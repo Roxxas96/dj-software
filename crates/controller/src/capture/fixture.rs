@@ -1,5 +1,13 @@
 //! The capture fixture: what each control sent, saved as TOML and committed as
 //! the ground truth for a controller's mapping.
+//!
+//! Recording rules (see [`Control::from_messages`]):
+//! - Note-offs, including note-on with velocity 0, are folded into the note-on
+//!   status (`0x9n`) with value 0, so a button reads `status = 0x9n, min = 0, max = 127`.
+//! - A pair whose first message in the step is a release is dropped: it belongs
+//!   to a key held across the start of the step (SHIFT, a pad-mode button).
+//! - Pitch bend keeps only its MSB: `data1 = 0` and the MSB as the value.
+//! - `first` is the first value seen, so direction (jog, BROWSE, TEMPO) is recoverable.
 
 use std::fmt::Write as _;
 
@@ -56,15 +64,16 @@ pub struct Control {
     pub led_values_vary: Option<bool>,
 }
 
-/// One distinct `(status, data1)` pair with the range of data2 values seen.
-///
-/// Note-offs (including note-on velocity 0) are folded into the note-on status
-/// (`0x9n`) with value 0. Pitch bend uses `data1 = 0` and the MSB as the value.
+/// One distinct `(status, data1)` pair with the first value and the range of
+/// data2 values seen (see the module docs for note-off and pitch-bend folding).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MessageRange {
     pub status: u8,
     pub data1: u8,
+    /// The first value seen in the step; optional so older fixtures still parse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first: Option<u8>,
     pub min: u8,
     pub max: u8,
 }
@@ -121,9 +130,12 @@ impl Fixture {
                 for m in &control.messages {
                     let _ = writeln!(
                         out,
-                        "  {{ status = 0x{:02X}, data1 = 0x{:02X}, min = {}, max = {} }}, # {}",
+                        "  {{ status = 0x{:02X}, data1 = 0x{:02X}, {}min = {}, max = {} }}, # {}",
                         m.status,
                         m.data1,
+                        m.first
+                            .map(|v| format!("first = {v}, "))
+                            .unwrap_or_default(),
                         m.min,
                         m.max,
                         m.describe()
@@ -147,64 +159,19 @@ impl Fixture {
         }
         out
     }
-
-    /// Controls to LED-probe: unprobed buttons and pads with at least one note.
-    pub fn led_probes(&self) -> Vec<LedProbe> {
-        self.controls
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| c.led.is_none())
-            .filter(|(_, c)| matches!(c.kind, StepKind::Button | StepKind::Pads))
-            .filter_map(|(i, c)| {
-                let notes: Vec<(u8, u8)> = c
-                    .messages
-                    .iter()
-                    .filter(|m| m.status & 0xF0 == 0x90)
-                    .map(|m| (m.status & 0x0F, m.data1))
-                    .collect();
-                (!notes.is_empty()).then(|| LedProbe {
-                    control: i,
-                    id: c.id.clone(),
-                    pads: c.kind == StepKind::Pads,
-                    notes,
-                })
-            })
-            .collect()
-    }
-}
-
-/// One LED probe: light every note of a control at once and ask the user.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LedProbe {
-    /// Index into [`Fixture::controls`].
-    pub control: usize,
-    pub id: String,
-    pub pads: bool,
-    /// `(channel, note)` pairs, 0-based channel.
-    pub notes: Vec<(u8, u8)>,
-}
-
-impl LedProbe {
-    /// Note-on messages lighting every note of this control at `velocity`
-    /// (0 turns them off).
-    pub fn messages(&self, velocity: u8) -> Vec<MidiMessage> {
-        self.notes
-            .iter()
-            .map(|&(channel, note)| MidiMessage::NoteOn {
-                channel,
-                note,
-                velocity,
-            })
-            .collect()
-    }
 }
 
 impl Control {
-    /// Builds a control record from the raw messages of one step.
+    /// Builds a control record from the raw messages of one step, dropping
+    /// pairs whose first message is a release.
     pub fn from_messages(id: &str, kind: StepKind, messages: &[TimedMidi]) -> Control {
         let mut ranges: Vec<MessageRange> = Vec::new();
+        let mut released_first: Vec<(u8, u8)> = Vec::new();
         for timed in messages {
             let (status, data1, value) = key_and_value(timed.message);
+            if released_first.contains(&(status, data1)) {
+                continue;
+            }
             match ranges
                 .iter_mut()
                 .find(|r| r.status == status && r.data1 == data1)
@@ -213,9 +180,11 @@ impl Control {
                     range.min = range.min.min(value);
                     range.max = range.max.max(value);
                 }
+                None if is_release(timed.message) => released_first.push((status, data1)),
                 None => ranges.push(MessageRange {
                     status,
                     data1,
+                    first: Some(value),
                     min: value,
                     max: value,
                 }),
@@ -246,7 +215,13 @@ impl Control {
         let parts: Vec<String> = self
             .messages
             .iter()
-            .map(|m| format!("{} [{}..{}]", m.describe(), m.min, m.max))
+            .map(|m| match m.first {
+                // Direction matters for moving controls; buttons always start at the press.
+                Some(first) if matches!(self.kind, StepKind::Continuous | StepKind::Jog) => {
+                    format!("{} [{}..{}, first {first}]", m.describe(), m.min, m.max)
+                }
+                _ => format!("{} [{}..{}]", m.describe(), m.min, m.max),
+            })
             .collect();
         let mut line = format!("{}: {}", self.id, parts.join(", "));
         if let Some(cc14) = self.cc14 {
@@ -269,8 +244,13 @@ impl MessageRange {
     }
 }
 
+/// A note release: note-off, or note-on with velocity 0 (parsed as note-off).
+pub(super) fn is_release(message: MidiMessage) -> bool {
+    matches!(message, MidiMessage::NoteOff { .. })
+}
+
 /// `(status, data1, value)` under which a message is recorded.
-fn key_and_value(message: MidiMessage) -> (u8, u8, u8) {
+pub(super) fn key_and_value(message: MidiMessage) -> (u8, u8, u8) {
     match message {
         MidiMessage::NoteOn {
             channel,
@@ -335,6 +315,7 @@ mod tests {
                     messages: vec![MessageRange {
                         status: 0x90,
                         data1: 0x0B,
+                        first: None,
                         min: 0,
                         max: 127,
                     }],
@@ -349,12 +330,14 @@ mod tests {
                         MessageRange {
                             status: 0xB0,
                             data1: 0x00,
+                            first: None,
                             min: 0,
                             max: 127,
                         },
                         MessageRange {
                             status: 0xB0,
                             data1: 0x20,
+                            first: None,
                             min: 0,
                             max: 126,
                         },
@@ -372,6 +355,7 @@ mod tests {
                     messages: vec![MessageRange {
                         status: 0x97,
                         data1: 0x00,
+                        first: None,
                         min: 0,
                         max: 127,
                     }],
@@ -431,6 +415,7 @@ led_values_vary = false
             [MessageRange {
                 status: 0x90,
                 data1: 0x0B,
+                first: Some(127),
                 min: 0,
                 max: 127
             }]
@@ -440,25 +425,41 @@ led_values_vary = false
     }
 
     #[test]
-    fn led_probes_cover_unprobed_buttons_and_pads() {
-        let mut fixture = sample();
-        assert!(fixture.led_probes().is_empty());
-        fixture.controls[0].led = None;
-        fixture.controls[2].led = None;
-        let probes = fixture.led_probes();
-        assert_eq!(probes.len(), 2);
-        assert_eq!(probes[0].control, 0);
-        assert_eq!(probes[0].notes, [(0, 0x0B)]);
-        assert!(!probes[0].pads);
-        assert!(probes[1].pads);
-        assert_eq!(probes[1].notes, [(7, 0)]);
-        assert_eq!(
-            probes[1].messages(0),
-            [MidiMessage::NoteOn {
-                channel: 7,
-                note: 0,
-                velocity: 0
-            }]
+    fn records_first_value_for_direction() {
+        // Jog turned counter-clockwise first (0x3F), then clockwise (0x41).
+        let control = Control::from_messages(
+            "deck1.jog_outer",
+            StepKind::Jog,
+            &[
+                timed(0, [0xB0, 0x21, 0x3F]),
+                timed(1, [0xB0, 0x21, 0x3E]),
+                timed(2, [0xB0, 0x21, 0x41]),
+            ],
         );
+        let m = control.messages[0];
+        assert_eq!((m.first, m.min, m.max), (Some(0x3F), 0x3E, 0x41));
+        let fixture = Fixture {
+            meta: Meta::default(),
+            controls: vec![control],
+        };
+        let text = fixture.to_toml();
+        assert!(text.contains("first = 63"), "{text}");
+        assert_eq!(parse_fixture(&text).unwrap(), fixture);
+    }
+
+    #[test]
+    fn from_messages_drops_pairs_starting_with_a_release() {
+        let control = Control::from_messages(
+            "deck1.cue",
+            StepKind::Button,
+            &[
+                timed(0, [0x80, 0x3F, 0x40]),
+                timed(1, [0x90, 0x0C, 0x7F]),
+                timed(2, [0x90, 0x3F, 0x7F]),
+                timed(3, [0x90, 0x0C, 0x00]),
+            ],
+        );
+        assert_eq!(control.messages.len(), 1);
+        assert_eq!(control.messages[0].data1, 0x0C);
     }
 }

@@ -11,11 +11,12 @@ use std::time::Duration;
 
 use anyhow::{Context, anyhow, bail};
 use controller::capture::{
-    CaptureSession, Fixture, LedProbe, Meta, StepKind, StepStatus, parse_checklist, parse_fixture,
+    CaptureSession, Fixture, LedProbe, LedSink, Meta, PROBE_VELOCITIES, Question, Step, StepKind,
+    StepStatus, parse_checklist, parse_fixture, run_led_probe,
 };
 use controller::{
-    MidiMessage, OutputPort, TimedMidi, clock, input_port_names, open_input, open_output,
-    output_port_names,
+    MidiMessage, OutputPort, PortError, TimedMidi, clock, input_port_names, open_input,
+    open_output, output_port_names,
 };
 
 const POLL: Duration = Duration::from_millis(100);
@@ -76,16 +77,14 @@ pub fn monitor(port: Option<&str>) -> anyhow::Result<()> {
 
 /// How often the capture loop polls the session while listening.
 const CAPTURE_POLL: Duration = Duration::from_millis(20);
-/// Velocities sent to lit pads to see whether the color depends on the value.
-const PROBE_VELOCITIES: [u8; 5] = [1, 16, 32, 64, 127];
 /// How long each probe velocity stays on.
 const PROBE_HOLD: Duration = Duration::from_millis(700);
 const PAD_COUNT: usize = 8;
 
-/// A line typed between steps or while listening.
+/// A line typed while a step is shown or listening.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Command {
-    /// Empty line: start listening, or finish the step now while listening.
+    /// Empty line: "ready" after preparing, or "finish now" while listening.
     Enter,
     Skip,
     Redo,
@@ -139,8 +138,8 @@ fn write_atomic(path: &Path, contents: &str) -> anyhow::Result<()> {
     write().with_context(|| format!("writing {}", path.display()))
 }
 
-fn save(path: &Path, fixture: &Fixture) -> anyhow::Result<()> {
-    write_atomic(path, &fixture.to_toml())
+fn save(path: &Path, session: &CaptureSession) -> anyhow::Result<()> {
+    write_atomic(path, &session.fixture().to_toml())
 }
 
 /// Stdin lines, read on a helper thread so the capture loop can keep polling MIDI.
@@ -181,6 +180,11 @@ impl Lines {
         }
     }
 
+    /// Drops lines typed ahead (e.g. Enter pressed while lights were cycling).
+    fn drain(&self) {
+        while self.0.try_recv().is_ok() {}
+    }
+
     /// Asks until the answer is y, n or q; `None` for q or end of input.
     fn ask_yes_no(&self, prompt: &str) -> Option<bool> {
         loop {
@@ -194,22 +198,14 @@ impl Lines {
     }
 }
 
-/// The output port plus the notes currently lit, so Ctrl-C can switch them off.
+/// The output port plus the notes currently lit, shared with the signal
+/// handler so Ctrl-C, SIGTERM or SIGHUP switch them off.
 struct Leds {
     port: Mutex<OutputPort>,
     lit: Mutex<Vec<(u8, u8)>>,
 }
 
 impl Leds {
-    fn light(&self, probe: &LedProbe, velocity: u8) -> anyhow::Result<()> {
-        let mut port = self.port.lock().unwrap_or_else(|e| e.into_inner());
-        *self.lit.lock().unwrap_or_else(|e| e.into_inner()) = probe.notes.clone();
-        for msg in probe.messages(velocity) {
-            port.send(msg).context("sending LED message")?;
-        }
-        Ok(())
-    }
-
     /// Switches every lit note off (best effort).
     fn off(&self) {
         let mut port = self.port.lock().unwrap_or_else(|e| e.into_inner());
@@ -224,8 +220,32 @@ impl Leds {
     }
 }
 
-/// `dj-software midi capture`: walks the checklist, recording each control,
-/// then probes LEDs. The fixture is saved after every step.
+/// [`LedSink`] over [`Leds`] that tracks which notes are lit.
+struct TrackedLeds<'a>(&'a Leds);
+
+impl LedSink for TrackedLeds<'_> {
+    fn send(&mut self, msg: MidiMessage) -> Result<(), PortError> {
+        let mut port = self.0.port.lock().unwrap_or_else(|e| e.into_inner());
+        let result = port.send(msg);
+        if let MidiMessage::NoteOn {
+            channel,
+            note,
+            velocity,
+        } = msg
+        {
+            let mut lit = self.0.lit.lock().unwrap_or_else(|e| e.into_inner());
+            lit.retain(|&n| n != (channel, note));
+            // Keep a failed "off" in the list so the handler retries it.
+            if velocity > 0 || result.is_err() {
+                lit.push((channel, note));
+            }
+        }
+        result
+    }
+}
+
+/// `dj-software midi capture`: walks the checklist, recording each control and
+/// probing its LED right after it is captured. The fixture is saved after every step.
 pub fn capture(checklist_path: &Path, out: &Path, port: Option<&str>) -> anyhow::Result<()> {
     let text = fs::read_to_string(checklist_path)
         .with_context(|| format!("reading {}", checklist_path.display()))?;
@@ -245,7 +265,7 @@ pub fn capture(checklist_path: &Path, out: &Path, port: Option<&str>) -> anyhow:
             lit: Mutex::new(Vec::new()),
         })),
         Err(error) => {
-            println!("warning: {error}; the LED check will be skipped");
+            println!("warning: {error}; LED checks will be skipped");
             None
         }
     };
@@ -257,7 +277,7 @@ pub fn capture(checklist_path: &Path, out: &Path, port: Option<&str>) -> anyhow:
         println!("\nInterrupted. Progress up to the last finished step is saved.");
         std::process::exit(130);
     })
-    .context("installing the Ctrl-C handler")?;
+    .context("installing the signal handler")?;
 
     let lines = Lines::spawn();
     let meta = Meta {
@@ -272,39 +292,35 @@ pub fn capture(checklist_path: &Path, out: &Path, port: Option<&str>) -> anyhow:
         return Ok(());
     };
     session.set_meta(meta);
-    save(out, &session.fixture())?;
+    save(out, &session)?;
 
     println!("Capturing from {} into {}", input.name(), out.display());
+    println!("Each step listens as soon as it is shown: just do what it says.");
     println!(
-        "Between steps: Enter = listen, s = skip, r = redo the previous step, q = save and quit."
+        "Type then Enter: nothing = finish the step now, s = skip, r = redo the previous step, q = save and quit."
     );
-    println!("While listening: Enter = finish the step now, s = skip, q = save and quit.");
-    if !run_steps(&mut session, &rx, &lines, out)? {
+    println!("When a step asks you to prepare something first, do it, then press Enter.");
+    if !run_steps(&mut session, &rx, &lines, out, leds.as_deref())? {
         println!(
             "\nSaved {}. Run the same command again to continue.",
             out.display()
         );
         return Ok(());
     }
-
-    let mut fixture = session.finish();
-    let captured = fixture.controls.len();
-    let skipped = fixture.meta.skipped.len();
-    println!("\nAll steps done: {captured} captured, {skipped} skipped.");
-    drop(input);
-    match &leds {
-        Some(leds) => probe_leds(&mut fixture, leds, &lines, out)?,
-        None => println!("No MIDI output port: LED check skipped."),
-    }
-    save(out, &fixture)?;
-    println!("Saved {}.", out.display());
+    let fixture = session.finish();
+    println!(
+        "\nAll steps done: {} captured, {} skipped. Saved {}.",
+        fixture.controls.len(),
+        fixture.meta.skipped.len(),
+        out.display()
+    );
     Ok(())
 }
 
 /// A new session, or one resumed from an existing `out` if the user agrees.
 /// `None` means the user chose to stop.
 fn open_session(
-    steps: Vec<controller::capture::Step>,
+    steps: Vec<Step>,
     out: &Path,
     lines: &Lines,
 ) -> anyhow::Result<Option<CaptureSession>> {
@@ -312,18 +328,17 @@ fn open_session(
         return Ok(Some(CaptureSession::new(steps)));
     }
     let text = fs::read_to_string(out).with_context(|| format!("reading {}", out.display()))?;
-    let prior = parse_fixture(&text).with_context(|| {
+    let prior: Fixture = parse_fixture(&text).with_context(|| {
         format!(
             "{} exists but is not a capture fixture; move it away or choose another --out",
             out.display()
         )
     })?;
-    let step_ids: Vec<String> = steps.iter().map(|s| s.id.clone()).collect();
     let unknown: Vec<String> = prior
         .controls
         .iter()
         .map(|c| c.id.clone())
-        .filter(|id| !step_ids.contains(id))
+        .filter(|id| !steps.iter().any(|s| &s.id == id))
         .collect();
     let session = CaptureSession::resume(steps.clone(), prior);
     let (n, total) = session.position();
@@ -339,11 +354,17 @@ fn open_session(
             unknown.join(", ")
         );
     }
-    let question = match session.current() {
-        Some(step) => format!("Continue from step {n}/{total} ({})? [y/n] ", step.id),
-        None => "Every step is done. Continue with the LED check? [y/n] ".to_owned(),
+    let resume = match session.current() {
+        Some(step) => lines.ask_yes_no(&format!(
+            "Continue from step {n}/{total} ({})? [y/n] ",
+            step.id
+        )),
+        None => {
+            println!("Every step is done.");
+            Some(false)
+        }
     };
-    match lines.ask_yes_no(&question) {
+    match resume {
         Some(true) => Ok(Some(session)),
         Some(false) => {
             let again = format!("Start over and overwrite {}? [y/n] ", out.display());
@@ -363,53 +384,80 @@ fn run_steps(
     rx: &Receiver<TimedMidi>,
     lines: &Lines,
     out: &Path,
+    leds: Option<&Leds>,
 ) -> anyhow::Result<bool> {
     let mut shown_section: Option<String> = None;
     while let Some(step) = session.current().cloned() {
+        // Wait for Enter when the user has something to do first (switch deck,
+        // select a pad mode), so that action is not recorded.
+        let mut wait = false;
         if shown_section.as_deref() != Some(step.section.as_str()) {
             println!("\n=== {} ===", step.section);
             if let Some(setup) = &step.setup {
                 println!("{setup}");
+                wait = true;
             }
             shown_section = Some(step.section.clone());
         }
         let (n, total) = session.position();
         println!("\n[step {n}/{total}] {}  ({})", step.id, step.kind.as_str());
         println!("  {}", step.prompt);
-        let Some(line) = lines.ask("  Enter = listen, s = skip, r = redo previous, q = quit > ")
-        else {
-            return Ok(false);
-        };
-        match parse_command(&line) {
-            Command::Enter => match listen(session, &step, rx, lines)? {
-                Listened::Done => match session.control(&step.id) {
-                    Some(control) => println!("  recorded {}", control.summary()),
-                    None => println!("  recorded {}", step.id),
+        if let Some(prepare) = &step.prepare {
+            println!("  First: {prepare}");
+            wait = true;
+        }
+        let outcome = if wait {
+            match lines.ask("  Press Enter when ready (s = skip, r = redo previous, q = quit) > ") {
+                None => Listened::Quit,
+                Some(line) => match parse_command(&line) {
+                    Command::Enter => listen(session, &step, rx, lines)?,
+                    Command::Skip => {
+                        session.skip();
+                        Listened::Skipped
+                    }
+                    Command::Redo => Listened::Redo,
+                    Command::Quit => Listened::Quit,
+                    Command::Unknown(other) => {
+                        println!("  unknown command {other:?}");
+                        shown_section = None;
+                        continue;
+                    }
                 },
-                Listened::Skipped => println!("  skipped {}", step.id),
-                Listened::Quit => return Ok(false),
-            },
-            Command::Skip => {
-                session.skip();
-                println!("  skipped {}", step.id);
             }
-            Command::Redo => {
+        } else {
+            listen(session, &step, rx, lines)?
+        };
+        match outcome {
+            Listened::Done => {
+                let probe = match session.control(&step.id) {
+                    Some(control) => {
+                        println!("  recorded {}", control.summary());
+                        LedProbe::for_step(&step, control)
+                    }
+                    None => None,
+                };
+                save(out, session)?;
+                if let (Some(probe), Some(leds)) = (probe, leds)
+                    && !check_led(session, leds, lines, &probe)
+                {
+                    save(out, session)?;
+                    return Ok(false);
+                }
+            }
+            Listened::Skipped => println!("  skipped {}", step.id),
+            Listened::Redo => {
                 session.redo();
                 match session.current() {
                     Some(again) if again.id != step.id => println!("  back to {}", again.id),
                     _ => println!("  nothing to redo yet"),
                 }
             }
-            Command::Quit => {
-                save(out, &session.fixture())?;
+            Listened::Quit => {
+                save(out, session)?;
                 return Ok(false);
             }
-            Command::Unknown(other) => {
-                println!("  unknown command {other:?}");
-                continue;
-            }
         }
-        save(out, &session.fixture())?;
+        save(out, session)?;
     }
     Ok(true)
 }
@@ -417,17 +465,18 @@ fn run_steps(
 enum Listened {
     Done,
     Skipped,
+    Redo,
     Quit,
 }
 
 /// Feeds MIDI into the session until the current step completes, echoing each message.
 fn listen(
     session: &mut CaptureSession,
-    step: &controller::capture::Step,
+    step: &Step,
     rx: &Receiver<TimedMidi>,
     lines: &Lines,
 ) -> anyhow::Result<Listened> {
-    // Drop anything sent before Enter (mode buttons, SHIFT held beforehand, fiddling).
+    // Drop anything sent before listening (setup, fiddling between steps).
     while rx.try_recv().is_ok() {}
     match step.kind {
         StepKind::Pads => println!("  Listening: tap all {PAD_COUNT} pads..."),
@@ -441,15 +490,11 @@ fn listen(
         };
         for timed in first.into_iter().chain(rx.try_iter()) {
             session.feed(timed);
-            if step.kind == StepKind::Pads && matches!(timed.message, MidiMessage::NoteOn { .. }) {
-                println!(
-                    "    {}   ({}/{PAD_COUNT} pads)",
-                    timed.message,
-                    session.distinct_notes()
-                );
-            } else {
-                println!("    {}", timed.message);
-            }
+            println!(
+                "    {}{}",
+                timed.message,
+                echo_note(session, step, timed.message)
+            );
         }
         match lines.try_next() {
             Typed::Nothing => {}
@@ -459,15 +504,18 @@ fn listen(
                     if session.accept() {
                         return Ok(Listened::Done);
                     }
-                    println!("  Nothing received yet. Do the action, or type s to skip.");
+                    println!("  Nothing recorded yet. Do the action, or type s to skip.");
                 }
                 Command::Skip => {
                     session.skip();
                     return Ok(Listened::Skipped);
                 }
+                Command::Redo => return Ok(Listened::Redo),
                 Command::Quit => return Ok(Listened::Quit),
-                Command::Redo | Command::Unknown(_) => {
-                    println!("  While listening: Enter = finish now, s = skip, q = quit.");
+                Command::Unknown(other) => {
+                    println!(
+                        "  unknown command {other:?} (Enter = finish now, s = skip, r = redo previous, q = quit)"
+                    );
                 }
             },
         }
@@ -477,58 +525,64 @@ fn listen(
     }
 }
 
-/// Lights each unprobed button and pad set and asks whether a light came on.
-fn probe_leds(fixture: &mut Fixture, leds: &Leds, lines: &Lines, out: &Path) -> anyhow::Result<()> {
-    let probes = fixture.led_probes();
-    if probes.is_empty() {
-        return Ok(());
-    }
-    println!("\n=== LED check ({} controls) ===", probes.len());
-    println!("Each control's light is switched on in turn. Answer y or n (q = save and stop).");
-    let total = probes.len();
-    for (k, probe) in probes.iter().enumerate() {
-        let lit = asked_with_light(leds, probe, 127, || {
-            lines.ask_yes_no(&format!(
-                "[{}/{total}] {}: did a light turn on? [y/n/q] ",
-                k + 1,
-                probe.id
-            ))
-        })?;
-        let Some(lit) = lit else {
-            save(out, fixture)?;
-            return Ok(());
-        };
-        fixture.controls[probe.control].led = Some(lit);
-        if lit && probe.pads {
-            println!("  Showing velocities 1, 16, 32, 64, 127 on the pads...");
-            for velocity in PROBE_VELOCITIES {
-                leds.light(probe, velocity).inspect_err(|_| leds.off())?;
-                println!("    velocity {velocity}");
-                thread::sleep(PROBE_HOLD);
-            }
-            leds.off();
-            let Some(vary) = lines.ask_yes_no("  Did the color change? [y/n/q] ") else {
-                fixture.controls[probe.control].led = None;
-                save(out, fixture)?;
-                return Ok(());
-            };
-            fixture.controls[probe.control].led_values_vary = Some(vary);
+/// Extra text after an echoed message: the held SHIFT, or the pad count.
+fn echo_note(session: &CaptureSession, step: &Step, message: MidiMessage) -> String {
+    let note = match message {
+        MidiMessage::NoteOn { channel, note, .. } | MidiMessage::NoteOff { channel, note, .. } => {
+            Some((channel, note))
         }
-        save(out, fixture)?;
+        _ => None,
+    };
+    if note.is_some() && note == session.modifier() {
+        return "   (held SHIFT, not recorded)".to_owned();
     }
-    Ok(())
+    if step.kind == StepKind::Pads && matches!(message, MidiMessage::NoteOn { .. }) {
+        return format!("   ({}/{PAD_COUNT} pads)", session.distinct_notes());
+    }
+    String::new()
 }
 
-/// Lights `probe` at `velocity`, runs `ask`, and always switches the light off.
-fn asked_with_light<T>(
-    leds: &Leds,
-    probe: &LedProbe,
-    velocity: u8,
-    ask: impl FnOnce() -> T,
-) -> anyhow::Result<T> {
-    let result = leds.light(probe, velocity).map(|()| ask());
+/// Lights the just-captured control and stores the answer. Returns false if the
+/// user quit. A failed send is reported and the capture goes on.
+fn check_led(session: &mut CaptureSession, leds: &Leds, lines: &Lines, probe: &LedProbe) -> bool {
+    let light_question = if probe.pads {
+        "  LED check: did the pads light up? [y/n, q = quit] "
+    } else {
+        "  LED check: did a light turn on? [y/n, q = quit] "
+    };
+    let result = run_led_probe(
+        &mut TrackedLeds(leds),
+        probe,
+        |question| {
+            lines.drain();
+            match question {
+                Question::LightOn => lines.ask_yes_no(light_question),
+                Question::ColorChanged => {
+                    lines.ask_yes_no("  Did the color change? [y/n, q = quit] ")
+                }
+            }
+        },
+        |velocity| {
+            if velocity == PROBE_VELOCITIES[0] {
+                println!("  Showing velocities 1, 16, 32, 64, 127 on the pads...");
+            }
+            println!("    velocity {velocity}");
+            thread::sleep(PROBE_HOLD);
+        },
+    );
+    // run_led_probe already switched everything off; retry anything still lit.
     leds.off();
-    result
+    match result {
+        Ok(Some(answer)) => {
+            session.set_led(&probe.id, answer.led, answer.values_vary);
+            true
+        }
+        Ok(None) => false,
+        Err(error) => {
+            println!("  warning: LED check failed ({error}); continuing without it");
+            true
+        }
+    }
 }
 
 #[cfg(test)]
