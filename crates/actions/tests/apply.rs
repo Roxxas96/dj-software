@@ -531,3 +531,41 @@ fn led_rules() {
     assert_eq!(led(StateKey::ChannelPfl, None, &state, None), Led::Off);
     assert_eq!(led(StateKey::Shift, global, &state, None), Led::Off);
 }
+
+/// An action of `kind` on deck 3 or the right side, whichever its scope needs.
+fn any_action(kind: ActionKind) -> Action {
+    let target = match kind.scope() {
+        actions::Scope::Deck => Target::Deck(d(2)),
+        actions::Scope::Side => Target::Side(Side::Right),
+        actions::Scope::Global => Target::Global,
+    };
+    Action::new(kind, target).unwrap()
+}
+
+#[test]
+fn accepts_matches_what_apply_does() {
+    use actions::InputKind;
+    for kind in ActionKind::ALL {
+        for input in [Input::Press, Input::Absolute(0.25), Input::Relative(1)] {
+            let mut rig = Rig::new();
+            let result = rig.apply(any_action(kind), input);
+            assert_eq!(
+                kind.accepts(input.kind()),
+                result != ApplyResult::Ignored,
+                "{kind:?} {input:?} -> {result:?}"
+            );
+        }
+        assert!(!kind.accepts(InputKind::Relative));
+        assert_eq!(kind.is_absolute(), kind.accepts(InputKind::Absolute));
+    }
+}
+
+#[test]
+fn state_key_scopes() {
+    use actions::Scope;
+    assert_eq!(StateKey::DeckPlayLed.scope(), Scope::Deck);
+    assert_eq!(StateKey::ChannelPfl.scope(), Scope::Deck);
+    assert_eq!(StateKey::SideAltDeck.scope(), Scope::Side);
+    assert_eq!(StateKey::Shift.scope(), Scope::Side);
+    assert_eq!(StateKey::HeadphoneMaster.scope(), Scope::Global);
+}

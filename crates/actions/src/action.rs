@@ -65,6 +65,25 @@ pub enum Input {
     Relative(i32),
 }
 
+/// The kinds of [`Input`], for checking what an action accepts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum InputKind {
+    /// [`Input::Press`] and [`Input::Release`].
+    Button,
+    Absolute,
+    Relative,
+}
+
+impl Input {
+    pub fn kind(self) -> InputKind {
+        match self {
+            Input::Press | Input::Release => InputKind::Button,
+            Input::Absolute(_) => InputKind::Absolute,
+            Input::Relative(_) => InputKind::Relative,
+        }
+    }
+}
+
 /// An action without its target. Each kind has a stable string id used in mapping files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ActionKind {
@@ -165,9 +184,11 @@ impl ActionKind {
         }
     }
 
-    /// Whether this action takes [`Input::Absolute`] values (and so has a [`ValueTarget`]).
-    pub fn is_absolute(self) -> bool {
-        matches!(
+    /// Whether this action accepts inputs of `kind`. This is the one table of what each
+    /// action takes: absolute actions take positions, every other action takes button
+    /// presses, and no action takes relative steps yet.
+    pub fn accepts(self, kind: InputKind) -> bool {
+        let absolute = matches!(
             self,
             ActionKind::Tempo
                 | ActionKind::Trim
@@ -180,7 +201,17 @@ impl ActionKind {
                 | ActionKind::MasterLevel
                 | ActionKind::HeadphoneLevel
                 | ActionKind::HeadphoneMix
-        )
+        );
+        match kind {
+            InputKind::Button => !absolute,
+            InputKind::Absolute => absolute,
+            InputKind::Relative => false,
+        }
+    }
+
+    /// Whether this action takes [`Input::Absolute`] values (and so has a [`ValueTarget`]).
+    pub fn is_absolute(self) -> bool {
+        self.accepts(InputKind::Absolute)
     }
 
     /// Whether this action reacts to [`Input::Release`] as well as [`Input::Press`].

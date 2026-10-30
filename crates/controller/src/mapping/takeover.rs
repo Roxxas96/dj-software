@@ -55,6 +55,18 @@ impl Takeover {
         self.entries.retain(|(_, d), _| *d != Some(deck));
     }
 
+    /// Arms `target`, with `prev_phys` as the physical value its control last had (on
+    /// whatever target it drove then), so a crossing can be detected from the first move.
+    pub fn arm(&mut self, target: ValueTarget, prev_phys: Option<f32>) {
+        self.entries.insert(
+            target,
+            Entry {
+                phys: prev_phys,
+                ..Entry::ARMED
+            },
+        );
+    }
+
     /// Whether the physical value `phys` for `target` may pass, given the target's
     /// `current` value. Passing disarms the target; it re-arms when `current` no longer
     /// matches the last value passed (another source changed it).
@@ -114,5 +126,15 @@ mod tests {
         t.arm_deck(DeckId::new(0).unwrap());
         assert!(!t.filter(fader1, 0.9, 0.5));
         assert!(t.filter(XF, 0.9, 0.5));
+    }
+
+    #[test]
+    fn arm_with_previous_detects_crossing_on_first_move() {
+        let mut t = Takeover::new();
+        assert!(t.filter(XF, 0.5, 0.5));
+        t.arm(XF, Some(0.9));
+        assert!(!t.filter(XF, 0.8, 0.5));
+        t.arm(XF, Some(0.9));
+        assert!(t.filter(XF, 0.1, 0.5));
     }
 }

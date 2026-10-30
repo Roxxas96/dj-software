@@ -39,7 +39,7 @@ soft_takeover = false
 midi = { cc = 19, channel = 16 }
 action = "deck.tempo"
 side = "left"
-value = "relative_twos"
+value = "absolute"
 
 [[output]]
 state = "deck.play_led"
@@ -119,9 +119,9 @@ fn parses_full_example() {
                 target: Target::Side(Side::Left),
                 shift: None,
                 active_deck: None,
-                value: ValueKind::RelativeTwos,
+                value: ValueKind::Absolute,
                 invert: false,
-                soft_takeover: false,
+                soft_takeover: true,
             },
         ],
         outputs: vec![
@@ -236,4 +236,100 @@ fn error_init_needs_value() {
         err.contains("init[0]") && err.contains("`value` is missing"),
         "{err}"
     );
+}
+
+#[test]
+fn error_deck_overflow_is_a_load_error() {
+    let err = input_error(
+        "midi = { note = 1, channel = 1 }\naction = \"deck.cue\"\ndeck = -9223372036854775808",
+    );
+    assert!(
+        err.contains("deck -9223372036854775808 is outside 1-4"),
+        "{err}"
+    );
+}
+
+#[test]
+fn error_channel_overflow_is_a_load_error() {
+    let err = input_error(
+        "midi = { note = 1, channel = -9223372036854775808 }\naction = \"deck.cue\"\ndeck = 1",
+    );
+    assert!(
+        err.contains("channel -9223372036854775808 is outside 1-16"),
+        "{err}"
+    );
+}
+
+#[test]
+fn error_relative_value_not_accepted() {
+    let err = input_error(
+        "midi = { cc = 1, channel = 1 }\naction = \"deck.tempo\"\ndeck = 1\nvalue = \"relative_twos\"",
+    );
+    assert!(
+        err.contains("action `deck.tempo` doesn't accept relative values"),
+        "{err}"
+    );
+}
+
+#[test]
+fn error_button_on_absolute_action() {
+    let err = input_error("midi = { note = 1, channel = 1 }\naction = \"channel.fader\"\ndeck = 1");
+    assert!(
+        err.contains("action `channel.fader` doesn't accept button values"),
+        "{err}"
+    );
+}
+
+#[test]
+fn error_absolute_on_press_action() {
+    let err = input_error("midi = { cc = 1, channel = 1 }\naction = \"deck.play_pause\"\ndeck = 1");
+    assert!(
+        err.contains("action `deck.play_pause` doesn't accept absolute values"),
+        "{err}"
+    );
+}
+
+/// Parses a file with one `[[output]]` made of `body`, and returns the error message.
+fn output_error(body: &str) -> String {
+    let text = format!(
+        "[controller]\nname = \"X\"\nport = \"X\"\n\n[[output]]\nmidi = {{ note = 1, channel = 1 }}\n{body}\n"
+    );
+    let err = parse_mapping("bad.toml", &text).unwrap_err().to_string();
+    assert!(
+        err.contains("bad.toml") && err.contains("output[0]"),
+        "{err}"
+    );
+    err
+}
+
+#[test]
+fn error_output_target_must_fit_state_scope() {
+    let err = output_error("state = \"deck.play_led\"");
+    assert!(
+        err.contains("state `deck.play_led` needs `deck` or `side`"),
+        "{err}"
+    );
+    let err = output_error("state = \"side.alt_deck\"\ndeck = 1");
+    assert!(err.contains("state `side.alt_deck` needs `side`"), "{err}");
+    let err = output_error("state = \"side.shift\"");
+    assert!(err.contains("state `side.shift` needs `side`"), "{err}");
+    let err = output_error("state = \"master.headphone_master\"\nside = \"left\"");
+    assert!(
+        err.contains("state `master.headphone_master` takes no `deck` or `side`"),
+        "{err}"
+    );
+}
+
+#[test]
+fn outputs_accept_targets_that_fit() {
+    for body in [
+        "state = \"deck.play_led\"\nside = \"right\"",
+        "state = \"channel.pfl\"\ndeck = 4",
+        "state = \"master.headphone_master\"",
+    ] {
+        let text = format!(
+            "[controller]\nname = \"X\"\nport = \"X\"\n\n[[output]]\nmidi = {{ note = 1, channel = 1 }}\n{body}\n"
+        );
+        parse_mapping("ok.toml", &text).unwrap();
+    }
 }
