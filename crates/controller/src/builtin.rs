@@ -32,11 +32,11 @@ pub fn config_dir() -> Option<PathBuf> {
     ProjectDirs::from("", "", "dj-software").map(|dirs| dirs.config_dir().to_path_buf())
 }
 
-/// Loads a mapping. An existing path is loaded as a file. Otherwise `name_or_path` names
+/// Loads a mapping. An existing file is loaded as such (a directory is not). Otherwise `name_or_path` names
 /// a mapping: the user's override in [`config_dir`] wins over the built-in.
 pub fn load_mapping(name_or_path: &str) -> Result<Mapping, MappingError> {
     let path = Path::new(name_or_path);
-    if path.exists() {
+    if path.is_file() {
         return load_file(path);
     }
     load_mapping_from(name_or_path, config_dir().as_deref())

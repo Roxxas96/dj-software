@@ -84,10 +84,15 @@ impl Runtime {
         self.reattach(engine, out);
     }
 
-    /// The controller went away. SHIFT is released on both sides, so a SHIFT held when the
-    /// cable was pulled does not stay stuck, and no LED is sent until it comes back.
-    pub fn on_disconnect(&mut self) {
+    /// The controller went away. Every held press is released (a held CUE stops
+    /// previewing), SHIFT is released on both sides, and nothing is handled or sent until
+    /// it comes back. A release the engine's queue has no room for is dropped.
+    pub fn on_disconnect(&mut self, engine: &mut EngineController) {
         self.attached = false;
+        for action in self.resolver.release_all_held() {
+            apply(&action, Input::Release, &mut self.state, engine);
+        }
+        // Fallback: SHIFT is held state too, whether or not its press is still tracked.
         for side in Side::ALL {
             self.state.side_mut(side).shift = false;
         }
@@ -107,7 +112,7 @@ impl Runtime {
         self.tick(clock::now_micros(), engine, out);
     }
 
-    /// Resolves and applies `msgs` in order.
+    /// Resolves and applies `msgs` in order. Ignored while the controller is not attached.
     ///
     /// Each resolved action is applied before the next message is resolved, as the
     /// resolver requires, with one exception: within a run of messages not interrupted by a
@@ -123,6 +128,11 @@ impl Runtime {
         engine: &mut EngineController,
     ) -> BatchStats {
         let mut stats = BatchStats::default();
+        // Messages still queued after the controller was lost (or before it attached)
+        // would bring back SHIFT or held presses no release will ever end.
+        if !self.attached {
+            return stats;
+        }
         if !msgs.is_empty() {
             self.last.clear();
         }

@@ -72,6 +72,15 @@ impl Resolver {
         self.sources.clear();
     }
 
+    /// Forgets every held press and returns the actions they resolved to, so the caller
+    /// can release them (the controller went away with buttons down).
+    pub fn release_all_held(&mut self) -> Vec<Action> {
+        let mut held: Vec<(usize, Action)> = self.held.drain().collect();
+        // Binding order, so releases are applied in a stable order.
+        held.sort_by_key(|&(i, _)| i);
+        held.into_iter().map(|(_, action)| action).collect()
+    }
+
     pub fn takeover(&self) -> &Takeover {
         &self.takeover
     }
