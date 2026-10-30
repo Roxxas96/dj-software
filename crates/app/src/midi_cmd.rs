@@ -112,11 +112,15 @@ pub fn monitor_controller(name_or_path: &str) -> anyhow::Result<()> {
     let bound = mapping.clone();
     let mut runtime = Runtime::new(mapping);
     let mut attached_once = false;
+    // Whether the runtime is attached now; while it is not, `handle_batch` ignores
+    // messages and `last_resolved` still holds an older batch.
+    let mut attached = false;
     match connection.port_names() {
         Some((input, _)) => {
             println!("Monitoring {name} on {input} (Ctrl-C to stop)");
             runtime.attach(&mut engine, &mut connection);
             attached_once = true;
+            attached = true;
         }
         None => println!("{name} not found; waiting for it (Ctrl-C to stop)"),
     }
@@ -135,9 +139,16 @@ pub fn monitor_controller(name_or_path: &str) -> anyhow::Result<()> {
         }
         if !batch.is_empty() {
             runtime.handle_batch(&batch, &mut engine);
-            for ((msg, resolved), timed) in runtime.last_resolved().iter().zip(&batch) {
+            let resolved = runtime.last_resolved();
+            let fresh = attached && resolved.len() == batch.len();
+            for (i, timed) in batch.iter().enumerate() {
                 let ms = timed.micros.saturating_sub(started) / 1000;
-                println!("{ms:>8} ms  {msg}  {}", describe(&bound, msg, resolved));
+                let what = if fresh {
+                    describe(&bound, &timed.message, &resolved[i].1)
+                } else {
+                    "→ (controller not attached)".to_owned()
+                };
+                println!("{ms:>8} ms  {}  {what}", timed.message);
             }
             batch.clear();
         }
@@ -151,16 +162,19 @@ pub fn monitor_controller(name_or_path: &str) -> anyhow::Result<()> {
             PresenceChange::None => {}
             PresenceChange::Lost => {
                 runtime.on_disconnect(&mut engine);
+                attached = false;
                 println!("controller disconnected");
             }
             PresenceChange::Back => {
+                attached = true;
                 if attached_once {
                     runtime.on_reconnect(&mut engine, &mut connection);
+                    println!("controller reconnected");
                 } else {
                     runtime.attach(&mut engine, &mut connection);
                     attached_once = true;
+                    println!("controller connected");
                 }
-                println!("controller reconnected");
             }
         }
     }

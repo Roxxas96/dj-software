@@ -92,12 +92,9 @@ fn main() -> ExitCode {
     let result = match cli.command {
         Sub::Devices => devices(),
         Sub::Play(args) => {
-            if args.cue_track.is_some() && args.headphones.is_none() {
+            if let Some(problem) = args.conflict() {
                 Cli::command()
-                    .error(
-                        ErrorKind::MissingRequiredArgument,
-                        "--cue-track needs --headphones",
-                    )
+                    .error(ErrorKind::MissingRequiredArgument, problem)
                     .exit();
             }
             play(&args)
@@ -212,6 +209,33 @@ mod tests {
     }
 
     #[test]
+    fn cue_track_needs_headphones_only_without_controller() {
+        let alone = play_args(&["dj-software", "play", "a.mp3", "--cue-track", "b.mp3"]);
+        assert!(alone.conflict().unwrap().contains("--headphones"));
+        let with_headphones = play_args(&[
+            "dj-software",
+            "play",
+            "a.mp3",
+            "--cue-track",
+            "b.mp3",
+            "--headphones",
+            "3,4",
+        ]);
+        assert_eq!(with_headphones.conflict(), None);
+        // With a controller, PFL comes from it: master-only routing is fine.
+        let controller = play_args(&[
+            "dj-software",
+            "play",
+            "a.mp3",
+            "--cue-track",
+            "b.mp3",
+            "--controller",
+            "ddj-sb3",
+        ]);
+        assert_eq!(controller.conflict(), None);
+    }
+
+    #[test]
     fn parses_monitor_with_controller() {
         match parse(&["dj-software", "midi", "monitor", "--controller", "ddj-sb3"])
             .unwrap()
@@ -264,6 +288,7 @@ mod tests {
         let plain = play_args(&["dj-software", "play", "a.mp3"]);
         assert_eq!(plain.controller, None);
         assert_eq!(plain.deck3, None);
+        assert_eq!(args.conflict(), None);
         // Decks 3 and 4 are only reachable with a controller.
         assert!(parse(&["dj-software", "play", "a.mp3", "--deck3", "c.mp3"]).is_err());
         assert!(parse(&["dj-software", "play", "a.mp3", "--deck4", "d.mp3"]).is_err());
