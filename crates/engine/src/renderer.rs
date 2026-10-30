@@ -5,7 +5,7 @@ use rtrb::{Consumer, Producer, PushError};
 use crate::deck::Deck;
 use crate::mixer::Mixer;
 use crate::shared::Shared;
-use crate::{Command, DeckId, EngineConfig, TrackBuffer};
+use crate::{Command, DeckId, EngineConfig, Meters, TrackBuffer};
 
 /// Audio-thread handle: renders output blocks. [`render`](Self::render) never allocates,
 /// frees, locks or blocks.
@@ -45,21 +45,32 @@ impl EngineRenderer {
     }
 
     /// Applies all queued commands, then overwrites both interleaved stereo buffers with
-    /// the next `master.len() / 2` frames.
+    /// the next frames.
+    ///
+    /// Any buffer lengths work and never panic: blocks longer than
+    /// [`max_block_frames`](Self::max_block_frames) are rendered in chunks, and when the
+    /// lengths differ (or a trailing half frame is left over) only the whole frames both
+    /// buffers share are rendered; the rest of either buffer is zero-filled.
     pub fn render(&mut self, master: &mut [f32], headphones: &mut [f32]) {
-        debug_assert_eq!(master.len(), headphones.len());
-        debug_assert!(master.len().is_multiple_of(2));
-        debug_assert!(master.len() / 2 <= self.config.max_block_frames);
-
         while let Ok(cmd) = self.commands.pop() {
             self.apply(cmd);
         }
 
-        let inputs = self.mixer.inputs(master.len());
-        for (deck, input) in self.decks.iter_mut().zip(inputs) {
-            deck.render_add(input, self.config.sample_rate);
+        let samples = master.len().min(headphones.len()) / 2 * 2;
+        let (master, master_rest) = master.split_at_mut(samples);
+        let (headphones, headphones_rest) = headphones.split_at_mut(samples);
+        master_rest.fill(0.0);
+        headphones_rest.fill(0.0);
+
+        let chunk = self.config.max_block_frames * 2;
+        let mut meters = Meters::default();
+        for (master, headphones) in master.chunks_mut(chunk).zip(headphones.chunks_mut(chunk)) {
+            let inputs = self.mixer.inputs(master.len());
+            for (deck, input) in self.decks.iter_mut().zip(inputs) {
+                deck.render_add(input, self.config.sample_rate);
+            }
+            meters.merge(&self.mixer.process(master, headphones));
         }
-        let meters = self.mixer.process(master, headphones);
 
         self.publish();
         self.shared.store_meters(&meters);

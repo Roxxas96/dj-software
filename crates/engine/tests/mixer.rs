@@ -229,3 +229,60 @@ fn non_finite_mixer_values_are_ignored() {
     assert_eq!(m, m_before);
     assert_eq!(h, h_before);
 }
+
+#[test]
+fn render_handles_buffers_larger_than_max_block() {
+    let make = || {
+        let (mut c, r) = engine(EngineConfig {
+            sample_rate: SR,
+            max_block_frames: 64,
+        });
+        channel(&mut c, 0, ChannelCommand::Fader(0.5));
+        play(&mut c, 0);
+        (c, r)
+    };
+    let (_c1, mut chunked) = make();
+    let (expected, expected_h) = render(&mut chunked, 1000);
+
+    let (c2, mut whole) = make();
+    let mut m = vec![0.0; 2000];
+    let mut h = vec![0.0; 2000];
+    whole.render(&mut m, &mut h);
+    assert_eq!(m, expected);
+    assert_eq!(h, expected_h);
+    assert_eq!(c2.deck(deck(0)).position_frames, 1000.0);
+    assert!(c2.meters().channel_peak[0] > 0.0);
+}
+
+#[test]
+fn render_handles_mismatched_buffer_lengths() {
+    let (mut c, mut r) = setup();
+    master(&mut c, MasterCommand::MasterLevel(1.0));
+    master(&mut c, MasterCommand::HeadphoneMix(1.0));
+    for index in 0..4 {
+        channel(&mut c, index, ChannelCommand::Trim(1.0));
+    }
+    settle(&mut r);
+    for index in 0..4 {
+        play(&mut c, index);
+    }
+    // Master is longer than headphones (and odd), headphones longer than master.
+    let mut m = vec![9.0; 2 * BLOCK + 1];
+    let mut h = vec![9.0; BLOCK];
+    r.render(&mut m, &mut h);
+    assert!(
+        m[..BLOCK].iter().all(|&s| s == 1.0),
+        "level and clamp applied"
+    );
+    assert!(
+        m[BLOCK..].iter().all(|&s| s == 0.0),
+        "remainder zero-filled"
+    );
+    assert!(h.iter().all(|&s| s.abs() <= 1.0 && s > 0.0));
+
+    let mut m = vec![9.0; 10];
+    let mut h = vec![9.0; 30];
+    r.render(&mut m, &mut h);
+    assert!(m.iter().all(|&s| s == 1.0));
+    assert!(h[10..].iter().all(|&s| s == 0.0));
+}

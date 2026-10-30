@@ -26,6 +26,18 @@ pub struct Meters {
     pub master_peak: [f32; 2],
 }
 
+impl Meters {
+    /// Keeps the larger of each peak.
+    pub(crate) fn merge(&mut self, other: &Meters) {
+        for (peak, other) in self.channel_peak.iter_mut().zip(other.channel_peak) {
+            *peak = peak.max(other);
+        }
+        for (peak, other) in self.master_peak.iter_mut().zip(other.master_peak) {
+            *peak = peak.max(other);
+        }
+    }
+}
+
 /// State the renderer publishes for the controller. Values are for display only, so each
 /// field is an independent `Relaxed` atomic and a snapshot may mix two consecutive blocks.
 #[derive(Debug, Default)]
