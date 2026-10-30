@@ -179,6 +179,14 @@ be mapped to a `light.*` action without the mapping layer knowing what lighting 
     CONTRIBUTING and handle it in CI). WASAPI as a fallback.
   - **macOS:** CoreAudio, class-compliant.
   - **Linux:** ALSA, optionally JACK/PipeWire.
+- **Master and headphones on separate devices (owner's setup, found in plan 1 hands-on test):**
+  when training, the owner plays master through the laptop speakers and cues through the SB3's
+  headphone output (outputs 3/4), with nothing plugged into the SB3 master out. When performing,
+  both come from the SB3. The app must support routing master and headphones to two different
+  audio devices, not only to channel pairs of one device. The two devices run on independent
+  clocks, so the secondary stream needs drift compensation (adaptive resampling fed by a
+  lock-free ring buffer); it must never block or glitch the primary (master) device. Settings
+  offer saved routing presets (e.g. "Training", "Performing").
 - **Hot-plug:** if the controller disconnects mid-set, playback continues. On reconnect, the
   mapping reattaches and all LEDs are re-sent. Audio device loss should fail over to the system
   default output and be shown clearly in the UI.
