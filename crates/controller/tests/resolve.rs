@@ -1,6 +1,6 @@
 use actions::{Action, ActionKind, ControlState, Input, Side, apply};
 use controller::MidiMessage;
-use controller::mapping::{Resolved, Resolver, parse_mapping};
+use controller::mapping::{Resolved, Resolver, ValueKind, decode_relative, parse_mapping};
 use engine::{DeckId, EngineConfig, EngineController, EngineRenderer, engine};
 
 /// A resolver over a mapping, with the control state and engine it drives. Every resolved
@@ -310,32 +310,15 @@ soft_takeover = false
 
 #[test]
 fn relative_twos_and_offset() {
-    let mut rig = Rig::new(
-        r#"
-[[input]]
-midi = { cc = 33, channel = 1 }
-action = "deck.tempo"
-deck = 1
-value = "relative_twos"
-
-[[input]]
-midi = { cc = 34, channel = 1 }
-action = "deck.tempo"
-deck = 1
-value = "relative_offset"
-"#,
-    );
-    let rel = |r: Resolved| match r.as_slice() {
-        [(Action::Tempo(_), Input::Relative(n))] => *n,
-        other => panic!("{other:?}"),
-    };
-    assert_eq!(rel(rig.send(cc(0, 33, 1))), 1);
-    assert_eq!(rel(rig.send(cc(0, 33, 63))), 63);
-    assert_eq!(rel(rig.send(cc(0, 33, 127))), -1);
-    assert_eq!(rel(rig.send(cc(0, 33, 65))), -63);
-    assert_eq!(rel(rig.send(cc(0, 34, 65))), 1);
-    assert_eq!(rel(rig.send(cc(0, 34, 63))), -1);
-    assert_eq!(rel(rig.send(cc(0, 34, 64))), 0);
+    use ValueKind::{RelativeOffset as Offset, RelativeTwos as Twos};
+    assert_eq!(decode_relative(Twos, 1), 1);
+    assert_eq!(decode_relative(Twos, 63), 63);
+    assert_eq!(decode_relative(Twos, 127), -1);
+    assert_eq!(decode_relative(Twos, 65), -63);
+    assert_eq!(decode_relative(Twos, 0), 0);
+    assert_eq!(decode_relative(Offset, 65), 1);
+    assert_eq!(decode_relative(Offset, 63), -1);
+    assert_eq!(decode_relative(Offset, 64), 0);
 }
 
 #[test]
@@ -435,4 +418,112 @@ fn reattach_arms_takeover() {
     assert_eq!(absolute(&rig.send(cc(0, 19, 127))), 1.0);
     rig.resolver.attach();
     assert!(rig.send(cc(0, 19, 60)).is_empty());
+}
+
+#[test]
+fn takeover_arms_when_shift_layer_changes_target() {
+    let mut rig = Rig::new(&format!(
+        r#"{LEFT_SIDE}
+[[input]]
+midi = {{ cc = 23, channel = 1 }}
+action = "channel.filter"
+side = "left"
+shift = false
+
+[[input]]
+midi = {{ cc = 23, channel = 1 }}
+action = "channel.trim"
+side = "left"
+shift = true
+"#
+    ));
+    // Pick up trim at 0.5 on the SHIFT layer.
+    rig.send(on(0, 63));
+    assert_eq!(
+        rig.send(cc(0, 23, 64)),
+        vec![(Action::Trim(d(0)), Input::Absolute(64.0 / 127.0))]
+    );
+    rig.send(off(0, 63));
+    // Pick up filter at 0.5, then turn it fully up.
+    assert_eq!(absolute(&rig.send(cc(0, 23, 64))), 64.0 / 127.0);
+    assert_eq!(absolute(&rig.send(cc(0, 23, 127))), 1.0);
+    // Back on the SHIFT layer, the knob is far from trim: it must not jump.
+    rig.send(on(0, 63));
+    assert!(rig.send(cc(0, 23, 126)).is_empty());
+    assert!(rig.send(cc(0, 23, 100)).is_empty());
+    assert_eq!(rig.state.deck(d(0)).trim, 64.0 / 127.0);
+    // Turning down past 0.5 picks trim up.
+    assert_eq!(
+        rig.send(cc(0, 23, 50)),
+        vec![(Action::Trim(d(0)), Input::Absolute(50.0 / 127.0))]
+    );
+}
+
+#[test]
+fn takeover_after_deck_switch_detects_crossing_from_previous_position() {
+    let mut rig = Rig::new(&format!("{LEFT_SIDE}{FADERS}"));
+    rig.state.deck_mut(d(2)).fader = 0.5;
+    assert_eq!(absolute(&rig.send(cc(0, 19, 127))), 1.0);
+    rig.send(on(0, 114));
+    rig.send(off(0, 114));
+    // The physical fader was at 1.0; moving to 0.2 crosses deck 3's 0.5.
+    assert_eq!(
+        rig.send(cc(0, 19, 25)),
+        vec![(Action::Fader(d(2)), Input::Absolute(25.0 / 127.0))]
+    );
+}
+
+#[test]
+fn second_press_without_release_keeps_first_press() {
+    let mut rig = Rig::new(&format!(
+        r#"{LEFT_SIDE}
+[[input]]
+midi = {{ note = 12, channel = 1 }}
+action = "deck.cue"
+side = "left"
+"#
+    ));
+    assert_eq!(rig.send(on(0, 12)), vec![(Action::Cue(d(0)), Input::Press)]);
+    rig.send(on(0, 114));
+    rig.send(off(0, 114));
+    // A repeated note-on (no release in between) still reaches the active deck…
+    assert_eq!(rig.send(on(0, 12)), vec![(Action::Cue(d(2)), Input::Press)]);
+    // …but the release goes to the deck that got the first press.
+    assert_eq!(
+        rig.send(off(0, 12)),
+        vec![(Action::Cue(d(0)), Input::Release)]
+    );
+}
+
+#[test]
+fn global_shift_condition_holds_when_either_side_shifts() {
+    let mut rig = Rig::new(
+        r#"
+[[input]]
+midi = { note = 63, channel = 1 }
+action = "modifier.shift"
+side = "left"
+
+[[input]]
+midi = { note = 63, channel = 2 }
+action = "modifier.shift"
+side = "right"
+
+[[input]]
+midi = { note = 40, channel = 7 }
+action = "master.headphone_master_toggle"
+shift = true
+"#,
+    );
+    assert!(rig.send(on(6, 40)).is_empty());
+    rig.send(off(6, 40));
+    for channel in [0, 1] {
+        rig.send(on(channel, 63));
+        assert_eq!(
+            rig.send(on(6, 40)),
+            vec![(Action::HeadphoneMasterToggle, Input::Press)]
+        );
+        rig.send(off(6, 40));
+        rig.send(off(channel, 63));
+    }
 }

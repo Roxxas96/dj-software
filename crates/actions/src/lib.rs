@@ -7,6 +7,6 @@ mod action;
 mod apply;
 mod state;
 
-pub use action::{Action, ActionKind, Input, Scope, Side, Target, ValueTarget};
+pub use action::{Action, ActionKind, Input, InputKind, Scope, Side, Target, ValueTarget};
 pub use apply::{ApplyResult, apply};
 pub use state::{ControlState, DeckControl, Led, SideControl, StateKey, led};

@@ -9,5 +9,5 @@ pub use file::{
     ControllerInfo, InitAction, InputBinding, Mapping, MappingError, MidiSource, OutputBinding,
     OutputMidi, ValueKind, parse_mapping,
 };
-pub use resolve::{Resolved, Resolver};
+pub use resolve::{Resolved, Resolver, decode_relative};
 pub use takeover::{TOLERANCE, Takeover};

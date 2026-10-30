@@ -6,7 +6,7 @@
 
 use std::fmt;
 
-use actions::{Action, ActionKind, Scope, Side, StateKey, Target};
+use actions::{Action, ActionKind, InputKind, Scope, Side, StateKey, Target};
 use engine::DeckId;
 use serde::Deserialize;
 
@@ -279,7 +279,12 @@ fn init_action(raw: RawInit) -> Result<InitAction, String> {
 fn input_binding(raw: RawInput) -> Result<InputBinding, String> {
     let kind = action_kind(&raw.action)?;
     let midi = midi_source(&raw.midi)?;
-    let target = target(kind, &raw.action, raw.deck, raw.side)?;
+    let target = scoped_target(
+        kind.scope(),
+        &format!("action `{}`", raw.action),
+        raw.deck,
+        raw.side,
+    )?;
     let value = match raw.value {
         Some(RawValueKind::Button) => ValueKind::Button,
         Some(RawValueKind::Absolute) => ValueKind::Absolute,
@@ -290,6 +295,17 @@ fn input_binding(raw: RawInput) -> Result<InputBinding, String> {
             _ => ValueKind::Absolute,
         },
     };
+    if !kind.accepts(value.input_kind()) {
+        let what = match value.input_kind() {
+            InputKind::Button => "button",
+            InputKind::Absolute => "absolute",
+            InputKind::Relative => "relative",
+        };
+        return Err(format!(
+            "action `{}` doesn't accept {what} values",
+            raw.action
+        ));
+    }
     let fits_midi = match value {
         ValueKind::Button => matches!(midi, MidiSource::Note { .. } | MidiSource::Cc { .. }),
         ValueKind::Absolute => true,
@@ -299,21 +315,6 @@ fn input_binding(raw: RawInput) -> Result<InputBinding, String> {
     };
     if !fits_midi {
         return Err(format!("value `{value}` does not fit {}", midi.kind_name()));
-    }
-    match value {
-        ValueKind::Absolute if !kind.is_absolute() => {
-            return Err(format!(
-                "action `{}` takes no absolute value; use value = \"button\"",
-                raw.action
-            ));
-        }
-        ValueKind::Button if kind.is_absolute() => {
-            return Err(format!(
-                "action `{}` needs an absolute or relative value",
-                raw.action
-            ));
-        }
-        _ => {}
     }
     let active_deck = raw.active_deck.map(deck).transpose()?;
     if let (Some(ad), Some(side)) = (active_deck, side_of(target))
@@ -339,11 +340,14 @@ fn input_binding(raw: RawInput) -> Result<InputBinding, String> {
 fn output_binding(raw: RawOutput) -> Result<OutputBinding, String> {
     let state =
         StateKey::from_id(&raw.state).ok_or_else(|| format!("unknown state `{}`", raw.state))?;
-    let target = match (raw.deck, raw.side) {
-        (Some(_), Some(_)) => return Err("`deck` and `side` are both set".into()),
-        (Some(n), None) => Some(Target::Deck(deck(n)?)),
-        (None, Some(s)) => Some(Target::Side(side(s))),
-        (None, None) => None,
+    let target = match scoped_target(
+        state.scope(),
+        &format!("state `{}`", raw.state),
+        raw.deck,
+        raw.side,
+    )? {
+        Target::Global => None,
+        t => Some(t),
     };
     let midi = match midi_source(&raw.midi)? {
         MidiSource::Note { channel, note } => OutputMidi::Note { channel, note },
@@ -368,10 +372,11 @@ fn action_kind(id: &str) -> Result<ActionKind, String> {
     ActionKind::from_id(id).ok_or_else(|| format!("unknown action `{id}`"))
 }
 
-/// The target of an input binding, checked against the action's scope.
-fn target(
-    kind: ActionKind,
-    id: &str,
+/// The target named by `deck`/`side`, checked against `scope`; `what` names the action
+/// or state in errors. Deck scopes take a deck or a side (read through its active deck).
+fn scoped_target(
+    scope: Scope,
+    what: &str,
     deck_n: Option<i64>,
     raw_side: Option<RawSide>,
 ) -> Result<Target, String> {
@@ -381,13 +386,13 @@ fn target(
         (None, Some(s)) => Some(Target::Side(side(s))),
         (None, None) => None,
     };
-    match (kind.scope(), target) {
+    match (scope, target) {
         (Scope::Deck, Some(t)) => Ok(t),
-        (Scope::Deck, None) => Err(format!("action `{id}` needs `deck` or `side`")),
+        (Scope::Deck, None) => Err(format!("{what} needs `deck` or `side`")),
         (Scope::Side, Some(t @ Target::Side(_))) => Ok(t),
-        (Scope::Side, _) => Err(format!("action `{id}` needs `side`")),
+        (Scope::Side, _) => Err(format!("{what} needs `side`")),
         (Scope::Global, None) => Ok(Target::Global),
-        (Scope::Global, Some(_)) => Err(format!("action `{id}` takes no `deck` or `side`")),
+        (Scope::Global, Some(_)) => Err(format!("{what} takes no `deck` or `side`")),
     }
 }
 
@@ -408,15 +413,17 @@ fn side(raw: RawSide) -> Side {
 
 /// A 1-based deck number from the file.
 fn deck(n: i64) -> Result<DeckId, String> {
-    usize::try_from(n - 1)
-        .ok()
+    n.checked_sub(1)
+        .and_then(|i| usize::try_from(i).ok())
         .and_then(DeckId::new)
         .ok_or_else(|| format!("deck {n} is outside 1-4"))
 }
 
 fn midi_source(raw: &RawMidi) -> Result<MidiSource, String> {
-    let channel = u8::try_from(raw.channel - 1)
-        .ok()
+    let channel = raw
+        .channel
+        .checked_sub(1)
+        .and_then(|c| u8::try_from(c).ok())
         .filter(|c| *c < 16)
         .ok_or_else(|| format!("channel {} is outside 1-16", raw.channel))?;
     let source = match (raw.note, raw.cc, raw.cc14, raw.pitchbend) {
@@ -462,6 +469,17 @@ impl MidiSource {
             MidiSource::Cc { .. } => "a cc",
             MidiSource::Cc14 { .. } => "a cc14",
             MidiSource::PitchBend { .. } => "pitch bend",
+        }
+    }
+}
+
+impl ValueKind {
+    /// The kind of [`actions::Input`] this value kind produces.
+    pub fn input_kind(self) -> InputKind {
+        match self {
+            ValueKind::Button => InputKind::Button,
+            ValueKind::Absolute => InputKind::Absolute,
+            ValueKind::RelativeTwos | ValueKind::RelativeOffset => InputKind::Relative,
         }
     }
 }

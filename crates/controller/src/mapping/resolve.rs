@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use actions::{Action, ControlState, Input, Scope, Side, Target};
+use actions::{Action, ControlState, Input, Scope, Side, Target, ValueTarget};
 use engine::DeckId;
 
 use super::file::{InputBinding, Mapping, MidiSource, ValueKind};
@@ -26,9 +26,19 @@ pub struct Resolver {
     held: HashMap<usize, Action>,
     /// The last `(msb, lsb)` seen per 14-bit source.
     cc14: HashMap<MidiSource, (u8, u8)>,
+    /// Per physical source: the value targets its last message drove and its last
+    /// absolute value (before `invert`). When a SHIFT or deck layer moves the control
+    /// onto a target it did not drive last time, that target is armed.
+    sources: HashMap<MidiSource, SourceMemory>,
     /// The active deck per side as of the last message, to arm takeover on a switch.
     seen_active: Option<[DeckId; 2]>,
     takeover: Takeover,
+}
+
+#[derive(Debug, Clone, Default)]
+struct SourceMemory {
+    targets: Vec<ValueTarget>,
+    value: f32,
 }
 
 /// A message's value as one binding reads it.
@@ -47,6 +57,7 @@ impl Resolver {
             bindings: mapping.inputs.clone(),
             held: HashMap::new(),
             cc14: HashMap::new(),
+            sources: HashMap::new(),
             seen_active: None,
             takeover: Takeover::new(),
         }
@@ -58,6 +69,7 @@ impl Resolver {
         self.takeover.arm_all();
         self.held.clear();
         self.cc14.clear();
+        self.sources.clear();
     }
 
     pub fn takeover(&self) -> &Takeover {
@@ -69,6 +81,7 @@ impl Resolver {
     pub fn resolve(&mut self, msg: &MidiMessage, state: &ControlState) -> Resolved {
         self.observe_deck_switches(state);
         let mut resolved = Resolved::new();
+        let mut driven: HashMap<MidiSource, SourceMemory> = HashMap::new();
 
         // A button release goes to whatever its press resolved to. If this control has
         // held presses, its other button bindings stay silent.
@@ -100,17 +113,32 @@ impl Resolver {
             let input = match binding.value {
                 ValueKind::Button => {
                     if button_pressed(raw) {
-                        self.held.insert(i, action);
+                        // A repeated press keeps the first one, so the release still
+                        // reaches the deck that got it.
+                        self.held.entry(i).or_insert(action);
                         Input::Press
                     } else {
                         Input::Release
                     }
                 }
                 ValueKind::Absolute => {
-                    let v = absolute(raw);
-                    let v = if binding.invert { 1.0 - v } else { v };
-                    if binding.soft_takeover && !self.take_over(action, v, state) {
-                        continue;
+                    let plain = absolute(raw);
+                    let flip = |v: f32| if binding.invert { 1.0 - v } else { v };
+                    let v = flip(plain);
+                    if let Some(target) = action.value_target() {
+                        let memory = driven.entry(binding.midi).or_default();
+                        memory.targets.push(target);
+                        memory.value = plain;
+                        if binding.soft_takeover {
+                            if let Some(last) = self.sources.get(&binding.midi)
+                                && !last.targets.contains(&target)
+                            {
+                                self.takeover.arm(target, Some(flip(last.value)));
+                            }
+                            if !self.take_over(target, v, state) {
+                                continue;
+                            }
+                        }
                     }
                     Input::Absolute(v)
                 }
@@ -121,6 +149,7 @@ impl Resolver {
             };
             resolved.push((action, input));
         }
+        self.sources.extend(driven);
         resolved
     }
 
@@ -137,15 +166,12 @@ impl Resolver {
         self.seen_active = Some(active);
     }
 
-    /// Whether the absolute value `v` for `action` passes soft takeover.
-    fn take_over(&mut self, action: Action, v: f32, state: &ControlState) -> bool {
-        let Some(target) = action.value_target() else {
-            return true;
-        };
-        let Some(current) = state.value(target) else {
-            return true;
-        };
-        self.takeover.filter(target, v, current)
+    /// Whether the absolute value `v` for `target` passes soft takeover.
+    fn take_over(&mut self, target: ValueTarget, v: f32, state: &ControlState) -> bool {
+        match state.value(target) {
+            Some(current) => self.takeover.filter(target, v, current),
+            None => true,
+        }
     }
 
     /// The value of `msg` for a binding on `source`, updating 14-bit CC state.
@@ -261,13 +287,20 @@ fn absolute(raw: Raw) -> f32 {
 }
 
 fn relative(kind: ValueKind, raw: Raw) -> i32 {
-    let Raw::Seven(v) = raw else {
-        return 0;
-    };
-    let v = i32::from(v);
+    match raw {
+        Raw::Seven(v) => decode_relative(kind, v),
+        Raw::Fourteen(_) => 0,
+    }
+}
+
+/// The signed steps a relative control sent as `value`: two's complement (1..=63 forward,
+/// 65..=127 backward) or offset by 64. Non-relative kinds decode to 0.
+pub fn decode_relative(kind: ValueKind, value: u8) -> i32 {
+    let v = i32::from(value);
     match kind {
         ValueKind::RelativeTwos if v >= 64 => v - 128,
         ValueKind::RelativeTwos => v,
-        _ => v - 64,
+        ValueKind::RelativeOffset => v - 64,
+        ValueKind::Button | ValueKind::Absolute => 0,
     }
 }

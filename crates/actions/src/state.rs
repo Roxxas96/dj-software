@@ -1,6 +1,6 @@
 use engine::{DeckId, DeckSnapshot, TempoRange};
 
-use crate::{ActionKind, Side, Target, ValueTarget};
+use crate::{ActionKind, Scope, Side, Target, ValueTarget};
 
 /// What the app last told the engine about one deck and its channel.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -187,6 +187,19 @@ impl StateKey {
 
     pub fn from_id(id: &str) -> Option<StateKey> {
         Self::ALL.into_iter().find(|key| key.id() == id)
+    }
+
+    /// The target this key reads: deck keys take a deck (or a side, read through its
+    /// active deck), side keys a side, global keys none.
+    pub fn scope(&self) -> Scope {
+        match self {
+            StateKey::DeckPlaying
+            | StateKey::DeckPlayLed
+            | StateKey::DeckCueLed
+            | StateKey::ChannelPfl => Scope::Deck,
+            StateKey::SideAltDeck | StateKey::Shift => Scope::Side,
+            StateKey::HeadphoneMaster => Scope::Global,
+        }
     }
 }
 
