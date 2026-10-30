@@ -10,7 +10,8 @@
 # with SHIFT held, as a separate step whose id ends in ".shift"; `held_shift`
 # marks a step that is itself done with SHIFT held. `prepare` is done before
 # listening starts, so that action is not recorded. A section's `shift_control`
-# names the earlier SHIFT button step whose note is ignored in its SHIFT steps.
+# (an id or a list, one per layer) names the earlier SHIFT button steps whose
+# notes are ignored in its SHIFT steps.
 
 controller = "Pioneer DDJ-SB3"
 
@@ -338,7 +339,7 @@ kind = "button"
 
 [[section]]
 name = "Global"
-setup = "Controls shared by both sides."
+setup = "Controls shared by both sides. First press each side's DECK button until the LEFT side controls deck 1 and the RIGHT side controls deck 2."
 
 [[section.step]]
 id = "crossfader"
@@ -363,7 +364,7 @@ kind = "button"
 [[section]]
 name = "Effects (LEFT)"
 setup = "The FX buttons and FX LEVEL knob on the LEFT side. If this side has no FX section, skip (s) each step. For SHIFT steps, hold the LEFT SHIFT."
-shift_control = "deck1.shift"
+shift_control = ["deck1.shift", "deck3.shift"]
 
 [[section.step]]
 id = "fx.left.1"
@@ -391,7 +392,7 @@ kind = "continuous"
 [[section]]
 name = "Effects (RIGHT)"
 setup = "The FX buttons and FX LEVEL knob on the RIGHT side. If this side has no FX section, skip (s) each step. For SHIFT steps, hold the RIGHT SHIFT."
-shift_control = "deck2.shift"
+shift_control = ["deck2.shift", "deck4.shift"]
 
 [[section.step]]
 id = "fx.right.1"
@@ -419,7 +420,7 @@ kind = "continuous"
 [[section]]
 name = "Browser"
 setup = "The BROWSE knob and LOAD buttons. For SHIFT steps, hold the LEFT SHIFT."
-shift_control = "deck1.shift"
+shift_control = ["deck1.shift", "deck3.shift"]
 
 [[section.step]]
 id = "browse.rotate"
