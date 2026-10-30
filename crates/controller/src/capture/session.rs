@@ -145,8 +145,8 @@ impl CaptureSession {
 
     /// The `(status, data1)` note pairs left out of a SHIFT step.
     ///
-    /// When the side's SHIFT button was captured (`shift_control`), they are
-    /// exactly its notes, whatever the order or whether SHIFT was held before
+    /// When the side's SHIFT button was captured (`shift_control`, one id per
+    /// layer), they are exactly the union of those controls' notes, whatever the order or whether SHIFT was held before
     /// the step. Otherwise a key counts as SHIFT only if it is still held when
     /// another key is pressed; until then, the earliest key still held is set
     /// aside so SHIFT held alone never completes the step.
@@ -154,17 +154,16 @@ impl CaptureSession {
         let Some(step) = self.current().filter(|s| s.shift) else {
             return Vec::new();
         };
-        if let Some(shift) = step
+        let known: Vec<(u8, u8)> = step
             .shift_control
-            .as_deref()
-            .and_then(|id| self.control(id))
-        {
-            return shift
-                .messages
-                .iter()
-                .filter(|m| m.status & 0xF0 == 0x90)
-                .map(|m| (m.status, m.data1))
-                .collect();
+            .iter()
+            .filter_map(|id| self.control(id))
+            .flat_map(|shift| &shift.messages)
+            .filter(|m| m.status & 0xF0 == 0x90)
+            .map(|m| (m.status, m.data1))
+            .collect();
+        if !known.is_empty() {
+            return known;
         }
         let mut held: Vec<(u8, u8)> = Vec::new();
         for timed in &self.buffer {
@@ -369,7 +368,7 @@ mod tests {
             prepare: None,
             kind,
             shift: false,
-            shift_control: None,
+            shift_control: Vec::new(),
         }
     }
 
@@ -662,7 +661,7 @@ mod tests {
 
     fn known_shift_step(id: &str, kind: StepKind) -> Step {
         Step {
-            shift_control: Some("deck1.shift".to_owned()),
+            shift_control: vec!["deck1.shift".to_owned()],
             ..shift_step(id, kind)
         }
     }
@@ -743,5 +742,31 @@ mod tests {
         assert_eq!(session.redo(), Redo::Reopened);
         assert_eq!(session.current().unwrap().id, "a");
         assert_eq!(session.redo(), Redo::Nothing);
+    }
+
+    #[test]
+    fn shift_control_list_excludes_either_layer() {
+        // LEFT SHIFT sends note 0x3F on deck 1 and on channel 3 for deck 3.
+        let mut session = CaptureSession::new(vec![
+            step("deck1.shift", StepKind::Button),
+            step("deck3.shift", StepKind::Button),
+            Step {
+                shift_control: vec!["deck1.shift".to_owned(), "deck3.shift".to_owned()],
+                ..shift_step("load.left.shift", StepKind::Button)
+            },
+        ]);
+        session.feed(timed(0, [0x90, 0x3F, 0x7F]));
+        assert_eq!(session.poll(1000 * MS), StepStatus::Done);
+        session.feed(timed(1000, [0x92, 0x3F, 0x7F]));
+        assert_eq!(session.poll(2000 * MS), StepStatus::Done);
+        // The side is on the deck-3 layer: its SHIFT (channel 3) is excluded.
+        session.feed(timed(3000, [0x92, 0x3F, 0x7F]));
+        session.feed(timed(3010, [0x96, 0x46, 0x7F]));
+        session.feed(timed(3050, [0x96, 0x46, 0x00]));
+        session.feed(timed(3100, [0x92, 0x3F, 0x00]));
+        assert_eq!(session.poll(4000 * MS), StepStatus::Done);
+        let control = session.control("load.left.shift").unwrap();
+        assert_eq!(control.messages.len(), 1, "{control:?}");
+        assert_eq!(control.messages[0].status, 0x96);
     }
 }
