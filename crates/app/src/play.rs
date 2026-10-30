@@ -185,3 +185,44 @@ pub fn play(args: &PlayArgs) -> anyhow::Result<()> {
     println!();
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn routing_errors_use_one_based_channels_and_a_hint() {
+        let out_of_range = AudioError::Routing {
+            device: "DDJ".to_owned(),
+            source: RoutingError::ChannelOutOfRange {
+                index: 3,
+                device_channels: 2,
+            },
+        };
+        let text = describe_audio_error(&out_of_range);
+        assert!(text.contains("output channel 4, but the device has only 2 channels"));
+        assert!(text.contains("\"DDJ\""));
+        assert!(text.contains("dj-software devices"));
+
+        let overlap = AudioError::Routing {
+            device: "DDJ".to_owned(),
+            source: RoutingError::Overlap { index: 0 },
+        };
+        assert!(describe_audio_error(&overlap).contains("output channel 1 is routed"));
+    }
+
+    #[test]
+    fn formats_deck_time() {
+        let snapshot = DeckSnapshot {
+            loaded: true,
+            playing: true,
+            position_frames: 44_100.0 * 65.0,
+            duration_frames: 44_100 * 200,
+            track_sample_rate: 44_100,
+            tempo_ratio: 1.0,
+            cue_frames: 0.0,
+            previewing: false,
+        };
+        assert_eq!(deck_line(&snapshot), "Deck 1  01:05 / 03:20");
+    }
+}
