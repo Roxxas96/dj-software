@@ -2,7 +2,12 @@ use actions::{Action, Input, Side};
 use controller::builtin::{builtin_mapping, load_mapping, load_mapping_from};
 use controller::mapping::{Mapping, parse_mapping};
 use controller::{MidiMessage, MidiOut, Runtime, TimedMidi};
-use engine::{DeckId, EngineConfig, EngineController, EngineRenderer, engine};
+use std::sync::Arc;
+
+use engine::{
+    Command, DeckCommand, DeckId, EngineConfig, EngineController, EngineRenderer, TrackBuffer,
+    engine,
+};
 
 #[derive(Default)]
 struct Recorder(Vec<MidiMessage>);
@@ -307,7 +312,7 @@ fn reconnect_resends_all_leds() {
     rig.runtime.tick(10, &rig.engine, &mut rig.out);
     assert_eq!(rig.out.take(), [led(63, 127)]);
 
-    rig.runtime.on_disconnect();
+    rig.runtime.on_disconnect(&mut rig.engine);
     rig.runtime.tick(20, &rig.engine, &mut rig.out);
     assert!(
         rig.out.take().is_empty(),
@@ -320,12 +325,53 @@ fn reconnect_resends_all_leds() {
 }
 
 #[test]
+fn disconnect_releases_held_presses() {
+    let mut rig = Rig::attached();
+    let track = Arc::new(TrackBuffer::new(44_100, vec![0.5; 200_000 * 2]).unwrap());
+    rig.engine
+        .send(Command::Deck(d(0), DeckCommand::Load(track)))
+        .unwrap();
+    rig.render();
+
+    rig.batch(&[on(0, 12)]);
+    rig.render();
+    assert!(rig.engine.deck(d(0)).previewing, "CUE held: preview runs");
+
+    rig.runtime.on_disconnect(&mut rig.engine);
+    rig.render();
+    assert!(
+        !rig.engine.deck(d(0)).previewing,
+        "the held CUE is released when the cable goes"
+    );
+}
+
+#[test]
+fn batches_are_ignored_while_detached() {
+    // Messages drained after the controller was lost must not bring back SHIFT or held
+    // presses.
+    let mut rig = Rig::attached();
+    rig.runtime.on_disconnect(&mut rig.engine);
+    let stats = rig.batch(&[on(0, 63), on(0, 12), fader(5)]);
+    assert_eq!(stats, controller::BatchStats::default());
+    let state = rig.runtime.state();
+    assert!(!state.side(Side::Left).shift);
+    assert_eq!(state.deck(d(0)).fader, 1.0);
+
+    let mut fresh = Rig::new();
+    let stats = fresh.batch(&[on(0, 63)]);
+    assert_eq!(
+        stats.applied, 0,
+        "nothing is handled before the first attach"
+    );
+}
+
+#[test]
 fn reconnect_does_not_rerun_init() {
     let mut rig = Rig::attached();
     rig.batch(&[cc(6, 31, 127)]);
     assert_eq!(rig.runtime.state().crossfader, 1.0);
 
-    rig.runtime.on_disconnect();
+    rig.runtime.on_disconnect(&mut rig.engine);
     rig.runtime.on_reconnect(&mut rig.engine, &mut rig.out);
     assert_eq!(
         rig.runtime.state().crossfader,
@@ -342,7 +388,7 @@ fn reconnect_arms_takeover() {
     let mut rig = Rig::attached();
     let start = (0.8f32 * 127.0).round() as u8;
     rig.batch(&[cc(6, 33, start)]);
-    rig.runtime.on_disconnect();
+    rig.runtime.on_disconnect(&mut rig.engine);
     rig.runtime.on_reconnect(&mut rig.engine, &mut rig.out);
     let stats = rig.batch(&[cc(6, 33, 0)]);
     assert_eq!(stats.applied, 0);
@@ -409,6 +455,19 @@ fn load_mapping_reads_existing_path() {
     let mapping = load_mapping(path.to_str().unwrap()).unwrap();
     assert_eq!(mapping.controller.name, "My SB3");
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn load_mapping_does_not_read_a_directory_as_a_file() {
+    // A `ddj-sb3` directory in the working directory (like the repo's `controllers/ddj-sb3`)
+    // is a name to look up, not a mapping file.
+    let dir = std::env::temp_dir().join(format!("dj-software-dir-{}", std::process::id()));
+    let named = dir.join("ddj-sb3");
+    std::fs::create_dir_all(&named).unwrap();
+    let mapping = load_mapping(named.to_str().unwrap());
+    std::fs::remove_dir_all(&dir).unwrap();
+    let err = mapping.unwrap_err();
+    assert!(err.to_string().contains("built-in mappings"), "{err}");
 }
 
 #[test]
