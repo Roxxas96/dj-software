@@ -19,7 +19,7 @@ AF=$STEREO ff -c:a flac "$out/sine440.flac"
 AF=$STEREO ff -c:a libmp3lame -b:a 128k "$out/sine440.mp3"
 AF=$STEREO ff -c:a aac -b:a 128k "$out/sine440.m4a"
 AF=$STEREO ff -c:a vorbis -strict -2 -b:a 128k "$out/sine440.ogg"
-AF=annul ff -ac 1 "$out/sine440_mono.wav"
+AF=anull ff -ac 1 "$out/sine440_mono.wav"
 
 # Deterministic pseudo-random bytes (fixed-seed LCG), so the file is not decodable.
 LC_ALL=C awk 'BEGIN { x = 12345; for (i = 0; i < 4096; i++) { x = (x * 1103515245 + 12345) % 2147483648; printf "%c", int(x / 65536) % 256 } }' \

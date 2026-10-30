@@ -1,5 +1,7 @@
 //! Audio file decoding into engine-ready sample buffers.
 
+mod mp4_trim;
+
 use std::fs::File;
 use std::path::Path;
 
@@ -34,86 +36,6 @@ fn map_error(err: SymphoniaError) -> DecodeError {
         SymphoniaError::Unsupported(m) => DecodeError::Unsupported(m.to_string()),
         other => DecodeError::Corrupt(other.to_string()),
     }
-}
-
-/// Gapless trim for an MP4 audio track, in frames at the track's sample rate.
-struct Trim {
-    delay: usize,
-    length: usize,
-}
-
-fn be32(b: &[u8], at: usize) -> Option<u32> {
-    Some(u32::from_be_bytes(
-        b.get(at..at.checked_add(4)?)?.try_into().ok()?,
-    ))
-}
-
-fn be64(b: &[u8], at: usize) -> Option<u64> {
-    Some(u64::from_be_bytes(
-        b.get(at..at.checked_add(8)?)?.try_into().ok()?,
-    ))
-}
-
-/// Iterates the ISO base media boxes in `data` as `(type, payload)`.
-fn boxes(data: &[u8]) -> impl Iterator<Item = (&[u8], &[u8])> {
-    let mut at = 0usize;
-    std::iter::from_fn(move || {
-        let size = be32(data, at)? as usize;
-        let kind = data.get(at + 4..at + 8)?;
-        let (header, size) = match size {
-            0 => (8, data.len() - at),
-            1 => (16, usize::try_from(be64(data, at + 8)?).ok()?),
-            n => (8, n),
-        };
-        let payload = data.get(at + header..at.checked_add(size)?)?;
-        at += size;
-        Some((kind, payload))
-    })
-}
-
-/// symphonia 0.6 does not apply MP4 edit lists, so AAC encoder delay and padding are read
-/// from the first real `elst` entry here.
-fn mp4_trim(data: &[u8], rate: u32) -> Option<Trim> {
-    if data.get(4..8)? != b"ftyp" {
-        return None;
-    }
-    let moov = boxes(data).find(|(k, _)| *k == b"moov")?.1;
-    let mvhd = boxes(moov).find(|(k, _)| *k == b"mvhd")?.1;
-    let movie_scale = u64::from(if *mvhd.first()? == 1 {
-        be32(mvhd, 20)?
-    } else {
-        be32(mvhd, 12)?
-    });
-    if movie_scale == 0 {
-        return None;
-    }
-    let elst = boxes(moov)
-        .filter(|(k, _)| *k == b"trak")
-        .filter_map(|(_, trak)| boxes(trak).find(|(k, _)| *k == b"edts"))
-        .find_map(|(_, edts)| boxes(edts).find(|(k, _)| *k == b"elst"))?
-        .1;
-    let v1 = *elst.first()? == 1;
-    let (mut at, count) = (8usize, be32(elst, 4)?);
-    for _ in 0..count {
-        let (duration, media_time, next) = if v1 {
-            (be64(elst, at)?, be64(elst, at + 8)? as i64, at + 20)
-        } else {
-            (
-                u64::from(be32(elst, at)?),
-                i64::from(be32(elst, at + 4)? as i32),
-                at + 12,
-            )
-        };
-        at = next;
-        if media_time >= 0 {
-            let length = duration.checked_mul(u64::from(rate))? / movie_scale;
-            return Some(Trim {
-                delay: media_time as usize,
-                length: usize::try_from(length).ok()?,
-            });
-        }
-    }
-    None
 }
 
 /// Decodes `path` at its native sample rate into interleaved stereo.
@@ -153,6 +75,7 @@ pub fn decode_file(path: &Path) -> Result<TrackBuffer, DecodeError> {
         .ok_or(DecodeError::NoAudioTrack)?;
     let track_id = track.id;
     let track_delay_missing = track.delay.is_none();
+    let track_id_for_trim = track.id;
     let params = track
         .codec_params
         .as_ref()
@@ -208,9 +131,8 @@ pub fn decode_file(path: &Path) -> Result<TrackBuffer, DecodeError> {
     }
 
     if track_delay_missing
-        && let Some(trim) = std::fs::read(path)
-            .ok()
-            .and_then(|d| mp4_trim(&d, sample_rate?))
+        && let Some(rate) = sample_rate
+        && let Some(trim) = mp4_trim::read_trim(path, track_id_for_trim, rate)
     {
         let start = trim.delay.saturating_mul(2).min(out.len());
         out.drain(..start);
