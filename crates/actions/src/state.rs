@@ -122,7 +122,11 @@ impl ControlState {
     }
 
     /// The field behind an absolute target; same mapping as [`Self::value`].
-    pub(crate) fn value_mut(&mut self, target: ValueTarget) -> Option<&mut f32> {
+    ///
+    /// Writing through it bypasses [`crate::apply`]: the engine is not told and derived
+    /// state (`headphone_master`) is not updated. The controller runtime uses it to stage a
+    /// value whose engine command is deferred, and restores the field if that send fails.
+    pub fn value_mut(&mut self, target: ValueTarget) -> Option<&mut f32> {
         match target {
             (kind, Some(id)) => {
                 let deck = self.deck_mut(id);

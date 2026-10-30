@@ -38,7 +38,7 @@ fn backend<E: std::fmt::Display>(e: E) -> PortError {
 }
 
 /// Index of the first name containing `wanted`, ignoring case.
-fn find_match(names: &[String], wanted: &str) -> Option<usize> {
+pub(crate) fn find_match(names: &[String], wanted: &str) -> Option<usize> {
     let wanted = wanted.to_lowercase();
     names
         .iter()
