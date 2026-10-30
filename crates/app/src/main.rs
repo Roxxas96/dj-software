@@ -1,5 +1,6 @@
 //! Command-line entry point: argument parsing and dispatch.
 
+mod led_scan;
 mod midi_cmd;
 mod play;
 
@@ -55,6 +56,31 @@ enum MidiCommand {
         #[arg(long, value_name = "STEP")]
         redo: Vec<String>,
     },
+    /// Find which MIDI message lights a controller LED, by binary search
+    LedScan {
+        /// Port name (substring; default: the first input containing "DDJ")
+        #[arg(long, value_name = "NAME")]
+        port: Option<String>,
+        /// 1-based MIDI channels to search
+        #[arg(long, value_delimiter = ',', default_value = "1,2,5,6,7,8,9")]
+        channels: Vec<u8>,
+        /// Velocity (or CC value) used to light messages
+        #[arg(long, default_value_t = 127)]
+        velocity: u8,
+        /// Message kind to search
+        #[arg(long, value_enum, default_value = "note")]
+        kind: led_scan::Kind,
+        /// File the findings are appended to
+        #[arg(
+            long,
+            value_name = "PATH",
+            default_value = "controllers/ddj-sb3/led-scan.toml"
+        )]
+        out: PathBuf,
+        /// Light one message instead of searching: <STATUS> <DATA1> [<VALUE>] in hex
+        #[arg(long = "try", num_args = 2..=3, value_names = ["STATUS", "DATA1", "VALUE"])]
+        try_message: Option<Vec<String>>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -80,6 +106,17 @@ fn main() -> ExitCode {
             port,
             redo,
         }) => midi_cmd::capture(&checklist, &out, port.as_deref(), &redo),
+        Sub::Midi(MidiCommand::LedScan {
+            port,
+            channels,
+            velocity,
+            kind,
+            out,
+            try_message,
+        }) => match try_message {
+            Some(args) => led_scan::try_one(port.as_deref(), &args),
+            None => led_scan::run(port.as_deref(), &channels, velocity, kind, &out),
+        },
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -159,6 +196,55 @@ mod tests {
             parse(&["dj-software", "midi", "monitor"]).unwrap().command,
             Sub::Midi(MidiCommand::Monitor { port: None })
         ));
+    }
+
+    #[test]
+    fn parses_midi_led_scan() {
+        match parse(&["dj-software", "midi", "led-scan"]).unwrap().command {
+            Sub::Midi(MidiCommand::LedScan {
+                channels,
+                velocity,
+                kind,
+                out,
+                try_message,
+                ..
+            }) => {
+                assert_eq!(channels, vec![1, 2, 5, 6, 7, 8, 9]);
+                assert_eq!(velocity, 127);
+                assert_eq!(kind, led_scan::Kind::Note);
+                assert_eq!(out, PathBuf::from("controllers/ddj-sb3/led-scan.toml"));
+                assert!(try_message.is_none());
+            }
+            _ => panic!("expected led-scan"),
+        }
+        match parse(&[
+            "dj-software",
+            "midi",
+            "led-scan",
+            "--kind",
+            "cc",
+            "--channels",
+            "3,4",
+            "--try",
+            "0x90",
+            "0B",
+            "40",
+        ])
+        .unwrap()
+        .command
+        {
+            Sub::Midi(MidiCommand::LedScan {
+                channels,
+                kind,
+                try_message,
+                ..
+            }) => {
+                assert_eq!(channels, vec![3, 4]);
+                assert_eq!(kind, led_scan::Kind::Cc);
+                assert_eq!(try_message.unwrap(), ["0x90", "0B", "40"]);
+            }
+            _ => panic!("expected led-scan"),
+        }
     }
 
     #[test]
