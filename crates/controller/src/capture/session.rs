@@ -4,8 +4,8 @@
 //! ([`crate::clock::now_micros`]); it never touches ports or stdin.
 
 use super::checklist::{Step, StepKind};
-use super::fixture::{Control, Fixture, Meta};
-use crate::midi::TimedMidi;
+use super::fixture::{Control, Fixture, Meta, is_release, key_and_value};
+use crate::midi::{MidiMessage, TimedMidi};
 
 /// Quiet gap after the last message that completes a button step.
 pub const BUTTON_GAP_MICROS: u64 = 400_000;
@@ -110,17 +110,56 @@ impl CaptureSession {
         self.slots.iter().filter(|s| **s != Slot::Missing).count()
     }
 
-    /// Distinct note-on notes recorded so far for the current step.
+    /// Distinct pressed notes recorded so far for the current step, ignoring
+    /// the SHIFT modifier and keys whose first message was a release.
     pub fn distinct_notes(&self) -> usize {
-        let mut notes: Vec<(u8, u8)> = Vec::new();
-        for timed in &self.buffer {
-            if let crate::midi::MidiMessage::NoteOn { channel, note, .. } = timed.message
-                && !notes.contains(&(channel, note))
-            {
-                notes.push((channel, note));
-            }
+        let Some(step) = self.current() else {
+            return 0;
+        };
+        Control::from_messages(&step.id, step.kind, &self.relevant())
+            .messages
+            .iter()
+            .filter(|m| m.status & 0xF0 == 0x90)
+            .count()
+    }
+
+    /// For a SHIFT step, the `(channel, note)` of the first key pressed in the
+    /// step: the held SHIFT, which is left out of the record.
+    pub fn modifier(&self) -> Option<(u8, u8)> {
+        if !self.current()?.shift {
+            return None;
         }
-        notes.len()
+        self.buffer.iter().find_map(|timed| match timed.message {
+            MidiMessage::NoteOn { channel, note, .. } => Some((channel, note)),
+            _ => None,
+        })
+    }
+
+    /// The current step's messages that count: without the SHIFT modifier and
+    /// without pairs whose first message was a release.
+    fn relevant(&self) -> Vec<TimedMidi> {
+        let modifier = self.modifier();
+        let mut released_first: Vec<(u8, u8)> = Vec::new();
+        let mut seen: Vec<(u8, u8)> = Vec::new();
+        let mut out = Vec::new();
+        for timed in &self.buffer {
+            let (status, data1, _) = key_and_value(timed.message);
+            if modifier.is_some_and(|(channel, note)| (0x90 | channel, note) == (status, data1)) {
+                continue;
+            }
+            if released_first.contains(&(status, data1)) {
+                continue;
+            }
+            if !seen.contains(&(status, data1)) {
+                if is_release(timed.message) {
+                    released_first.push((status, data1));
+                    continue;
+                }
+                seen.push((status, data1));
+            }
+            out.push(*timed);
+        }
+        out
     }
 
     /// Records a message for the current step (ignored when every step is done).
@@ -136,7 +175,8 @@ impl CaptureSession {
         let Some(i) = self.cursor else {
             return StepStatus::Done;
         };
-        let Some(last) = self.buffer.last() else {
+        let relevant = self.relevant();
+        let Some(last) = relevant.last() else {
             return StepStatus::Waiting;
         };
         let kind = self.steps[i].kind;
@@ -158,7 +198,7 @@ impl CaptureSession {
     /// (and does nothing) if nothing was recorded.
     pub fn accept(&mut self) -> bool {
         match self.cursor {
-            Some(i) if !self.buffer.is_empty() => {
+            Some(i) if !self.relevant().is_empty() => {
                 self.commit(i);
                 true
             }
@@ -222,13 +262,24 @@ impl CaptureSession {
         Fixture { meta, controls }
     }
 
+    /// Stores an LED probe answer on a captured control (no-op if not captured).
+    pub fn set_led(&mut self, id: &str, led: bool, values_vary: Option<bool>) {
+        if let Some(i) = self.index_of(id)
+            && let Slot::Captured(control) = &mut self.slots[i]
+        {
+            control.led = Some(led);
+            control.led_values_vary = values_vary;
+        }
+    }
+
     pub fn finish(self) -> Fixture {
         self.fixture()
     }
 
     fn commit(&mut self, i: usize) {
+        let relevant = self.relevant();
         let step = &self.steps[i];
-        let control = Control::from_messages(&step.id, step.kind, &self.buffer);
+        let control = Control::from_messages(&step.id, step.kind, &relevant);
         self.buffer.clear();
         self.slots[i] = Slot::Captured(control);
         self.history.push(i);
@@ -258,6 +309,7 @@ mod tests {
             section: "Test".to_owned(),
             prompt: "do it".to_owned(),
             setup: None,
+            prepare: None,
             kind,
             shift: false,
         }
@@ -308,6 +360,7 @@ mod tests {
             [MessageRange {
                 status: 0xB0,
                 data1: 0x13,
+                first: Some(64),
                 min: 0,
                 max: 127
             }]
@@ -450,5 +503,89 @@ mod tests {
         assert_eq!(ids, ["a", "c", "d", "gone"]);
         assert_eq!(fixture.meta.port, "P");
         assert_eq!(fixture.meta.skipped, ["b"]);
+    }
+
+    fn shift_step(id: &str, kind: StepKind) -> Step {
+        Step {
+            shift: true,
+            ..step(id, kind)
+        }
+    }
+
+    #[test]
+    fn release_first_pairs_are_dropped() {
+        // SHIFT (note 0x3F) released at the start of a step it was held across.
+        let mut session = CaptureSession::new(vec![step("cue", StepKind::Button)]);
+        session.feed(timed(0, [0x90, 0x3F, 0x00]));
+        assert_eq!(session.poll(1000 * MS), StepStatus::Waiting);
+        assert!(!session.accept());
+        session.feed(timed(1000, [0x90, 0x0C, 0x7F]));
+        session.feed(timed(1050, [0x90, 0x0C, 0x00]));
+        session.feed(timed(1060, [0x90, 0x3F, 0x00]));
+        assert_eq!(session.poll(2000 * MS), StepStatus::Done);
+        let control = session.finish().controls.remove(0);
+        assert_eq!(control.messages.len(), 1, "{control:?}");
+        assert_eq!(control.messages[0].data1, 0x0C);
+    }
+
+    #[test]
+    fn released_mode_button_does_not_count_as_pad() {
+        let mut session = CaptureSession::new(vec![step("pads", StepKind::Pads)]);
+        // HOT CUE (note 0x1B) pressed before listening, released after.
+        session.feed(timed(0, [0x90, 0x1B, 0x00]));
+        for note in 0..7u8 {
+            let t = 100 + u64::from(note) * 100;
+            session.feed(timed(t, [0x97, note, 0x7F]));
+            session.feed(timed(t + 50, [0x97, note, 0x00]));
+        }
+        assert_eq!(session.distinct_notes(), 7);
+        assert_eq!(session.poll(10_000 * MS), StepStatus::Recording);
+    }
+
+    #[test]
+    fn shift_step_ignores_the_held_modifier() {
+        let mut session = CaptureSession::new(vec![
+            shift_step("play.shift", StepKind::Button),
+            step("cue", StepKind::Button),
+        ]);
+        // SHIFT pressed and held: alone it neither records nor completes the step.
+        session.feed(timed(0, [0x90, 0x3F, 0x7F]));
+        assert_eq!(session.modifier(), Some((0, 0x3F)));
+        assert_eq!(session.poll(2000 * MS), StepStatus::Waiting);
+        session.feed(timed(2000, [0x90, 0x47, 0x7F]));
+        session.feed(timed(2050, [0x90, 0x47, 0x00]));
+        // SHIFT released inside the quiet gap: does not delay completion.
+        session.feed(timed(2300, [0x90, 0x3F, 0x00]));
+        assert_eq!(session.poll(2451 * MS), StepStatus::Done);
+        let fixture = session.finish();
+        assert_eq!(fixture.controls[0].messages.len(), 1);
+        assert_eq!(fixture.controls[0].messages[0].data1, 0x47);
+    }
+
+    #[test]
+    fn shift_pads_ignore_the_modifier_in_the_count() {
+        let mut session = CaptureSession::new(vec![shift_step("pads.shift", StepKind::Pads)]);
+        session.feed(timed(0, [0x90, 0x3F, 0x7F]));
+        for note in 0..8u8 {
+            let t = 100 + u64::from(note) * 100;
+            session.feed(timed(t, [0x97, note + 8, 0x7F]));
+            session.feed(timed(t + 50, [0x97, note + 8, 0x00]));
+        }
+        assert_eq!(session.distinct_notes(), 8);
+        assert_eq!(session.poll(3000 * MS), StepStatus::Done);
+        let control = session.finish().controls.remove(0);
+        assert_eq!(control.messages.len(), 8);
+        assert!(control.messages.iter().all(|m| m.status == 0x97));
+    }
+
+    #[test]
+    fn set_led_stores_probe_answer() {
+        let mut session = CaptureSession::new(vec![step("play", StepKind::Button)]);
+        session.feed(timed(0, [0x90, 0x0B, 0x7F]));
+        assert_eq!(session.poll(1000 * MS), StepStatus::Done);
+        session.set_led("play", true, None);
+        let control = session.control("play").unwrap();
+        assert_eq!(control.led, Some(true));
+        assert_eq!(control.led_values_vary, None);
     }
 }

@@ -19,7 +19,7 @@ rtrb = "0.4"
 assert_no_alloc = "1.1"
 clap = { version = "4.6", features = ["derive"] }
 anyhow = "1"
-ctrlc = "3.5.2"
+ctrlc = { version = "3.5.2", features = ["termination"] }
 thiserror = "2"
 approx = "0.5"
 midir = "0.11.1"

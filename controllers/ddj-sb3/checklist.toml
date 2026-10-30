@@ -7,7 +7,9 @@
 #
 # Each section may repeat once per deck (`decks`), with {deck} substituted in
 # its name, setup, ids and prompts. A step with `shift = true` is also captured
-# with SHIFT held, as a separate step whose id ends in ".shift".
+# with SHIFT held, as a separate step whose id ends in ".shift"; `held_shift`
+# marks a step that is itself done with SHIFT held. `prepare` is done before
+# listening starts, so that action is not recorded.
 
 controller = "Pioneer DDJ-SB3"
 
@@ -121,27 +123,32 @@ shift = true
 
 [[section.step]]
 id = "deck{deck}.pads_hot_cue"
-prompt = "Before Enter: press LEFT HOT CUE (without SHIFT). After Enter: tap the 8 LEFT pads one by one, 1 to 8."
+prepare = "Press LEFT HOT CUE (without SHIFT) to select its pad mode."
+prompt = "Tap the 8 LEFT pads one by one, 1 to 8."
 kind = "pads"
 
 [[section.step]]
 id = "deck{deck}.pads_hot_cue.shift"
-prompt = "Stay in HOT CUE mode. Hold LEFT SHIFT before Enter and keep holding it. After Enter: tap the 8 LEFT pads one by one, 1 to 8."
+prompt = "Still in HOT CUE mode: hold LEFT SHIFT and keep holding it, then tap the 8 LEFT pads one by one, 1 to 8."
 kind = "pads"
+held_shift = true
 
 [[section.step]]
 id = "deck{deck}.pads_fx_fade"
-prompt = "Before Enter: press LEFT FX FADE (without SHIFT). After Enter: tap the 8 LEFT pads one by one, 1 to 8."
+prepare = "Press LEFT FX FADE (without SHIFT) to select its pad mode."
+prompt = "Tap the 8 LEFT pads one by one, 1 to 8."
 kind = "pads"
 
 [[section.step]]
 id = "deck{deck}.pads_pad_scratch"
-prompt = "Before Enter: press LEFT PAD SCRATCH (without SHIFT). After Enter: tap the 8 LEFT pads one by one, 1 to 8."
+prepare = "Press LEFT PAD SCRATCH (without SHIFT) to select its pad mode."
+prompt = "Tap the 8 LEFT pads one by one, 1 to 8."
 kind = "pads"
 
 [[section.step]]
 id = "deck{deck}.pads_sampler"
-prompt = "Before Enter: press LEFT SAMPLER (without SHIFT). After Enter: tap the 8 LEFT pads one by one, 1 to 8."
+prepare = "Press LEFT SAMPLER (without SHIFT) to select its pad mode."
+prompt = "Tap the 8 LEFT pads one by one, 1 to 8."
 kind = "pads"
 
 [[section]]
@@ -254,27 +261,32 @@ shift = true
 
 [[section.step]]
 id = "deck{deck}.pads_hot_cue"
-prompt = "Before Enter: press RIGHT HOT CUE (without SHIFT). After Enter: tap the 8 RIGHT pads one by one, 1 to 8."
+prepare = "Press RIGHT HOT CUE (without SHIFT) to select its pad mode."
+prompt = "Tap the 8 RIGHT pads one by one, 1 to 8."
 kind = "pads"
 
 [[section.step]]
 id = "deck{deck}.pads_hot_cue.shift"
-prompt = "Stay in HOT CUE mode. Hold RIGHT SHIFT before Enter and keep holding it. After Enter: tap the 8 RIGHT pads one by one, 1 to 8."
+prompt = "Still in HOT CUE mode: hold RIGHT SHIFT and keep holding it, then tap the 8 RIGHT pads one by one, 1 to 8."
 kind = "pads"
+held_shift = true
 
 [[section.step]]
 id = "deck{deck}.pads_fx_fade"
-prompt = "Before Enter: press RIGHT FX FADE (without SHIFT). After Enter: tap the 8 RIGHT pads one by one, 1 to 8."
+prepare = "Press RIGHT FX FADE (without SHIFT) to select its pad mode."
+prompt = "Tap the 8 RIGHT pads one by one, 1 to 8."
 kind = "pads"
 
 [[section.step]]
 id = "deck{deck}.pads_pad_scratch"
-prompt = "Before Enter: press RIGHT PAD SCRATCH (without SHIFT). After Enter: tap the 8 RIGHT pads one by one, 1 to 8."
+prepare = "Press RIGHT PAD SCRATCH (without SHIFT) to select its pad mode."
+prompt = "Tap the 8 RIGHT pads one by one, 1 to 8."
 kind = "pads"
 
 [[section.step]]
 id = "deck{deck}.pads_sampler"
-prompt = "Before Enter: press RIGHT SAMPLER (without SHIFT). After Enter: tap the 8 RIGHT pads one by one, 1 to 8."
+prepare = "Press RIGHT SAMPLER (without SHIFT) to select its pad mode."
+prompt = "Tap the 8 RIGHT pads one by one, 1 to 8."
 kind = "pads"
 
 [[section]]
@@ -342,28 +354,63 @@ id = "headphone_master"
 prompt = "Press and release the headphone MASTER button."
 kind = "button"
 
+[[section]]
+name = "Effects (LEFT)"
+setup = "The FX buttons and FX LEVEL knob on the LEFT side. If this side has no FX section, skip (s) each step. For SHIFT steps, hold the LEFT SHIFT."
+
 [[section.step]]
-id = "fx.1"
-prompt = "Press and release the FX 1 button (if each side has one, use the LEFT one)."
+id = "fx.left.1"
+prompt = "Press and release the LEFT FX 1 button. Skip (s) if this side has none."
 kind = "button"
 shift = true
 
 [[section.step]]
-id = "fx.2"
-prompt = "Press and release the FX 2 button (if each side has one, use the LEFT one)."
+id = "fx.left.2"
+prompt = "Press and release the LEFT FX 2 button. Skip (s) if this side has none."
 kind = "button"
 shift = true
 
 [[section.step]]
-id = "fx.3"
-prompt = "Press and release the FX 3 button (if each side has one, use the LEFT one)."
+id = "fx.left.3"
+prompt = "Press and release the LEFT FX 3 button. Skip (s) if this side has none."
 kind = "button"
 shift = true
 
 [[section.step]]
-id = "fx.level"
-prompt = "Turn the FX LEVEL knob fully left, then fully right (if each side has one, use the LEFT one)."
+id = "fx.left.level"
+prompt = "Turn the LEFT FX LEVEL knob fully left, then fully right. Skip (s) if this side has none."
 kind = "continuous"
+
+[[section]]
+name = "Effects (RIGHT)"
+setup = "The FX buttons and FX LEVEL knob on the RIGHT side. If this side has no FX section, skip (s) each step. For SHIFT steps, hold the RIGHT SHIFT."
+
+[[section.step]]
+id = "fx.right.1"
+prompt = "Press and release the RIGHT FX 1 button. Skip (s) if this side has none."
+kind = "button"
+shift = true
+
+[[section.step]]
+id = "fx.right.2"
+prompt = "Press and release the RIGHT FX 2 button. Skip (s) if this side has none."
+kind = "button"
+shift = true
+
+[[section.step]]
+id = "fx.right.3"
+prompt = "Press and release the RIGHT FX 3 button. Skip (s) if this side has none."
+kind = "button"
+shift = true
+
+[[section.step]]
+id = "fx.right.level"
+prompt = "Turn the RIGHT FX LEVEL knob fully left, then fully right. Skip (s) if this side has none."
+kind = "continuous"
+
+[[section]]
+name = "Browser"
+setup = "The BROWSE knob and LOAD buttons. For SHIFT steps, hold the LEFT SHIFT."
 
 [[section.step]]
 id = "browse.rotate"
