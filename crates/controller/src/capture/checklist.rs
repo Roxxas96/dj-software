@@ -3,7 +3,8 @@
 //!
 //! Step keys: `id`, `prompt`, `kind`, optional `prepare` (done before listening
 //! starts), `shift` (also capture a SHIFT variant) and `held_shift` (this step is
-//! itself done with SHIFT held).
+//! itself done with SHIFT held). A section's optional `shift_control` names the
+//! earlier SHIFT button step whose note is the modifier in its SHIFT steps.
 
 use std::collections::HashSet;
 
@@ -48,8 +49,11 @@ pub struct Step {
     /// CLI waits for Enter first so that action is not recorded.
     pub prepare: Option<String>,
     /// True when the step is captured with SHIFT held (a SHIFT variant or a
-    /// `held_shift` step); the first key pressed is then treated as SHIFT.
+    /// `held_shift` step).
     pub shift: bool,
+    /// For SHIFT steps: id of the earlier step that captured this side's SHIFT
+    /// button, whose note is excluded from the record.
+    pub shift_control: Option<String>,
 }
 
 /// A loaded checklist: an optional controller name and the expanded steps.
@@ -65,6 +69,12 @@ pub enum ChecklistError {
     Parse(#[from] toml::de::Error),
     #[error("duplicate step id {0:?}")]
     DuplicateId(String),
+    #[error("step {step:?}: shift_control {shift_control:?} {problem}")]
+    ShiftControl {
+        step: String,
+        shift_control: String,
+        problem: &'static str,
+    },
     #[error("section {section:?}: {problem}")]
     Section { section: String, problem: String },
 }
@@ -83,6 +93,9 @@ struct SectionDef {
     name: String,
     decks: Option<Vec<u8>>,
     setup: Option<String>,
+    /// Id of the SHIFT button step whose note is the modifier in this section's
+    /// SHIFT steps; it must be captured earlier in the checklist.
+    shift_control: Option<String>,
     #[serde(rename = "step", default)]
     steps: Vec<StepDef>,
 }
@@ -120,10 +133,37 @@ pub fn parse_checklist(text: &str) -> Result<Checklist, ChecklistError> {
             return Err(ChecklistError::DuplicateId(step.id.clone()));
         }
     }
+    check_shift_controls(&steps)?;
     Ok(Checklist {
         controller: file.controller,
         steps,
     })
+}
+
+/// Each `shift_control` must name an unshifted button step that comes earlier,
+/// so its note is known when the SHIFT step is captured.
+fn check_shift_controls(steps: &[Step]) -> Result<(), ChecklistError> {
+    for (i, step) in steps.iter().enumerate() {
+        let Some(shift_control) = &step.shift_control else {
+            continue;
+        };
+        let error = |problem| ChecklistError::ShiftControl {
+            step: step.id.clone(),
+            shift_control: shift_control.clone(),
+            problem,
+        };
+        let Some(j) = steps.iter().position(|s| &s.id == shift_control) else {
+            return Err(error("is not a step in this checklist"));
+        };
+        if j > i {
+            return Err(error("must come before this step"));
+        }
+        let target = &steps[j];
+        if target.shift || target.kind != StepKind::Button {
+            return Err(error("must be an unshifted button step"));
+        }
+    }
+    Ok(())
 }
 
 const DECK: &str = "{deck}";
@@ -139,6 +179,10 @@ fn expand_section(section: &SectionDef, out: &mut Vec<Step>) -> Result<(), Check
         None => {
             let uses_deck = section.name.contains(DECK)
                 || section.setup.as_deref().is_some_and(|s| s.contains(DECK))
+                || section
+                    .shift_control
+                    .as_deref()
+                    .is_some_and(|s| s.contains(DECK))
                 || section.steps.iter().any(|s| {
                     s.id.contains(DECK)
                         || s.prompt.contains(DECK)
@@ -175,11 +219,16 @@ fn expand_section(section: &SectionDef, out: &mut Vec<Step>) -> Result<(), Check
                 prepare: def.prepare.as_deref().map(sub),
                 kind: def.kind,
                 shift: def.held_shift,
+                shift_control: def
+                    .held_shift
+                    .then(|| section.shift_control.as_deref().map(sub))
+                    .flatten(),
             };
             let shifted = def.shift.then(|| Step {
                 id: format!("{}.shift", base.id),
                 prompt: format!("Hold SHIFT and keep holding it, then: {}", base.prompt),
                 shift: true,
+                shift_control: section.shift_control.as_deref().map(sub),
                 ..base.clone()
             });
             out.push(base);
@@ -383,6 +432,33 @@ kind = "button"
             .find(|s| s.id == "deck2.pads_hot_cue.shift")
             .unwrap();
         assert!(shifted.shift);
+        // Every SHIFT step knows its side's SHIFT button (load checks the order).
+        for step in checklist.steps.iter().filter(|s| s.shift) {
+            assert!(step.shift_control.is_some(), "{}", step.id);
+        }
+        assert_eq!(shifted.shift_control.as_deref(), Some("deck2.shift"));
+        // TEMPO starts at the far end, so `first` gives the polarity.
+        for deck in 1..=4 {
+            let id = format!("deck{deck}.tempo");
+            let tempo = checklist.steps.iter().find(|s| s.id == id).unwrap();
+            assert!(
+                tempo.prepare.as_deref().is_some_and(|p| p.contains("AWAY")),
+                "{id}"
+            );
+        }
+        // DECK is pressed once, as the last step of each deck section.
+        for deck in 1..=4 {
+            let section: Vec<&Step> = checklist
+                .steps
+                .iter()
+                .filter(|s| s.id.starts_with(&format!("deck{deck}.")))
+                .collect();
+            assert_eq!(
+                section.last().unwrap().id,
+                format!("deck{deck}.deck_select")
+            );
+            assert_eq!(section.first().unwrap().id, format!("deck{deck}.shift"));
+        }
         assert!(
             checklist
                 .steps
@@ -424,6 +500,69 @@ held_shift = true
         assert!(matches!(
             load_checklist(&both),
             Err(ChecklistError::Section { .. })
+        ));
+    }
+
+    #[test]
+    fn checklist_shift_control_must_precede() {
+        let ok = r#"
+[[section]]
+name = "Left deck {deck}"
+decks = [1, 3]
+shift_control = "deck{deck}.shift"
+[[section.step]]
+id = "deck{deck}.shift"
+prompt = "Press SHIFT."
+kind = "button"
+[[section.step]]
+id = "deck{deck}.play"
+prompt = "Press PLAY."
+kind = "button"
+shift = true
+[[section.step]]
+id = "deck{deck}.pads.shift"
+prompt = "Hold SHIFT and tap the pads."
+kind = "pads"
+held_shift = true
+"#;
+        let steps = load_checklist(ok).unwrap();
+        let find = |id: &str| steps.iter().find(|s| s.id == id).unwrap();
+        assert_eq!(find("deck3.play").shift_control, None);
+        assert_eq!(
+            find("deck3.play.shift").shift_control.as_deref(),
+            Some("deck3.shift")
+        );
+        assert_eq!(
+            find("deck1.pads.shift").shift_control.as_deref(),
+            Some("deck1.shift")
+        );
+
+        // SHIFT captured after the step that needs it.
+        let late = ok.replace(
+            "id = \"deck{deck}.shift\"\nprompt = \"Press SHIFT.\"\nkind = \"button\"\n[[section.step]]\nid = \"deck{deck}.play\"",
+            "id = \"deck{deck}.play\"",
+        ) + "[[section.step]]\nid = \"deck{deck}.shift\"\nprompt = \"Press SHIFT.\"\nkind = \"button\"\n";
+        assert!(matches!(
+            load_checklist(&late),
+            Err(ChecklistError::ShiftControl { problem, .. }) if problem.contains("before")
+        ));
+
+        let missing = ok.replace(
+            "shift_control = \"deck{deck}.shift\"",
+            "shift_control = \"nope\"",
+        );
+        assert!(matches!(
+            load_checklist(&missing),
+            Err(ChecklistError::ShiftControl { .. })
+        ));
+
+        let not_button = ok.replace(
+            "shift_control = \"deck{deck}.shift\"",
+            "shift_control = \"deck{deck}.pads.shift\"",
+        );
+        assert!(matches!(
+            load_checklist(&not_button),
+            Err(ChecklistError::ShiftControl { .. })
         ));
     }
 }

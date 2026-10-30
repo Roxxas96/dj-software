@@ -11,8 +11,8 @@ use std::time::Duration;
 
 use anyhow::{Context, anyhow, bail};
 use controller::capture::{
-    CaptureSession, Fixture, LedProbe, LedSink, Meta, PROBE_VELOCITIES, Question, Step, StepKind,
-    StepStatus, parse_checklist, parse_fixture, run_led_probe,
+    CaptureSession, Fixture, LedProbe, LedSink, Meta, PROBE_VELOCITIES, Question, Redo, Step,
+    StepKind, StepStatus, parse_checklist, parse_fixture, run_led_probe,
 };
 use controller::{
     MidiMessage, OutputPort, PortError, TimedMidi, clock, input_port_names, open_input,
@@ -297,7 +297,7 @@ pub fn capture(checklist_path: &Path, out: &Path, port: Option<&str>) -> anyhow:
     println!("Capturing from {} into {}", input.name(), out.display());
     println!("Each step listens as soon as it is shown: just do what it says.");
     println!(
-        "Type then Enter: nothing = finish the step now, s = skip, r = redo the previous step, q = save and quit."
+        "Type then Enter: nothing = finish the step now, s = skip, r = start this step over (or go back one step if nothing was recorded yet), q = save and quit."
     );
     println!("When a step asks you to prepare something first, do it, then press Enter.");
     if !run_steps(&mut session, &rx, &lines, out, leds.as_deref())? {
@@ -445,13 +445,15 @@ fn run_steps(
                 }
             }
             Listened::Skipped => println!("  skipped {}", step.id),
-            Listened::Redo => {
-                session.redo();
-                match session.current() {
-                    Some(again) if again.id != step.id => println!("  back to {}", again.id),
-                    _ => println!("  nothing to redo yet"),
+            Listened::Redo => match session.redo() {
+                Redo::Restarted => println!("  starting {} over", step.id),
+                Redo::Reopened => {
+                    if let Some(again) = session.current() {
+                        println!("  back to {}", again.id);
+                    }
                 }
-            }
+                Redo::Nothing => println!("  nothing to redo yet"),
+            },
             Listened::Quit => {
                 save(out, session)?;
                 return Ok(false);
@@ -514,7 +516,7 @@ fn listen(
                 Command::Quit => return Ok(Listened::Quit),
                 Command::Unknown(other) => {
                     println!(
-                        "  unknown command {other:?} (Enter = finish now, s = skip, r = redo previous, q = quit)"
+                        "  unknown command {other:?} (Enter = finish now, s = skip, r = redo, q = quit)"
                     );
                 }
             },
@@ -527,14 +529,8 @@ fn listen(
 
 /// Extra text after an echoed message: the held SHIFT, or the pad count.
 fn echo_note(session: &CaptureSession, step: &Step, message: MidiMessage) -> String {
-    let note = match message {
-        MidiMessage::NoteOn { channel, note, .. } | MidiMessage::NoteOff { channel, note, .. } => {
-            Some((channel, note))
-        }
-        _ => None,
-    };
-    if note.is_some() && note == session.modifier() {
-        return "   (held SHIFT, not recorded)".to_owned();
+    if session.is_modifier(message) {
+        return "   (SHIFT, not recorded)".to_owned();
     }
     if step.kind == StepKind::Pads && matches!(message, MidiMessage::NoteOn { .. }) {
         return format!("   ({}/{PAD_COUNT} pads)", session.distinct_notes());
