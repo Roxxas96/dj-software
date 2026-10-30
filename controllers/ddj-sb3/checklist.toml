@@ -15,23 +15,18 @@
 
 controller = "Pioneer DDJ-SB3"
 
-# Sources that are never recorded: messages from them are dropped while
-# capturing (shown as "(ignored)") and stripped from loaded fixtures.
-# Seeded entries: a parasitic burst observed on the owner's SB3, 2026-10-30
-# (B5 02 32, B5 22 1A, B5 04 32, B5 24 1A, B5 06 32, B5 26 1A, channel 6
-# CC 2/34, 4/36, 6/38 with constant values), sent now and then after other
-# events, never during a 20 s idle period. If a real control ever turns out to
-# use one of these, type `u B5 02` (status, data1 in hex) during the capture to
-# record it again, and remove it from this list.
+# Sources that are never recorded: list them as
+#   [ignore]
+#   sources = [{ status = 0xB5, data1 = 0x02 }]
+# and messages from them are dropped while capturing and stripped from loaded
+# fixtures. Nothing is ignored for the SB3. It sends the current FILTER knob
+# positions (channel 6, 14-bit CC 2/34, 4/36, 6/38) when some buttons are
+# pressed; that is knob data, not noise. The capture tool handles it: a button
+# or pads step that recorded a note keeps only notes, and any source that
+# varies in a knob, fader or jog capture is stripped from button and pads
+# controls.
 [ignore]
-sources = [
-  { status = 0xB5, data1 = 0x02 },
-  { status = 0xB5, data1 = 0x22 },
-  { status = 0xB5, data1 = 0x04 },
-  { status = 0xB5, data1 = 0x24 },
-  { status = 0xB5, data1 = 0x06 },
-  { status = 0xB5, data1 = 0x26 },
-]
+sources = []
 
 [[section]]
 name = "Left deck {deck}"
