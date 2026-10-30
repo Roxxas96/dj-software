@@ -9,3 +9,11 @@ publish = false
 
 [lints]
 workspace = true
+
+[dependencies]
+rtrb.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+approx.workspace = true
+assert_no_alloc.workspace = true
