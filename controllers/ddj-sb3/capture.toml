@@ -1,0 +1,1805 @@
+[meta]
+controller = "Pioneer DDJ-SB3"
+port = "DDJ-SB3"
+tool_version = "0.0.0"
+
+[[control]]
+id = "deck1.shift"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x3F, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 63
+]
+led = false
+
+[[control]]
+id = "deck1.play"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x0B, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 11
+]
+led = false
+
+[[control]]
+id = "deck1.play.shift"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x47, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 71
+]
+
+[[control]]
+id = "deck1.cue"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x0C, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 12
+]
+led = false
+
+[[control]]
+id = "deck1.cue.shift"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x48, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 72
+]
+
+[[control]]
+id = "deck1.sync"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x58, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 88
+]
+led = false
+
+[[control]]
+id = "deck1.sync.shift"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x5C, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 92
+]
+
+[[control]]
+id = "deck1.key_lock"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x1A, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 26
+]
+led = false
+
+[[control]]
+id = "deck1.key_lock.shift"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x60, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 96
+]
+
+[[control]]
+id = "deck1.vinyl"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x17, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 23
+]
+led = false
+
+[[control]]
+id = "deck1.vinyl.shift"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x40, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 64
+]
+
+[[control]]
+id = "deck1.auto_loop"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x14, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 20
+]
+led = false
+
+[[control]]
+id = "deck1.auto_loop.shift"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x50, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 80
+]
+
+[[control]]
+id = "deck1.loop_half"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x12, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 18
+]
+led = false
+
+[[control]]
+id = "deck1.loop_half.shift"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x61, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 97
+]
+
+[[control]]
+id = "deck1.loop_double"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x13, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 19
+]
+led = false
+
+[[control]]
+id = "deck1.loop_double.shift"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x62, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 98
+]
+
+[[control]]
+id = "deck1.jog_touch"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x36, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 54
+]
+led = false
+
+[[control]]
+id = "deck1.jog_top"
+kind = "jog"
+messages = [
+  { status = 0x90, data1 = 0x36, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 54
+  { status = 0xB0, data1 = 0x23, first = 65, min = 63, max = 65 }, # ControlChange ch1 controller 35
+  { status = 0xB0, data1 = 0x21, first = 63, min = 63, max = 63 }, # ControlChange ch1 controller 33
+]
+
+[[control]]
+id = "deck1.jog_top.shift"
+kind = "jog"
+messages = [
+  { status = 0x90, data1 = 0x67, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 103
+  { status = 0xB0, data1 = 0x1F, first = 65, min = 63, max = 65 }, # ControlChange ch1 controller 31
+  { status = 0xB0, data1 = 0x26, first = 63, min = 63, max = 63 }, # ControlChange ch1 controller 38
+]
+
+[[control]]
+id = "deck1.jog_outer"
+kind = "jog"
+messages = [
+  { status = 0xB0, data1 = 0x21, first = 65, min = 63, max = 65 }, # ControlChange ch1 controller 33
+]
+
+[[control]]
+id = "deck1.tempo"
+kind = "continuous"
+messages = [
+  { status = 0xB0, data1 = 0x00, first = 63, min = 0, max = 63 }, # ControlChange ch1 controller 0
+  { status = 0xB0, data1 = 0x20, first = 79, min = 0, max = 124 }, # ControlChange ch1 controller 32
+]
+cc14 = { msb = 0x00, lsb = 0x20 }
+
+[[control]]
+id = "deck1.mode_hot_cue"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x1B, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 27
+]
+led = true
+
+[[control]]
+id = "deck1.mode_hot_cue.shift"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x69, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 105
+]
+
+[[control]]
+id = "deck1.mode_fx_fade"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x1E, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 30
+]
+led = true
+
+[[control]]
+id = "deck1.mode_fx_fade.shift"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x4D, first = 127, min = 127, max = 127 }, # NoteOn ch1 note 77
+  { status = 0x90, data1 = 0x6B, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 107
+]
+
+[[control]]
+id = "deck1.mode_pad_scratch"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x20, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 32
+]
+led = true
+
+[[control]]
+id = "deck1.mode_pad_scratch.shift"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x6D, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 109
+]
+
+[[control]]
+id = "deck1.mode_sampler"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x22, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 34
+]
+led = true
+
+[[control]]
+id = "deck1.mode_sampler.shift"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x6E, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 110
+]
+
+[[control]]
+id = "deck1.pads_hot_cue"
+kind = "pads"
+messages = [
+  { status = 0x97, data1 = 0x00, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 0
+  { status = 0x97, data1 = 0x01, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 1
+  { status = 0x97, data1 = 0x02, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 2
+  { status = 0x97, data1 = 0x03, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 3
+  { status = 0x97, data1 = 0x04, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 4
+  { status = 0x97, data1 = 0x05, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 5
+  { status = 0x97, data1 = 0x06, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 6
+  { status = 0x97, data1 = 0x07, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 7
+]
+
+[[control]]
+id = "deck1.pads_hot_cue.shift"
+kind = "pads"
+messages = [
+  { status = 0x97, data1 = 0x08, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 8
+  { status = 0x97, data1 = 0x09, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 9
+  { status = 0x97, data1 = 0x0A, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 10
+  { status = 0x97, data1 = 0x0B, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 11
+  { status = 0x97, data1 = 0x0C, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 12
+  { status = 0x97, data1 = 0x0D, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 13
+  { status = 0x97, data1 = 0x0E, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 14
+  { status = 0x97, data1 = 0x0F, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 15
+]
+
+[[control]]
+id = "deck1.pads_fx_fade"
+kind = "pads"
+messages = [
+  { status = 0x97, data1 = 0x10, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 16
+  { status = 0x97, data1 = 0x11, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 17
+  { status = 0x97, data1 = 0x12, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 18
+  { status = 0x90, data1 = 0x4D, first = 127, min = 127, max = 127 }, # NoteOn ch1 note 77
+  { status = 0x90, data1 = 0x4C, first = 127, min = 127, max = 127 }, # NoteOn ch1 note 76
+  { status = 0x97, data1 = 0x13, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 19
+  { status = 0xB0, data1 = 0x22, first = 56, min = 56, max = 56 }, # ControlChange ch1 controller 34
+  { status = 0x90, data1 = 0x36, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 54
+  { status = 0x97, data1 = 0x14, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 20
+  { status = 0x97, data1 = 0x15, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 21
+  { status = 0x97, data1 = 0x16, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 22
+  { status = 0x90, data1 = 0x4A, first = 127, min = 127, max = 127 }, # NoteOn ch1 note 74
+  { status = 0x97, data1 = 0x17, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 23
+]
+led = true
+led_values_vary = false
+
+[[control]]
+id = "deck1.pads_pad_scratch"
+kind = "pads"
+messages = [
+  { status = 0x97, data1 = 0x20, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 32
+  { status = 0x90, data1 = 0x36, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 54
+  { status = 0x97, data1 = 0x00, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 0
+  { status = 0xB0, data1 = 0x22, first = 65, min = 62, max = 66 }, # ControlChange ch1 controller 34
+  { status = 0x97, data1 = 0x21, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 33
+  { status = 0x97, data1 = 0x22, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 34
+  { status = 0x97, data1 = 0x23, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 35
+  { status = 0x97, data1 = 0x24, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 36
+  { status = 0x97, data1 = 0x25, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 37
+  { status = 0x97, data1 = 0x26, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 38
+  { status = 0x97, data1 = 0x27, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 39
+]
+led = true
+led_values_vary = false
+
+[[control]]
+id = "deck1.pads_sampler"
+kind = "pads"
+messages = [
+  { status = 0x97, data1 = 0x30, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 48
+  { status = 0x97, data1 = 0x31, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 49
+  { status = 0x97, data1 = 0x32, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 50
+  { status = 0x97, data1 = 0x33, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 51
+  { status = 0x97, data1 = 0x34, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 52
+  { status = 0x97, data1 = 0x35, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 53
+  { status = 0x97, data1 = 0x36, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 54
+  { status = 0x97, data1 = 0x37, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 55
+]
+led = true
+led_values_vary = false
+
+[[control]]
+id = "deck1.deck_select"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x72, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 114
+]
+led = false
+
+[[control]]
+id = "deck3.shift"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x3F, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 63
+]
+led = false
+
+[[control]]
+id = "deck3.play"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x0B, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 11
+]
+led = false
+
+[[control]]
+id = "deck3.play.shift"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x47, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 71
+]
+
+[[control]]
+id = "deck3.cue"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x0C, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 12
+]
+led = false
+
+[[control]]
+id = "deck3.cue.shift"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x48, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 72
+]
+
+[[control]]
+id = "deck3.sync"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x58, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 88
+]
+led = false
+
+[[control]]
+id = "deck3.sync.shift"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x5C, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 92
+]
+
+[[control]]
+id = "deck3.key_lock"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x1A, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 26
+]
+led = false
+
+[[control]]
+id = "deck3.key_lock.shift"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x60, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 96
+]
+
+[[control]]
+id = "deck3.vinyl"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x17, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 23
+]
+led = false
+
+[[control]]
+id = "deck3.vinyl.shift"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x40, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 64
+]
+
+[[control]]
+id = "deck3.auto_loop"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x14, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 20
+]
+led = false
+
+[[control]]
+id = "deck3.auto_loop.shift"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x50, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 80
+]
+
+[[control]]
+id = "deck3.loop_half"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x12, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 18
+]
+led = false
+
+[[control]]
+id = "deck3.loop_half.shift"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x61, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 97
+]
+
+[[control]]
+id = "deck3.loop_double"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x13, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 19
+]
+led = false
+
+[[control]]
+id = "deck3.loop_double.shift"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x62, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 98
+]
+
+[[control]]
+id = "deck3.jog_touch"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x36, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 54
+]
+led = false
+
+[[control]]
+id = "deck3.jog_top"
+kind = "jog"
+messages = [
+  { status = 0x90, data1 = 0x36, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 54
+  { status = 0xB0, data1 = 0x23, first = 65, min = 63, max = 65 }, # ControlChange ch1 controller 35
+  { status = 0xB0, data1 = 0x21, first = 63, min = 63, max = 63 }, # ControlChange ch1 controller 33
+]
+
+[[control]]
+id = "deck3.jog_top.shift"
+kind = "jog"
+messages = [
+  { status = 0x90, data1 = 0x67, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 103
+  { status = 0xB0, data1 = 0x1F, first = 65, min = 63, max = 65 }, # ControlChange ch1 controller 31
+]
+
+[[control]]
+id = "deck3.jog_outer"
+kind = "jog"
+messages = [
+  { status = 0xB0, data1 = 0x21, first = 65, min = 63, max = 65 }, # ControlChange ch1 controller 33
+]
+
+[[control]]
+id = "deck3.tempo"
+kind = "continuous"
+messages = [
+  { status = 0xB0, data1 = 0x00, first = 62, min = 0, max = 62 }, # ControlChange ch1 controller 0
+  { status = 0xB0, data1 = 0x20, first = 12, min = 0, max = 90 }, # ControlChange ch1 controller 32
+]
+cc14 = { msb = 0x00, lsb = 0x20 }
+
+[[control]]
+id = "deck3.mode_hot_cue"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x1B, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 27
+]
+led = true
+
+[[control]]
+id = "deck3.mode_hot_cue.shift"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x69, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 105
+]
+
+[[control]]
+id = "deck3.mode_fx_fade"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x1E, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 30
+]
+led = true
+
+[[control]]
+id = "deck3.mode_fx_fade.shift"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x4D, first = 127, min = 127, max = 127 }, # NoteOn ch1 note 77
+  { status = 0x90, data1 = 0x6B, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 107
+]
+
+[[control]]
+id = "deck3.mode_pad_scratch"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x4D, first = 127, min = 127, max = 127 }, # NoteOn ch1 note 77
+  { status = 0x90, data1 = 0x20, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 32
+]
+led = true
+
+[[control]]
+id = "deck3.mode_pad_scratch.shift"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x6D, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 109
+]
+
+[[control]]
+id = "deck3.mode_sampler"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x22, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 34
+]
+led = true
+
+[[control]]
+id = "deck3.mode_sampler.shift"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x6E, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 110
+]
+
+[[control]]
+id = "deck3.pads_hot_cue"
+kind = "pads"
+messages = [
+  { status = 0x97, data1 = 0x00, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 0
+  { status = 0x97, data1 = 0x01, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 1
+  { status = 0x97, data1 = 0x02, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 2
+  { status = 0x97, data1 = 0x03, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 3
+  { status = 0x97, data1 = 0x04, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 4
+  { status = 0x97, data1 = 0x05, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 5
+  { status = 0x97, data1 = 0x06, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 6
+  { status = 0x97, data1 = 0x07, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 7
+]
+led = true
+led_values_vary = false
+
+[[control]]
+id = "deck3.pads_hot_cue.shift"
+kind = "pads"
+messages = [
+  { status = 0x97, data1 = 0x08, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 8
+  { status = 0x97, data1 = 0x09, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 9
+  { status = 0x97, data1 = 0x0A, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 10
+  { status = 0x97, data1 = 0x0B, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 11
+  { status = 0x97, data1 = 0x0C, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 12
+  { status = 0x97, data1 = 0x0D, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 13
+  { status = 0x97, data1 = 0x0E, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 14
+  { status = 0x97, data1 = 0x0F, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 15
+]
+
+[[control]]
+id = "deck3.pads_fx_fade"
+kind = "pads"
+messages = [
+  { status = 0x97, data1 = 0x10, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 16
+  { status = 0x97, data1 = 0x11, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 17
+  { status = 0x97, data1 = 0x12, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 18
+  { status = 0x90, data1 = 0x4D, first = 127, min = 127, max = 127 }, # NoteOn ch1 note 77
+  { status = 0x90, data1 = 0x4C, first = 127, min = 127, max = 127 }, # NoteOn ch1 note 76
+  { status = 0x97, data1 = 0x13, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 19
+  { status = 0xB0, data1 = 0x22, first = 56, min = 56, max = 56 }, # ControlChange ch1 controller 34
+  { status = 0x90, data1 = 0x36, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 54
+  { status = 0x97, data1 = 0x14, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 20
+  { status = 0x97, data1 = 0x15, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 21
+  { status = 0x97, data1 = 0x16, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 22
+  { status = 0x90, data1 = 0x4A, first = 127, min = 127, max = 127 }, # NoteOn ch1 note 74
+  { status = 0x97, data1 = 0x17, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 23
+]
+led = true
+led_values_vary = false
+
+[[control]]
+id = "deck3.pads_pad_scratch"
+kind = "pads"
+messages = [
+  { status = 0x97, data1 = 0x20, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 32
+  { status = 0x90, data1 = 0x36, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 54
+  { status = 0x97, data1 = 0x00, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 0
+  { status = 0xB0, data1 = 0x22, first = 65, min = 62, max = 66 }, # ControlChange ch1 controller 34
+  { status = 0x97, data1 = 0x21, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 33
+  { status = 0x97, data1 = 0x22, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 34
+  { status = 0x97, data1 = 0x23, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 35
+  { status = 0x97, data1 = 0x24, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 36
+  { status = 0x97, data1 = 0x25, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 37
+  { status = 0x97, data1 = 0x26, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 38
+  { status = 0x97, data1 = 0x27, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 39
+]
+led = true
+led_values_vary = false
+
+[[control]]
+id = "deck3.pads_sampler"
+kind = "pads"
+messages = [
+  { status = 0x97, data1 = 0x30, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 48
+  { status = 0x97, data1 = 0x31, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 49
+  { status = 0x97, data1 = 0x32, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 50
+  { status = 0x97, data1 = 0x33, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 51
+  { status = 0x97, data1 = 0x34, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 52
+  { status = 0x97, data1 = 0x35, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 53
+  { status = 0x97, data1 = 0x36, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 54
+  { status = 0x97, data1 = 0x37, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 55
+]
+led = true
+led_values_vary = false
+
+[[control]]
+id = "deck3.deck_select"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x72, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 114
+]
+led = false
+
+[[control]]
+id = "deck2.shift"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x3F, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 63
+]
+led = false
+
+[[control]]
+id = "deck2.play"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x0B, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 11
+]
+led = false
+
+[[control]]
+id = "deck2.play.shift"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x47, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 71
+]
+
+[[control]]
+id = "deck2.cue"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x0C, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 12
+]
+led = false
+
+[[control]]
+id = "deck2.cue.shift"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x48, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 72
+]
+
+[[control]]
+id = "deck2.sync"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x58, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 88
+]
+led = false
+
+[[control]]
+id = "deck2.sync.shift"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x5C, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 92
+]
+
+[[control]]
+id = "deck2.key_lock"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x1A, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 26
+]
+led = false
+
+[[control]]
+id = "deck2.key_lock.shift"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x60, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 96
+]
+
+[[control]]
+id = "deck2.vinyl"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x17, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 23
+]
+led = false
+
+[[control]]
+id = "deck2.vinyl.shift"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x40, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 64
+]
+
+[[control]]
+id = "deck2.auto_loop"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x14, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 20
+]
+led = false
+
+[[control]]
+id = "deck2.auto_loop.shift"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x50, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 80
+]
+
+[[control]]
+id = "deck2.loop_half"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x12, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 18
+]
+led = false
+
+[[control]]
+id = "deck2.loop_half.shift"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x61, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 97
+]
+
+[[control]]
+id = "deck2.loop_double"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x13, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 19
+]
+led = false
+
+[[control]]
+id = "deck2.loop_double.shift"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x62, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 98
+]
+
+[[control]]
+id = "deck2.jog_touch"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x36, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 54
+]
+led = false
+
+[[control]]
+id = "deck2.jog_top"
+kind = "jog"
+messages = [
+  { status = 0x91, data1 = 0x36, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 54
+  { status = 0xB1, data1 = 0x23, first = 63, min = 63, max = 65 }, # ControlChange ch2 controller 35
+]
+
+[[control]]
+id = "deck2.jog_top.shift"
+kind = "jog"
+messages = [
+  { status = 0x91, data1 = 0x67, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 103
+  { status = 0xB1, data1 = 0x1F, first = 65, min = 63, max = 66 }, # ControlChange ch2 controller 31
+  { status = 0xB1, data1 = 0x26, first = 63, min = 63, max = 63 }, # ControlChange ch2 controller 38
+]
+
+[[control]]
+id = "deck2.jog_outer"
+kind = "jog"
+messages = [
+  { status = 0xB1, data1 = 0x21, first = 65, min = 63, max = 65 }, # ControlChange ch2 controller 33
+]
+
+[[control]]
+id = "deck2.tempo"
+kind = "continuous"
+messages = [
+  { status = 0xB1, data1 = 0x00, first = 62, min = 0, max = 64 }, # ControlChange ch2 controller 0
+  { status = 0xB1, data1 = 0x20, first = 77, min = 0, max = 127 }, # ControlChange ch2 controller 32
+]
+cc14 = { msb = 0x00, lsb = 0x20 }
+
+[[control]]
+id = "deck2.mode_hot_cue"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x1B, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 27
+]
+led = true
+
+[[control]]
+id = "deck2.mode_hot_cue.shift"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x69, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 105
+]
+
+[[control]]
+id = "deck2.mode_fx_fade"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x1E, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 30
+]
+led = true
+
+[[control]]
+id = "deck2.mode_fx_fade.shift"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x4D, first = 127, min = 127, max = 127 }, # NoteOn ch2 note 77
+  { status = 0x91, data1 = 0x6B, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 107
+]
+
+[[control]]
+id = "deck2.mode_pad_scratch"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x4D, first = 127, min = 127, max = 127 }, # NoteOn ch2 note 77
+  { status = 0x91, data1 = 0x20, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 32
+]
+led = true
+
+[[control]]
+id = "deck2.mode_pad_scratch.shift"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x6D, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 109
+]
+
+[[control]]
+id = "deck2.mode_sampler"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x22, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 34
+]
+led = true
+
+[[control]]
+id = "deck2.mode_sampler.shift"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x6E, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 110
+]
+
+[[control]]
+id = "deck2.pads_hot_cue"
+kind = "pads"
+messages = [
+  { status = 0x98, data1 = 0x00, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 0
+  { status = 0x98, data1 = 0x01, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 1
+  { status = 0x98, data1 = 0x02, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 2
+  { status = 0x98, data1 = 0x03, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 3
+  { status = 0x98, data1 = 0x04, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 4
+  { status = 0x98, data1 = 0x05, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 5
+  { status = 0x98, data1 = 0x06, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 6
+  { status = 0x98, data1 = 0x07, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 7
+]
+led = true
+led_values_vary = false
+
+[[control]]
+id = "deck2.pads_hot_cue.shift"
+kind = "pads"
+messages = [
+  { status = 0x98, data1 = 0x08, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 8
+  { status = 0x98, data1 = 0x09, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 9
+  { status = 0x98, data1 = 0x0A, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 10
+  { status = 0x98, data1 = 0x0B, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 11
+  { status = 0x98, data1 = 0x0C, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 12
+  { status = 0x98, data1 = 0x0D, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 13
+  { status = 0x98, data1 = 0x0E, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 14
+  { status = 0x98, data1 = 0x0F, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 15
+]
+
+[[control]]
+id = "deck2.pads_fx_fade"
+kind = "pads"
+messages = [
+  { status = 0x98, data1 = 0x10, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 16
+  { status = 0x98, data1 = 0x11, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 17
+  { status = 0x98, data1 = 0x12, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 18
+  { status = 0x91, data1 = 0x4D, first = 127, min = 127, max = 127 }, # NoteOn ch2 note 77
+  { status = 0x91, data1 = 0x4C, first = 127, min = 127, max = 127 }, # NoteOn ch2 note 76
+  { status = 0x98, data1 = 0x13, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 19
+  { status = 0xB1, data1 = 0x22, first = 56, min = 56, max = 56 }, # ControlChange ch2 controller 34
+  { status = 0x91, data1 = 0x36, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 54
+  { status = 0x98, data1 = 0x14, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 20
+  { status = 0x98, data1 = 0x15, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 21
+  { status = 0x98, data1 = 0x16, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 22
+  { status = 0x91, data1 = 0x4A, first = 127, min = 127, max = 127 }, # NoteOn ch2 note 74
+  { status = 0x98, data1 = 0x17, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 23
+]
+led = true
+led_values_vary = false
+
+[[control]]
+id = "deck2.pads_pad_scratch"
+kind = "pads"
+messages = [
+  { status = 0x98, data1 = 0x20, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 32
+  { status = 0x91, data1 = 0x36, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 54
+  { status = 0x98, data1 = 0x00, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 0
+  { status = 0xB1, data1 = 0x22, first = 65, min = 62, max = 66 }, # ControlChange ch2 controller 34
+  { status = 0x98, data1 = 0x21, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 33
+  { status = 0x98, data1 = 0x22, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 34
+  { status = 0x98, data1 = 0x23, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 35
+  { status = 0x98, data1 = 0x24, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 36
+  { status = 0x98, data1 = 0x25, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 37
+  { status = 0x98, data1 = 0x26, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 38
+  { status = 0x98, data1 = 0x27, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 39
+]
+led = true
+led_values_vary = false
+
+[[control]]
+id = "deck2.pads_sampler"
+kind = "pads"
+messages = [
+  { status = 0x98, data1 = 0x30, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 48
+  { status = 0x98, data1 = 0x31, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 49
+  { status = 0x98, data1 = 0x32, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 50
+  { status = 0x98, data1 = 0x33, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 51
+  { status = 0x98, data1 = 0x34, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 52
+  { status = 0x98, data1 = 0x35, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 53
+  { status = 0x98, data1 = 0x36, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 54
+  { status = 0x98, data1 = 0x37, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 55
+]
+led = false
+
+[[control]]
+id = "deck2.deck_select"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x72, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 114
+]
+led = false
+
+[[control]]
+id = "deck4.shift"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x3F, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 63
+]
+led = false
+
+[[control]]
+id = "deck4.play"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x0B, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 11
+]
+led = false
+
+[[control]]
+id = "deck4.play.shift"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x47, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 71
+]
+
+[[control]]
+id = "deck4.cue"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x0C, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 12
+]
+led = false
+
+[[control]]
+id = "deck4.cue.shift"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x48, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 72
+]
+
+[[control]]
+id = "deck4.sync"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x58, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 88
+]
+led = false
+
+[[control]]
+id = "deck4.sync.shift"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x5C, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 92
+]
+
+[[control]]
+id = "deck4.key_lock"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x1A, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 26
+]
+led = false
+
+[[control]]
+id = "deck4.key_lock.shift"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x60, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 96
+]
+
+[[control]]
+id = "deck4.vinyl"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x17, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 23
+]
+led = false
+
+[[control]]
+id = "deck4.vinyl.shift"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x40, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 64
+]
+
+[[control]]
+id = "deck4.auto_loop"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x14, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 20
+]
+led = false
+
+[[control]]
+id = "deck4.auto_loop.shift"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x50, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 80
+]
+
+[[control]]
+id = "deck4.loop_half"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x12, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 18
+]
+led = false
+
+[[control]]
+id = "deck4.loop_half.shift"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x61, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 97
+]
+
+[[control]]
+id = "deck4.loop_double"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x13, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 19
+]
+led = false
+
+[[control]]
+id = "deck4.loop_double.shift"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x62, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 98
+]
+
+[[control]]
+id = "deck4.jog_touch"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x36, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 54
+]
+led = false
+
+[[control]]
+id = "deck4.jog_top"
+kind = "jog"
+messages = [
+  { status = 0x91, data1 = 0x36, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 54
+  { status = 0xB1, data1 = 0x23, first = 65, min = 62, max = 65 }, # ControlChange ch2 controller 35
+  { status = 0xB1, data1 = 0x21, first = 65, min = 65, max = 65 }, # ControlChange ch2 controller 33
+]
+
+[[control]]
+id = "deck4.jog_top.shift"
+kind = "jog"
+messages = [
+  { status = 0x91, data1 = 0x67, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 103
+  { status = 0xB1, data1 = 0x1F, first = 65, min = 63, max = 65 }, # ControlChange ch2 controller 31
+]
+
+[[control]]
+id = "deck4.jog_outer"
+kind = "jog"
+messages = [
+  { status = 0xB1, data1 = 0x21, first = 65, min = 61, max = 65 }, # ControlChange ch2 controller 33
+]
+
+[[control]]
+id = "deck4.tempo"
+kind = "continuous"
+messages = [
+  { status = 0xB1, data1 = 0x00, first = 87, min = 0, max = 87 }, # ControlChange ch2 controller 0
+  { status = 0xB1, data1 = 0x20, first = 101, min = 0, max = 101 }, # ControlChange ch2 controller 32
+]
+cc14 = { msb = 0x00, lsb = 0x20 }
+
+[[control]]
+id = "deck4.mode_hot_cue"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x1B, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 27
+]
+led = true
+
+[[control]]
+id = "deck4.mode_hot_cue.shift"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x69, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 105
+]
+
+[[control]]
+id = "deck4.mode_fx_fade"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x1E, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 30
+]
+led = true
+
+[[control]]
+id = "deck4.mode_fx_fade.shift"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x4D, first = 127, min = 127, max = 127 }, # NoteOn ch2 note 77
+  { status = 0x91, data1 = 0x6B, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 107
+]
+
+[[control]]
+id = "deck4.mode_pad_scratch"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x4D, first = 127, min = 127, max = 127 }, # NoteOn ch2 note 77
+  { status = 0x91, data1 = 0x20, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 32
+]
+led = true
+
+[[control]]
+id = "deck4.mode_pad_scratch.shift"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x6D, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 109
+]
+
+[[control]]
+id = "deck4.mode_sampler"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x22, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 34
+]
+led = true
+
+[[control]]
+id = "deck4.mode_sampler.shift"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x6E, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 110
+]
+
+[[control]]
+id = "deck4.pads_hot_cue"
+kind = "pads"
+messages = [
+  { status = 0x98, data1 = 0x00, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 0
+  { status = 0x98, data1 = 0x01, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 1
+  { status = 0x98, data1 = 0x02, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 2
+  { status = 0x98, data1 = 0x03, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 3
+  { status = 0x98, data1 = 0x04, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 4
+  { status = 0x98, data1 = 0x05, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 5
+  { status = 0x98, data1 = 0x06, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 6
+  { status = 0x98, data1 = 0x07, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 7
+]
+led = true
+led_values_vary = false
+
+[[control]]
+id = "deck4.pads_hot_cue.shift"
+kind = "pads"
+messages = [
+  { status = 0x98, data1 = 0x08, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 8
+  { status = 0x98, data1 = 0x09, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 9
+  { status = 0x98, data1 = 0x0A, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 10
+  { status = 0x98, data1 = 0x0B, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 11
+  { status = 0x98, data1 = 0x0C, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 12
+  { status = 0x98, data1 = 0x0D, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 13
+  { status = 0x98, data1 = 0x0E, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 14
+  { status = 0x98, data1 = 0x0F, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 15
+]
+
+[[control]]
+id = "deck4.pads_fx_fade"
+kind = "pads"
+messages = [
+  { status = 0x98, data1 = 0x10, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 16
+  { status = 0x98, data1 = 0x11, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 17
+  { status = 0x98, data1 = 0x12, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 18
+  { status = 0x91, data1 = 0x4D, first = 127, min = 127, max = 127 }, # NoteOn ch2 note 77
+  { status = 0x91, data1 = 0x4C, first = 127, min = 127, max = 127 }, # NoteOn ch2 note 76
+  { status = 0x98, data1 = 0x13, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 19
+  { status = 0xB1, data1 = 0x22, first = 56, min = 56, max = 56 }, # ControlChange ch2 controller 34
+  { status = 0x91, data1 = 0x36, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 54
+  { status = 0x98, data1 = 0x14, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 20
+  { status = 0x98, data1 = 0x15, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 21
+  { status = 0x98, data1 = 0x16, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 22
+  { status = 0x91, data1 = 0x4A, first = 127, min = 127, max = 127 }, # NoteOn ch2 note 74
+  { status = 0x98, data1 = 0x17, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 23
+]
+led = true
+led_values_vary = false
+
+[[control]]
+id = "deck4.pads_pad_scratch"
+kind = "pads"
+messages = [
+  { status = 0x98, data1 = 0x20, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 32
+  { status = 0x91, data1 = 0x36, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 54
+  { status = 0x98, data1 = 0x00, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 0
+  { status = 0xB1, data1 = 0x22, first = 65, min = 62, max = 66 }, # ControlChange ch2 controller 34
+  { status = 0x98, data1 = 0x21, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 33
+  { status = 0x98, data1 = 0x22, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 34
+  { status = 0x98, data1 = 0x23, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 35
+  { status = 0x98, data1 = 0x24, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 36
+  { status = 0x98, data1 = 0x25, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 37
+  { status = 0x98, data1 = 0x26, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 38
+  { status = 0x98, data1 = 0x27, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 39
+]
+led = true
+led_values_vary = false
+
+[[control]]
+id = "deck4.pads_sampler"
+kind = "pads"
+messages = [
+  { status = 0x98, data1 = 0x30, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 48
+  { status = 0x98, data1 = 0x31, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 49
+  { status = 0x98, data1 = 0x32, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 50
+  { status = 0x98, data1 = 0x33, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 51
+  { status = 0x98, data1 = 0x34, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 52
+  { status = 0x98, data1 = 0x35, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 53
+  { status = 0x98, data1 = 0x36, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 54
+  { status = 0x98, data1 = 0x37, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 55
+]
+led = false
+
+[[control]]
+id = "deck4.deck_select"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x72, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 114
+]
+led = false
+
+[[control]]
+id = "channel1.trim"
+kind = "continuous"
+messages = [
+  { status = 0xB0, data1 = 0x04, first = 63, min = 0, max = 127 }, # ControlChange ch1 controller 4
+  { status = 0xB0, data1 = 0x24, first = 76, min = 0, max = 127 }, # ControlChange ch1 controller 36
+]
+cc14 = { msb = 0x04, lsb = 0x24 }
+
+[[control]]
+id = "channel1.eq_high"
+kind = "continuous"
+messages = [
+  { status = 0xB0, data1 = 0x07, first = 62, min = 0, max = 127 }, # ControlChange ch1 controller 7
+  { status = 0xB0, data1 = 0x27, first = 50, min = 0, max = 127 }, # ControlChange ch1 controller 39
+]
+cc14 = { msb = 0x07, lsb = 0x27 }
+
+[[control]]
+id = "channel1.eq_mid"
+kind = "continuous"
+messages = [
+  { status = 0xB0, data1 = 0x0B, first = 63, min = 0, max = 127 }, # ControlChange ch1 controller 11
+  { status = 0xB0, data1 = 0x2B, first = 59, min = 0, max = 127 }, # ControlChange ch1 controller 43
+]
+cc14 = { msb = 0x0B, lsb = 0x2B }
+
+[[control]]
+id = "channel1.eq_low"
+kind = "continuous"
+messages = [
+  { status = 0xB0, data1 = 0x0F, first = 63, min = 0, max = 127 }, # ControlChange ch1 controller 15
+  { status = 0xB0, data1 = 0x2F, first = 8, min = 0, max = 127 }, # ControlChange ch1 controller 47
+]
+cc14 = { msb = 0x0F, lsb = 0x2F }
+
+[[control]]
+id = "channel1.filter"
+kind = "continuous"
+messages = [
+  { status = 0xB6, data1 = 0x17, first = 63, min = 0, max = 127 }, # ControlChange ch7 controller 23
+  { status = 0xB6, data1 = 0x37, first = 76, min = 0, max = 127 }, # ControlChange ch7 controller 55
+]
+cc14 = { msb = 0x17, lsb = 0x37 }
+
+[[control]]
+id = "channel1.fader"
+kind = "continuous"
+messages = [
+  { status = 0xB0, data1 = 0x13, first = 127, min = 0, max = 127 }, # ControlChange ch1 controller 19
+  { status = 0xB0, data1 = 0x33, first = 62, min = 0, max = 127 }, # ControlChange ch1 controller 51
+]
+cc14 = { msb = 0x13, lsb = 0x33 }
+
+[[control]]
+id = "channel1.fader.shift"
+kind = "continuous"
+messages = [
+  { status = 0xB0, data1 = 0x13, first = 126, min = 0, max = 127 }, # ControlChange ch1 controller 19
+  { status = 0xB0, data1 = 0x33, first = 76, min = 0, max = 127 }, # ControlChange ch1 controller 51
+  { status = 0x90, data1 = 0x52, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 82
+  { status = 0x90, data1 = 0x66, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 102
+]
+cc14 = { msb = 0x13, lsb = 0x33 }
+
+[[control]]
+id = "channel1.pfl"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x54, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 84
+]
+led = false
+
+[[control]]
+id = "channel2.trim"
+kind = "continuous"
+messages = [
+  { status = 0xB1, data1 = 0x04, first = 63, min = 0, max = 127 }, # ControlChange ch2 controller 4
+  { status = 0xB1, data1 = 0x24, first = 25, min = 0, max = 127 }, # ControlChange ch2 controller 36
+]
+cc14 = { msb = 0x04, lsb = 0x24 }
+
+[[control]]
+id = "channel2.eq_high"
+kind = "continuous"
+messages = [
+  { status = 0xB1, data1 = 0x07, first = 63, min = 0, max = 127 }, # ControlChange ch2 controller 7
+  { status = 0xB1, data1 = 0x27, first = 8, min = 0, max = 127 }, # ControlChange ch2 controller 39
+]
+cc14 = { msb = 0x07, lsb = 0x27 }
+
+[[control]]
+id = "channel2.eq_mid"
+kind = "continuous"
+messages = [
+  { status = 0xB1, data1 = 0x0B, first = 63, min = 0, max = 127 }, # ControlChange ch2 controller 11
+  { status = 0xB1, data1 = 0x2B, first = 25, min = 0, max = 127 }, # ControlChange ch2 controller 43
+]
+cc14 = { msb = 0x0B, lsb = 0x2B }
+
+[[control]]
+id = "channel2.eq_low"
+kind = "continuous"
+messages = [
+  { status = 0xB1, data1 = 0x0F, first = 62, min = 0, max = 127 }, # ControlChange ch2 controller 15
+  { status = 0xB1, data1 = 0x2F, first = 33, min = 0, max = 127 }, # ControlChange ch2 controller 47
+]
+cc14 = { msb = 0x0F, lsb = 0x2F }
+
+[[control]]
+id = "channel2.filter"
+kind = "continuous"
+messages = [
+  { status = 0xB6, data1 = 0x18, first = 63, min = 0, max = 127 }, # ControlChange ch7 controller 24
+  { status = 0xB6, data1 = 0x38, first = 8, min = 0, max = 127 }, # ControlChange ch7 controller 56
+]
+cc14 = { msb = 0x18, lsb = 0x38 }
+
+[[control]]
+id = "channel2.fader"
+kind = "continuous"
+messages = [
+  { status = 0xB1, data1 = 0x13, first = 126, min = 0, max = 127 }, # ControlChange ch2 controller 19
+  { status = 0xB1, data1 = 0x33, first = 60, min = 0, max = 127 }, # ControlChange ch2 controller 51
+]
+cc14 = { msb = 0x13, lsb = 0x33 }
+
+[[control]]
+id = "channel2.fader.shift"
+kind = "continuous"
+messages = [
+  { status = 0xB1, data1 = 0x13, first = 125, min = 0, max = 127 }, # ControlChange ch2 controller 19
+  { status = 0xB1, data1 = 0x33, first = 90, min = 0, max = 127 }, # ControlChange ch2 controller 51
+  { status = 0x91, data1 = 0x52, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 82
+  { status = 0x91, data1 = 0x66, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 102
+]
+cc14 = { msb = 0x13, lsb = 0x33 }
+
+[[control]]
+id = "channel2.pfl"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x54, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 84
+]
+led = false
+
+[[control]]
+id = "channel3.trim"
+kind = "continuous"
+messages = [
+  { status = 0xB0, data1 = 0x04, first = 63, min = 0, max = 127 }, # ControlChange ch1 controller 4
+  { status = 0xB0, data1 = 0x24, first = 93, min = 0, max = 127 }, # ControlChange ch1 controller 36
+]
+cc14 = { msb = 0x04, lsb = 0x24 }
+
+[[control]]
+id = "channel3.eq_high"
+kind = "continuous"
+messages = [
+  { status = 0xB0, data1 = 0x07, first = 63, min = 0, max = 127 }, # ControlChange ch1 controller 7
+  { status = 0xB0, data1 = 0x27, first = 93, min = 0, max = 127 }, # ControlChange ch1 controller 39
+]
+cc14 = { msb = 0x07, lsb = 0x27 }
+
+[[control]]
+id = "channel3.eq_mid"
+kind = "continuous"
+messages = [
+  { status = 0xB0, data1 = 0x0B, first = 62, min = 0, max = 127 }, # ControlChange ch1 controller 11
+  { status = 0xB0, data1 = 0x2B, first = 101, min = 0, max = 127 }, # ControlChange ch1 controller 43
+]
+cc14 = { msb = 0x0B, lsb = 0x2B }
+
+[[control]]
+id = "channel3.eq_low"
+kind = "continuous"
+messages = [
+  { status = 0xB0, data1 = 0x0F, first = 62, min = 0, max = 127 }, # ControlChange ch1 controller 15
+  { status = 0xB0, data1 = 0x2F, first = 50, min = 0, max = 127 }, # ControlChange ch1 controller 47
+]
+cc14 = { msb = 0x0F, lsb = 0x2F }
+
+[[control]]
+id = "channel3.filter"
+kind = "continuous"
+messages = [
+  { status = 0xB6, data1 = 0x17, first = 63, min = 0, max = 127 }, # ControlChange ch7 controller 23
+  { status = 0xB6, data1 = 0x37, first = 25, min = 0, max = 127 }, # ControlChange ch7 controller 55
+]
+cc14 = { msb = 0x17, lsb = 0x37 }
+
+[[control]]
+id = "channel3.fader"
+kind = "continuous"
+messages = [
+  { status = 0xB0, data1 = 0x13, first = 127, min = 0, max = 127 }, # ControlChange ch1 controller 19
+  { status = 0xB0, data1 = 0x33, first = 94, min = 0, max = 127 }, # ControlChange ch1 controller 51
+]
+cc14 = { msb = 0x13, lsb = 0x33 }
+
+[[control]]
+id = "channel3.fader.shift"
+kind = "continuous"
+messages = [
+  { status = 0xB0, data1 = 0x13, first = 127, min = 0, max = 127 }, # ControlChange ch1 controller 19
+  { status = 0xB0, data1 = 0x33, first = 13, min = 0, max = 127 }, # ControlChange ch1 controller 51
+  { status = 0x90, data1 = 0x52, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 82
+  { status = 0x90, data1 = 0x66, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 102
+]
+cc14 = { msb = 0x13, lsb = 0x33 }
+
+[[control]]
+id = "channel3.pfl"
+kind = "button"
+messages = [
+  { status = 0x90, data1 = 0x54, first = 127, min = 0, max = 127 }, # NoteOn ch1 note 84
+]
+led = false
+
+[[control]]
+id = "channel4.trim"
+kind = "continuous"
+messages = [
+  { status = 0xB1, data1 = 0x04, first = 63, min = 0, max = 127 }, # ControlChange ch2 controller 4
+  { status = 0xB1, data1 = 0x24, first = 110, min = 0, max = 127 }, # ControlChange ch2 controller 36
+]
+cc14 = { msb = 0x04, lsb = 0x24 }
+
+[[control]]
+id = "channel4.eq_high"
+kind = "continuous"
+messages = [
+  { status = 0xB1, data1 = 0x07, first = 63, min = 0, max = 127 }, # ControlChange ch2 controller 7
+  { status = 0xB1, data1 = 0x27, first = 8, min = 0, max = 127 }, # ControlChange ch2 controller 39
+]
+cc14 = { msb = 0x07, lsb = 0x27 }
+
+[[control]]
+id = "channel4.eq_mid"
+kind = "continuous"
+messages = [
+  { status = 0xB1, data1 = 0x0B, first = 63, min = 0, max = 127 }, # ControlChange ch2 controller 11
+  { status = 0xB1, data1 = 0x2B, first = 76, min = 0, max = 127 }, # ControlChange ch2 controller 43
+]
+cc14 = { msb = 0x0B, lsb = 0x2B }
+
+[[control]]
+id = "channel4.eq_low"
+kind = "continuous"
+messages = [
+  { status = 0xB1, data1 = 0x0F, first = 63, min = 0, max = 127 }, # ControlChange ch2 controller 15
+  { status = 0xB1, data1 = 0x2F, first = 93, min = 0, max = 127 }, # ControlChange ch2 controller 47
+]
+cc14 = { msb = 0x0F, lsb = 0x2F }
+
+[[control]]
+id = "channel4.filter"
+kind = "continuous"
+messages = [
+  { status = 0xB6, data1 = 0x18, first = 63, min = 0, max = 127 }, # ControlChange ch7 controller 24
+  { status = 0xB6, data1 = 0x38, first = 59, min = 0, max = 127 }, # ControlChange ch7 controller 56
+]
+cc14 = { msb = 0x18, lsb = 0x38 }
+
+[[control]]
+id = "channel4.fader"
+kind = "continuous"
+messages = [
+  { status = 0xB1, data1 = 0x13, first = 127, min = 0, max = 127 }, # ControlChange ch2 controller 19
+  { status = 0xB1, data1 = 0x33, first = 62, min = 0, max = 127 }, # ControlChange ch2 controller 51
+]
+cc14 = { msb = 0x13, lsb = 0x33 }
+
+[[control]]
+id = "channel4.fader.shift"
+kind = "continuous"
+messages = [
+  { status = 0xB1, data1 = 0x13, first = 126, min = 0, max = 127 }, # ControlChange ch2 controller 19
+  { status = 0xB1, data1 = 0x33, first = 60, min = 0, max = 127 }, # ControlChange ch2 controller 51
+  { status = 0x91, data1 = 0x52, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 82
+  { status = 0x91, data1 = 0x66, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 102
+]
+cc14 = { msb = 0x13, lsb = 0x33 }
+
+[[control]]
+id = "channel4.pfl"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x54, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 84
+]
+led = false
+
+[[control]]
+id = "crossfader"
+kind = "continuous"
+messages = [
+  { status = 0xB6, data1 = 0x1F, first = 62, min = 0, max = 127 }, # ControlChange ch7 controller 31
+  { status = 0xB6, data1 = 0x3F, first = 7, min = 0, max = 127 }, # ControlChange ch7 controller 63
+]
+cc14 = { msb = 0x1F, lsb = 0x3F }
+
+[[control]]
+id = "master_level"
+kind = "continuous"
+messages = [
+  { status = 0xB6, data1 = 0x08, first = 16, min = 0, max = 127 }, # ControlChange ch7 controller 8
+  { status = 0xB6, data1 = 0x28, first = 106, min = 0, max = 127 }, # ControlChange ch7 controller 40
+]
+cc14 = { msb = 0x08, lsb = 0x28 }
+
+[[control]]
+id = "headphone_level"
+kind = "continuous"
+messages = [
+  { status = 0xB6, data1 = 0x0D, first = 26, min = 0, max = 127 }, # ControlChange ch7 controller 13
+  { status = 0xB6, data1 = 0x2D, first = 75, min = 0, max = 127 }, # ControlChange ch7 controller 45
+]
+cc14 = { msb = 0x0D, lsb = 0x2D }
+
+[[control]]
+id = "headphone_master"
+kind = "button"
+messages = [
+  { status = 0x96, data1 = 0x5B, first = 127, min = 0, max = 127 }, # NoteOn ch7 note 91
+]
+led = true
+
+[[control]]
+id = "fx.left.1"
+kind = "button"
+messages = [
+  { status = 0x94, data1 = 0x47, first = 127, min = 0, max = 127 }, # NoteOn ch5 note 71
+]
+led = false
+
+[[control]]
+id = "fx.left.1.shift"
+kind = "button"
+messages = [
+  { status = 0x94, data1 = 0x63, first = 127, min = 0, max = 127 }, # NoteOn ch5 note 99
+]
+
+[[control]]
+id = "fx.left.2"
+kind = "button"
+messages = [
+  { status = 0x94, data1 = 0x48, first = 127, min = 0, max = 127 }, # NoteOn ch5 note 72
+]
+led = false
+
+[[control]]
+id = "fx.left.2.shift"
+kind = "button"
+messages = [
+  { status = 0x94, data1 = 0x64, first = 127, min = 0, max = 127 }, # NoteOn ch5 note 100
+]
+
+[[control]]
+id = "fx.left.3"
+kind = "button"
+messages = [
+  { status = 0x94, data1 = 0x49, first = 127, min = 0, max = 127 }, # NoteOn ch5 note 73
+]
+led = false
+
+[[control]]
+id = "fx.left.3.shift"
+kind = "button"
+messages = [
+  { status = 0x94, data1 = 0x65, first = 127, min = 0, max = 127 }, # NoteOn ch5 note 101
+]
+
+[[control]]
+id = "fx.left.level"
+kind = "continuous"
+messages = [
+  { status = 0xB4, data1 = 0x02, first = 54, min = 0, max = 127 }, # ControlChange ch5 controller 2
+  { status = 0xB4, data1 = 0x22, first = 114, min = 0, max = 127 }, # ControlChange ch5 controller 34
+  { status = 0xB4, data1 = 0x04, first = 54, min = 0, max = 127 }, # ControlChange ch5 controller 4
+  { status = 0xB4, data1 = 0x24, first = 114, min = 0, max = 127 }, # ControlChange ch5 controller 36
+  { status = 0xB4, data1 = 0x06, first = 54, min = 0, max = 127 }, # ControlChange ch5 controller 6
+  { status = 0xB4, data1 = 0x26, first = 114, min = 0, max = 127 }, # ControlChange ch5 controller 38
+]
+cc14 = { msb = 0x02, lsb = 0x22 }
+
+[[control]]
+id = "fx.right.1"
+kind = "button"
+messages = [
+  { status = 0x95, data1 = 0x47, first = 127, min = 0, max = 127 }, # NoteOn ch6 note 71
+]
+led = false
+
+[[control]]
+id = "fx.right.1.shift"
+kind = "button"
+messages = [
+  { status = 0x95, data1 = 0x63, first = 127, min = 0, max = 127 }, # NoteOn ch6 note 99
+]
+
+[[control]]
+id = "fx.right.2"
+kind = "button"
+messages = [
+  { status = 0x95, data1 = 0x48, first = 127, min = 0, max = 127 }, # NoteOn ch6 note 72
+]
+led = false
+
+[[control]]
+id = "fx.right.2.shift"
+kind = "button"
+messages = [
+  { status = 0x95, data1 = 0x64, first = 127, min = 0, max = 127 }, # NoteOn ch6 note 100
+]
+
+[[control]]
+id = "fx.right.3"
+kind = "button"
+messages = [
+  { status = 0x95, data1 = 0x49, first = 127, min = 0, max = 127 }, # NoteOn ch6 note 73
+]
+led = false
+
+[[control]]
+id = "fx.right.3.shift"
+kind = "button"
+messages = [
+  { status = 0x95, data1 = 0x65, first = 127, min = 0, max = 127 }, # NoteOn ch6 note 101
+]
+
+[[control]]
+id = "fx.right.level"
+kind = "continuous"
+messages = [
+  { status = 0xB5, data1 = 0x02, first = 51, min = 0, max = 127 }, # ControlChange ch6 controller 2
+  { status = 0xB5, data1 = 0x22, first = 35, min = 0, max = 127 }, # ControlChange ch6 controller 34
+  { status = 0xB5, data1 = 0x04, first = 51, min = 0, max = 127 }, # ControlChange ch6 controller 4
+  { status = 0xB5, data1 = 0x24, first = 35, min = 0, max = 127 }, # ControlChange ch6 controller 36
+  { status = 0xB5, data1 = 0x06, first = 51, min = 0, max = 127 }, # ControlChange ch6 controller 6
+  { status = 0xB5, data1 = 0x26, first = 35, min = 0, max = 127 }, # ControlChange ch6 controller 38
+]
+cc14 = { msb = 0x02, lsb = 0x22 }
+
+[[control]]
+id = "browse.rotate"
+kind = "jog"
+messages = [
+  { status = 0xB6, data1 = 0x40, first = 1, min = 1, max = 127 }, # ControlChange ch7 controller 64
+]
+
+[[control]]
+id = "browse.rotate.shift"
+kind = "jog"
+messages = [
+  { status = 0x91, data1 = 0x3F, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 63
+  { status = 0xB6, data1 = 0x64, first = 1, min = 1, max = 127 }, # ControlChange ch7 controller 100
+]
+
+[[control]]
+id = "browse.press"
+kind = "button"
+messages = [
+  { status = 0x96, data1 = 0x41, first = 127, min = 0, max = 127 }, # NoteOn ch7 note 65
+]
+led = false
+
+[[control]]
+id = "browse.press.shift"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x3F, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 63
+  { status = 0x96, data1 = 0x42, first = 127, min = 0, max = 127 }, # NoteOn ch7 note 66
+]
+
+[[control]]
+id = "load.left"
+kind = "button"
+messages = [
+  { status = 0x96, data1 = 0x46, first = 127, min = 0, max = 127 }, # NoteOn ch7 note 70
+]
+led = false
+
+[[control]]
+id = "load.left.shift"
+kind = "button"
+messages = [
+  { status = 0x96, data1 = 0x58, first = 127, min = 0, max = 127 }, # NoteOn ch7 note 88
+]
+
+[[control]]
+id = "load.right"
+kind = "button"
+messages = [
+  { status = 0x96, data1 = 0x47, first = 127, min = 0, max = 127 }, # NoteOn ch7 note 71
+]
+led = false
+
+[[control]]
+id = "load.right.shift"
+kind = "button"
+messages = [
+  { status = 0x91, data1 = 0x3F, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 63
+  { status = 0x96, data1 = 0x59, first = 127, min = 0, max = 127 }, # NoteOn ch7 note 89
+]
