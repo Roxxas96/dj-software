@@ -10,6 +10,8 @@ mod probe;
 mod session;
 
 pub use checklist::{Checklist, ChecklistError, Step, StepKind, load_checklist, parse_checklist};
-pub use fixture::{Cc14, Control, Fixture, FixtureError, MessageRange, Meta, parse_fixture};
+pub use fixture::{
+    Cc14, Control, Fixture, FixtureError, MessageRange, Meta, Source, parse_fixture,
+};
 pub use probe::{LedProbe, LedSink, PROBE_VELOCITIES, ProbeAnswer, Question, run_led_probe};
 pub use session::{CaptureSession, Redo, StepStatus};

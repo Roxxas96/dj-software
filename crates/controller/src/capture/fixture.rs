@@ -8,6 +8,8 @@
 //!   to a key held across the start of the step (SHIFT, a pad-mode button).
 //! - Pitch bend keeps only its MSB: `data1 = 0` and the MSB as the value.
 //! - `first` is the first value seen, so direction (jog, BROWSE, TEMPO) is recoverable.
+//! - Sources in `meta.ignored` (checklist ignore list plus detected noise) are
+//!   never recorded.
 
 use std::fmt::Write as _;
 
@@ -33,6 +35,50 @@ pub struct Meta {
     /// Steps the user skipped (for example a knob that sends no MIDI).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skipped: Vec<String>,
+    /// Sources never recorded: the checklist's ignore list plus noise found
+    /// during the capture.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ignored: Vec<Source>,
+}
+
+/// A message source: `(status, data1)`, as in [`MessageRange`]. Note-off
+/// statuses (`0x8n`) are treated as the note-on status (`0x9n`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Source {
+    pub status: u8,
+    pub data1: u8,
+}
+
+impl Source {
+    /// The `(status, data1)` key messages are recorded under.
+    pub fn key(self) -> (u8, u8) {
+        let status = if self.status & 0xF0 == 0x80 {
+            0x90 | (self.status & 0x0F)
+        } else {
+            self.status
+        };
+        (status, self.data1)
+    }
+
+    /// True if `msg` comes from this source.
+    pub fn matches(self, msg: MidiMessage) -> bool {
+        let (status, data1, _) = key_and_value(msg);
+        self.key() == (status, data1)
+    }
+
+    /// Decoded form with a 1-based channel, e.g. `ControlChange ch6 controller 2`.
+    pub fn describe(self) -> String {
+        let (status, data1) = self.key();
+        describe(status, data1)
+    }
+}
+
+impl std::fmt::Display for Source {
+    /// Hex bytes, e.g. `B5 02`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:02X} {:02X}", self.status, self.data1)
+    }
 }
 
 impl Default for Meta {
@@ -42,6 +88,7 @@ impl Default for Meta {
             port: String::new(),
             tool_version: env!("CARGO_PKG_VERSION").to_owned(),
             skipped: Vec::new(),
+            ignored: Vec::new(),
         }
     }
 }
@@ -119,6 +166,19 @@ impl Fixture {
             let list: Vec<String> = meta.skipped.iter().map(|s| quote(s)).collect();
             let _ = writeln!(out, "skipped = [{}]", list.join(", "));
         }
+        if !meta.ignored.is_empty() {
+            let _ = writeln!(out, "ignored = [");
+            for source in &meta.ignored {
+                let _ = writeln!(
+                    out,
+                    "  {{ status = 0x{:02X}, data1 = 0x{:02X} }}, # {}",
+                    source.status,
+                    source.data1,
+                    source.describe()
+                );
+            }
+            let _ = writeln!(out, "]");
+        }
         for control in &self.controls {
             let _ = writeln!(out, "\n[[control]]");
             let _ = writeln!(out, "id = {}", quote(&control.id));
@@ -190,16 +250,7 @@ impl Control {
                 }),
             }
         }
-        let cc14 = ranges.iter().find_map(|msb| {
-            let is_cc = msb.status & 0xF0 == 0xB0;
-            let has_lsb = ranges
-                .iter()
-                .any(|lsb| lsb.status == msb.status && lsb.data1 == msb.data1 + 32);
-            (is_cc && msb.data1 < 32 && has_lsb).then_some(Cc14 {
-                msb: msb.data1,
-                lsb: msb.data1 + 32,
-            })
-        });
+        let cc14 = find_cc14(&ranges);
         Control {
             id: id.to_owned(),
             kind,
@@ -208,6 +259,16 @@ impl Control {
             led: None,
             led_values_vary: None,
         }
+    }
+
+    /// Removes every message from `ignored` sources and recomputes `cc14`.
+    /// Returns true if something was removed.
+    pub fn strip(&mut self, ignored: &[Source]) -> bool {
+        let before = self.messages.len();
+        self.messages
+            .retain(|m| !ignored.iter().any(|s| s.key() == (m.status, m.data1)));
+        self.cc14 = find_cc14(&self.messages);
+        self.messages.len() != before
     }
 
     /// One-line summary such as `deck1.play: NoteOn ch1 note 11 [0..127]`.
@@ -234,14 +295,39 @@ impl Control {
 impl MessageRange {
     /// Decoded form with a 1-based channel, e.g. `NoteOn ch1 note 11`.
     pub fn describe(&self) -> String {
-        let channel = (self.status & 0x0F) + 1;
-        match self.status & 0xF0 {
-            0x90 => format!("NoteOn ch{channel} note {}", self.data1),
-            0xB0 => format!("ControlChange ch{channel} controller {}", self.data1),
-            0xE0 => format!("PitchBend ch{channel} (MSB)"),
-            _ => format!("status 0x{:02X} data1 {}", self.status, self.data1),
+        describe(self.status, self.data1)
+    }
+
+    pub fn source(&self) -> Source {
+        Source {
+            status: self.status,
+            data1: self.data1,
         }
     }
+}
+
+fn describe(status: u8, data1: u8) -> String {
+    let channel = (status & 0x0F) + 1;
+    match status & 0xF0 {
+        0x90 => format!("NoteOn ch{channel} note {data1}"),
+        0xB0 => format!("ControlChange ch{channel} controller {data1}"),
+        0xE0 => format!("PitchBend ch{channel} (MSB)"),
+        _ => format!("status 0x{status:02X} data1 {data1}"),
+    }
+}
+
+/// CC `n` (< 32) and CC `n + 32` on the same channel form a 14-bit pair.
+fn find_cc14(ranges: &[MessageRange]) -> Option<Cc14> {
+    ranges.iter().find_map(|msb| {
+        let is_cc = msb.status & 0xF0 == 0xB0;
+        let has_lsb = ranges
+            .iter()
+            .any(|lsb| lsb.status == msb.status && lsb.data1 == msb.data1 + 32);
+        (is_cc && msb.data1 < 32 && has_lsb).then_some(Cc14 {
+            msb: msb.data1,
+            lsb: msb.data1 + 32,
+        })
+    })
 }
 
 /// A note release: note-off, or note-on with velocity 0 (parsed as note-off).
@@ -307,6 +393,16 @@ mod tests {
                 port: "DDJ-SB3".to_owned(),
                 tool_version: "0.0.0".to_owned(),
                 skipped: vec!["master_level".to_owned()],
+                ignored: vec![
+                    Source {
+                        status: 0xB5,
+                        data1: 0x02,
+                    },
+                    Source {
+                        status: 0xB5,
+                        data1: 0x22,
+                    },
+                ],
             },
             controls: vec![
                 Control {
@@ -373,6 +469,10 @@ mod tests {
         let text = fixture.to_toml();
         assert!(text.contains("status = 0x90, data1 = 0x0B"), "{text}");
         assert!(text.contains("cc14 = { msb = 0x00, lsb = 0x20 }"), "{text}");
+        assert!(
+            text.contains("{ status = 0xB5, data1 = 0x02 }, # ControlChange ch6 controller 2"),
+            "{text}"
+        );
         assert_eq!(parse_fixture(&text).unwrap(), fixture);
     }
 
@@ -461,5 +561,55 @@ led_values_vary = false
         );
         assert_eq!(control.messages.len(), 1);
         assert_eq!(control.messages[0].data1, 0x0C);
+    }
+
+    #[test]
+    fn strip_removes_ignored_sources_and_recomputes_cc14() {
+        // The owner's parasitic burst, recorded as a button.
+        let mut control = Control::from_messages(
+            "deck1.key_lock",
+            StepKind::Button,
+            &[
+                timed(0, [0xB5, 0x02, 0x32]),
+                timed(1, [0xB5, 0x22, 0x1A]),
+                timed(2, [0x90, 0x1A, 0x7F]),
+                timed(3, [0x90, 0x1A, 0x00]),
+            ],
+        );
+        assert_eq!(control.cc14, Some(Cc14 { msb: 2, lsb: 34 }));
+        let ignored = [
+            Source {
+                status: 0xB5,
+                data1: 0x02,
+            },
+            Source {
+                status: 0xB5,
+                data1: 0x22,
+            },
+        ];
+        assert!(control.strip(&ignored));
+        assert_eq!(control.messages.len(), 1);
+        assert_eq!(control.messages[0].data1, 0x1A);
+        assert_eq!(control.cc14, None);
+        assert!(!control.strip(&ignored));
+    }
+
+    #[test]
+    fn source_matches_note_off_status_as_note_on() {
+        let source = Source {
+            status: 0x80,
+            data1: 0x0B,
+        };
+        assert!(source.matches(MidiMessage::NoteOn {
+            channel: 0,
+            note: 0x0B,
+            velocity: 127
+        }));
+        assert!(!source.matches(MidiMessage::NoteOn {
+            channel: 1,
+            note: 0x0B,
+            velocity: 127
+        }));
+        assert_eq!(source.to_string(), "80 0B");
     }
 }

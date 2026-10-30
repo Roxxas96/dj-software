@@ -15,6 +15,19 @@
 
 controller = "Pioneer DDJ-SB3"
 
+# Sources that are never recorded.
+# Observed parasitic burst on the owner's SB3, 2026-10-30: B5 02 32, B5 22 1A,
+# B5 04 32, B5 24 1A, B5 06 32, B5 26 1A, sent now and then after other events.
+[ignore]
+sources = [
+  { status = 0xB5, data1 = 0x02 },
+  { status = 0xB5, data1 = 0x22 },
+  { status = 0xB5, data1 = 0x04 },
+  { status = 0xB5, data1 = 0x24 },
+  { status = 0xB5, data1 = 0x06 },
+  { status = 0xB5, data1 = 0x26 },
+]
+
 [[section]]
 name = "Left deck {deck}"
 decks = [1, 3]

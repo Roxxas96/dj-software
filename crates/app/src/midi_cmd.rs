@@ -1,7 +1,7 @@
 //! The `midi` commands: list ports, monitor raw messages and run a guided capture.
 
 use std::fs;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError, channel};
@@ -11,8 +11,8 @@ use std::time::Duration;
 
 use anyhow::{Context, anyhow, bail};
 use controller::capture::{
-    CaptureSession, Fixture, LedProbe, LedSink, Meta, PROBE_VELOCITIES, Question, Redo, Step,
-    StepKind, StepStatus, parse_checklist, parse_fixture, run_led_probe,
+    CaptureSession, Fixture, LedProbe, LedSink, Meta, PROBE_VELOCITIES, Question, Redo, Source,
+    Step, StepKind, StepStatus, parse_checklist, parse_fixture, run_led_probe,
 };
 use controller::{
     MidiMessage, OutputPort, PortError, TimedMidi, clock, input_port_names, open_input,
@@ -88,15 +88,27 @@ enum Command {
     Enter,
     Skip,
     Redo,
+    /// `x`: what was just recorded is noise.
+    Noise,
+    /// `g <step id>`.
+    Goto(String),
     Quit,
     Unknown(String),
 }
 
 fn parse_command(line: &str) -> Command {
-    match line.trim().to_lowercase().as_str() {
+    let line = line.trim();
+    if let Some(id) = line
+        .strip_prefix("g ")
+        .or_else(|| (line == "g").then_some(""))
+    {
+        return Command::Goto(id.trim().to_owned());
+    }
+    match line.to_lowercase().as_str() {
         "" => Command::Enter,
         "s" | "skip" => Command::Skip,
         "r" | "redo" => Command::Redo,
+        "x" => Command::Noise,
         "q" | "quit" => Command::Quit,
         other => Command::Unknown(other.to_owned()),
     }
@@ -244,15 +256,30 @@ impl LedSink for TrackedLeds<'_> {
     }
 }
 
-/// `dj-software midi capture`: walks the checklist, recording each control and
-/// probing its LED right after it is captured. The fixture is saved after every step.
-pub fn capture(checklist_path: &Path, out: &Path, port: Option<&str>) -> anyhow::Result<()> {
+/// One help line, shown at the start and on an unknown command.
+const KEYS_HELP: &str = "Keys (then Enter): Enter = finish now / keep, r = redo, x = mark as noise, s = skip, g <step> = go to a step, q = save and quit";
+
+/// `dj-software midi capture`: walks the checklist, recording each control,
+/// confirming it, and probing its LED. The fixture is saved after every step.
+/// With `redo` ids, only those steps of the existing fixture are captured again.
+pub fn capture(
+    checklist_path: &Path,
+    out: &Path,
+    port: Option<&str>,
+    redo: &[String],
+) -> anyhow::Result<()> {
     let text = fs::read_to_string(checklist_path)
         .with_context(|| format!("reading {}", checklist_path.display()))?;
     let checklist = parse_checklist(&text)
         .with_context(|| format!("loading checklist {}", checklist_path.display()))?;
     if checklist.steps.is_empty() {
         bail!("checklist {} has no steps", checklist_path.display());
+    }
+    if !redo.is_empty() && !out.exists() {
+        bail!(
+            "--redo needs an existing fixture, but {} does not exist",
+            out.display()
+        );
     }
 
     let inputs = input_port_names().context("listing MIDI inputs")?;
@@ -288,7 +315,17 @@ pub fn capture(checklist_path: &Path, out: &Path, port: Option<&str>) -> anyhow:
         port: input.name().to_owned(),
         ..Meta::default()
     };
-    let Some(mut session) = open_session(checklist.steps, out, &lines)? else {
+    let session = if redo.is_empty() {
+        open_session(checklist.steps, &checklist.ignore, out, &lines)?
+    } else {
+        Some(open_redo_session(
+            checklist.steps,
+            &checklist.ignore,
+            out,
+            redo,
+        )?)
+    };
+    let Some(mut session) = session else {
         return Ok(());
     };
     session.set_meta(meta);
@@ -297,9 +334,10 @@ pub fn capture(checklist_path: &Path, out: &Path, port: Option<&str>) -> anyhow:
     println!("Capturing from {} into {}", input.name(), out.display());
     println!("Each step listens as soon as it is shown: just do what it says.");
     println!(
-        "Type then Enter: nothing = finish the step now, s = skip, r = start this step over (or go back one step if nothing was recorded yet), q = save and quit."
+        "After each step, check the summary: Enter keeps it, r records it again, x marks what was recorded as noise."
     );
     println!("When a step asks you to prepare something first, do it, then press Enter.");
+    println!("{KEYS_HELP}");
     if !run_steps(&mut session, &rx, &lines, out, leds.as_deref())? {
         println!(
             "\nSaved {}. Run the same command again to continue.",
@@ -309,38 +347,92 @@ pub fn capture(checklist_path: &Path, out: &Path, port: Option<&str>) -> anyhow:
     }
     let fixture = session.finish();
     println!(
-        "\nAll steps done: {} captured, {} skipped. Saved {}.",
+        "\nDone: {} captured, {} skipped, {} ignored sources. Saved {}.",
         fixture.controls.len(),
         fixture.meta.skipped.len(),
+        fixture.meta.ignored.len(),
         out.display()
     );
     Ok(())
+}
+
+fn load_prior(out: &Path) -> anyhow::Result<Fixture> {
+    let text = fs::read_to_string(out).with_context(|| format!("reading {}", out.display()))?;
+    parse_fixture(&text).with_context(|| {
+        format!(
+            "{} exists but is not a capture fixture; move it away or choose another --out",
+            out.display()
+        )
+    })
+}
+
+/// Applies the checklist's ignore list and reports what it and noise
+/// detection removed.
+fn apply_ignores(session: &mut CaptureSession, ignore: &[Source]) {
+    let reopened = session.ignore(ignore);
+    if !reopened.is_empty() {
+        println!(
+            "note: {} recorded only ignored sources; asking again: {}",
+            if reopened.len() == 1 {
+                "1 step"
+            } else {
+                "some steps"
+            },
+            reopened.join(", ")
+        );
+    }
+    report_noise(session);
+}
+
+/// Prints noise found since the last call.
+fn report_noise(session: &mut CaptureSession) {
+    for noise in session.take_noise() {
+        let sources: Vec<String> = noise.sources.iter().map(Source::to_string).collect();
+        println!(
+            "  ignoring noise: {} seen in {}",
+            sources.join(", "),
+            noise.ids.join(" and ")
+        );
+        let again: Vec<&str> = noise
+            .ids
+            .iter()
+            .map(String::as_str)
+            .filter(|id| session.control(id).is_none())
+            .collect();
+        if !again.is_empty() {
+            println!(
+                "  (nothing else was recorded for {}; it will be asked again)",
+                again.join(", ")
+            );
+        }
+    }
 }
 
 /// A new session, or one resumed from an existing `out` if the user agrees.
 /// `None` means the user chose to stop.
 fn open_session(
     steps: Vec<Step>,
+    ignore: &[Source],
     out: &Path,
     lines: &Lines,
 ) -> anyhow::Result<Option<CaptureSession>> {
+    let fresh = |steps: Vec<Step>| {
+        let mut session = CaptureSession::new(steps);
+        session.ignore(ignore);
+        session
+    };
     if !out.exists() {
-        return Ok(Some(CaptureSession::new(steps)));
+        return Ok(Some(fresh(steps)));
     }
-    let text = fs::read_to_string(out).with_context(|| format!("reading {}", out.display()))?;
-    let prior: Fixture = parse_fixture(&text).with_context(|| {
-        format!(
-            "{} exists but is not a capture fixture; move it away or choose another --out",
-            out.display()
-        )
-    })?;
+    let prior = load_prior(out)?;
     let unknown: Vec<String> = prior
         .controls
         .iter()
         .map(|c| c.id.clone())
         .filter(|id| !steps.iter().any(|s| &s.id == id))
         .collect();
-    let session = CaptureSession::resume(steps.clone(), prior);
+    let mut session = CaptureSession::resume(steps.clone(), prior);
+    apply_ignores(&mut session, ignore);
     let (n, total) = session.position();
     println!(
         "{} already has {}/{total} steps done.",
@@ -360,7 +452,7 @@ fn open_session(
             step.id
         )),
         None => {
-            println!("Every step is done.");
+            println!("Every step is done (use --redo <step> to capture some again).");
             Some(false)
         }
     };
@@ -369,7 +461,7 @@ fn open_session(
         Some(false) => {
             let again = format!("Start over and overwrite {}? [y/n] ", out.display());
             if lines.ask_yes_no(&again) == Some(true) {
-                Ok(Some(CaptureSession::new(steps)))
+                Ok(Some(fresh(steps)))
             } else {
                 Ok(None)
             }
@@ -378,7 +470,53 @@ fn open_session(
     }
 }
 
-/// Runs every remaining step. Returns false if the user quit early.
+/// `--redo`: the existing fixture, with only the listed steps to capture.
+fn open_redo_session(
+    steps: Vec<Step>,
+    ignore: &[Source],
+    out: &Path,
+    redo: &[String],
+) -> anyhow::Result<CaptureSession> {
+    let prior = load_prior(out)?;
+    let mut session = CaptureSession::resume(steps, prior);
+    apply_ignores(&mut session, ignore);
+    if let Err(unknown) = session.redo_only(redo) {
+        bail!(
+            "--redo: no step {unknown:?}{}",
+            close_matches(&session, &unknown)
+        );
+    }
+    println!("Capturing again: {}", redo.join(", "));
+    Ok(session)
+}
+
+/// `; close matches: a, b` or an empty string.
+fn close_matches(session: &CaptureSession, query: &str) -> String {
+    let matches = session.find_steps(query);
+    if matches.is_empty() {
+        return String::new();
+    }
+    let shown: Vec<&str> = matches.iter().take(8).map(String::as_str).collect();
+    let more = if matches.len() > shown.len() {
+        ", ..."
+    } else {
+        ""
+    };
+    format!("; close matches: {}{more}", shown.join(", "))
+}
+
+/// Handles `g <step>`: jumps there, or explains why not.
+fn go_to(session: &mut CaptureSession, id: &str) {
+    if id.is_empty() {
+        println!("  usage: g <step id>, e.g. g deck1.play");
+    } else if session.goto(id) {
+        println!("  going to {id}; afterwards you come back here");
+    } else {
+        println!("  unknown step {id:?}{}", close_matches(session, id));
+    }
+}
+
+/// Runs the steps until none is left. Returns false if the user quit early.
 fn run_steps(
     session: &mut CaptureSession,
     rx: &Receiver<TimedMidi>,
@@ -407,7 +545,9 @@ fn run_steps(
             wait = true;
         }
         let outcome = if wait {
-            match lines.ask("  Press Enter when ready (s = skip, r = redo previous, q = quit) > ") {
+            match lines.ask(
+                "  Press Enter when ready (s = skip, r = back one step, g <step>, q = quit) > ",
+            ) {
                 None => Listened::Quit,
                 Some(line) => match parse_command(&line) {
                     Command::Enter => listen(session, &step, rx, lines)?,
@@ -416,9 +556,10 @@ fn run_steps(
                         Listened::Skipped
                     }
                     Command::Redo => Listened::Redo,
+                    Command::Goto(id) => Listened::Goto(id),
                     Command::Quit => Listened::Quit,
-                    Command::Unknown(other) => {
-                        println!("  unknown command {other:?}");
+                    Command::Noise | Command::Unknown(_) => {
+                        println!("  {KEYS_HELP}");
                         shown_section = None;
                         continue;
                     }
@@ -429,19 +570,28 @@ fn run_steps(
         };
         match outcome {
             Listened::Done => {
-                let probe = match session.control(&step.id) {
-                    Some(control) => {
-                        println!("  recorded {}", control.summary());
-                        LedProbe::for_step(&step, control)
-                    }
-                    None => None,
+                report_noise(session);
+                let Some(control) = session.control(&step.id) else {
+                    println!("  only ignored sources were recorded; listening again");
+                    continue;
                 };
-                save(out, session)?;
-                if let (Some(probe), Some(leds)) = (probe, leds)
-                    && !check_led(session, leds, lines, &probe)
-                {
-                    save(out, session)?;
-                    return Ok(false);
+                println!("  recorded {}", control.summary());
+                let probe = LedProbe::for_step(&step, control);
+                match review(session, &step, lines) {
+                    Review::Keep => {
+                        save(out, session)?;
+                        if let (Some(probe), Some(leds)) = (probe, leds)
+                            && !check_led(session, leds, lines, &probe)
+                        {
+                            save(out, session)?;
+                            return Ok(false);
+                        }
+                    }
+                    Review::Again => {}
+                    Review::Quit => {
+                        save(out, session)?;
+                        return Ok(false);
+                    }
                 }
             }
             Listened::Skipped => println!("  skipped {}", step.id),
@@ -452,8 +602,9 @@ fn run_steps(
                         println!("  back to {}", again.id);
                     }
                 }
-                Redo::Nothing => println!("  nothing to redo yet"),
+                Redo::Nothing => println!("  nothing to go back to"),
             },
+            Listened::Goto(id) => go_to(session, &id),
             Listened::Quit => {
                 save(out, session)?;
                 return Ok(false);
@@ -464,10 +615,58 @@ fn run_steps(
     Ok(true)
 }
 
+enum Review {
+    /// Keep the recording (then save and probe the LED).
+    Keep,
+    /// The step (or another, with `g`) is captured again.
+    Again,
+    Quit,
+}
+
+/// Asks whether to keep the step just recorded.
+fn review(session: &mut CaptureSession, step: &Step, lines: &Lines) -> Review {
+    loop {
+        let Some(line) = lines.ask(
+            "  Keep it? Enter = keep, r = record again, x = that was noise, g <step>, q = quit > ",
+        ) else {
+            return Review::Quit;
+        };
+        match parse_command(&line) {
+            Command::Enter => return Review::Keep,
+            Command::Redo => {
+                session.goto(&step.id);
+                println!("  recording {} again", step.id);
+                return Review::Again;
+            }
+            Command::Noise => {
+                let marked = session.mark_noise(&step.id);
+                let sources: Vec<String> = marked.iter().map(Source::to_string).collect();
+                println!(
+                    "  ignoring from now on: {}; recording {} again",
+                    sources.join(", "),
+                    step.id
+                );
+                return Review::Again;
+            }
+            Command::Goto(id) => {
+                // Keep this step, then jump; otherwise explain and ask again.
+                if !id.is_empty() && session.goto(&id) {
+                    println!("  kept {}; going to {id}, then back here", step.id);
+                    return Review::Keep;
+                }
+                go_to(session, &id);
+            }
+            Command::Quit => return Review::Quit,
+            Command::Skip | Command::Unknown(_) => println!("  {KEYS_HELP}"),
+        }
+    }
+}
+
 enum Listened {
     Done,
     Skipped,
     Redo,
+    Goto(String),
     Quit,
 }
 
@@ -484,6 +683,7 @@ fn listen(
         StepKind::Pads => println!("  Listening: tap all {PAD_COUNT} pads..."),
         _ => println!("  Listening..."),
     }
+    let dim = io::stdout().is_terminal();
     loop {
         let first = match rx.recv_timeout(CAPTURE_POLL) {
             Ok(timed) => Some(timed),
@@ -491,6 +691,15 @@ fn listen(
             Err(RecvTimeoutError::Disconnected) => bail!("the MIDI input closed"),
         };
         for timed in first.into_iter().chain(rx.try_iter()) {
+            if session.is_ignored(timed.message) {
+                let line = format!("    {}   (ignored)", timed.message);
+                if dim {
+                    println!("\x1b[2m{line}\x1b[0m");
+                } else {
+                    println!("{line}");
+                }
+                continue;
+            }
             session.feed(timed);
             println!(
                 "    {}{}",
@@ -513,12 +722,9 @@ fn listen(
                     return Ok(Listened::Skipped);
                 }
                 Command::Redo => return Ok(Listened::Redo),
+                Command::Goto(id) => return Ok(Listened::Goto(id)),
                 Command::Quit => return Ok(Listened::Quit),
-                Command::Unknown(other) => {
-                    println!(
-                        "  unknown command {other:?} (Enter = finish now, s = skip, r = redo, q = quit)"
-                    );
-                }
+                Command::Noise | Command::Unknown(_) => println!("  {KEYS_HELP}"),
             },
         }
         if session.poll(clock::now_micros()) == StepStatus::Done {
@@ -616,7 +822,17 @@ mod tests {
         assert_eq!(parse_command("s"), Command::Skip);
         assert_eq!(parse_command("R"), Command::Redo);
         assert_eq!(parse_command("quit"), Command::Quit);
-        assert_eq!(parse_command("x"), Command::Unknown("x".to_owned()));
+        assert_eq!(parse_command("x"), Command::Noise);
+        assert_eq!(
+            parse_command("g deck1.play"),
+            Command::Goto("deck1.play".to_owned())
+        );
+        assert_eq!(
+            parse_command(" g  deck1.play "),
+            Command::Goto("deck1.play".to_owned())
+        );
+        assert_eq!(parse_command("g"), Command::Goto(String::new()));
+        assert_eq!(parse_command("go"), Command::Unknown("go".to_owned()));
     }
 
     #[test]
