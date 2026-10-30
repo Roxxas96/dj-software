@@ -524,17 +524,38 @@ fn shift_cue_returns_to_start_but_cue_alone_previews() {
 #[test]
 fn tempo_slider_toward_you_is_faster() {
     // The capture's tempo slider reached 0 when pulled fully toward the player, which is
-    // the "+" end on Pioneer controllers.
-    let mut rig = Rig::attached();
-    let tempo = rig.control("deck1.tempo").messages.clone();
-    let msb_max = tempo.iter().find(|m| m.data1 == 0x00).unwrap().max;
-    let lsb_max = tempo.iter().find(|m| m.data1 == 0x20).unwrap().max;
-    // Pick up the slider near the middle (its captured maximum), then pull it to 0.
-    rig.cc14("deck1.tempo", msb_max, lsb_max);
-    let actions = rig.cc14("deck1.tempo", 0, 0);
-    assert!(actions.contains(&Action::Tempo(d(1))), "{actions:?}");
-    let ratio = rig.engine.deck(d(1)).tempo_ratio;
-    assert!(ratio > 1.0, "slider at 0 (toward you) gives ratio {ratio}");
+    // the "+" end on Pioneer controllers. Checked on every deck, each in its DECK state.
+    for (n, layer) in [
+        (1, Main),
+        (2, Main),
+        (3, Alt(Side::Left)),
+        (4, Alt(Side::Right)),
+    ] {
+        let mut rig = Rig::attached();
+        if let Alt(side) = layer {
+            rig.press(deck_select(side));
+        }
+        let id = format!("deck{n}.tempo");
+        let tempo = rig.control(&id).messages.clone();
+        let msb_max = tempo.iter().find(|m| m.data1 == 0x00).unwrap().max;
+        let lsb_max = tempo.iter().find(|m| m.data1 == 0x20).unwrap().max;
+        // Start from the captured maximum (soft takeover picks the slider up near or
+        // across the middle), then pull it to 0.
+        rig.cc14(&id, msb_max, lsb_max);
+        let actions = rig.cc14(&id, 0, 0);
+        assert!(
+            actions.contains(&Action::Tempo(d(n))),
+            "deck {n}: {actions:?}"
+        );
+        let ratio = rig.engine.deck(d(n)).tempo_ratio;
+        assert!(
+            ratio > 1.0,
+            "deck {n}: slider at 0 (toward you) gives ratio {ratio}"
+        );
+        for other in (1..=4).filter(|&o| o != n) {
+            assert_eq!(rig.engine.deck(d(other)).tempo_ratio, 1.0, "deck {other}");
+        }
+    }
 }
 
 #[test]

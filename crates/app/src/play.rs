@@ -29,7 +29,7 @@ const DEVICES_HINT: &str = "run `dj-software devices` to see the available devic
 pub struct PlayArgs {
     /// Track to play on deck 1
     pub track: PathBuf,
-    /// Track to play on deck 2, heard only in the headphones
+    /// Track to play on deck 2, heard only in the headphones (without --controller)
     #[arg(long, value_name = "TRACK2")]
     pub cue_track: Option<PathBuf>,
     /// Output device name (default: the system default device)
@@ -42,7 +42,8 @@ pub struct PlayArgs {
     #[arg(long, value_name = "L,R", value_parser = parse_channel_pair)]
     pub headphones: Option<[usize; 2]>,
     /// Drive the decks with a MIDI controller: a built-in mapping name (e.g. `ddj-sb3`) or a
-    /// mapping file. Every track then loads paused, and only Ctrl-C quits
+    /// mapping file. Every track then loads paused, `--cue-track` only loads deck 2 (no
+    /// fader or PFL presets: the controller sets them), and only Ctrl-C quits
     #[arg(long, value_name = "NAME|PATH")]
     pub controller: Option<String>,
     /// Track to load (paused) on deck 3
@@ -54,6 +55,14 @@ pub struct PlayArgs {
 }
 
 impl PlayArgs {
+    /// Why these arguments cannot be used together, if they cannot. Without a controller,
+    /// `--cue-track` plays deck 2 in the headphones, so it needs `--headphones`; with one,
+    /// headphone cueing comes from the controller and master-only routing is fine.
+    pub fn conflict(&self) -> Option<&'static str> {
+        (self.cue_track.is_some() && self.headphones.is_none() && self.controller.is_none())
+            .then_some("--cue-track needs --headphones (or --controller)")
+    }
+
     /// Routing with 0-based channel indices.
     pub fn routing(&self) -> OutputRouting {
         OutputRouting {
@@ -313,11 +322,12 @@ fn control_loop(
             PresenceChange::Back => {
                 if attached_once {
                     runtime.on_reconnect(engine, &mut connection);
+                    printer.event("controller reconnected".to_owned());
                 } else {
                     runtime.attach(engine, &mut connection);
                     attached_once = true;
+                    printer.event("controller connected".to_owned());
                 }
-                printer.event("controller reconnected".to_owned());
             }
         }
 
