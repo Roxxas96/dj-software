@@ -75,7 +75,6 @@ pub fn decode_file(path: &Path) -> Result<TrackBuffer, DecodeError> {
         .ok_or(DecodeError::NoAudioTrack)?;
     let track_id = track.id;
     let track_delay_missing = track.delay.is_none();
-    let track_id_for_trim = track.id;
     let params = track
         .codec_params
         .as_ref()
@@ -132,11 +131,14 @@ pub fn decode_file(path: &Path) -> Result<TrackBuffer, DecodeError> {
 
     if track_delay_missing
         && let Some(rate) = sample_rate
-        && let Some(trim) = mp4_trim::read_trim(path, track_id_for_trim, rate)
+        && let Some(trim) = mp4_trim::read_trim(path, track_id, rate)
     {
         let start = trim.delay.saturating_mul(2).min(out.len());
         out.drain(..start);
-        out.truncate(trim.length.saturating_mul(2));
+        // A zero edit duration means "to the end of the media", not "empty".
+        if trim.length > 0 {
+            out.truncate(trim.length.saturating_mul(2));
+        }
     }
     if out.is_empty() {
         return Err(last_error.map_or(DecodeError::NoAudioTrack, map_error));

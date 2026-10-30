@@ -10,7 +10,7 @@ use std::path::Path;
 /// Upper bound on the `moov` box we are willing to load.
 const MAX_MOOV: u64 = 64 * 1024 * 1024;
 
-/// Frames to drop at the start, and the total playable length, at the output sample rate.
+/// Frames to drop at the start, and the total playable length (0 = unlimited), at the output sample rate.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Trim {
     pub delay: usize,
@@ -219,6 +219,18 @@ mod tests {
             Some(Trim {
                 delay: 1024,
                 length: 44100
+            })
+        );
+    }
+
+    #[test]
+    fn zero_duration_yields_zero_length() {
+        let m = moov(&[mvhd(1000), trak(1, 44100, Some(elst_v0(&[(0, 1024)])))]);
+        assert_eq!(
+            parse_moov(&m, 1, 44100),
+            Some(Trim {
+                delay: 1024,
+                length: 0
             })
         );
     }
