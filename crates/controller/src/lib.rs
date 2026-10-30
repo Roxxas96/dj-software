@@ -2,10 +2,12 @@
 
 pub mod capture;
 pub mod clock;
+pub mod feedback;
 pub mod mapping;
 mod midi;
 mod ports;
 
+pub use feedback::Feedback;
 pub use midi::{MidiMessage, TimedMidi};
 pub use ports::{
     InputPort, MidiOut, OutputPort, PortError, input_port_names, open_input, open_output,
