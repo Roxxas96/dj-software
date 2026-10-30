@@ -371,6 +371,7 @@ dependencies = [
  "anyhow",
  "audio-io",
  "clap",
+ "controller",
  "ctrlc",
  "decode",
  "engine",

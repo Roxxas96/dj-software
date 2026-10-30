@@ -19,5 +19,6 @@ anyhow.workspace = true
 audio-io = { path = "../audio-io" }
 clap.workspace = true
 ctrlc.workspace = true
+controller = { path = "../controller" }
 decode = { path = "../decode" }
 engine = { path = "../engine" }
