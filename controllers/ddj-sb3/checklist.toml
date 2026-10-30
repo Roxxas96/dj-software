@@ -1,0 +1,390 @@
+# Capture checklist for the Pioneer DDJ-SB3, used by `dj-software midi capture`.
+#
+# The control list follows the hardware description in the Mixxx manual
+# (https://manual.mixxx.org/2.6/en/hardware/controllers/pioneer_ddj_sb3).
+# Only the list of physical controls is taken from there; no MIDI values. Those
+# come from the capture itself.
+#
+# Each section may repeat once per deck (`decks`), with {deck} substituted in
+# its name, setup, ids and prompts. A step with `shift = true` is also captured
+# with SHIFT held, as a separate step whose id ends in ".shift".
+
+controller = "Pioneer DDJ-SB3"
+
+[[section]]
+name = "Left deck {deck}"
+decks = [1, 3]
+setup = "Use the LEFT side. Press its DECK button until it controls deck {deck}. For SHIFT steps, hold the LEFT SHIFT."
+
+[[section.step]]
+id = "deck{deck}.play"
+prompt = "Press and release LEFT PLAY/PAUSE."
+kind = "button"
+shift = true
+
+[[section.step]]
+id = "deck{deck}.cue"
+prompt = "Press and release LEFT CUE."
+kind = "button"
+shift = true
+
+[[section.step]]
+id = "deck{deck}.sync"
+prompt = "Press and release LEFT SYNC."
+kind = "button"
+shift = true
+
+[[section.step]]
+id = "deck{deck}.key_lock"
+prompt = "Press and release LEFT KEY LOCK."
+kind = "button"
+shift = true
+
+[[section.step]]
+id = "deck{deck}.vinyl"
+prompt = "Press and release LEFT VINYL."
+kind = "button"
+shift = true
+
+[[section.step]]
+id = "deck{deck}.auto_loop"
+prompt = "Press and release LEFT AUTO LOOP."
+kind = "button"
+shift = true
+
+[[section.step]]
+id = "deck{deck}.loop_half"
+prompt = "Press and release LEFT 1/2X."
+kind = "button"
+shift = true
+
+[[section.step]]
+id = "deck{deck}.loop_double"
+prompt = "Press and release LEFT 2X."
+kind = "button"
+shift = true
+
+[[section.step]]
+id = "deck{deck}.shift"
+prompt = "Press and release LEFT SHIFT."
+kind = "button"
+
+[[section.step]]
+id = "deck{deck}.deck_select"
+prompt = "Press LEFT DECK twice (it should end on deck {deck} again)."
+kind = "button"
+
+[[section.step]]
+id = "deck{deck}.jog_touch"
+prompt = "Touch the top plate of the LEFT jog wheel without turning it, then let go."
+kind = "button"
+
+[[section.step]]
+id = "deck{deck}.jog_top"
+prompt = "Keep a hand on the top plate of the LEFT jog wheel: turn it about one turn clockwise, then one turn counter-clockwise."
+kind = "jog"
+shift = true
+
+[[section.step]]
+id = "deck{deck}.jog_outer"
+prompt = "Turn the outer ring of the LEFT jog wheel (do not touch the top plate) about one turn clockwise, then one turn counter-clockwise."
+kind = "jog"
+
+[[section.step]]
+id = "deck{deck}.tempo"
+prompt = "Move the LEFT TEMPO slider fully toward you, then fully away from you, then back to the middle."
+kind = "continuous"
+
+[[section.step]]
+id = "deck{deck}.mode_hot_cue"
+prompt = "Press and release LEFT HOT CUE (pad mode button)."
+kind = "button"
+shift = true
+
+[[section.step]]
+id = "deck{deck}.mode_fx_fade"
+prompt = "Press and release LEFT FX FADE (pad mode button)."
+kind = "button"
+shift = true
+
+[[section.step]]
+id = "deck{deck}.mode_pad_scratch"
+prompt = "Press and release LEFT PAD SCRATCH (pad mode button)."
+kind = "button"
+shift = true
+
+[[section.step]]
+id = "deck{deck}.mode_sampler"
+prompt = "Press and release LEFT SAMPLER (pad mode button)."
+kind = "button"
+shift = true
+
+[[section.step]]
+id = "deck{deck}.pads_hot_cue"
+prompt = "Before Enter: press LEFT HOT CUE (without SHIFT). After Enter: tap the 8 LEFT pads one by one, 1 to 8."
+kind = "pads"
+
+[[section.step]]
+id = "deck{deck}.pads_hot_cue.shift"
+prompt = "Stay in HOT CUE mode. Hold LEFT SHIFT before Enter and keep holding it. After Enter: tap the 8 LEFT pads one by one, 1 to 8."
+kind = "pads"
+
+[[section.step]]
+id = "deck{deck}.pads_fx_fade"
+prompt = "Before Enter: press LEFT FX FADE (without SHIFT). After Enter: tap the 8 LEFT pads one by one, 1 to 8."
+kind = "pads"
+
+[[section.step]]
+id = "deck{deck}.pads_pad_scratch"
+prompt = "Before Enter: press LEFT PAD SCRATCH (without SHIFT). After Enter: tap the 8 LEFT pads one by one, 1 to 8."
+kind = "pads"
+
+[[section.step]]
+id = "deck{deck}.pads_sampler"
+prompt = "Before Enter: press LEFT SAMPLER (without SHIFT). After Enter: tap the 8 LEFT pads one by one, 1 to 8."
+kind = "pads"
+
+[[section]]
+name = "Right deck {deck}"
+decks = [2, 4]
+setup = "Use the RIGHT side. Press its DECK button until it controls deck {deck}. For SHIFT steps, hold the RIGHT SHIFT."
+
+[[section.step]]
+id = "deck{deck}.play"
+prompt = "Press and release RIGHT PLAY/PAUSE."
+kind = "button"
+shift = true
+
+[[section.step]]
+id = "deck{deck}.cue"
+prompt = "Press and release RIGHT CUE."
+kind = "button"
+shift = true
+
+[[section.step]]
+id = "deck{deck}.sync"
+prompt = "Press and release RIGHT SYNC."
+kind = "button"
+shift = true
+
+[[section.step]]
+id = "deck{deck}.key_lock"
+prompt = "Press and release RIGHT KEY LOCK."
+kind = "button"
+shift = true
+
+[[section.step]]
+id = "deck{deck}.vinyl"
+prompt = "Press and release RIGHT VINYL."
+kind = "button"
+shift = true
+
+[[section.step]]
+id = "deck{deck}.auto_loop"
+prompt = "Press and release RIGHT AUTO LOOP."
+kind = "button"
+shift = true
+
+[[section.step]]
+id = "deck{deck}.loop_half"
+prompt = "Press and release RIGHT 1/2X."
+kind = "button"
+shift = true
+
+[[section.step]]
+id = "deck{deck}.loop_double"
+prompt = "Press and release RIGHT 2X."
+kind = "button"
+shift = true
+
+[[section.step]]
+id = "deck{deck}.shift"
+prompt = "Press and release RIGHT SHIFT."
+kind = "button"
+
+[[section.step]]
+id = "deck{deck}.deck_select"
+prompt = "Press RIGHT DECK twice (it should end on deck {deck} again)."
+kind = "button"
+
+[[section.step]]
+id = "deck{deck}.jog_touch"
+prompt = "Touch the top plate of the RIGHT jog wheel without turning it, then let go."
+kind = "button"
+
+[[section.step]]
+id = "deck{deck}.jog_top"
+prompt = "Keep a hand on the top plate of the RIGHT jog wheel: turn it about one turn clockwise, then one turn counter-clockwise."
+kind = "jog"
+shift = true
+
+[[section.step]]
+id = "deck{deck}.jog_outer"
+prompt = "Turn the outer ring of the RIGHT jog wheel (do not touch the top plate) about one turn clockwise, then one turn counter-clockwise."
+kind = "jog"
+
+[[section.step]]
+id = "deck{deck}.tempo"
+prompt = "Move the RIGHT TEMPO slider fully toward you, then fully away from you, then back to the middle."
+kind = "continuous"
+
+[[section.step]]
+id = "deck{deck}.mode_hot_cue"
+prompt = "Press and release RIGHT HOT CUE (pad mode button)."
+kind = "button"
+shift = true
+
+[[section.step]]
+id = "deck{deck}.mode_fx_fade"
+prompt = "Press and release RIGHT FX FADE (pad mode button)."
+kind = "button"
+shift = true
+
+[[section.step]]
+id = "deck{deck}.mode_pad_scratch"
+prompt = "Press and release RIGHT PAD SCRATCH (pad mode button)."
+kind = "button"
+shift = true
+
+[[section.step]]
+id = "deck{deck}.mode_sampler"
+prompt = "Press and release RIGHT SAMPLER (pad mode button)."
+kind = "button"
+shift = true
+
+[[section.step]]
+id = "deck{deck}.pads_hot_cue"
+prompt = "Before Enter: press RIGHT HOT CUE (without SHIFT). After Enter: tap the 8 RIGHT pads one by one, 1 to 8."
+kind = "pads"
+
+[[section.step]]
+id = "deck{deck}.pads_hot_cue.shift"
+prompt = "Stay in HOT CUE mode. Hold RIGHT SHIFT before Enter and keep holding it. After Enter: tap the 8 RIGHT pads one by one, 1 to 8."
+kind = "pads"
+
+[[section.step]]
+id = "deck{deck}.pads_fx_fade"
+prompt = "Before Enter: press RIGHT FX FADE (without SHIFT). After Enter: tap the 8 RIGHT pads one by one, 1 to 8."
+kind = "pads"
+
+[[section.step]]
+id = "deck{deck}.pads_pad_scratch"
+prompt = "Before Enter: press RIGHT PAD SCRATCH (without SHIFT). After Enter: tap the 8 RIGHT pads one by one, 1 to 8."
+kind = "pads"
+
+[[section.step]]
+id = "deck{deck}.pads_sampler"
+prompt = "Before Enter: press RIGHT SAMPLER (without SHIFT). After Enter: tap the 8 RIGHT pads one by one, 1 to 8."
+kind = "pads"
+
+[[section]]
+name = "Mixer channel {deck}"
+decks = [1, 2, 3, 4]
+setup = "Mixer channel {deck}: decks 1 and 3 use the LEFT channel strip, decks 2 and 4 the RIGHT one. Press that side's DECK button until it controls deck {deck}. For SHIFT steps, hold that side's SHIFT."
+
+[[section.step]]
+id = "channel{deck}.trim"
+prompt = "Turn the channel {deck} TRIM knob fully left, then fully right."
+kind = "continuous"
+
+[[section.step]]
+id = "channel{deck}.eq_high"
+prompt = "Turn the channel {deck} HI knob fully left, then fully right."
+kind = "continuous"
+
+[[section.step]]
+id = "channel{deck}.eq_mid"
+prompt = "Turn the channel {deck} MID knob fully left, then fully right."
+kind = "continuous"
+
+[[section.step]]
+id = "channel{deck}.eq_low"
+prompt = "Turn the channel {deck} LOW knob fully left, then fully right."
+kind = "continuous"
+
+[[section.step]]
+id = "channel{deck}.filter"
+prompt = "Turn the channel {deck} FILTER knob fully left, then fully right, then back to the middle."
+kind = "continuous"
+
+[[section.step]]
+id = "channel{deck}.fader"
+prompt = "Move the channel {deck} fader fully down, then fully up."
+kind = "continuous"
+shift = true
+
+[[section.step]]
+id = "channel{deck}.pfl"
+prompt = "Press and release the channel {deck} headphone CUE button."
+kind = "button"
+
+[[section]]
+name = "Global"
+setup = "Controls shared by both sides. For SHIFT steps, hold the LEFT SHIFT."
+
+[[section.step]]
+id = "crossfader"
+prompt = "Move the CROSSFADER fully left, then fully right."
+kind = "continuous"
+
+[[section.step]]
+id = "master_level"
+prompt = "Turn the MASTER level knob fully down, then back up. It may send nothing: skip (s) if nothing is echoed."
+kind = "continuous"
+
+[[section.step]]
+id = "headphone_level"
+prompt = "Turn the HEADPHONES level knob fully down, then back up. It may send nothing: skip (s) if nothing is echoed."
+kind = "continuous"
+
+[[section.step]]
+id = "headphone_master"
+prompt = "Press and release the headphone MASTER button."
+kind = "button"
+
+[[section.step]]
+id = "fx.1"
+prompt = "Press and release the FX 1 button (if each side has one, use the LEFT one)."
+kind = "button"
+shift = true
+
+[[section.step]]
+id = "fx.2"
+prompt = "Press and release the FX 2 button (if each side has one, use the LEFT one)."
+kind = "button"
+shift = true
+
+[[section.step]]
+id = "fx.3"
+prompt = "Press and release the FX 3 button (if each side has one, use the LEFT one)."
+kind = "button"
+shift = true
+
+[[section.step]]
+id = "fx.level"
+prompt = "Turn the FX LEVEL knob fully left, then fully right (if each side has one, use the LEFT one)."
+kind = "continuous"
+
+[[section.step]]
+id = "browse.rotate"
+prompt = "Turn the BROWSE knob a few clicks clockwise, then a few clicks counter-clockwise."
+kind = "jog"
+shift = true
+
+[[section.step]]
+id = "browse.press"
+prompt = "Press and release the BROWSE knob."
+kind = "button"
+shift = true
+
+[[section.step]]
+id = "load.left"
+prompt = "Press and release the LEFT LOAD button."
+kind = "button"
+shift = true
+
+[[section.step]]
+id = "load.right"
+prompt = "Press and release the RIGHT LOAD button."
+kind = "button"
+shift = true

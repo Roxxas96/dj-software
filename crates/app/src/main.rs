@@ -3,6 +3,7 @@
 mod midi_cmd;
 mod play;
 
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use anyhow::Context;
@@ -39,6 +40,18 @@ enum MidiCommand {
         #[arg(long, value_name = "NAME")]
         port: Option<String>,
     },
+    /// Guided capture of every control's MIDI messages into a TOML fixture
+    Capture {
+        /// Checklist of controls to capture (e.g. controllers/ddj-sb3/checklist.toml)
+        #[arg(long, value_name = "PATH")]
+        checklist: PathBuf,
+        /// Fixture to write; if it exists, the capture can continue where it stopped
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        /// Port name (substring; default: the first input containing "DDJ")
+        #[arg(long, value_name = "NAME")]
+        port: Option<String>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -58,6 +71,11 @@ fn main() -> ExitCode {
         }
         Sub::Midi(MidiCommand::Ports) => midi_cmd::ports(),
         Sub::Midi(MidiCommand::Monitor { port }) => midi_cmd::monitor(port.as_deref()),
+        Sub::Midi(MidiCommand::Capture {
+            checklist,
+            out,
+            port,
+        }) => midi_cmd::capture(&checklist, &out, port.as_deref()),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -137,5 +155,33 @@ mod tests {
             parse(&["dj-software", "midi", "monitor"]).unwrap().command,
             Sub::Midi(MidiCommand::Monitor { port: None })
         ));
+    }
+
+    #[test]
+    fn parses_midi_capture() {
+        match parse(&[
+            "dj-software",
+            "midi",
+            "capture",
+            "--checklist",
+            "c.toml",
+            "--out",
+            "o.toml",
+        ])
+        .unwrap()
+        .command
+        {
+            Sub::Midi(MidiCommand::Capture {
+                checklist,
+                out,
+                port,
+            }) => {
+                assert_eq!(checklist, PathBuf::from("c.toml"));
+                assert_eq!(out, PathBuf::from("o.toml"));
+                assert_eq!(port, None);
+            }
+            _ => panic!("expected midi capture"),
+        }
+        assert!(parse(&["dj-software", "midi", "capture", "--out", "o.toml"]).is_err());
     }
 }
