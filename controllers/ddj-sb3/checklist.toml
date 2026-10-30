@@ -15,9 +15,14 @@
 
 controller = "Pioneer DDJ-SB3"
 
-# Sources that are never recorded.
-# Observed parasitic burst on the owner's SB3, 2026-10-30: B5 02 32, B5 22 1A,
-# B5 04 32, B5 24 1A, B5 06 32, B5 26 1A, sent now and then after other events.
+# Sources that are never recorded: messages from them are dropped while
+# capturing (shown as "(ignored)") and stripped from loaded fixtures.
+# Seeded entries: a parasitic burst observed on the owner's SB3, 2026-10-30
+# (B5 02 32, B5 22 1A, B5 04 32, B5 24 1A, B5 06 32, B5 26 1A, channel 6
+# CC 2/34, 4/36, 6/38 with constant values), sent now and then after other
+# events, never during a 20 s idle period. If a real control ever turns out to
+# use one of these, type `u B5 02` (status, data1 in hex) during the capture to
+# record it again, and remove it from this list.
 [ignore]
 sources = [
   { status = 0xB5, data1 = 0x02 },
