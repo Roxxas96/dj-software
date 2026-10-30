@@ -27,4 +27,4 @@ Each plan that adds or changes a crate updates this page. The full design is in
 | `engine` | Audio engine: decks, mixing and effects. Real-time safe, no I/O, no UI or MIDI knowledge. Testable without an audio device by rendering frames into a buffer. |
 | `decode` | Decodes audio files into memory. |
 | `audio-io` | Audio device enumeration and output. |
-| `dj-software` (`crates/app`) | The application binary. Wires the other crates together. |
+| `dj-software` (`crates/app`) | The application binary. Currently a command-line player (`devices`, `play`) that wires the other crates together. |

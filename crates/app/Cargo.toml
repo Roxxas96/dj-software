@@ -13,3 +13,11 @@ workspace = true
 [[bin]]
 name = "dj-software"
 path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+audio-io = { path = "../audio-io" }
+clap.workspace = true
+ctrlc.workspace = true
+decode = { path = "../decode" }
+engine = { path = "../engine" }

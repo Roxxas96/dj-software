@@ -4,8 +4,8 @@ Open-source DJ software written in Rust. It aims for a VirtualDJ-like workflow, 
 precise controller mapping: every control on a supported controller is mapped to a named action,
 and LEDs follow the app state.
 
-**Status: early development.** Nothing is usable yet. The foundation (audio engine, file
-decoding, audio output) is being built first.
+**Status: early development.** The foundation (audio engine, file decoding, audio output) works
+from a command-line player; there is no UI or controller support yet.
 
 ## Supported controllers
 
@@ -21,10 +21,26 @@ Install [mise](https://mise.jdx.dev), then:
 
 ```bash
 mise install                # installs the pinned Rust toolchain and dev tools
-cargo run -p dj-software
 ```
 
 On Linux you also need the ALSA headers (`libasound2-dev` on Debian and Ubuntu).
+
+## Quick start
+
+```bash
+# List output devices and their channel counts
+cargo run --release -p dj-software -- devices
+
+# Play track A to the master output; track B only in the headphones (channels 3 and 4)
+cargo run --release -p dj-software -- play <track-a> --cue-track <track-b> \
+  --device "DDJ-SB3" --headphones 3,4
+
+# Play on the default output
+cargo run --release -p dj-software -- play <track-a>
+```
+
+Channel numbers are 1-based, as printed on the hardware. `--cue-track` needs `--headphones`.
+Press Ctrl-C to stop.
 
 ## Architecture
 
