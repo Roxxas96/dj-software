@@ -11,6 +11,8 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
+use super::fixture::Source;
+
 /// How a control behaves, which decides when its capture step is complete.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -61,6 +63,8 @@ pub struct Step {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Checklist {
     pub controller: Option<String>,
+    /// Sources never recorded (e.g. a controller's parasitic messages).
+    pub ignore: Vec<Source>,
     pub steps: Vec<Step>,
 }
 
@@ -76,6 +80,11 @@ pub enum ChecklistError {
         shift_control: String,
         problem: &'static str,
     },
+    #[error("ignore source {ignored}: {problem}")]
+    Ignore {
+        ignored: Source,
+        problem: &'static str,
+    },
     #[error("section {section:?}: {problem}")]
     Section { section: String, problem: String },
 }
@@ -84,6 +93,8 @@ pub enum ChecklistError {
 #[serde(deny_unknown_fields)]
 struct FileDef {
     controller: Option<String>,
+    #[serde(default)]
+    ignore: IgnoreDef,
     #[serde(rename = "section", default)]
     sections: Vec<SectionDef>,
 }
@@ -100,6 +111,13 @@ struct SectionDef {
     shift_control: OneOrMany,
     #[serde(rename = "step", default)]
     steps: Vec<StepDef>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IgnoreDef {
+    #[serde(default)]
+    sources: Vec<Source>,
 }
 
 /// A string or a list of strings.
@@ -145,6 +163,21 @@ pub fn load_checklist(text: &str) -> Result<Vec<Step>, ChecklistError> {
 /// Parses a checklist, keeping the optional top-level `controller` name.
 pub fn parse_checklist(text: &str) -> Result<Checklist, ChecklistError> {
     let file: FileDef = toml::from_str(text)?;
+    for &source in &file.ignore.sources {
+        let problem = if source.status < 0x80 || source.status >= 0xF0 {
+            Some("status must be a channel message status (0x80..=0xEF)")
+        } else if source.data1 > 0x7F {
+            Some("data1 must be 0..=127")
+        } else {
+            None
+        };
+        if let Some(problem) = problem {
+            return Err(ChecklistError::Ignore {
+                ignored: source,
+                problem,
+            });
+        }
+    }
     let mut steps = Vec::new();
     for section in &file.sections {
         expand_section(section, &mut steps)?;
@@ -158,6 +191,7 @@ pub fn parse_checklist(text: &str) -> Result<Checklist, ChecklistError> {
     check_shift_controls(&steps)?;
     Ok(Checklist {
         controller: file.controller,
+        ignore: file.ignore.sources,
         steps,
     })
 }
@@ -433,6 +467,23 @@ kind = "button"
         let checklist = parse_checklist(text).unwrap();
         assert!(checklist.steps.len() > 80, "{}", checklist.steps.len());
         assert_eq!(checklist.controller.as_deref(), Some("Pioneer DDJ-SB3"));
+        // The parasitic burst seen on the owner's SB3.
+        let ignored: Vec<(u8, u8)> = checklist
+            .ignore
+            .iter()
+            .map(|s| (s.status, s.data1))
+            .collect();
+        assert_eq!(
+            ignored,
+            [
+                (0xB5, 0x02),
+                (0xB5, 0x22),
+                (0xB5, 0x04),
+                (0xB5, 0x24),
+                (0xB5, 0x06),
+                (0xB5, 0x26)
+            ]
+        );
         for deck in 1..=4 {
             for id in ["play", "cue", "jog_top", "tempo", "pads_hot_cue"] {
                 let id = format!("deck{deck}.{id}");
@@ -644,5 +695,38 @@ shift = true
             load_checklist(&not_button),
             Err(ChecklistError::ShiftControl { .. })
         ));
+    }
+
+    #[test]
+    fn checklist_ignore_sources() {
+        let text = r#"
+[ignore]
+sources = [{ status = 0xB5, data1 = 0x02 }]
+[[section]]
+name = "A"
+[[section.step]]
+id = "x"
+prompt = "p"
+kind = "button"
+"#;
+        let checklist = parse_checklist(text).unwrap();
+        assert_eq!(
+            checklist.ignore,
+            [Source {
+                status: 0xB5,
+                data1: 0x02
+            }]
+        );
+        assert!(parse_checklist(&text.replace("data1 = 0x02", "data1 = 0x02, value = 1")).is_err());
+        assert!(parse_checklist(&text.replace("sources", "source")).is_err());
+        assert!(matches!(
+            parse_checklist(&text.replace("0xB5", "0x35")),
+            Err(ChecklistError::Ignore { .. })
+        ));
+        assert!(matches!(
+            parse_checklist(&text.replace("0x02", "0x80")),
+            Err(ChecklistError::Ignore { .. })
+        ));
+        assert!(parse_checklist(TWO_STEPS).unwrap().ignore.is_empty());
     }
 }

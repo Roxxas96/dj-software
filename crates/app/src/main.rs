@@ -51,6 +51,9 @@ enum MidiCommand {
         /// Port name (substring; default: the first input containing "DDJ")
         #[arg(long, value_name = "NAME")]
         port: Option<String>,
+        /// Capture only this step of the existing fixture again (repeatable)
+        #[arg(long, value_name = "STEP")]
+        redo: Vec<String>,
     },
 }
 
@@ -75,7 +78,8 @@ fn main() -> ExitCode {
             checklist,
             out,
             port,
-        }) => midi_cmd::capture(&checklist, &out, port.as_deref()),
+            redo,
+        }) => midi_cmd::capture(&checklist, &out, port.as_deref(), &redo),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -175,13 +179,36 @@ mod tests {
                 checklist,
                 out,
                 port,
+                redo,
             }) => {
                 assert_eq!(checklist, PathBuf::from("c.toml"));
                 assert_eq!(out, PathBuf::from("o.toml"));
                 assert_eq!(port, None);
+                assert!(redo.is_empty());
             }
             _ => panic!("expected midi capture"),
         }
         assert!(parse(&["dj-software", "midi", "capture", "--out", "o.toml"]).is_err());
+        match parse(&[
+            "dj-software",
+            "midi",
+            "capture",
+            "--checklist",
+            "c.toml",
+            "--out",
+            "o.toml",
+            "--redo",
+            "deck1.play",
+            "--redo",
+            "deck1.cue",
+        ])
+        .unwrap()
+        .command
+        {
+            Sub::Midi(MidiCommand::Capture { redo, .. }) => {
+                assert_eq!(redo, ["deck1.play", "deck1.cue"]);
+            }
+            _ => panic!("expected midi capture"),
+        }
     }
 }
