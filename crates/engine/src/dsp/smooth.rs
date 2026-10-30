@@ -49,6 +49,11 @@ impl Segment {
     pub(crate) fn at(&self, frame: usize) -> f32 {
         self.start + self.step * (frame + 1) as f32
     }
+
+    /// Whether the gain is exactly zero across the whole block.
+    pub(crate) fn is_zero(&self) -> bool {
+        self.start == 0.0 && self.step == 0.0
+    }
 }
 
 #[cfg(test)]

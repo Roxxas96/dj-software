@@ -30,7 +30,7 @@ impl EngineRenderer {
             garbage,
             shared: Arc::default(),
             decks: Default::default(),
-            mixer: Mixer::new(config.max_block_frames),
+            mixer: Mixer::new(config.sample_rate, config.max_block_frames),
         };
         renderer.publish();
         renderer
