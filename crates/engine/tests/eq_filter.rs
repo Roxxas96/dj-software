@@ -98,7 +98,7 @@ fn neutral_eq_is_flat() {
         let db = gain_db(freq, &neutral);
         assert!(db.abs() <= 0.5, "{freq} Hz: {db:.3} dB");
     }
-    // Any non-neutral setting engages the isolator; at unity it must still be flat.
+    // Including at crossovers, where the bands overlap, and just off neutral.
     let engaged = [ChannelCommand::EqLow(0.5001)];
     for freq in [50.0, 250.0, 1000.0, 2500.0, 10_000.0] {
         let db = gain_db(freq, &engaged);

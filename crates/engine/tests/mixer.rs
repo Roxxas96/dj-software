@@ -3,7 +3,7 @@ mod common;
 use std::f32::consts::FRAC_1_SQRT_2;
 
 use approx::assert_abs_diff_eq;
-use common::{constant_track, render};
+use common::{SETTLE_FRAMES, SETTLED_EPSILON, constant_track, render};
 use engine::mixer::{crossfader_gains, fader_gain, trim_gain};
 use engine::{
     ChannelCommand, Command, DeckCommand, DeckId, EngineConfig, EngineController, EngineRenderer,
@@ -49,9 +49,15 @@ fn settle(r: &mut EngineRenderer) {
     render(r, BLOCK);
 }
 
+/// Renders until the EQ isolator's response to the decks starting has settled, so DC
+/// levels can be checked (the isolator passes DC at unity once settled).
+fn settle_playback(r: &mut EngineRenderer) {
+    render(r, SETTLE_FRAMES);
+}
+
 fn assert_all_near(samples: &[f32], expected: f32) {
     for &s in samples {
-        assert_abs_diff_eq!(s, expected, epsilon = 1e-5);
+        assert_abs_diff_eq!(s, expected, epsilon = SETTLED_EPSILON);
     }
 }
 
@@ -95,6 +101,7 @@ fn crossfader_full_a_mutes_b_channels_but_not_thru() {
 
     c.send(Command::Deck(deck(1), DeckCommand::Pause)).unwrap();
     play(&mut c, 3);
+    settle_playback(&mut r);
     let (m, _) = render(&mut r, 1024);
     assert_all_near(&m, SIGNAL);
 }
@@ -107,6 +114,8 @@ fn pfl_sends_prefader_signal_to_headphones() {
     master(&mut c, MasterCommand::HeadphoneMix(0.0));
     settle(&mut r);
     play(&mut c, 0);
+    let (m, _) = render(&mut r, SETTLE_FRAMES);
+    assert!(m.iter().all(|&s| s == 0.0));
     let (m, h) = render(&mut r, 1024);
     assert!(m.iter().all(|&s| s == 0.0));
     assert_all_near(&h, SIGNAL * 0.64);
@@ -120,6 +129,7 @@ fn headphone_mix_one_is_master() {
     settle(&mut r);
     play(&mut c, 0);
     play(&mut c, 1);
+    settle_playback(&mut r);
     let (m, h) = render(&mut r, 1024);
     // Two decks at the crossfader center, master level 0.64: well below clipping.
     assert_all_near(&m, 2.0 * SIGNAL * FRAC_1_SQRT_2 * 0.64);
@@ -167,6 +177,7 @@ fn gain_changes_are_ramped() {
     channel(&mut c, 0, ChannelCommand::XfaderAssign(XfaderAssign::Thru));
     settle(&mut r);
     play(&mut c, 0);
+    settle_playback(&mut r);
     let (m, _) = render(&mut r, BLOCK);
     assert_all_near(&m, SIGNAL);
 
@@ -188,21 +199,31 @@ fn meters_report_channel_and_master_peaks() {
     settle(&mut r);
     assert_eq!(c.meters().channel_peak, [0.0; 4]);
     play(&mut c, 0);
+    settle_playback(&mut r);
+    // Meters hold the peaks of the last render call: one settled block.
     render(&mut r, BLOCK);
     let meters = c.meters();
-    assert_abs_diff_eq!(meters.channel_peak[0], SIGNAL * 0.25, epsilon = 1e-6);
+    let expected = SIGNAL * 0.25;
+    assert_abs_diff_eq!(meters.channel_peak[0], expected, epsilon = SETTLED_EPSILON);
     assert_eq!(meters.channel_peak[1..], [0.0; 3]);
-    assert_abs_diff_eq!(meters.master_peak[0], SIGNAL * 0.25, epsilon = 1e-6);
-    assert_abs_diff_eq!(meters.master_peak[1], SIGNAL * 0.25, epsilon = 1e-6);
+    assert_abs_diff_eq!(meters.master_peak[0], expected, epsilon = SETTLED_EPSILON);
+    assert_abs_diff_eq!(meters.master_peak[1], expected, epsilon = SETTLED_EPSILON);
 }
 
 #[test]
 fn non_finite_mixer_values_are_ignored() {
-    let (mut c, mut r) = setup();
-    channel(&mut c, 0, ChannelCommand::Pfl(true));
-    settle(&mut r);
-    play(&mut c, 0);
-    let (m_before, h_before) = render(&mut r, BLOCK);
+    // Two identical engines; only one receives the non-finite values. The filter state
+    // carries history across blocks, so the reference is a twin rather than an earlier block.
+    let make = || {
+        let (mut c, mut r) = setup();
+        channel(&mut c, 0, ChannelCommand::Pfl(true));
+        settle(&mut r);
+        play(&mut c, 0);
+        render(&mut r, BLOCK);
+        (c, r)
+    };
+    let (_reference_c, mut reference) = make();
+    let (mut c, mut r) = make();
 
     for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
         for cmd in [
@@ -224,10 +245,12 @@ fn non_finite_mixer_values_are_ignored() {
             master(&mut c, cmd);
         }
     }
+    let (expected, expected_h) = render(&mut reference, BLOCK);
     let (m, h) = render(&mut r, BLOCK);
     assert!(m.iter().chain(&h).all(|s| s.is_finite()));
-    assert_eq!(m, m_before);
-    assert_eq!(h, h_before);
+    assert!(m.iter().any(|&s| s != 0.0) && h.iter().any(|&s| s != 0.0));
+    assert_eq!(m, expected);
+    assert_eq!(h, expected_h);
 }
 
 #[test]
@@ -266,6 +289,7 @@ fn render_handles_mismatched_buffer_lengths() {
     for index in 0..4 {
         play(&mut c, index);
     }
+    settle_playback(&mut r);
     // Master is longer than headphones (and odd), headphones longer than master.
     let mut m = vec![9.0; 2 * BLOCK + 1];
     let mut h = vec![9.0; BLOCK];

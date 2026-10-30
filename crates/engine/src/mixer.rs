@@ -5,9 +5,10 @@
 //! `lerp(cue_sum, master_pre_clamp, mix) * headphone_level`, clamped, where `cue_sum` is the
 //! sum of the PFL taps. Every gain change is ramped linearly across one block.
 //!
-//! With all three EQ knobs at 0.5 the isolator is bypassed (bit-exact dry signal); the same
-//! goes for the filter inside its center deadzone. Engaging or releasing either crossfades
-//! between dry and processed signal across one block.
+//! The EQ is an always-on isolator: at unity its bands sum to an allpass (flat magnitude,
+//! DC passes at unity once settled), so the channel is never bit-exact dry. The filter is
+//! bypassed inside its center deadzone; engaging or releasing it crossfades between dry and
+//! filtered signal across one block.
 //!
 //! The curve functions are public so the UI can show the same values the engine applies.
 
@@ -70,12 +71,8 @@ fn side_gain(assign: XfaderAssign, crossfader: f32) -> f32 {
 #[derive(Debug)]
 struct ChannelStrip {
     trim: Ramp,
-    /// Low, mid and high knob positions.
-    eq: [f32; 3],
     /// Low, mid and high band gains.
     eq_gain: [Ramp; 3],
-    /// 1.0 when the isolator is engaged, 0.0 when every knob is neutral.
-    eq_wet: Ramp,
     isolator: Isolator,
     filter: Filter,
     fader: Ramp,
@@ -90,9 +87,7 @@ impl ChannelStrip {
     fn new(assign: XfaderAssign, crossfader: f32, sample_rate: u32) -> Self {
         Self {
             trim: Ramp::new(trim_gain(0.5)),
-            eq: [0.5; 3],
             eq_gain: [Ramp::new(eq_gain(0.5)); 3],
-            eq_wet: Ramp::new(0.0),
             isolator: Isolator::new(sample_rate),
             filter: Filter::default(),
             fader: Ramp::new(fader_gain(1.0)),
@@ -103,11 +98,7 @@ impl ChannelStrip {
     }
 
     fn set_eq(&mut self, band: usize, pos: f32) {
-        let pos = pos.clamp(0.0, 1.0);
-        self.eq[band] = pos;
         self.eq_gain[band].target = eq_gain(pos);
-        let neutral = self.eq.iter().all(|&p| p == 0.5);
-        self.eq_wet.target = if neutral { 0.0 } else { 1.0 };
     }
 }
 
@@ -224,8 +215,6 @@ impl Mixer {
         {
             let trim = strip.trim.block(frames);
             let [low, mid, high] = strip.eq_gain.each_mut().map(|gain| gain.block(frames));
-            let eq_wet = strip.eq_wet.block(frames);
-            let eq_engaged = !eq_wet.is_zero();
             let filter_wet = strip.filter.block(frames, self.sample_rate);
             let fader = strip.fader.block(frames);
             let pfl = strip.pfl.block(frames);
@@ -239,14 +228,8 @@ impl Mixer {
             {
                 let (trim, fader, pfl, xfade) = (trim.at(i), fader.at(i), pfl.at(i), xfade.at(i));
                 for ch in 0..2 {
-                    let mut pre_fader = x[ch] * trim;
-                    // The isolator always runs so its state is warm when it engages.
-                    let bands = strip.isolator.split(ch, pre_fader);
-                    if eq_engaged {
-                        let eq =
-                            bands[0] * low.at(i) + bands[1] * mid.at(i) + bands[2] * high.at(i);
-                        pre_fader += (eq - pre_fader) * eq_wet.at(i);
-                    }
+                    let [lo, mi, hi] = strip.isolator.split(ch, x[ch] * trim);
+                    let mut pre_fader = lo * low.at(i) + mi * mid.at(i) + hi * high.at(i);
                     if let Some(wet) = &filter_wet {
                         let filtered = strip.filter.process(ch, pre_fader);
                         pre_fader += (filtered - pre_fader) * wet.at(i);

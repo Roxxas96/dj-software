@@ -3,7 +3,7 @@ mod common;
 use std::sync::Arc;
 
 use approx::{assert_abs_diff_eq, assert_relative_eq};
-use common::{constant_track, ramp_track, render};
+use common::{SETTLE_FRAMES, SETTLED_EPSILON, constant_track, ramp_track, render};
 use engine::{
     ChannelCommand, Command, DeckCommand, DeckId, EngineConfig, EngineController, EngineRenderer,
     MasterCommand, TempoRange, TrackBuffer, TrackError, XfaderAssign, engine,
@@ -11,8 +11,10 @@ use engine::{
 
 const SR: u32 = 44_100;
 
-/// An engine whose mixer passes every deck to master at unity gain, so these tests see
-/// transport output untouched: master level 1.0 and every channel off the crossfader.
+/// An engine whose mixer passes every deck to master at unity gain: master level 1.0 and
+/// every channel off the crossfader. The always-on EQ isolator still shifts phase (it is an
+/// allpass at unity), so sample-exact transport output is pinned by the unit tests in
+/// `src/deck.rs`; these tests check the end-to-end path with settled DC levels.
 fn setup(sample_rate: u32) -> (EngineController, EngineRenderer) {
     let (mut c, mut r) = engine(EngineConfig {
         sample_rate,
@@ -66,22 +68,26 @@ fn loaded_but_paused_is_silent() {
 }
 
 #[test]
-fn play_outputs_track_samples_exactly() {
+fn play_outputs_track_at_unity() {
     let (mut c, mut r) = setup(SR);
-    let track = ramp_track(SR, 4096);
-    send(&mut c, deck(0), DeckCommand::Load(track.clone()));
+    // Left and right differ, so a channel swap or mono sum would fail.
+    let samples = [0.3, -0.2].repeat(2 * SETTLE_FRAMES);
+    let track = Arc::new(TrackBuffer::new(SR, samples).unwrap());
+    send(&mut c, deck(0), DeckCommand::Load(track));
     send(&mut c, deck(0), DeckCommand::SetTempoSlider(0.5));
     send(&mut c, deck(0), DeckCommand::Play);
+    let (_, headphones) = render(&mut r, SETTLE_FRAMES);
+    assert_silent(&headphones);
     let (master, headphones) = render(&mut r, 1000);
-    for i in 0..1000 {
-        assert_eq!(master[2 * i], track.frame(i)[0]);
-        assert_eq!(master[2 * i + 1], track.frame(i)[1]);
+    for frame in master.chunks(2) {
+        assert_abs_diff_eq!(frame[0], 0.3, epsilon = SETTLED_EPSILON);
+        assert_abs_diff_eq!(frame[1], -0.2, epsilon = SETTLED_EPSILON);
     }
     assert_silent(&headphones);
     let snap = c.deck(deck(0));
     assert!(snap.playing);
-    assert_eq!(snap.position_frames, 1000.0);
-    assert_eq!(snap.duration_frames, 4096);
+    assert_eq!(snap.position_frames, (SETTLE_FRAMES + 1000) as f64);
+    assert_eq!(snap.duration_frames, 2 * SETTLE_FRAMES);
     assert_eq!(snap.track_sample_rate, SR);
 }
 
@@ -146,11 +152,14 @@ fn interpolates_between_frames() {
     );
     send(&mut c, deck(0), DeckCommand::SetTempoSlider(0.25));
     send(&mut c, deck(0), DeckCommand::Play);
-    let (master, _) = render(&mut r, 4);
-    assert_relative_eq!(c.deck(deck(0)).tempo_ratio, 0.5);
-    let (f0, f1) = (track.frame(0)[0], track.frame(1)[0]);
-    assert_relative_eq!(master[2], (f0 + f1) / 2.0);
-    assert_relative_eq!(master[3], (f0 + f1) / 2.0);
+    // Sample values are pinned by `deck::tests::interpolates_between_frames`; end to end,
+    // half speed advances half a frame per output frame.
+    let (master, _) = render(&mut r, 5);
+    let snap = c.deck(deck(0));
+    assert_relative_eq!(snap.tempo_ratio, 0.5);
+    assert_eq!(snap.position_frames, 2.5);
+    assert!(master.iter().all(|s| s.is_finite()));
+    assert_eq!(track.frames(), 4096);
 }
 
 #[test]
@@ -166,8 +175,13 @@ fn stops_at_end_of_track() {
     let snap = c.deck(deck(0));
     assert!(!snap.playing);
     assert_eq!(snap.position_frames, 100.0);
-    assert!(master[..200].iter().all(|&s| s == 0.5));
-    assert_silent(&master[200..]);
+    // Exact samples are pinned by `deck::tests::stops_at_end_of_track`. End to end, the
+    // track is heard, then only the EQ's decaying tail, which settles to true silence.
+    assert!(master[..200].iter().any(|&s| s > 0.25));
+    assert!(master[200..].iter().all(|s| s.is_finite()));
+    render(&mut r, SETTLE_FRAMES);
+    let (master, _) = render(&mut r, 1024);
+    assert_silent(&master);
 }
 
 #[test]
@@ -269,13 +283,15 @@ fn four_decks_sum_into_master() {
         send(
             &mut c,
             id,
-            DeckCommand::Load(constant_track(SR, 4096, 0.25)),
+            DeckCommand::Load(constant_track(SR, 2 * SETTLE_FRAMES, 0.25)),
         );
         send(&mut c, id, DeckCommand::Play);
     }
+    let (_, headphones) = render(&mut r, SETTLE_FRAMES);
+    assert_silent(&headphones);
     let (master, headphones) = render(&mut r, 1024);
     for &s in &master {
-        assert_relative_eq!(s, 0.5);
+        assert_abs_diff_eq!(s, 0.5, epsilon = SETTLED_EPSILON);
     }
     assert_silent(&headphones);
 }

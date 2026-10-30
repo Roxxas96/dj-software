@@ -181,3 +181,76 @@ impl Deck {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SR: u32 = 44_100;
+
+    /// A stereo track whose left and right channels both ramp as `i / frames`.
+    fn ramp_track(frames: usize) -> Arc<TrackBuffer> {
+        let samples = (0..frames)
+            .flat_map(|i| {
+                let v = i as f32 / frames as f32;
+                [v, v]
+            })
+            .collect();
+        Arc::new(TrackBuffer::new(SR, samples).unwrap())
+    }
+
+    fn playing_deck(track: &Arc<TrackBuffer>) -> Deck {
+        let mut deck = Deck::default();
+        assert!(deck.apply(DeckCommand::Load(Arc::clone(track))).is_none());
+        let _ = deck.apply(DeckCommand::Play);
+        deck
+    }
+
+    #[test]
+    fn renders_track_samples_exactly() {
+        let track = ramp_track(4096);
+        let mut deck = playing_deck(&track);
+        let mut out = vec![0.0; 2000];
+        deck.render_add(&mut out, SR);
+        for (i, frame) in out.as_chunks::<2>().0.iter().enumerate() {
+            assert_eq!(*frame, track.frame(i));
+        }
+        assert_eq!(deck.position, 1000.0);
+    }
+
+    #[test]
+    fn render_adds_onto_existing_output() {
+        let track = Arc::new(TrackBuffer::new(SR, vec![0.25; 200]).unwrap());
+        let mut deck = playing_deck(&track);
+        let mut out = vec![0.25; 100];
+        deck.render_add(&mut out, SR);
+        assert!(out.iter().all(|&s| s == 0.5));
+    }
+
+    #[test]
+    fn interpolates_between_frames() {
+        let track = ramp_track(4096);
+        let mut deck = playing_deck(&track);
+        let _ = deck.apply(DeckCommand::SetTempoRange(TempoRange::Hundred));
+        let _ = deck.apply(DeckCommand::SetTempoSlider(0.25));
+        assert_eq!(deck.tempo_ratio(), 0.5);
+        let mut out = vec![0.0; 8];
+        deck.render_add(&mut out, SR);
+        let (f0, f1) = (track.frame(0)[0], track.frame(1)[0]);
+        assert_eq!(out[..2], [f0, f0]);
+        assert_eq!(out[2..4], [(f0 + f1) / 2.0; 2]);
+        assert_eq!(out[4..6], [f1, f1]);
+    }
+
+    #[test]
+    fn stops_at_end_of_track() {
+        let track = Arc::new(TrackBuffer::new(SR, vec![0.5; 200]).unwrap());
+        let mut deck = playing_deck(&track);
+        let mut out = vec![0.0; 400];
+        deck.render_add(&mut out, SR);
+        assert!(out[..200].iter().all(|&s| s == 0.5));
+        assert!(out[200..].iter().all(|&s| s == 0.0));
+        assert!(!deck.playing);
+        assert_eq!(deck.position, 100.0);
+    }
+}
