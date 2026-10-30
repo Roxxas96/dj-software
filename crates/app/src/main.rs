@@ -24,7 +24,7 @@ struct Cli {
 enum Sub {
     /// List audio output devices
     Devices,
-    /// Play a track on deck 1 to the master output
+    /// Play a track on deck 1 to the master output, or up to four decks with a controller
     Play(PlayArgs),
     /// MIDI controller tools
     #[command(subcommand)]
@@ -40,6 +40,10 @@ enum MidiCommand {
         /// Input port name (substring; default: the first port containing "DDJ")
         #[arg(long, value_name = "NAME")]
         port: Option<String>,
+        /// Also show what each message does in this mapping (a built-in name such as
+        /// `ddj-sb3`, or a mapping file); the port comes from the mapping
+        #[arg(long, value_name = "NAME|PATH", conflicts_with = "port")]
+        controller: Option<String>,
     },
     /// Guided capture of every control's MIDI messages into a TOML fixture
     Capture {
@@ -99,7 +103,10 @@ fn main() -> ExitCode {
             play(&args)
         }
         Sub::Midi(MidiCommand::Ports) => midi_cmd::ports(),
-        Sub::Midi(MidiCommand::Monitor { port }) => midi_cmd::monitor(port.as_deref()),
+        Sub::Midi(MidiCommand::Monitor { port, controller }) => match controller {
+            Some(controller) => midi_cmd::monitor_controller(&controller),
+            None => midi_cmd::monitor(port.as_deref()),
+        },
         Sub::Midi(MidiCommand::Capture {
             checklist,
             out,
@@ -189,13 +196,77 @@ mod tests {
             .unwrap()
             .command
         {
-            Sub::Midi(MidiCommand::Monitor { port }) => assert_eq!(port.as_deref(), Some("DDJ")),
+            Sub::Midi(MidiCommand::Monitor { port, controller }) => {
+                assert_eq!(port.as_deref(), Some("DDJ"));
+                assert_eq!(controller, None);
+            }
             _ => panic!("expected midi monitor"),
         }
         assert!(matches!(
             parse(&["dj-software", "midi", "monitor"]).unwrap().command,
-            Sub::Midi(MidiCommand::Monitor { port: None })
+            Sub::Midi(MidiCommand::Monitor {
+                port: None,
+                controller: None
+            })
         ));
+    }
+
+    #[test]
+    fn parses_monitor_with_controller() {
+        match parse(&["dj-software", "midi", "monitor", "--controller", "ddj-sb3"])
+            .unwrap()
+            .command
+        {
+            Sub::Midi(MidiCommand::Monitor { port, controller }) => {
+                assert_eq!(port, None);
+                assert_eq!(controller.as_deref(), Some("ddj-sb3"));
+            }
+            _ => panic!("expected midi monitor"),
+        }
+        // The mapping names the port.
+        assert!(
+            parse(&[
+                "dj-software",
+                "midi",
+                "monitor",
+                "--controller",
+                "ddj-sb3",
+                "--port",
+                "DDJ",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn parses_play_with_controller_and_four_decks() {
+        let args = play_args(&[
+            "dj-software",
+            "play",
+            "a.mp3",
+            "--cue-track",
+            "b.mp3",
+            "--headphones",
+            "3,4",
+            "--controller",
+            "ddj-sb3",
+            "--deck3",
+            "c.mp3",
+            "--deck4",
+            "d.mp3",
+        ]);
+        assert_eq!(args.track, PathBuf::from("a.mp3"));
+        assert_eq!(args.cue_track, Some(PathBuf::from("b.mp3")));
+        assert_eq!(args.controller.as_deref(), Some("ddj-sb3"));
+        assert_eq!(args.deck3, Some(PathBuf::from("c.mp3")));
+        assert_eq!(args.deck4, Some(PathBuf::from("d.mp3")));
+
+        let plain = play_args(&["dj-software", "play", "a.mp3"]);
+        assert_eq!(plain.controller, None);
+        assert_eq!(plain.deck3, None);
+        // Decks 3 and 4 are only reachable with a controller.
+        assert!(parse(&["dj-software", "play", "a.mp3", "--deck3", "c.mp3"]).is_err());
+        assert!(parse(&["dj-software", "play", "a.mp3", "--deck4", "d.mp3"]).is_err());
     }
 
     #[test]

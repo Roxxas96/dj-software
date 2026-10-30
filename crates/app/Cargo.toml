@@ -15,6 +15,7 @@ name = "dj-software"
 path = "src/main.rs"
 
 [dependencies]
+actions = { path = "../actions" }
 anyhow.workspace = true
 audio-io = { path = "../audio-io" }
 clap.workspace = true

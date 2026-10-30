@@ -96,12 +96,12 @@ impl Resolver {
         // held presses, its other button bindings stay silent.
         let releasing_held = is_release(msg)
             && self.held.keys().any(|&i| {
-                self.bindings[i].value == ValueKind::Button && matches(&self.bindings[i].midi, msg)
+                self.bindings[i].value == ValueKind::Button && self.bindings[i].midi.matches(msg)
             });
 
         for i in 0..self.bindings.len() {
             let binding = self.bindings[i];
-            if !matches(&binding.midi, msg) {
+            if !binding.midi.matches(msg) {
                 continue;
             }
             // Read before the conditions so a 14-bit half is stored even when no binding
@@ -215,42 +215,44 @@ fn is_release(msg: &MidiMessage) -> bool {
     )
 }
 
-/// Whether `msg` comes from `source`.
-fn matches(source: &MidiSource, msg: &MidiMessage) -> bool {
-    match (*source, *msg) {
-        (
-            MidiSource::Note { channel, note },
-            MidiMessage::NoteOn {
-                channel: c,
-                note: n,
-                ..
+impl MidiSource {
+    /// Whether `msg` comes from this source (either half, for a 14-bit CC).
+    pub fn matches(&self, msg: &MidiMessage) -> bool {
+        match (*self, *msg) {
+            (
+                MidiSource::Note { channel, note },
+                MidiMessage::NoteOn {
+                    channel: c,
+                    note: n,
+                    ..
+                }
+                | MidiMessage::NoteOff {
+                    channel: c,
+                    note: n,
+                    ..
+                },
+            ) => channel == c && note == n,
+            (
+                MidiSource::Cc { channel, cc },
+                MidiMessage::ControlChange {
+                    channel: c,
+                    controller,
+                    ..
+                },
+            ) => channel == c && cc == controller,
+            (
+                MidiSource::Cc14 { channel, msb, lsb },
+                MidiMessage::ControlChange {
+                    channel: c,
+                    controller,
+                    ..
+                },
+            ) => channel == c && (controller == msb || controller == lsb),
+            (MidiSource::PitchBend { channel }, MidiMessage::PitchBend { channel: c, .. }) => {
+                channel == c
             }
-            | MidiMessage::NoteOff {
-                channel: c,
-                note: n,
-                ..
-            },
-        ) => channel == c && note == n,
-        (
-            MidiSource::Cc { channel, cc },
-            MidiMessage::ControlChange {
-                channel: c,
-                controller,
-                ..
-            },
-        ) => channel == c && cc == controller,
-        (
-            MidiSource::Cc14 { channel, msb, lsb },
-            MidiMessage::ControlChange {
-                channel: c,
-                controller,
-                ..
-            },
-        ) => channel == c && (controller == msb || controller == lsb),
-        (MidiSource::PitchBend { channel }, MidiMessage::PitchBend { channel: c, .. }) => {
-            channel == c
+            _ => false,
         }
-        _ => false,
     }
 }
 
