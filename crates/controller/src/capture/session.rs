@@ -4,7 +4,7 @@
 //! ([`crate::clock::now_micros`]); it never touches ports or stdin.
 
 use super::checklist::{Step, StepKind};
-use super::fixture::{Control, Fixture, Meta, Source, is_release, key_and_value};
+use super::fixture::{Control, Fixture, MessageRange, Meta, Source, is_release, key_and_value};
 use crate::midi::{MidiMessage, TimedMidi};
 
 /// Quiet gap after the last message that completes a button step.
@@ -190,7 +190,8 @@ impl CaptureSession {
         std::mem::take(&mut self.notices)
     }
 
-    /// Sources seen with a varying value in a continuous or jog capture.
+    /// CC and pitch-bend sources seen with a varying value in a continuous or
+    /// jog capture (never notes).
     fn continuous_sources(&self) -> Vec<Source> {
         let mut out: Vec<Source> = Vec::new();
         for slot in &self.slots {
@@ -200,7 +201,11 @@ impl CaptureSession {
             if !matches!(control.kind, StepKind::Continuous | StepKind::Jog) {
                 continue;
             }
-            for m in control.messages.iter().filter(|m| m.min != m.max) {
+            // CC and pitch bend only: a note (jog touch, a held SHIFT) also
+            // spans 0..127 in a jog step but is a button, not knob data.
+            let knob_data =
+                |m: &&MessageRange| matches!(m.status & 0xF0, 0xB0 | 0xE0) && m.min != m.max;
+            for m in control.messages.iter().filter(knob_data) {
                 if !out.iter().any(|s| s.key() == m.source().key()) {
                     out.push(m.source());
                 }
@@ -1685,5 +1690,35 @@ mod tests {
             1
         );
         assert_eq!(session.control("channel1.trim").unwrap().messages.len(), 1);
+    }
+
+    #[test]
+    fn jog_touch_note_is_not_knob_data() {
+        let steps = vec![
+            step("deck1.jog_touch", StepKind::Button),
+            step("deck1.jog_top", StepKind::Jog),
+        ];
+        let mut session = CaptureSession::new(steps.clone());
+        // Touch the platter: note 0x36 press and release.
+        session.feed(timed(0, [0x90, 0x36, 0x7F]));
+        session.feed(timed(50, [0x90, 0x36, 0x00]));
+        assert_eq!(session.poll(1000 * MS), StepStatus::Done);
+        // Spin while touching: the touch note (0..127) plus CC spin values.
+        session.feed(timed(1000, [0x90, 0x36, 0x7F]));
+        for k in 0..5u64 {
+            session.feed(timed(1010 + k * 10, [0xB0, 0x22, 0x41]));
+        }
+        session.feed(timed(1100, [0xB0, 0x22, 0x3F]));
+        session.feed(timed(1200, [0x90, 0x36, 0x00]));
+        assert_eq!(session.poll(3000 * MS), StepStatus::Done);
+        let touch = session.control("deck1.jog_touch").unwrap().clone();
+        assert_eq!(touch.messages.len(), 1);
+        assert!(session.take_notices().is_empty());
+
+        // Same on resume.
+        let mut resumed = CaptureSession::resume(steps, session.finish());
+        assert_eq!(resumed.control("deck1.jog_touch"), Some(&touch));
+        assert!(resumed.take_notices().is_empty());
+        assert_eq!(resumed.current(), None);
     }
 }
