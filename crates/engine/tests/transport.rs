@@ -134,6 +134,8 @@ fn tempo_slider_minus_hundred_stops_advancing() {
     send(&mut c, deck(0), DeckCommand::SetTempoSlider(0.0));
     send(&mut c, deck(0), DeckCommand::Play);
     render(&mut r, 1000);
+    let (master, _) = render(&mut r, SETTLE_FRAMES);
+    assert!(master.iter().all(|&s| s.abs() < SETTLED_EPSILON));
     let snap = c.deck(deck(0));
     assert_eq!(snap.tempo_ratio, 0.0);
     assert_eq!(snap.position_frames, 100.0);
@@ -310,4 +312,25 @@ fn track_buffer_rejects_odd_length_and_zero_rate() {
     assert_eq!(track.frames(), 2);
     assert_eq!(track.sample_rate(), SR);
     assert_eq!(track.frame(1), [0.3, 0.4]);
+}
+
+#[test]
+fn non_finite_track_samples_are_silenced() {
+    let (mut c, mut r) = setup(SR);
+    let mut samples = vec![0.5; 4000];
+    samples[10] = f32::NAN;
+    samples[11] = f32::INFINITY;
+    samples[20] = f32::NEG_INFINITY;
+    let bad = std::sync::Arc::new(engine::TrackBuffer::new(SR, samples).unwrap());
+    send(&mut c, deck(0), DeckCommand::Load(bad));
+    send(&mut c, deck(0), DeckCommand::Play);
+    let (master, headphones) = render(&mut r, 2000);
+    assert!(master.iter().chain(&headphones).all(|s| s.is_finite()));
+
+    send(&mut c, deck(0), DeckCommand::Load(ramp_track(SR, 100_000)));
+    send(&mut c, deck(0), DeckCommand::Play);
+    render(&mut r, SETTLE_FRAMES);
+    let (master, _) = render(&mut r, 512);
+    assert!(master.iter().all(|s| s.is_finite()));
+    assert!(master.iter().any(|&s| s.abs() > 0.01));
 }

@@ -59,6 +59,11 @@ fn render_does_not_allocate() {
     for cmd in [
         DeckCommand::CuePress,
         DeckCommand::CuePress,
+        DeckCommand::TogglePlay,
+        DeckCommand::CueRelease,
+        DeckCommand::CuePress,
+        DeckCommand::CuePress,
+        DeckCommand::Pause,
         DeckCommand::CueRelease,
         DeckCommand::Play,
     ] {

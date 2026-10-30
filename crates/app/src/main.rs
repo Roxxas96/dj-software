@@ -308,6 +308,7 @@ mod tests {
             track_sample_rate: 44_100,
             tempo_ratio: 1.0,
             cue_frames: 0.0,
+            previewing: false,
         };
         assert_eq!(deck_line(&snapshot), "Deck 1  01:05 / 03:20");
     }

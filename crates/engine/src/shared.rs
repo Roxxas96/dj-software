@@ -15,6 +15,8 @@ pub struct DeckSnapshot {
     pub tempo_ratio: f64,
     /// Cue point in track frames.
     pub cue_frames: f64,
+    /// Cue is held and the deck is previewing from the cue point.
+    pub previewing: bool,
 }
 
 /// Peak absolute sample values of the last rendered block, for metering.
@@ -90,6 +92,7 @@ struct DeckShared {
     track_sample_rate: AtomicU32,
     tempo_ratio: AtomicU64,
     cue_frames: AtomicU64,
+    previewing: AtomicBool,
 }
 
 impl DeckShared {
@@ -106,6 +109,7 @@ impl DeckShared {
             .store(s.tempo_ratio.to_bits(), Ordering::Relaxed);
         self.cue_frames
             .store(s.cue_frames.to_bits(), Ordering::Relaxed);
+        self.previewing.store(s.previewing, Ordering::Relaxed);
     }
 
     fn load(&self) -> DeckSnapshot {
@@ -117,6 +121,7 @@ impl DeckShared {
             track_sample_rate: self.track_sample_rate.load(Ordering::Relaxed),
             tempo_ratio: f64::from_bits(self.tempo_ratio.load(Ordering::Relaxed)),
             cue_frames: f64::from_bits(self.cue_frames.load(Ordering::Relaxed)),
+            previewing: self.previewing.load(Ordering::Relaxed),
         }
     }
 }

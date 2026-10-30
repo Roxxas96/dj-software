@@ -17,12 +17,19 @@ pub struct TrackBuffer {
 }
 
 impl TrackBuffer {
-    pub fn new(sample_rate: u32, interleaved_stereo: Vec<f32>) -> Result<Self, TrackError> {
+    /// Non-finite samples (NaN, infinities) are replaced with silence so they can never
+    /// reach the mixer, where a single one would poison the filter state for good.
+    pub fn new(sample_rate: u32, mut interleaved_stereo: Vec<f32>) -> Result<Self, TrackError> {
         if sample_rate == 0 {
             return Err(TrackError::ZeroSampleRate);
         }
         if !interleaved_stereo.len().is_multiple_of(2) {
             return Err(TrackError::OddSampleCount(interleaved_stereo.len()));
+        }
+        for sample in &mut interleaved_stereo {
+            if !sample.is_finite() {
+                *sample = 0.0;
+            }
         }
         Ok(Self {
             sample_rate,

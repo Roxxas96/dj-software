@@ -51,7 +51,8 @@ impl Deck {
             DeckCommand::Play => self.play(),
             DeckCommand::Pause => self.pause(),
             DeckCommand::TogglePlay => {
-                if self.playing {
+                // During cue preview, play latches instead of pausing (hold CUE, press PLAY).
+                if self.playing && !self.preview {
                     self.pause();
                 } else {
                     self.play();
@@ -146,6 +147,10 @@ impl Deck {
         if !self.playing {
             return;
         }
+        // Ratio 0 holds the playhead; output silence rather than a repeated sample (DC).
+        if self.tempo_ratio() <= 0.0 {
+            return;
+        }
         let frames = track.frames();
         let end = frames as f64;
         let rate =
@@ -178,6 +183,7 @@ impl Deck {
             track_sample_rate: self.track.as_ref().map_or(0, |t| t.sample_rate()),
             tempo_ratio: self.tempo_ratio(),
             cue_frames: self.cue,
+            previewing: self.preview,
         }
     }
 }
@@ -240,6 +246,20 @@ mod tests {
         assert_eq!(out[..2], [f0, f0]);
         assert_eq!(out[2..4], [(f0 + f1) / 2.0; 2]);
         assert_eq!(out[4..6], [f1, f1]);
+    }
+
+    #[test]
+    fn zero_tempo_ratio_renders_silence_and_holds_position() {
+        let track = ramp_track(4096);
+        let mut deck = playing_deck(&track);
+        let _ = deck.apply(DeckCommand::Seek(100.0));
+        let _ = deck.apply(DeckCommand::SetTempoRange(TempoRange::Hundred));
+        let _ = deck.apply(DeckCommand::SetTempoSlider(0.0));
+        let mut out = vec![0.0; 400];
+        deck.render_add(&mut out, SR);
+        assert!(out.iter().all(|&s| s == 0.0));
+        assert_eq!(deck.position, 100.0);
+        assert!(deck.playing);
     }
 
     #[test]
