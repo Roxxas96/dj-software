@@ -11,6 +11,18 @@ use crate::midi::{MidiMessage, TimedMidi};
 pub const BUTTON_GAP_MICROS: u64 = 400_000;
 /// Quiet gap that completes a continuous, jog or pads step.
 pub const LONG_GAP_MICROS: u64 = 1_500_000;
+/// Ignore entries that an earlier checklist seeded by mistake: the SB3's
+/// FILTER knobs (14-bit CC on channel 6), which it also sends when some buttons
+/// are pressed. Dropped from `meta.ignored` on resume.
+const MISTAKEN_SEEDS: [(u8, u8); 6] = [
+    (0xB5, 0x02),
+    (0xB5, 0x22),
+    (0xB5, 0x04),
+    (0xB5, 0x24),
+    (0xB5, 0x06),
+    (0xB5, 0x26),
+];
+
 /// Distinct note-on notes a pads step needs.
 pub const PAD_COUNT: usize = 8;
 
@@ -66,6 +78,8 @@ pub struct CaptureSession {
     extras: Vec<Control>,
     /// Sources never recorded.
     ignored: Vec<Source>,
+    /// Messages for the user (sources un-ignored, steps reopened by cleanup).
+    notices: Vec<String>,
     /// Noise suggestions not yet taken by [`CaptureSession::take_noise`].
     noise: Vec<Noise>,
     /// Sources the user said are not noise; never suggested again.
@@ -92,6 +106,7 @@ impl CaptureSession {
             meta: Meta::default(),
             extras: Vec::new(),
             ignored: Vec::new(),
+            notices: Vec::new(),
             noise: Vec::new(),
             declined: Vec::new(),
             before: None,
@@ -120,13 +135,28 @@ impl CaptureSession {
                 session.slots[i] = Slot::Skipped;
             }
         }
-        let prior_ignored = prior.meta.ignored.clone();
+        let continuous = session.continuous_sources();
+        let mut prior_ignored = Vec::new();
+        for source in &prior.meta.ignored {
+            if MISTAKEN_SEEDS.contains(&source.key()) {
+                session.notices.push(format!(
+                    "no longer ignoring {source}: it was seeded by mistake (SB3 filter knob data)"
+                ));
+            } else if continuous.iter().any(|c| c.key() == source.key()) {
+                session.notices.push(format!(
+                    "no longer ignoring {source}: it varies in a knob, fader or jog capture"
+                ));
+            } else {
+                prior_ignored.push(*source);
+            }
+        }
         session.meta = Meta {
             skipped: Vec::new(),
             ignored: Vec::new(),
             ..prior.meta
         };
         session.ignore(&prior_ignored);
+        session.strip_continuous_from_buttons();
         session.detect_noise();
         session.update_cursor();
         session
@@ -153,6 +183,65 @@ impl CaptureSession {
     /// Noise suggestions since the last call (nothing is ignored yet).
     pub fn take_noise(&mut self) -> Vec<Noise> {
         std::mem::take(&mut self.noise)
+    }
+
+    /// Messages for the user since the last call.
+    pub fn take_notices(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.notices)
+    }
+
+    /// Sources seen with a varying value in a continuous or jog capture.
+    fn continuous_sources(&self) -> Vec<Source> {
+        let mut out: Vec<Source> = Vec::new();
+        for slot in &self.slots {
+            let Slot::Captured(control) = slot else {
+                continue;
+            };
+            if !matches!(control.kind, StepKind::Continuous | StepKind::Jog) {
+                continue;
+            }
+            for m in control.messages.iter().filter(|m| m.min != m.max) {
+                if !out.iter().any(|s| s.key() == m.source().key()) {
+                    out.push(m.source());
+                }
+            }
+        }
+        out
+    }
+
+    /// Strips known continuous sources (knob data such as the SB3's filter
+    /// dump) from button and pads controls. Controls left empty are asked
+    /// again (the step just captured first; queued in redo-only mode).
+    fn strip_continuous_from_buttons(&mut self) {
+        let continuous = self.continuous_sources();
+        if continuous.is_empty() {
+            return;
+        }
+        let just = self.before.as_ref().map(|(i, _)| *i);
+        for i in 0..self.slots.len() {
+            let Slot::Captured(control) = &mut self.slots[i] else {
+                continue;
+            };
+            if !matches!(control.kind, StepKind::Button | StepKind::Pads)
+                || !control.strip(&continuous)
+                || !control.messages.is_empty()
+            {
+                continue;
+            }
+            let id = control.id.clone();
+            self.slots[i] = Slot::Missing;
+            self.history.retain(|&h| h != i);
+            if Some(i) == just {
+                self.focus.retain(|&f| f != i);
+                self.focus.insert(0, i);
+            } else if self.only && !self.focus.contains(&i) {
+                self.focus.push(i);
+            }
+            self.notices.push(format!(
+                "{id} recorded only knob data; it will be asked again"
+            ));
+        }
+        self.update_cursor();
     }
 
     /// The user says these are not noise: never suggest them again.
@@ -618,6 +707,7 @@ impl CaptureSession {
             self.focus.remove(0);
         }
         self.update_cursor();
+        self.strip_continuous_from_buttons();
         self.detect_noise();
     }
 
@@ -1061,15 +1151,15 @@ mod tests {
 
     fn burst_source(data1: u8) -> Source {
         Source {
-            status: 0xB5,
+            status: 0xB6,
             data1,
         }
     }
 
-    /// Part of the owner's parasitic burst at `ms`.
+    /// A burst of constant CC values (like the SB3's filter dump) at `ms`.
     fn feed_burst(session: &mut CaptureSession, ms: u64) {
-        session.feed(timed(ms, [0xB5, 0x02, 0x32]));
-        session.feed(timed(ms + 1, [0xB5, 0x22, 0x1A]));
+        session.feed(timed(ms, [0xB6, 0x02, 0x32]));
+        session.feed(timed(ms + 1, [0xB6, 0x22, 0x1A]));
     }
 
     #[test]
@@ -1077,7 +1167,7 @@ mod tests {
         let mut session = CaptureSession::new(vec![step("key_lock", StepKind::Button)]);
         session.ignore(&[burst_source(0x02), burst_source(0x22)]);
         assert!(session.is_ignored(MidiMessage::ControlChange {
-            channel: 5,
+            channel: 6,
             controller: 2,
             value: 50
         }));
@@ -1085,9 +1175,9 @@ mod tests {
         assert_eq!(session.poll(5000 * MS), StepStatus::Waiting);
         assert!(!session.accept());
         assert_eq!(session.redo(), Redo::Nothing);
-        session.feed(timed(5000, [0x90, 0x1A, 0x7F]));
+        session.feed(timed(5000, [0xB0, 0x1A, 0x7F]));
         feed_burst(&mut session, 5010);
-        session.feed(timed(5050, [0x90, 0x1A, 0x00]));
+        session.feed(timed(5050, [0xB0, 0x1A, 0x00]));
         assert_eq!(session.poll(6000 * MS), StepStatus::Done);
         let fixture = session.finish();
         assert_eq!(fixture.controls[0].messages.len(), 1);
@@ -1102,17 +1192,17 @@ mod tests {
             step("vinyl", StepKind::Button),
             step("sync", StepKind::Button),
         ]);
-        session.feed(timed(0, [0x90, 0x1A, 0x7F]));
-        session.feed(timed(50, [0x90, 0x1A, 0x00]));
+        session.feed(timed(0, [0xB0, 0x1A, 0x7F]));
+        session.feed(timed(50, [0xB0, 0x1A, 0x00]));
         feed_burst(&mut session, 60);
         assert_eq!(session.poll(1000 * MS), StepStatus::Done);
         // One step alone is not enough.
         assert!(session.take_noise().is_empty());
         assert_eq!(session.control("key_lock").unwrap().messages.len(), 3);
 
-        session.feed(timed(1000, [0x90, 0x17, 0x7F]));
+        session.feed(timed(1000, [0xB0, 0x17, 0x7F]));
         feed_burst(&mut session, 1010);
-        session.feed(timed(1050, [0x90, 0x17, 0x00]));
+        session.feed(timed(1050, [0xB0, 0x17, 0x00]));
         assert_eq!(session.poll(2000 * MS), StepStatus::Done);
         assert_eq!(
             session.take_noise(),
@@ -1151,9 +1241,9 @@ mod tests {
         // The burst arrived alone during key_lock and was taken for it.
         feed_burst(&mut session, 0);
         assert_eq!(session.poll(1000 * MS), StepStatus::Done);
-        session.feed(timed(1000, [0x90, 0x17, 0x7F]));
+        session.feed(timed(1000, [0xB0, 0x17, 0x7F]));
         feed_burst(&mut session, 1010);
-        session.feed(timed(1050, [0x90, 0x17, 0x00]));
+        session.feed(timed(1050, [0xB0, 0x17, 0x00]));
         assert_eq!(session.poll(2000 * MS), StepStatus::Done);
         let noise = session.take_noise();
         assert_eq!(noise.len(), 1);
@@ -1183,12 +1273,12 @@ mod tests {
         prior.controls.push(Control::from_messages(
             "key_lock",
             StepKind::Button,
-            &[timed(0, [0xB5, 0x02, 0x32]), timed(1, [0xB5, 0x22, 0x1A])],
+            &[timed(0, [0xB6, 0x02, 0x32]), timed(1, [0xB6, 0x22, 0x1A])],
         ));
         prior.controls.push(Control::from_messages(
             "vinyl",
             StepKind::Button,
-            &[timed(0, [0x90, 0x17, 0x7F]), timed(1, [0xB5, 0x22, 0x1A])],
+            &[timed(0, [0xB0, 0x17, 0x7F]), timed(1, [0xB6, 0x22, 0x1A])],
         ));
         let mut session = CaptureSession::resume(steps, prior);
         // Fixture ignores apply on load; key_lock still has B5 02.
@@ -1339,11 +1429,12 @@ mod tests {
 
     /// Captures one button step: a press of `note`, plus `extra` messages.
     fn capture_with(session: &mut CaptureSession, ms: u64, note: u8, extra: &[[u8; 3]]) {
-        session.feed(timed(ms, [0x90, note, 0x7F]));
+        // A CC button, so other CC sources are kept (a note button drops them).
+        session.feed(timed(ms, [0xB0, note, 0x7F]));
         for (k, bytes) in extra.iter().enumerate() {
             session.feed(timed(ms + 10 + k as u64, *bytes));
         }
-        session.feed(timed(ms + 50, [0x90, note, 0x00]));
+        session.feed(timed(ms + 50, [0xB0, note, 0x00]));
         assert_eq!(session.poll((ms + 1000) * MS), StepStatus::Done);
     }
 
@@ -1366,8 +1457,8 @@ mod tests {
 
         // Different constant values in two steps.
         let mut session = three_buttons();
-        capture_with(&mut session, 0, 1, &[[0xB5, 0x02, 50]]);
-        capture_with(&mut session, 2000, 2, &[[0xB5, 0x02, 60]]);
+        capture_with(&mut session, 0, 1, &[[0xB6, 0x02, 50]]);
+        capture_with(&mut session, 2000, 2, &[[0xB6, 0x02, 60]]);
         assert!(session.take_noise().is_empty());
 
         // A note held through two steps (e.g. jog touch) is never suggested.
@@ -1378,12 +1469,12 @@ mod tests {
 
         // Declined sources are not suggested again.
         let mut session = three_buttons();
-        capture_with(&mut session, 0, 1, &[[0xB5, 0x02, 50]]);
-        capture_with(&mut session, 2000, 2, &[[0xB5, 0x02, 50]]);
+        capture_with(&mut session, 0, 1, &[[0xB6, 0x02, 50]]);
+        capture_with(&mut session, 2000, 2, &[[0xB6, 0x02, 50]]);
         let noise = session.take_noise();
         assert_eq!(noise[0].sources, [burst_source(0x02)]);
         session.decline_noise(&noise[0].sources);
-        capture_with(&mut session, 4000, 3, &[[0xB5, 0x02, 50]]);
+        capture_with(&mut session, 4000, 3, &[[0xB6, 0x02, 50]]);
         assert!(session.take_noise().is_empty());
         assert_eq!(session.control("c").unwrap().messages.len(), 2);
     }
@@ -1456,7 +1547,7 @@ mod tests {
         prior.controls.push(Control::from_messages(
             "a",
             StepKind::Button,
-            &[timed(0, [0xB5, 0x02, 0x32])],
+            &[timed(0, [0xB6, 0x02, 0x32])],
         ));
         prior.controls.push(Control::from_messages(
             "b",
@@ -1489,5 +1580,110 @@ mod tests {
         assert_eq!(session.poll(1000 * MS), StepStatus::Done);
         assert_eq!(session.control("a").unwrap().messages.len(), 2);
         assert!(session.fixture().meta.ignored.is_empty());
+    }
+
+    #[test]
+    fn knob_data_is_stripped_from_buttons_and_never_suggested() {
+        let mut session = CaptureSession::new(vec![
+            step("deck1.x", StepKind::Button),
+            step("channel1.filter", StepKind::Continuous),
+            step("deck1.y", StepKind::Button),
+            step("deck1.z", StepKind::Button),
+        ]);
+        // A CC-only button caught the filter dump (B5 02 = 50) and its own CC.
+        session.feed(timed(0, [0xB0, 0x40, 0x7F]));
+        session.feed(timed(1, [0xB5, 0x02, 0x32]));
+        session.feed(timed(50, [0xB0, 0x40, 0x00]));
+        assert_eq!(session.poll(1000 * MS), StepStatus::Done);
+        // The filter knob moves B5 02: now known continuous.
+        for (k, v) in [10u8, 0, 64, 127].into_iter().enumerate() {
+            session.feed(timed(1000 + k as u64 * 10, [0xB5, 0x02, v]));
+        }
+        assert_eq!(session.poll(3000 * MS), StepStatus::Done);
+        assert_eq!(session.control("deck1.x").unwrap().messages.len(), 1);
+        assert!(session.take_notices().is_empty());
+        // Another CC-only button that caught only the dump: emptied, asked again.
+        session.feed(timed(4000, [0xB5, 0x02, 0x32]));
+        assert_eq!(session.poll(5000 * MS), StepStatus::Done);
+        assert!(session.control("deck1.y").is_none());
+        assert_eq!(session.current().unwrap().id, "deck1.y");
+        assert_eq!(session.take_notices().len(), 1);
+        // The knob keeps its data, and the constant 50 seen in two buttons is
+        // not suggested as noise (it varies in the knob).
+        assert_eq!(
+            session.control("channel1.filter").unwrap().messages[0].max,
+            127
+        );
+        assert!(session.take_noise().is_empty());
+    }
+
+    #[test]
+    fn resume_strips_knob_data_and_unignores_knob_sources() {
+        let steps = vec![
+            step("deck1.x", StepKind::Button),
+            step("channel1.filter", StepKind::Continuous),
+            step("channel1.trim", StepKind::Continuous),
+        ];
+        let seeded = [0x02u8, 0x22, 0x04, 0x24, 0x06, 0x26].map(|data1| Source {
+            status: 0xB5,
+            data1,
+        });
+        let mut prior = Fixture::new(Meta {
+            ignored: [
+                &seeded[..],
+                &[
+                    Source {
+                        status: 0xB0,
+                        data1: 0x13,
+                    },
+                    Source {
+                        status: 0xB6,
+                        data1: 0x50,
+                    },
+                ],
+            ]
+            .concat(),
+            ..Meta::default()
+        });
+        // Recorded before this fix: a CC-only button that holds knob data.
+        prior.controls.push(Control::from_messages(
+            "deck1.x",
+            StepKind::Button,
+            &[timed(0, [0xB0, 0x14, 0x32])],
+        ));
+        prior.controls.push(Control::from_messages(
+            "channel1.filter",
+            StepKind::Continuous,
+            &[timed(0, [0xB0, 0x13, 0x00]), timed(1, [0xB0, 0x13, 0x7F])],
+        ));
+        prior.controls.push(Control::from_messages(
+            "channel1.trim",
+            StepKind::Continuous,
+            &[timed(0, [0xB0, 0x14, 0x00]), timed(1, [0xB0, 0x14, 0x7F])],
+        ));
+        let mut session = CaptureSession::resume(steps, prior);
+        // Only the unrelated source stays ignored.
+        assert_eq!(
+            session.fixture().meta.ignored,
+            [Source {
+                status: 0xB6,
+                data1: 0x50
+            }]
+        );
+        let notices = session.take_notices();
+        assert_eq!(notices.len(), 8, "{notices:?}");
+        assert!(notices.iter().any(|n| n.contains("B0 13")));
+        assert!(
+            notices
+                .iter()
+                .any(|n| n.contains("B5 02") && n.contains("mistake"))
+        );
+        // deck1.x held only trim data: asked again; the knobs are untouched.
+        assert_eq!(session.current().unwrap().id, "deck1.x");
+        assert_eq!(
+            session.control("channel1.filter").unwrap().messages.len(),
+            1
+        );
+        assert_eq!(session.control("channel1.trim").unwrap().messages.len(), 1);
     }
 }

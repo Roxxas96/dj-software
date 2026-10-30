@@ -395,6 +395,7 @@ fn load_prior(out: &Path) -> anyhow::Result<Fixture> {
 /// Applies the checklist's ignore list to a loaded fixture, then offers any
 /// noise suggestions.
 fn apply_ignores(session: &mut CaptureSession, ignore: &[Source], lines: &Lines) {
+    print_notices(session);
     let reopened = session.ignore(ignore);
     if !reopened.is_empty() {
         println!(
@@ -403,6 +404,14 @@ fn apply_ignores(session: &mut CaptureSession, ignore: &[Source], lines: &Lines)
         );
     }
     confirm_noise(session, lines);
+}
+
+/// Prints the session's notices (sources no longer ignored, steps reopened
+/// because they held only knob data).
+fn print_notices(session: &mut CaptureSession) {
+    for notice in session.take_notices() {
+        println!("  note: {notice}");
+    }
 }
 
 /// Asks about each noise suggestion: yes (the default) ignores it, no means
@@ -644,12 +653,13 @@ fn run_steps(
         };
         match outcome {
             Listened::Done => {
+                print_notices(session);
                 confirm_noise(session, lines);
                 // A capture that turned out to be all noise is asked again.
                 let refocused = session.current().is_some_and(|c| c.id == step.id);
                 let control = session.control(&step.id).filter(|_| !refocused);
                 let Some(control) = control else {
-                    println!("  only ignored sources were recorded; listening again");
+                    println!("  only ignored sources or knob data were recorded; listening again");
                     save(out, session)?;
                     continue;
                 };

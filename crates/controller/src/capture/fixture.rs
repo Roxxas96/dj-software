@@ -6,6 +6,7 @@
 //!   status (`0x9n`) with value 0, so a button reads `status = 0x9n, min = 0, max = 127`.
 //! - A pair whose first message in the step is a release is dropped: it belongs
 //!   to a key held across the start of the step (SHIFT, a pad-mode button).
+//! - Button and pads steps that recorded a note keep only note sources.
 //! - Pitch bend keeps only its MSB: `data1 = 0` and the MSB as the value.
 //! - `first` is the first value seen, so direction (jog, BROWSE, TEMPO) is recoverable.
 //! - Sources in `meta.ignored` (checklist ignore list plus detected noise) are
@@ -249,6 +250,13 @@ impl Control {
                     max: value,
                 }),
             }
+        }
+        // A button or pad is a note: when notes were recorded, other sources
+        // in the same step (e.g. the SB3's filter-position dump on some button
+        // presses) are not part of it.
+        let is_note = |r: &MessageRange| r.status & 0xF0 == 0x90;
+        if matches!(kind, StepKind::Button | StepKind::Pads) && ranges.iter().any(is_note) {
+            ranges.retain(is_note);
         }
         let cc14 = find_cc14(&ranges);
         Control {
@@ -565,15 +573,15 @@ led_values_vary = false
 
     #[test]
     fn strip_removes_ignored_sources_and_recomputes_cc14() {
-        // The owner's parasitic burst, recorded as a button.
+        // A knob capture that also caught a 14-bit pair from elsewhere.
         let mut control = Control::from_messages(
-            "deck1.key_lock",
-            StepKind::Button,
+            "channel1.trim",
+            StepKind::Continuous,
             &[
                 timed(0, [0xB5, 0x02, 0x32]),
                 timed(1, [0xB5, 0x22, 0x1A]),
-                timed(2, [0x90, 0x1A, 0x7F]),
-                timed(3, [0x90, 0x1A, 0x00]),
+                timed(2, [0xB0, 0x13, 0x00]),
+                timed(3, [0xB0, 0x13, 0x7F]),
             ],
         );
         assert_eq!(control.cc14, Some(Cc14 { msb: 2, lsb: 34 }));
@@ -589,7 +597,7 @@ led_values_vary = false
         ];
         assert!(control.strip(&ignored));
         assert_eq!(control.messages.len(), 1);
-        assert_eq!(control.messages[0].data1, 0x1A);
+        assert_eq!(control.messages[0].data1, 0x13);
         assert_eq!(control.cc14, None);
         assert!(!control.strip(&ignored));
     }
@@ -611,5 +619,32 @@ led_values_vary = false
             velocity: 127
         }));
         assert_eq!(source.to_string(), "80 0B");
+    }
+
+    #[test]
+    fn note_buttons_keep_only_notes() {
+        // The SB3 sends filter positions (B5 02/22 ...) with some button presses.
+        let dump = [
+            timed(0, [0x90, 0x1A, 0x7F]),
+            timed(1, [0xB5, 0x02, 0x32]),
+            timed(2, [0xB5, 0x22, 0x1A]),
+            timed(3, [0x90, 0x1A, 0x00]),
+        ];
+        for kind in [StepKind::Button, StepKind::Pads] {
+            let control = Control::from_messages("deck1.key_lock", kind, &dump);
+            assert_eq!(control.messages.len(), 1, "{kind:?}");
+            assert_eq!(control.messages[0].status, 0x90);
+            assert_eq!(control.cc14, None);
+        }
+        // A knob keeps everything.
+        let knob = Control::from_messages("channel1.filter", StepKind::Continuous, &dump);
+        assert_eq!(knob.messages.len(), 3);
+        // A button without notes (a CC button) keeps what it sent.
+        let cc_button = Control::from_messages(
+            "x",
+            StepKind::Button,
+            &[timed(0, [0xB0, 0x40, 0x7F]), timed(1, [0xB0, 0x40, 0x00])],
+        );
+        assert_eq!(cc_button.messages.len(), 1);
     }
 }

@@ -467,23 +467,9 @@ kind = "button"
         let checklist = parse_checklist(text).unwrap();
         assert!(checklist.steps.len() > 80, "{}", checklist.steps.len());
         assert_eq!(checklist.controller.as_deref(), Some("Pioneer DDJ-SB3"));
-        // The parasitic burst seen on the owner's SB3.
-        let ignored: Vec<(u8, u8)> = checklist
-            .ignore
-            .iter()
-            .map(|s| (s.status, s.data1))
-            .collect();
-        assert_eq!(
-            ignored,
-            [
-                (0xB5, 0x02),
-                (0xB5, 0x22),
-                (0xB5, 0x04),
-                (0xB5, 0x24),
-                (0xB5, 0x06),
-                (0xB5, 0x26)
-            ]
-        );
+        // The SB3's filter-position dump is knob data, handled by the
+        // capture rules: nothing is ignored.
+        assert!(checklist.ignore.is_empty());
         for deck in 1..=4 {
             for id in ["play", "cue", "jog_top", "tempo", "pads_hot_cue"] {
                 let id = format!("deck{deck}.{id}");
