@@ -1,2 +1,6 @@
 [files]
 extend-exclude = ["crates/decode/tests/fixtures/"]
+
+[default.extend-words]
+# MP4 box fourcc ("trak" = track box)
+trak = "trak"
