@@ -248,6 +248,8 @@ dependencies = [
 name = "controller"
 version = "0.0.0"
 dependencies = [
+ "actions",
+ "engine",
  "midir",
  "serde",
  "thiserror 2.0.21",

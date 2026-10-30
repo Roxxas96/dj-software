@@ -1,7 +1,8 @@
-//! MIDI controller support: message parsing, port access and guided capture.
+//! MIDI controller support: message parsing, port access, guided capture and mappings.
 
 pub mod capture;
 pub mod clock;
+pub mod mapping;
 mod midi;
 mod ports;
 
