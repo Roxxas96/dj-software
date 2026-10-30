@@ -401,6 +401,7 @@ dependencies = [
 name = "dj-software"
 version = "0.0.0"
 dependencies = [
+ "actions",
  "anyhow",
  "audio-io",
  "clap",

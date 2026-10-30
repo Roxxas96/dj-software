@@ -1,3 +1,254 @@
+# Default mapping for the Pioneer DDJ-SB3.
+#
+# Every MIDI value below comes from our own capture, controllers/ddj-sb3/capture.toml.
+# Behavior follows VirtualDJ's default SB3 layout, limited to the actions that exist.
+# Channels are 1-based: status 0x90/0xB0 is channel 1, 0x91/0xB1 channel 2, 0x96/0xB6
+# channel 7. Each binding is checked by crates/controller/tests/sb3_replay.rs.
+#
+# Layering decision: SOFTWARE layering.
+# Evidence: in the capture, every deck-3 control sends byte-identical messages to deck 1
+# and every deck-4 control to deck 2 (mixer channel 3 == channel 1, channel 4 ==
+# channel 2). The DECK buttons send left 0x90 0x72 / right 0x91 0x72 and have no
+# hardware light. So deck and mixer bindings use `side = "left"` / `side = "right"` and
+# follow the side's active deck: each DECK press toggles the side (decks 1/3 on the
+# left, 2/4 on the right), starting on decks 1 and 2.
+#
+# SHIFT: the SB3 sends different notes for shifted buttons (CUE 0x0C, SHIFT+CUE 0x48),
+# so shifted functions bind to the shifted note and need no `shift` condition.
+
 [controller]
 name = "Pioneer DDJ-SB3"
 port = "DDJ-SB3"
+
+# The SB3 applies its MASTER and HEADPHONES knobs in its own audio interface, so the
+# software levels stay at full. Both knobs do send MIDI (MASTER cc14 ch7 0x08/0x28,
+# HEADPHONES cc14 ch7 0x0D/0x2D) and are deliberately left unbound.
+[[init]]
+action = "master.level"
+value = 1.0
+
+[[init]]
+action = "master.headphone_level"
+value = 1.0
+
+# ---------------------------------------------------------------- left deck (1 / 3)
+
+[[input]]
+midi = { channel = 1, note = 0x3F }
+action = "modifier.shift"
+side = "left"
+
+[[input]]
+midi = { channel = 1, note = 0x72 }
+action = "side.deck_toggle"
+side = "left"
+
+[[input]]
+midi = { channel = 1, note = 0x0B }
+action = "deck.play_pause"
+side = "left"
+
+[[input]]
+midi = { channel = 1, note = 0x0C }
+action = "deck.cue"
+side = "left"
+
+# SHIFT + CUE
+[[input]]
+midi = { channel = 1, note = 0x48 }
+action = "deck.return_to_start"
+side = "left"
+
+# SHIFT + KEY LOCK
+[[input]]
+midi = { channel = 1, note = 0x60 }
+action = "deck.tempo_range_next"
+side = "left"
+
+# TEMPO: the capture reached 0 with the slider pulled fully toward the player, which is
+# the "+" (faster) end, so the value is inverted. Confirmed by hands-on check (Task 10).
+[[input]]
+midi = { channel = 1, cc14 = [0x00, 0x20] }
+action = "deck.tempo"
+side = "left"
+invert = true
+
+# --------------------------------------------------------------- right deck (2 / 4)
+
+[[input]]
+midi = { channel = 2, note = 0x3F }
+action = "modifier.shift"
+side = "right"
+
+[[input]]
+midi = { channel = 2, note = 0x72 }
+action = "side.deck_toggle"
+side = "right"
+
+[[input]]
+midi = { channel = 2, note = 0x0B }
+action = "deck.play_pause"
+side = "right"
+
+[[input]]
+midi = { channel = 2, note = 0x0C }
+action = "deck.cue"
+side = "right"
+
+# SHIFT + CUE
+[[input]]
+midi = { channel = 2, note = 0x48 }
+action = "deck.return_to_start"
+side = "right"
+
+# SHIFT + KEY LOCK
+[[input]]
+midi = { channel = 2, note = 0x60 }
+action = "deck.tempo_range_next"
+side = "right"
+
+# TEMPO: inverted, as on the left deck.
+[[input]]
+midi = { channel = 2, cc14 = [0x00, 0x20] }
+action = "deck.tempo"
+side = "right"
+invert = true
+
+# ------------------------------------------------------- mixer, left channel (1 / 3)
+
+[[input]]
+midi = { channel = 1, cc14 = [0x04, 0x24] }
+action = "channel.trim"
+side = "left"
+
+[[input]]
+midi = { channel = 1, cc14 = [0x07, 0x27] }
+action = "channel.eq_high"
+side = "left"
+
+[[input]]
+midi = { channel = 1, cc14 = [0x0B, 0x2B] }
+action = "channel.eq_mid"
+side = "left"
+
+[[input]]
+midi = { channel = 1, cc14 = [0x0F, 0x2F] }
+action = "channel.eq_low"
+side = "left"
+
+[[input]]
+midi = { channel = 7, cc14 = [0x17, 0x37] }
+action = "channel.filter"
+side = "left"
+
+[[input]]
+midi = { channel = 1, cc14 = [0x13, 0x33] }
+action = "channel.fader"
+side = "left"
+
+# Headphone CUE
+[[input]]
+midi = { channel = 1, note = 0x54 }
+action = "channel.pfl_toggle"
+side = "left"
+
+# ------------------------------------------------------ mixer, right channel (2 / 4)
+
+[[input]]
+midi = { channel = 2, cc14 = [0x04, 0x24] }
+action = "channel.trim"
+side = "right"
+
+[[input]]
+midi = { channel = 2, cc14 = [0x07, 0x27] }
+action = "channel.eq_high"
+side = "right"
+
+[[input]]
+midi = { channel = 2, cc14 = [0x0B, 0x2B] }
+action = "channel.eq_mid"
+side = "right"
+
+[[input]]
+midi = { channel = 2, cc14 = [0x0F, 0x2F] }
+action = "channel.eq_low"
+side = "right"
+
+[[input]]
+midi = { channel = 7, cc14 = [0x18, 0x38] }
+action = "channel.filter"
+side = "right"
+
+[[input]]
+midi = { channel = 2, cc14 = [0x13, 0x33] }
+action = "channel.fader"
+side = "right"
+
+# Headphone CUE
+[[input]]
+midi = { channel = 2, note = 0x54 }
+action = "channel.pfl_toggle"
+side = "right"
+
+# ------------------------------------------------------------------- mixer, global
+
+[[input]]
+midi = { channel = 7, cc14 = [0x1F, 0x3F] }
+action = "master.crossfader"
+
+# Headphone MASTER button
+[[input]]
+midi = { channel = 7, note = 0x5B }
+action = "master.headphone_master_toggle"
+
+# ------------------------------------------------------------------------ LEDs
+#
+# Only the headphone MASTER LED responds. A full LED scan (all 16 channels, note-on,
+# with and without audio streaming to the SB3) found no message lighting PLAY or CUE;
+# SHIFT and DECK have no lights; the headphone CUE LED did not respond in the capture.
+
+[[output]]
+state = "master.headphone_master"
+midi = { channel = 7, note = 0x5B }
+on = 127
+off = 0
+
+# ----------------------------------------------------------------------------------
+# Not mapped yet (needs plan 4): every other captured control, with its MIDI message.
+# Left deck shown (channel 1, status 0x90/0xB0); the right deck sends the same on
+# channel 2 (0x91/0xB1). Decks 3/4 send the same bytes as decks 1/2.
+#
+#   SYNC                   note 0x58        SHIFT+SYNC        note 0x5C
+#   SHIFT+PLAY             note 0x47
+#   KEY LOCK               note 0x1A
+#   VINYL                  note 0x17        SHIFT+VINYL       note 0x40
+#   AUTO LOOP              note 0x14        SHIFT+AUTO LOOP   note 0x50
+#   1/2X                   note 0x12        SHIFT+1/2X        note 0x61
+#   2X                     note 0x13        SHIFT+2X          note 0x62
+#   jog touch              note 0x36        SHIFT+jog touch   note 0x67
+#   jog top (spin)         cc 0x23          SHIFT+jog top     cc 0x1F
+#   jog outer ring         cc 0x21, relative offset 64 (65 = clockwise)
+#   pad mode HOT CUE       note 0x1B        SHIFT             note 0x69
+#   pad mode FX FADE       note 0x1E        SHIFT             note 0x6B
+#   pad mode PAD SCRATCH   note 0x20        SHIFT             note 0x6D
+#   pad mode SAMPLER       note 0x22        SHIFT             note 0x6E
+#   channel fader + SHIFT  (fader start) notes 0x52 / 0x66, with the fader's cc14
+#
+#   Pads: channel 8 (0x97) left, channel 9 (0x98) right, notes:
+#     HOT CUE 0x00-0x07 (SHIFT 0x08-0x0F), FX FADE 0x10-0x17, PAD SCRATCH 0x20-0x27,
+#     SAMPLER 0x30-0x37.
+#     The FX FADE and PAD SCRATCH pad steps also recorded firmware-generated messages
+#     (notes 0x4D/0x4C/0x4A at a constant 127, cc 0x22): those are not pads.
+#
+#   FX buttons 1/2/3: channel 5 (0x94) left, channel 6 (0x95) right, notes 0x47/0x48/0x49
+#     (SHIFT 0x63/0x64/0x65)
+#   FX level: cc14 0x02/0x22 on channel 5 (0xB4) left, channel 6 (0xB5) right; also
+#     sends 0x04/0x24 and 0x06/0x26 (FX slots 2 and 3)
+#
+#   Global, channel 7 (0x96/0xB6):
+#     MASTER level         cc14 0x08/0x28   (applied by the SB3 itself, see [[init]])
+#     HEADPHONES level     cc14 0x0D/0x2D   (applied by the SB3 itself, see [[init]])
+#     BROWSE rotate        cc 0x40          SHIFT+rotate      cc 0x64
+#     BROWSE press         note 0x41        SHIFT+press       note 0x42
+#     LOAD left            note 0x46        SHIFT             note 0x58
+#     LOAD right           note 0x47        SHIFT             note 0x59

@@ -9,15 +9,19 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use actions::{Input, Target};
 use anyhow::{Context, anyhow, bail};
+use controller::builtin::load_mapping;
 use controller::capture::{
     CaptureSession, Fixture, LedProbe, LedSink, Meta, PROBE_VELOCITIES, Question, Redo, Source,
     Step, StepKind, StepStatus, parse_checklist, parse_fixture, run_led_probe,
 };
+use controller::mapping::{Mapping, Resolved};
 use controller::{
-    MidiMessage, OutputPort, PortError, TimedMidi, clock, input_port_names, open_input,
-    open_output, output_port_names,
+    Connection, MidiMessage, OutputPort, PortError, PresenceChange, Runtime, TimedMidi, clock,
+    input_port_names, open_input, open_output, output_port_names,
 };
+use engine::{EngineConfig, engine};
 
 const POLL: Duration = Duration::from_millis(100);
 
@@ -73,6 +77,127 @@ pub fn monitor(port: Option<&str>) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// How long the controller monitor waits for MIDI before its periodic work.
+const MONITOR_WAIT: Duration = Duration::from_millis(10);
+/// How often the controller monitor updates the LEDs.
+const MONITOR_LED_TICK: Duration = Duration::from_millis(33);
+
+/// `midi monitor --controller`: prints each message of the mapping's controller with what
+/// it does, e.g. `→ deck.play_pause deck 1 Press` or `→ (unbound)`.
+///
+/// The actions are applied to an engine with no audio device (rendered here, silently,
+/// only so its command queue drains), so SHIFT, deck switching and soft takeover behave
+/// exactly as when playing.
+pub fn monitor_controller(name_or_path: &str) -> anyhow::Result<()> {
+    let mapping = load_mapping(name_or_path).context("loading the controller mapping")?;
+    let name = mapping.controller.name.clone();
+
+    let interrupted = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&interrupted);
+    ctrlc::set_handler(move || flag.store(true, Ordering::Relaxed))
+        .context("installing the Ctrl-C handler")?;
+
+    let config = EngineConfig {
+        sample_rate: 44_100,
+        max_block_frames: 64,
+    };
+    let (mut engine, mut renderer) = engine(config);
+    let mut master = vec![0.0; config.max_block_frames * 2];
+    let mut headphones = master.clone();
+
+    let (tx, rx) = channel();
+    let mut connection = Connection::new(&mapping, tx).context("opening the controller")?;
+    let bound = mapping.clone();
+    let mut runtime = Runtime::new(mapping);
+    let mut attached_once = false;
+    match connection.port_names() {
+        Some((input, _)) => {
+            println!("Monitoring {name} on {input} (Ctrl-C to stop)");
+            runtime.attach(&mut engine, &mut connection);
+            attached_once = true;
+        }
+        None => println!("{name} not found; waiting for it (Ctrl-C to stop)"),
+    }
+
+    let started = clock::now_micros();
+    let mut batch: Vec<TimedMidi> = Vec::new();
+    let mut last_led = std::time::Instant::now();
+    while !interrupted.load(Ordering::Relaxed) {
+        match rx.recv_timeout(MONITOR_WAIT) {
+            Ok(first) => {
+                batch.push(first);
+                batch.extend(rx.try_iter());
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+        if !batch.is_empty() {
+            runtime.handle_batch(&batch, &mut engine);
+            for ((msg, resolved), timed) in runtime.last_resolved().iter().zip(&batch) {
+                let ms = timed.micros.saturating_sub(started) / 1000;
+                println!("{ms:>8} ms  {msg}  {}", describe(&bound, msg, resolved));
+            }
+            batch.clear();
+        }
+        renderer.render(&mut master, &mut headphones);
+        engine.collect_garbage();
+        if last_led.elapsed() >= MONITOR_LED_TICK {
+            last_led = std::time::Instant::now();
+            runtime.tick(clock::now_micros(), &engine, &mut connection);
+        }
+        match connection.poll_presence() {
+            PresenceChange::None => {}
+            PresenceChange::Lost => {
+                runtime.on_disconnect(&mut engine);
+                println!("controller disconnected");
+            }
+            PresenceChange::Back => {
+                if attached_once {
+                    runtime.on_reconnect(&mut engine, &mut connection);
+                } else {
+                    runtime.attach(&mut engine, &mut connection);
+                    attached_once = true;
+                }
+                println!("controller reconnected");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// What `msg` did: each resolved action as `→ <action> <target> <input>`. A message no
+/// binding listens to is `(unbound)`; a bound one that did nothing (soft takeover not
+/// reached yet, or a SHIFT/deck condition not met) is `(no action)`.
+fn describe(mapping: &Mapping, msg: &MidiMessage, resolved: &Resolved) -> String {
+    if resolved.is_empty() {
+        let bound = mapping.inputs.iter().any(|b| b.midi.matches(msg));
+        return if bound {
+            "→ (no action)"
+        } else {
+            "→ (unbound)"
+        }
+        .to_owned();
+    }
+    resolved
+        .iter()
+        .map(|(action, input)| {
+            let target = match action.target() {
+                Target::Deck(deck) => format!(" deck {}", deck.index() + 1),
+                Target::Side(side) => format!(" side {}", format!("{side:?}").to_lowercase()),
+                Target::Global => String::new(),
+            };
+            let input = match input {
+                Input::Press => "Press".to_owned(),
+                Input::Release => "Release".to_owned(),
+                Input::Absolute(v) => format!("{v:.3}"),
+                Input::Relative(n) => format!("{n:+}"),
+            };
+            format!("→ {}{target} {input}", action.id())
+        })
+        .collect::<Vec<_>>()
+        .join("  ")
 }
 
 /// How often the capture loop polls the session while listening.
@@ -894,6 +1019,46 @@ mod tests {
 
     fn names(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn describes_what_a_message_did() {
+        use actions::{Action, Side};
+        use engine::DeckId;
+
+        let mapping = load_mapping("ddj-sb3").unwrap();
+        let play = MidiMessage::NoteOn {
+            channel: 0,
+            note: 0x0B,
+            velocity: 127,
+        };
+        let deck1 = DeckId::new(0).unwrap();
+        assert_eq!(
+            describe(
+                &mapping,
+                &play,
+                &vec![(Action::PlayPause(deck1), Input::Press)]
+            ),
+            "→ deck.play_pause deck 1 Press"
+        );
+        assert_eq!(
+            describe(
+                &mapping,
+                &play,
+                &vec![
+                    (Action::Shift(Side::Left), Input::Release),
+                    (Action::Crossfader, Input::Absolute(0.25)),
+                ]
+            ),
+            "→ modifier.shift side left Release  → master.crossfader 0.250"
+        );
+        assert_eq!(describe(&mapping, &play, &vec![]), "→ (no action)");
+        let sync = MidiMessage::NoteOn {
+            channel: 0,
+            note: 0x58,
+            velocity: 127,
+        };
+        assert_eq!(describe(&mapping, &sync, &vec![]), "→ (unbound)");
     }
 
     #[test]
