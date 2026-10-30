@@ -1,0 +1,9 @@
+[tool.commitizen]
+name = "cz_conventional_commits"
+version = "0.0.0"
+tag_format = "v$version"
+# 0.2.0-rc.0, not PEP 440's 0.2.0rc0: CI marks tags containing "-rc" as prereleases
+version_scheme = "semver2"
+major_version_zero = true
+update_changelog_on_bump = true
+version_files = ["Cargo.toml:^version"]

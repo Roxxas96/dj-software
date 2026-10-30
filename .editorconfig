@@ -1,0 +1,27 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# rustfmt is the authority on Rust formatting.
+[*.rs]
+indent_size = 4
+
+# Verbatim upstream license text (Apache 2.0) — its centered/legal formatting
+# is not ours to reformat.
+[LICENSE]
+indent_style = unset
+indent_size = unset
+
+# Fenced code blocks mix Rust, TOML/YAML snippets and prose —
+# no single indent rule fits a whole markdown file, so leave indent unenforced.
+[*.md]
+trim_trailing_whitespace = false
+indent_style = unset
+indent_size = unset
+max_line_length = off

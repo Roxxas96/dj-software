@@ -1,0 +1,23 @@
+[tools]
+rust = { version = "1.99.1", components = "rustfmt,clippy" }
+prek = "0.5.7"
+cargo-binstall = "1.26.1"
+"cargo:cargo-nextest" = "0.9.150"
+"cargo:cargo-deny" = "0.20.2"
+
+[settings]
+experimental = true
+
+# `mise install` pulls every tool above at the pinned version — run it once after
+# cloning, then `prek install` to activate the git hooks. cargo-binstall is here so
+# the cargo: tools install as prebuilt binaries instead of compiling from source.
+# typos, gitleaks, actionlint, editorconfig-checker and commitizen are not here:
+# prek fetches them itself from .pre-commit-config.yaml.
+
+[tasks.test]
+description = "Run the whole test suite"
+run = "cargo nextest run --workspace --no-tests=pass"
+
+[tasks.lint]
+description = "Run every check CI runs"
+run = "prek run --all-files"
