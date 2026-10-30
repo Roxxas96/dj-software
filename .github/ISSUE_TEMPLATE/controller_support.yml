@@ -1,0 +1,38 @@
+name: Controller support
+description: Ask for support for a new DJ controller
+labels: [controller]
+body:
+  - type: input
+    id: model
+    attributes:
+      label: Controller model
+      placeholder: "Pioneer DDJ-400"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "Windows 11, macOS 15, Ubuntu 24.04"
+    validations:
+      required: true
+  - type: dropdown
+    id: soundcard
+    attributes:
+      label: Does it have a built-in sound card?
+      options:
+        - "Yes"
+        - "No"
+        - "Not sure"
+    validations:
+      required: true
+  - type: input
+    id: midi-list
+    attributes:
+      label: Manufacturer MIDI message list
+      description: Link to the MIDI message list or implementation chart, if there is one.
+  - type: textarea
+    id: capture
+    attributes:
+      label: MIDI capture
+      description: Attach a capture of the controller's MIDI messages (move each control in turn).

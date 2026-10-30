@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: [v*.*.*, v*.*.*-rc*]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Reuses .pre-commit-config.yaml as the single source of truth for lint/format
+  # checks — the same checks that run locally via `prek install`.
+  lint:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # cpal links ALSA on Linux; clippy needs the headers to type-check audio-io.
+      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - uses: jdx/mise-action@v4
+      - uses: j178/prek-action@1382ad72dea72f9d53832f2bcb65b3e87a947204 # v3.0.1
+
+  test:
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - uses: jdx/mise-action@v4
+      - run: cargo nextest run --workspace --locked --no-tests=pass
+      - run: cargo build --workspace --release --locked
