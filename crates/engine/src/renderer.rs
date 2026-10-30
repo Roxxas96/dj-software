@@ -3,6 +3,7 @@ use std::sync::Arc;
 use rtrb::{Consumer, Producer, PushError};
 
 use crate::deck::Deck;
+use crate::mixer::Mixer;
 use crate::shared::Shared;
 use crate::{Command, DeckId, EngineConfig, TrackBuffer};
 
@@ -14,6 +15,7 @@ pub struct EngineRenderer {
     garbage: Producer<Arc<TrackBuffer>>,
     shared: Arc<Shared>,
     decks: [Deck; DeckId::ALL.len()],
+    mixer: Mixer,
 }
 
 impl EngineRenderer {
@@ -28,6 +30,7 @@ impl EngineRenderer {
             garbage,
             shared: Arc::default(),
             decks: Default::default(),
+            mixer: Mixer::new(config.max_block_frames),
         };
         renderer.publish();
         renderer
@@ -52,13 +55,14 @@ impl EngineRenderer {
             self.apply(cmd);
         }
 
-        master.fill(0.0);
-        headphones.fill(0.0);
-        for deck in &mut self.decks {
-            deck.render_add(master, self.config.sample_rate);
+        let inputs = self.mixer.inputs(master.len());
+        for (deck, input) in self.decks.iter_mut().zip(inputs) {
+            deck.render_add(input, self.config.sample_rate);
         }
+        let meters = self.mixer.process(master, headphones);
 
         self.publish();
+        self.shared.store_meters(&meters);
     }
 
     fn apply(&mut self, cmd: Command) {
@@ -68,8 +72,8 @@ impl EngineRenderer {
                     self.discard(old);
                 }
             }
-            Command::Channel(_, cmd) => match cmd {},
-            Command::Master(cmd) => match cmd {},
+            Command::Channel(id, cmd) => self.mixer.apply_channel(id, cmd),
+            Command::Master(cmd) => self.mixer.apply_master(cmd),
         }
     }
 

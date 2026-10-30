@@ -52,10 +52,42 @@ impl TempoRange {
     }
 }
 
-/// Per-channel mixer commands.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChannelCommand {}
+/// Per-channel mixer commands. Every `f32` is a knob or fader position in `[0, 1]`
+/// (clamped); the engine owns the curves (see [`crate::mixer`]). Non-finite values are
+/// ignored.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ChannelCommand {
+    /// Input gain: 0.5 is unity, the ends are ±12 dB.
+    Trim(f32),
+    EqLow(f32),
+    EqMid(f32),
+    EqHigh(f32),
+    /// 0.5 is off.
+    Filter(f32),
+    /// Channel fader: 1.0 is unity, 0.0 mutes.
+    Fader(f32),
+    /// Sends the pre-fader signal to the headphone cue bus.
+    Pfl(bool),
+    XfaderAssign(XfaderAssign),
+}
 
-/// Master bus commands.
+/// Which side of the crossfader a channel follows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MasterCommand {}
+pub enum XfaderAssign {
+    A,
+    /// Ignores the crossfader.
+    Thru,
+    B,
+}
+
+/// Master bus commands. Every `f32` is a position in `[0, 1]` (clamped); non-finite values
+/// are ignored.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MasterCommand {
+    /// 0.0 is full A, 1.0 full B.
+    Crossfader(f32),
+    MasterLevel(f32),
+    HeadphoneLevel(f32),
+    /// 0.0 is cue only, 1.0 master only.
+    HeadphoneMix(f32),
+}

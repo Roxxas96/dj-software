@@ -5,17 +5,31 @@ use std::sync::Arc;
 use approx::{assert_abs_diff_eq, assert_relative_eq};
 use common::{constant_track, ramp_track, render};
 use engine::{
-    Command, DeckCommand, DeckId, EngineConfig, EngineController, EngineRenderer, TempoRange,
-    TrackBuffer, TrackError, engine,
+    ChannelCommand, Command, DeckCommand, DeckId, EngineConfig, EngineController, EngineRenderer,
+    MasterCommand, TempoRange, TrackBuffer, TrackError, XfaderAssign, engine,
 };
 
 const SR: u32 = 44_100;
 
+/// An engine whose mixer passes every deck to master at unity gain, so these tests see
+/// transport output untouched: master level 1.0 and every channel off the crossfader.
 fn setup(sample_rate: u32) -> (EngineController, EngineRenderer) {
-    engine(EngineConfig {
+    let (mut c, mut r) = engine(EngineConfig {
         sample_rate,
         max_block_frames: 512,
-    })
+    });
+    c.send(Command::Master(MasterCommand::MasterLevel(1.0)))
+        .unwrap();
+    for id in DeckId::ALL {
+        c.send(Command::Channel(
+            id,
+            ChannelCommand::XfaderAssign(XfaderAssign::Thru),
+        ))
+        .unwrap();
+    }
+    // One frame with nothing loaded applies the changes and finishes their gain ramps.
+    render(&mut r, 1);
+    (c, r)
 }
 
 fn deck(index: usize) -> DeckId {

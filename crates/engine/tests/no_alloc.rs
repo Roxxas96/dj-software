@@ -4,7 +4,9 @@ use std::sync::Arc;
 
 use assert_no_alloc::{AllocDisabler, assert_no_alloc};
 use common::ramp_track;
-use engine::{Command, DeckCommand, DeckId, EngineConfig, engine};
+use engine::{
+    ChannelCommand, Command, DeckCommand, DeckId, EngineConfig, MasterCommand, XfaderAssign, engine,
+};
 
 #[global_allocator]
 static A: AllocDisabler = AllocDisabler;
@@ -63,10 +65,36 @@ fn render_does_not_allocate() {
         c.send(Command::Deck(decks[0], cmd)).unwrap();
         render_blocks(10);
     }
+    for cmd in [
+        ChannelCommand::Trim(0.7),
+        ChannelCommand::EqLow(0.2),
+        ChannelCommand::EqMid(0.6),
+        ChannelCommand::EqHigh(0.9),
+        ChannelCommand::Filter(0.3),
+        ChannelCommand::Fader(0.8),
+        ChannelCommand::Pfl(true),
+        ChannelCommand::XfaderAssign(XfaderAssign::Thru),
+        ChannelCommand::Fader(f32::NAN),
+    ] {
+        c.send(Command::Channel(decks[0], cmd)).unwrap();
+        render_blocks(2);
+    }
+    for cmd in [
+        MasterCommand::Crossfader(0.2),
+        MasterCommand::MasterLevel(0.9),
+        MasterCommand::HeadphoneLevel(0.7),
+        MasterCommand::HeadphoneMix(0.5),
+        MasterCommand::Crossfader(f32::INFINITY),
+    ] {
+        c.send(Command::Master(cmd)).unwrap();
+        render_blocks(2);
+    }
 
     // The replaced track went back to the controller, which frees it outside the guard.
     c.collect_garbage();
     assert_eq!(Arc::strong_count(&old), 1);
     assert!(c.deck(decks[0]).playing);
     assert!(master.iter().any(|&s| s != 0.0));
+    assert!(headphones.iter().any(|&s| s != 0.0));
+    assert!(c.meters().channel_peak[0] > 0.0);
 }

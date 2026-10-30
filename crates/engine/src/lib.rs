@@ -7,16 +7,18 @@
 mod command;
 mod controller;
 mod deck;
+mod dsp;
 mod ids;
+pub mod mixer;
 mod renderer;
 mod shared;
 mod track;
 
-pub use command::{ChannelCommand, Command, DeckCommand, MasterCommand, TempoRange};
+pub use command::{ChannelCommand, Command, DeckCommand, MasterCommand, TempoRange, XfaderAssign};
 pub use controller::{CommandQueueFull, EngineController};
 pub use ids::DeckId;
 pub use renderer::EngineRenderer;
-pub use shared::DeckSnapshot;
+pub use shared::{DeckSnapshot, Meters};
 pub use track::{TrackBuffer, TrackError};
 
 /// Capacity of the command queue (controller to renderer).
