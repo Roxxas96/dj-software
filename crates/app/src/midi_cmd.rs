@@ -32,7 +32,7 @@ pub fn ports() -> anyhow::Result<()> {
 }
 
 /// Picks the port to monitor: the requested name, else the first input containing "DDJ".
-fn choose_port(requested: Option<&str>, inputs: &[String]) -> anyhow::Result<String> {
+pub(crate) fn choose_port(requested: Option<&str>, inputs: &[String]) -> anyhow::Result<String> {
     if let Some(name) = requested {
         return Ok(name.to_owned());
     }
@@ -141,7 +141,7 @@ fn parse_answer(line: &str) -> Answer {
 
 /// Writes `contents` to a temporary file next to `path`, then renames it over
 /// `path`, so a crash never leaves a half-written fixture.
-fn write_atomic(path: &Path, contents: &str) -> anyhow::Result<()> {
+pub(crate) fn write_atomic(path: &Path, contents: &str) -> anyhow::Result<()> {
     let name = path
         .file_name()
         .ok_or_else(|| anyhow!("{} is not a file path", path.display()))?;
@@ -163,7 +163,7 @@ fn save(path: &Path, session: &CaptureSession) -> anyhow::Result<()> {
 }
 
 /// Stdin lines, read on a helper thread so the capture loop can keep polling MIDI.
-struct Lines(Receiver<String>);
+pub(crate) struct Lines(Receiver<String>);
 
 enum Typed {
     Line(String),
@@ -172,7 +172,7 @@ enum Typed {
 }
 
 impl Lines {
-    fn spawn() -> Lines {
+    pub(crate) fn spawn() -> Lines {
         let (tx, rx) = channel();
         thread::spawn(move || {
             for line in io::stdin().lock().lines() {
@@ -186,7 +186,7 @@ impl Lines {
     }
 
     /// Prints `prompt` and waits for a line; `None` on end of input.
-    fn ask(&self, prompt: &str) -> Option<String> {
+    pub(crate) fn ask(&self, prompt: &str) -> Option<String> {
         print!("{prompt}");
         let _ = io::stdout().flush();
         self.0.recv().ok()
@@ -201,7 +201,7 @@ impl Lines {
     }
 
     /// Drops lines typed ahead (e.g. Enter pressed while lights were cycling).
-    fn drain(&self) {
+    pub(crate) fn drain(&self) {
         while self.0.try_recv().is_ok() {}
     }
 
@@ -222,7 +222,7 @@ impl Lines {
     }
 
     /// Asks until the answer is y, n or q; `None` for q or end of input.
-    fn ask_yes_no(&self, prompt: &str) -> Option<bool> {
+    pub(crate) fn ask_yes_no(&self, prompt: &str) -> Option<bool> {
         loop {
             match parse_answer(&self.ask(prompt)?) {
                 Answer::Yes => return Some(true),
