@@ -6,6 +6,7 @@ use std::sync::mpsc::Sender;
 
 use midir::{Ignore, MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
 
+use crate::clock;
 use crate::midi::{MidiMessage, TimedMidi};
 
 const CLIENT_NAME: &str = "dj-software";
@@ -96,9 +97,10 @@ pub fn open_input(name_contains: &str, tx: Sender<TimedMidi>) -> Result<InputPor
         .connect(
             &ports[i],
             "dj-software-in",
-            move |micros, bytes, _| {
+            move |_backend_micros, bytes, _| {
                 if let Some(message) = MidiMessage::parse(bytes) {
                     // The receiver may be gone during shutdown; nothing to do then.
+                    let micros = clock::now_micros();
                     let _ = tx.send(TimedMidi { micros, message });
                 }
             },

@@ -27,7 +27,8 @@ pub enum MidiMessage {
     },
 }
 
-/// A message with the backend's timestamp in microseconds.
+/// A message stamped with [`crate::clock::now_micros`] when it was received: one
+/// process-wide monotonic clock, not the MIDI backend's per-port timestamp.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TimedMidi {
     pub micros: u64,
