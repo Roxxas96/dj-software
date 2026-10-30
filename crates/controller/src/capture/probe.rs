@@ -332,6 +332,7 @@ mod tests {
             prepare: None,
             kind,
             shift,
+            shift_control: None,
         }
     }
 

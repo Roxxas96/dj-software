@@ -9,14 +9,21 @@
 # its name, setup, ids and prompts. A step with `shift = true` is also captured
 # with SHIFT held, as a separate step whose id ends in ".shift"; `held_shift`
 # marks a step that is itself done with SHIFT held. `prepare` is done before
-# listening starts, so that action is not recorded.
+# listening starts, so that action is not recorded. A section's `shift_control`
+# names the earlier SHIFT button step whose note is ignored in its SHIFT steps.
 
 controller = "Pioneer DDJ-SB3"
 
 [[section]]
 name = "Left deck {deck}"
 decks = [1, 3]
-setup = "Use the LEFT side. Press its DECK button until it controls deck {deck}. For SHIFT steps, hold the LEFT SHIFT."
+setup = "Use the LEFT side. Make sure it controls deck {deck} (its DECK button switches between its two decks). For SHIFT steps, hold the LEFT SHIFT."
+shift_control = "deck{deck}.shift"
+
+[[section.step]]
+id = "deck{deck}.shift"
+prompt = "Press and release LEFT SHIFT."
+kind = "button"
 
 [[section.step]]
 id = "deck{deck}.play"
@@ -67,16 +74,6 @@ kind = "button"
 shift = true
 
 [[section.step]]
-id = "deck{deck}.shift"
-prompt = "Press and release LEFT SHIFT."
-kind = "button"
-
-[[section.step]]
-id = "deck{deck}.deck_select"
-prompt = "Press LEFT DECK twice (it should end on deck {deck} again)."
-kind = "button"
-
-[[section.step]]
 id = "deck{deck}.jog_touch"
 prompt = "Touch the top plate of the LEFT jog wheel without turning it, then let go."
 kind = "button"
@@ -94,7 +91,8 @@ kind = "jog"
 
 [[section.step]]
 id = "deck{deck}.tempo"
-prompt = "Move the LEFT TEMPO slider fully toward you, then fully away from you, then back to the middle."
+prepare = "Move the LEFT TEMPO slider fully AWAY from you."
+prompt = "Now pull the LEFT TEMPO slider fully toward you, then push it back to the middle."
 kind = "continuous"
 
 [[section.step]]
@@ -151,10 +149,21 @@ prepare = "Press LEFT SAMPLER (without SHIFT) to select its pad mode."
 prompt = "Tap the 8 LEFT pads one by one, 1 to 8."
 kind = "pads"
 
+[[section.step]]
+id = "deck{deck}.deck_select"
+prompt = "Last step for deck {deck}: press LEFT DECK once. The LEFT side switches to its other deck."
+kind = "button"
+
 [[section]]
 name = "Right deck {deck}"
 decks = [2, 4]
-setup = "Use the RIGHT side. Press its DECK button until it controls deck {deck}. For SHIFT steps, hold the RIGHT SHIFT."
+setup = "Use the RIGHT side. Make sure it controls deck {deck} (its DECK button switches between its two decks). For SHIFT steps, hold the RIGHT SHIFT."
+shift_control = "deck{deck}.shift"
+
+[[section.step]]
+id = "deck{deck}.shift"
+prompt = "Press and release RIGHT SHIFT."
+kind = "button"
 
 [[section.step]]
 id = "deck{deck}.play"
@@ -205,16 +214,6 @@ kind = "button"
 shift = true
 
 [[section.step]]
-id = "deck{deck}.shift"
-prompt = "Press and release RIGHT SHIFT."
-kind = "button"
-
-[[section.step]]
-id = "deck{deck}.deck_select"
-prompt = "Press RIGHT DECK twice (it should end on deck {deck} again)."
-kind = "button"
-
-[[section.step]]
 id = "deck{deck}.jog_touch"
 prompt = "Touch the top plate of the RIGHT jog wheel without turning it, then let go."
 kind = "button"
@@ -232,7 +231,8 @@ kind = "jog"
 
 [[section.step]]
 id = "deck{deck}.tempo"
-prompt = "Move the RIGHT TEMPO slider fully toward you, then fully away from you, then back to the middle."
+prepare = "Move the RIGHT TEMPO slider fully AWAY from you."
+prompt = "Now pull the RIGHT TEMPO slider fully toward you, then push it back to the middle."
 kind = "continuous"
 
 [[section.step]]
@@ -289,10 +289,16 @@ prepare = "Press RIGHT SAMPLER (without SHIFT) to select its pad mode."
 prompt = "Tap the 8 RIGHT pads one by one, 1 to 8."
 kind = "pads"
 
+[[section.step]]
+id = "deck{deck}.deck_select"
+prompt = "Last step for deck {deck}: press RIGHT DECK once. The RIGHT side switches to its other deck."
+kind = "button"
+
 [[section]]
 name = "Mixer channel {deck}"
 decks = [1, 2, 3, 4]
 setup = "Mixer channel {deck}: decks 1 and 3 use the LEFT channel strip, decks 2 and 4 the RIGHT one. Press that side's DECK button until it controls deck {deck}. For SHIFT steps, hold that side's SHIFT."
+shift_control = "deck{deck}.shift"
 
 [[section.step]]
 id = "channel{deck}.trim"
@@ -332,7 +338,7 @@ kind = "button"
 
 [[section]]
 name = "Global"
-setup = "Controls shared by both sides. For SHIFT steps, hold the LEFT SHIFT."
+setup = "Controls shared by both sides."
 
 [[section.step]]
 id = "crossfader"
@@ -357,6 +363,7 @@ kind = "button"
 [[section]]
 name = "Effects (LEFT)"
 setup = "The FX buttons and FX LEVEL knob on the LEFT side. If this side has no FX section, skip (s) each step. For SHIFT steps, hold the LEFT SHIFT."
+shift_control = "deck1.shift"
 
 [[section.step]]
 id = "fx.left.1"
@@ -384,6 +391,7 @@ kind = "continuous"
 [[section]]
 name = "Effects (RIGHT)"
 setup = "The FX buttons and FX LEVEL knob on the RIGHT side. If this side has no FX section, skip (s) each step. For SHIFT steps, hold the RIGHT SHIFT."
+shift_control = "deck2.shift"
 
 [[section.step]]
 id = "fx.right.1"
@@ -411,6 +419,7 @@ kind = "continuous"
 [[section]]
 name = "Browser"
 setup = "The BROWSE knob and LOAD buttons. For SHIFT steps, hold the LEFT SHIFT."
+shift_control = "deck1.shift"
 
 [[section.step]]
 id = "browse.rotate"

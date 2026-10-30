@@ -24,6 +24,17 @@ pub enum StepStatus {
     Done,
 }
 
+/// What [`CaptureSession::redo`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Redo {
+    /// The current step had started recording; it starts over.
+    Restarted,
+    /// The previously completed or skipped step is current again.
+    Reopened,
+    /// Nothing to redo (no step done yet and nothing recorded).
+    Nothing,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Slot {
     Missing,
@@ -123,28 +134,68 @@ impl CaptureSession {
             .count()
     }
 
-    /// For a SHIFT step, the `(channel, note)` of the first key pressed in the
-    /// step: the held SHIFT, which is left out of the record.
-    pub fn modifier(&self) -> Option<(u8, u8)> {
-        if !self.current()?.shift {
-            return None;
+    /// True if `msg` belongs to the held SHIFT of the current SHIFT step.
+    pub fn is_modifier(&self, msg: MidiMessage) -> bool {
+        let (status, data1, _) = key_and_value(msg);
+        matches!(
+            msg,
+            MidiMessage::NoteOn { .. } | MidiMessage::NoteOff { .. }
+        ) && self.modifier_pairs().contains(&(status, data1))
+    }
+
+    /// The `(status, data1)` note pairs left out of a SHIFT step.
+    ///
+    /// When the side's SHIFT button was captured (`shift_control`), they are
+    /// exactly its notes, whatever the order or whether SHIFT was held before
+    /// the step. Otherwise a key counts as SHIFT only if it is still held when
+    /// another key is pressed; until then, the earliest key still held is set
+    /// aside so SHIFT held alone never completes the step.
+    fn modifier_pairs(&self) -> Vec<(u8, u8)> {
+        let Some(step) = self.current().filter(|s| s.shift) else {
+            return Vec::new();
+        };
+        if let Some(shift) = step
+            .shift_control
+            .as_deref()
+            .and_then(|id| self.control(id))
+        {
+            return shift
+                .messages
+                .iter()
+                .filter(|m| m.status & 0xF0 == 0x90)
+                .map(|m| (m.status, m.data1))
+                .collect();
         }
-        self.buffer.iter().find_map(|timed| match timed.message {
-            MidiMessage::NoteOn { channel, note, .. } => Some((channel, note)),
-            _ => None,
-        })
+        let mut held: Vec<(u8, u8)> = Vec::new();
+        for timed in &self.buffer {
+            let (status, data1, _) = key_and_value(timed.message);
+            let pair = (status, data1);
+            match timed.message {
+                MidiMessage::NoteOn { .. } => {
+                    if let Some(&modifier) = held.iter().find(|&&p| p != pair) {
+                        return vec![modifier];
+                    }
+                    if !held.contains(&pair) {
+                        held.push(pair);
+                    }
+                }
+                MidiMessage::NoteOff { .. } => held.retain(|&p| p != pair),
+                _ => {}
+            }
+        }
+        held.first().copied().into_iter().collect()
     }
 
     /// The current step's messages that count: without the SHIFT modifier and
     /// without pairs whose first message was a release.
     fn relevant(&self) -> Vec<TimedMidi> {
-        let modifier = self.modifier();
+        let modifiers = self.modifier_pairs();
         let mut released_first: Vec<(u8, u8)> = Vec::new();
         let mut seen: Vec<(u8, u8)> = Vec::new();
         let mut out = Vec::new();
         for timed in &self.buffer {
             let (status, data1, _) = key_and_value(timed.message);
-            if modifier.is_some_and(|(channel, note)| (0x90 | channel, note) == (status, data1)) {
+            if modifiers.contains(&(status, data1)) {
                 continue;
             }
             if released_first.contains(&(status, data1)) {
@@ -216,9 +267,13 @@ impl CaptureSession {
         }
     }
 
-    /// Discards the partial recording and reopens the previously completed or
-    /// skipped step, which becomes current again.
-    pub fn redo(&mut self) {
+    /// If the current step has started recording, starts it over. Otherwise
+    /// reopens the previously completed or skipped step, which becomes current.
+    pub fn redo(&mut self) -> Redo {
+        if !self.relevant().is_empty() {
+            self.buffer.clear();
+            return Redo::Restarted;
+        }
         self.buffer.clear();
         let previous = self.history.pop().or_else(|| {
             let end = self.cursor.unwrap_or(self.slots.len());
@@ -228,7 +283,9 @@ impl CaptureSession {
             self.slots[i] = Slot::Missing;
             self.history.retain(|&h| h != i);
             self.update_cursor();
+            return Redo::Reopened;
         }
+        Redo::Nothing
     }
 
     /// The captured control with this id, if any.
@@ -312,6 +369,7 @@ mod tests {
             prepare: None,
             kind,
             shift: false,
+            shift_control: None,
         }
     }
 
@@ -550,7 +608,11 @@ mod tests {
         ]);
         // SHIFT pressed and held: alone it neither records nor completes the step.
         session.feed(timed(0, [0x90, 0x3F, 0x7F]));
-        assert_eq!(session.modifier(), Some((0, 0x3F)));
+        assert!(session.is_modifier(MidiMessage::NoteOn {
+            channel: 0,
+            note: 0x3F,
+            velocity: 127
+        }));
         assert_eq!(session.poll(2000 * MS), StepStatus::Waiting);
         session.feed(timed(2000, [0x90, 0x47, 0x7F]));
         session.feed(timed(2050, [0x90, 0x47, 0x00]));
@@ -587,5 +649,99 @@ mod tests {
         let control = session.control("play").unwrap();
         assert_eq!(control.led, Some(true));
         assert_eq!(control.led_values_vary, None);
+    }
+
+    /// A SHIFT button step (note 0x3F) followed by `next`, with SHIFT captured.
+    fn after_shift_capture(next: Step) -> CaptureSession {
+        let mut session = CaptureSession::new(vec![step("deck1.shift", StepKind::Button), next]);
+        session.feed(timed(0, [0x90, 0x3F, 0x7F]));
+        session.feed(timed(50, [0x90, 0x3F, 0x00]));
+        assert_eq!(session.poll(1000 * MS), StepStatus::Done);
+        session
+    }
+
+    fn known_shift_step(id: &str, kind: StepKind) -> Step {
+        Step {
+            shift_control: Some("deck1.shift".to_owned()),
+            ..shift_step(id, kind)
+        }
+    }
+
+    #[test]
+    fn known_shift_excluded_when_control_pressed_first() {
+        let mut session = after_shift_capture(known_shift_step("play.shift", StepKind::Button));
+        session.feed(timed(2000, [0x90, 0x47, 0x7F]));
+        session.feed(timed(2010, [0x90, 0x3F, 0x7F]));
+        session.feed(timed(2050, [0x90, 0x47, 0x00]));
+        session.feed(timed(2100, [0x90, 0x3F, 0x00]));
+        assert!(session.is_modifier(MidiMessage::NoteOn {
+            channel: 0,
+            note: 0x3F,
+            velocity: 127
+        }));
+        assert_eq!(session.poll(2451 * MS), StepStatus::Done);
+        let control = session.finish().controls.remove(1);
+        assert_eq!(control.messages.len(), 1, "{control:?}");
+        assert_eq!(control.messages[0].data1, 0x47);
+    }
+
+    #[test]
+    fn known_shift_held_before_step_records_the_control() {
+        // SHIFT was pressed before listening (dropped), released at the end.
+        let mut session = after_shift_capture(known_shift_step("play.shift", StepKind::Button));
+        session.feed(timed(2000, [0x90, 0x47, 0x7F]));
+        session.feed(timed(2050, [0x90, 0x47, 0x00]));
+        session.feed(timed(2300, [0x90, 0x3F, 0x00]));
+        assert_eq!(session.poll(2451 * MS), StepStatus::Done);
+        let control = session.finish().controls.remove(1);
+        assert_eq!(control.messages.len(), 1, "{control:?}");
+        assert_eq!(control.messages[0].data1, 0x47);
+    }
+
+    #[test]
+    fn held_shift_pads_with_shift_held_before_step_record_eight() {
+        let mut session = after_shift_capture(known_shift_step("pads.shift", StepKind::Pads));
+        for note in 0..8u8 {
+            let t = 2000 + u64::from(note) * 100;
+            session.feed(timed(t, [0x97, note + 8, 0x7F]));
+            session.feed(timed(t + 50, [0x97, note + 8, 0x00]));
+        }
+        session.feed(timed(2900, [0x90, 0x3F, 0x00]));
+        assert_eq!(session.distinct_notes(), 8);
+        assert_eq!(session.poll(4500 * MS), StepStatus::Done);
+        let control = session.finish().controls.remove(1);
+        assert_eq!(control.messages.len(), 8);
+        assert!(control.messages.iter().all(|m| m.status == 0x97));
+    }
+
+    #[test]
+    fn unknown_shift_falls_back_to_overlap() {
+        // SHIFT skipped: a key counts as SHIFT only while held during another press.
+        let mut session = CaptureSession::new(vec![shift_step("play.shift", StepKind::Button)]);
+        // Held before the step: the control alone completes the step.
+        session.feed(timed(0, [0x90, 0x47, 0x7F]));
+        session.feed(timed(50, [0x90, 0x47, 0x00]));
+        session.feed(timed(100, [0x90, 0x3F, 0x00]));
+        assert_eq!(session.poll(1000 * MS), StepStatus::Done);
+        let control = session.finish().controls.remove(0);
+        assert_eq!(control.messages.len(), 1);
+        assert_eq!(control.messages[0].data1, 0x47);
+    }
+
+    #[test]
+    fn r_restarts_current_step_once_recording() {
+        let mut session = CaptureSession::new(vec![
+            step("a", StepKind::Button),
+            step("b", StepKind::Continuous),
+        ]);
+        session.feed(timed(0, [0x90, 1, 127]));
+        assert_eq!(session.poll(1000 * MS), StepStatus::Done);
+        session.feed(timed(1000, [0xB0, 0x13, 10]));
+        assert_eq!(session.redo(), Redo::Restarted);
+        assert_eq!(session.current().unwrap().id, "b");
+        assert_eq!(session.poll(5000 * MS), StepStatus::Waiting);
+        assert_eq!(session.redo(), Redo::Reopened);
+        assert_eq!(session.current().unwrap().id, "a");
+        assert_eq!(session.redo(), Redo::Nothing);
     }
 }
