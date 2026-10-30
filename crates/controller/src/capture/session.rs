@@ -35,11 +35,14 @@ pub enum Redo {
     Nothing,
 }
 
-/// Sources found to be noise: recorded with one constant value in several steps.
+/// Suspected noise: CC sources recorded with the same constant value in
+/// several steps and never with a varying value. Only a suggestion: the caller
+/// asks the user, then calls [`CaptureSession::ignore`] or
+/// [`CaptureSession::decline_noise`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Noise {
     pub sources: Vec<Source>,
-    /// The steps they were recorded in (now stripped).
+    /// The steps they were recorded in.
     pub ids: Vec<String>,
 }
 
@@ -63,8 +66,13 @@ pub struct CaptureSession {
     extras: Vec<Control>,
     /// Sources never recorded.
     ignored: Vec<Source>,
-    /// Noise found since the last [`CaptureSession::take_noise`].
+    /// Noise suggestions not yet taken by [`CaptureSession::take_noise`].
     noise: Vec<Noise>,
+    /// Sources the user said are not noise; never suggested again.
+    declined: Vec<Source>,
+    /// The step last captured and its slot before that capture, so `rebind`
+    /// and ignores can restore it.
+    before: Option<(usize, Slot)>,
     /// Steps to capture before returning to the first missing one (goto,
     /// rebind, redo-only); the first is current.
     focus: Vec<usize>,
@@ -85,6 +93,8 @@ impl CaptureSession {
             extras: Vec::new(),
             ignored: Vec::new(),
             noise: Vec::new(),
+            declined: Vec::new(),
+            before: None,
             focus: Vec::new(),
             only: false,
         };
@@ -123,8 +133,9 @@ impl CaptureSession {
     }
 
     /// Adds sources to the ignore list and strips them from everything
-    /// recorded. Returns the ids of steps left with no messages, which are
-    /// missing again.
+    /// recorded. Returns the ids of steps left with no messages; they are asked
+    /// again. The step just captured is asked right away and falls back to its
+    /// previous recording (goto/redo); in redo-only mode the others are queued.
     pub fn ignore(&mut self, sources: &[Source]) -> Vec<String> {
         for source in sources {
             if !self.ignored.iter().any(|i| i.key() == source.key()) {
@@ -139,23 +150,58 @@ impl CaptureSession {
         self.ignored.iter().any(|s| s.matches(msg))
     }
 
-    /// Noise detected since the last call (already ignored and stripped).
+    /// Noise suggestions since the last call (nothing is ignored yet).
     pub fn take_noise(&mut self) -> Vec<Noise> {
         std::mem::take(&mut self.noise)
     }
 
+    /// The user says these are not noise: never suggest them again.
+    pub fn decline_noise(&mut self, sources: &[Source]) {
+        for source in sources {
+            if !self.declined.iter().any(|d| d.key() == source.key()) {
+                self.declined.push(*source);
+            }
+        }
+    }
+
+    /// Removes a source from the ignore list. Recordings already stripped are
+    /// not restored. Returns false if it was not ignored.
+    pub fn unignore(&mut self, source: Source) -> bool {
+        let before = self.ignored.len();
+        self.ignored.retain(|i| i.key() != source.key());
+        self.ignored.len() != before
+    }
+
     fn strip_ignored(&mut self) -> Vec<String> {
         let ignored = self.ignored.clone();
+        let just = self.before.as_ref().map(|(i, _)| *i);
         let mut reopened = Vec::new();
         for i in 0..self.slots.len() {
-            if let Slot::Captured(control) = &mut self.slots[i]
-                && control.strip(&ignored)
-                && control.messages.is_empty()
-            {
-                reopened.push(control.id.clone());
-                self.slots[i] = Slot::Missing;
+            let Slot::Captured(control) = &mut self.slots[i] else {
+                continue;
+            };
+            if !(control.strip(&ignored) && control.messages.is_empty()) {
+                continue;
+            }
+            reopened.push(i);
+            let mut fallback = match &self.before {
+                Some((b, slot)) if *b == i => slot.clone(),
+                _ => Slot::Missing,
+            };
+            let old_empty = match &mut fallback {
+                Slot::Captured(old) => {
+                    old.strip(&ignored);
+                    old.messages.is_empty()
+                }
+                _ => false,
+            };
+            if old_empty {
+                fallback = Slot::Missing;
+            }
+            if fallback == Slot::Missing {
                 self.history.retain(|&h| h != i);
             }
+            self.slots[i] = fallback;
         }
         self.extras.retain_mut(|control| {
             control.strip(&ignored);
@@ -163,44 +209,78 @@ impl CaptureSession {
         });
         self.buffer
             .retain(|timed| !ignored.iter().any(|s| s.matches(timed.message)));
+        for &i in &reopened {
+            if Some(i) == just {
+                self.focus.retain(|&f| f != i);
+                self.focus.insert(0, i);
+            } else if self.only && !self.focus.contains(&i) {
+                self.focus.push(i);
+            }
+        }
         self.update_cursor();
-        reopened
+        reopened.iter().map(|&i| self.steps[i].id.clone()).collect()
     }
 
-    /// A source recorded with one constant value in two or more steps is a
-    /// controller's parasitic message, not a control: ignore and strip it.
+    /// Suggests as noise every CC source recorded with the same constant value
+    /// in two or more steps and never with a varying value. Notes are never
+    /// suggested: a held key or a one-way move can look constant.
     fn detect_noise(&mut self) {
-        let mut constant: Vec<(Source, Vec<String>)> = Vec::new();
+        // Per CC source: (step id, min, max) of each control it was recorded in.
+        type Seen = (String, u8, u8);
+        let mut seen: Vec<(Source, Vec<Seen>)> = Vec::new();
         for slot in &self.slots {
             let Slot::Captured(control) = slot else {
                 continue;
             };
-            for m in control.messages.iter().filter(|m| m.min == m.max) {
-                match constant
-                    .iter_mut()
-                    .find(|(s, _)| s.key() == m.source().key())
-                {
-                    Some((_, ids)) => ids.push(control.id.clone()),
-                    None => constant.push((m.source(), vec![control.id.clone()])),
+            for m in control.messages.iter().filter(|m| m.status & 0xF0 == 0xB0) {
+                let entry = (control.id.clone(), m.min, m.max);
+                match seen.iter_mut().find(|(s, _)| s.key() == m.source().key()) {
+                    Some((_, list)) => list.push(entry),
+                    None => seen.push((m.source(), vec![entry])),
                 }
             }
         }
         let mut found: Vec<Noise> = Vec::new();
-        for (source, ids) in constant.into_iter().filter(|(_, ids)| ids.len() >= 2) {
+        for (source, list) in seen {
+            let value = list[0].1;
+            let noise = list.len() >= 2
+                && list
+                    .iter()
+                    .all(|&(_, min, max)| min == value && max == value)
+                && !self.declined.iter().any(|d| d.key() == source.key())
+                && !self.ignored.iter().any(|i| i.key() == source.key());
+            if !noise {
+                continue;
+            }
+            let ids: Vec<String> = list.into_iter().map(|(id, _, _)| id).collect();
             match found.iter_mut().find(|n| n.ids == ids) {
-                Some(noise) => noise.sources.push(source),
+                Some(group) => group.sources.push(source),
                 None => found.push(Noise {
                     sources: vec![source],
                     ids,
                 }),
             }
         }
-        if found.is_empty() {
-            return;
+        self.noise = found;
+    }
+
+    /// Rejects the recording just made for step `id`: its slot goes back to
+    /// what it was before (missing, or the old recording in goto/redo mode)
+    /// and the step is listened to again. Returns false for an unknown id.
+    pub fn rebind(&mut self, id: &str) -> bool {
+        let Some(i) = self.index_of(id) else {
+            return false;
+        };
+        if let Some((b, slot)) = self.before.take()
+            && b == i
+        {
+            if slot == Slot::Missing {
+                self.history.retain(|&h| h != i);
+            }
+            self.slots[i] = slot;
+            self.update_cursor();
         }
-        let sources: Vec<Source> = found.iter().flat_map(|n| n.sources.clone()).collect();
-        self.ignore(&sources);
-        self.noise.extend(found);
+        self.goto(id)
     }
 
     /// Jumps to step `id` to capture it again (its old recording stays until
@@ -234,7 +314,8 @@ impl CaptureSession {
 
     /// Marks every source recorded for step `id` as noise: they join the
     /// ignore list and are stripped everywhere, and step `id` is listened to
-    /// again. Returns the sources.
+    /// again (keeping its previous recording, if any, until then). Returns the
+    /// sources.
     pub fn mark_noise(&mut self, id: &str) -> Vec<Source> {
         let sources: Vec<Source> = self
             .control(id)
@@ -431,11 +512,19 @@ impl CaptureSession {
     }
 
     /// Marks the current step as skipped and moves on. A step reached with
-    /// `goto` or `redo_only` keeps its previous recording instead.
+    /// `goto`, `rebind` or `redo_only` keeps its previous recording instead,
+    /// if it has one.
     pub fn skip(&mut self) {
         if !self.focus.is_empty() {
             self.buffer.clear();
-            self.focus.remove(0);
+            let i = self.focus.remove(0);
+            // Never captured: skipping marks it skipped like any other step.
+            if self.slots[i] == Slot::Missing {
+                self.slots[i] = Slot::Skipped;
+                self.history.push(i);
+            }
+            self.before = None;
+            self.update_cursor();
             return;
         }
         if let Some(i) = self.cursor {
@@ -522,6 +611,7 @@ impl CaptureSession {
         let step = &self.steps[i];
         let control = Control::from_messages(&step.id, step.kind, &relevant);
         self.buffer.clear();
+        self.before = Some((i, self.slots[i].clone()));
         self.slots[i] = Slot::Captured(control);
         self.history.push(i);
         if self.focus.first() == Some(&i) {
@@ -1006,7 +1096,7 @@ mod tests {
     }
 
     #[test]
-    fn noise_in_two_steps_is_detected_and_stripped() {
+    fn noise_in_two_steps_is_suggested_then_stripped_on_confirm() {
         let mut session = CaptureSession::new(vec![
             step("key_lock", StepKind::Button),
             step("vinyl", StepKind::Button),
@@ -1032,6 +1122,11 @@ mod tests {
             }]
         );
         assert!(session.take_noise().is_empty());
+        // Only a suggestion: nothing is stripped until the user confirms.
+        assert_eq!(session.control("vinyl").unwrap().messages.len(), 3);
+        assert!(session.fixture().meta.ignored.is_empty());
+        let reopened = session.ignore(&[burst_source(0x02), burst_source(0x22)]);
+        assert!(reopened.is_empty());
         for id in ["key_lock", "vinyl"] {
             let control = session.control(id).unwrap();
             assert_eq!(control.messages.len(), 1, "{control:?}");
@@ -1060,7 +1155,9 @@ mod tests {
         feed_burst(&mut session, 1010);
         session.feed(timed(1050, [0x90, 0x17, 0x00]));
         assert_eq!(session.poll(2000 * MS), StepStatus::Done);
-        assert_eq!(session.take_noise().len(), 1);
+        let noise = session.take_noise();
+        assert_eq!(noise.len(), 1);
+        assert_eq!(session.ignore(&noise[0].sources), ["key_lock"]);
         assert_eq!(session.current().unwrap().id, "key_lock");
         assert!(session.control("key_lock").is_none());
         assert_eq!(session.control("vinyl").unwrap().messages.len(), 1);
@@ -1238,5 +1335,159 @@ mod tests {
             ["deck1.key_lock", "deck1.play"]
         );
         assert!(session.find_steps("zzz").is_empty());
+    }
+
+    /// Captures one button step: a press of `note`, plus `extra` messages.
+    fn capture_with(session: &mut CaptureSession, ms: u64, note: u8, extra: &[[u8; 3]]) {
+        session.feed(timed(ms, [0x90, note, 0x7F]));
+        for (k, bytes) in extra.iter().enumerate() {
+            session.feed(timed(ms + 10 + k as u64, *bytes));
+        }
+        session.feed(timed(ms + 50, [0x90, note, 0x00]));
+        assert_eq!(session.poll((ms + 1000) * MS), StepStatus::Done);
+    }
+
+    fn three_buttons() -> CaptureSession {
+        CaptureSession::new(vec![
+            step("a", StepKind::Button),
+            step("b", StepKind::Button),
+            step("c", StepKind::Button),
+        ])
+    }
+
+    #[test]
+    fn noise_suggestions_are_narrow() {
+        // CC 0x10 varies in a (a real control), constant in b and c.
+        let mut session = three_buttons();
+        capture_with(&mut session, 0, 1, &[[0xB0, 0x10, 0], [0xB0, 0x10, 127]]);
+        capture_with(&mut session, 2000, 2, &[[0xB0, 0x10, 64]]);
+        capture_with(&mut session, 4000, 3, &[[0xB0, 0x10, 64]]);
+        assert!(session.take_noise().is_empty());
+
+        // Different constant values in two steps.
+        let mut session = three_buttons();
+        capture_with(&mut session, 0, 1, &[[0xB5, 0x02, 50]]);
+        capture_with(&mut session, 2000, 2, &[[0xB5, 0x02, 60]]);
+        assert!(session.take_noise().is_empty());
+
+        // A note held through two steps (e.g. jog touch) is never suggested.
+        let mut session = three_buttons();
+        capture_with(&mut session, 0, 1, &[[0x90, 0x36, 0x7F]]);
+        capture_with(&mut session, 2000, 2, &[[0x90, 0x36, 0x7F]]);
+        assert!(session.take_noise().is_empty());
+
+        // Declined sources are not suggested again.
+        let mut session = three_buttons();
+        capture_with(&mut session, 0, 1, &[[0xB5, 0x02, 50]]);
+        capture_with(&mut session, 2000, 2, &[[0xB5, 0x02, 50]]);
+        let noise = session.take_noise();
+        assert_eq!(noise[0].sources, [burst_source(0x02)]);
+        session.decline_noise(&noise[0].sources);
+        capture_with(&mut session, 4000, 3, &[[0xB5, 0x02, 50]]);
+        assert!(session.take_noise().is_empty());
+        assert_eq!(session.control("c").unwrap().messages.len(), 2);
+    }
+
+    #[test]
+    fn rebind_restores_the_slot_before_listening_again() {
+        // First capture rejected: the step is missing again, nothing is saved.
+        let mut session = three_buttons();
+        capture_with(&mut session, 0, 1, &[]);
+        assert!(session.rebind("a"));
+        assert!(session.control("a").is_none());
+        assert_eq!(session.current().unwrap().id, "a");
+        assert!(session.fixture().controls.is_empty());
+        // Skipping after r marks it skipped.
+        session.skip();
+        assert_eq!(session.fixture().meta.skipped, ["a"]);
+        assert_eq!(session.current().unwrap().id, "b");
+
+        // Re-capture via goto, rejected: the old recording comes back, and
+        // skipping keeps it.
+        let mut session = three_buttons();
+        capture_with(&mut session, 0, 1, &[]);
+        capture_with(&mut session, 2000, 2, &[]);
+        assert!(session.goto("a"));
+        capture_with(&mut session, 4000, 9, &[]);
+        assert_eq!(session.control("a").unwrap().messages[0].data1, 9);
+        assert!(session.rebind("a"));
+        assert_eq!(session.control("a").unwrap().messages[0].data1, 1);
+        assert_eq!(session.current().unwrap().id, "a");
+        session.skip();
+        assert_eq!(session.control("a").unwrap().messages[0].data1, 1);
+        assert_eq!(session.current().unwrap().id, "c");
+    }
+
+    #[test]
+    fn mark_noise_in_redo_mode_keeps_the_old_control() {
+        let mut first = three_buttons();
+        capture_with(&mut first, 0, 1, &[]);
+        capture_with(&mut first, 2000, 2, &[]);
+        capture_with(&mut first, 4000, 3, &[]);
+        let mut session = CaptureSession::resume(
+            vec![
+                step("a", StepKind::Button),
+                step("b", StepKind::Button),
+                step("c", StepKind::Button),
+            ],
+            first.finish(),
+        );
+        session.redo_only(&["b".to_owned()]).unwrap();
+        // The new capture of b caught only the burst; the user marks it noise.
+        feed_burst(&mut session, 0);
+        assert_eq!(session.poll(1000 * MS), StepStatus::Done);
+        let marked = session.mark_noise("b");
+        assert_eq!(marked, [burst_source(0x02), burst_source(0x22)]);
+        assert_eq!(session.control("b").unwrap().messages[0].data1, 2);
+        assert_eq!(session.current().unwrap().id, "b");
+        session.skip();
+        assert_eq!(session.current(), None);
+        assert_eq!(session.finish().controls[1].messages[0].data1, 2);
+    }
+
+    #[test]
+    fn redo_mode_queues_steps_reopened_by_ignores() {
+        let steps = vec![
+            step("a", StepKind::Button),
+            step("b", StepKind::Button),
+            step("c", StepKind::Button),
+        ];
+        let mut prior = Fixture::new(Meta::default());
+        prior.controls.push(Control::from_messages(
+            "a",
+            StepKind::Button,
+            &[timed(0, [0xB5, 0x02, 0x32])],
+        ));
+        prior.controls.push(Control::from_messages(
+            "b",
+            StepKind::Button,
+            &[timed(0, [0x90, 2, 0x7F])],
+        ));
+        prior.controls.push(Control::from_messages(
+            "c",
+            StepKind::Button,
+            &[timed(0, [0x90, 3, 0x7F])],
+        ));
+        let mut session = CaptureSession::resume(steps, prior);
+        session.redo_only(&["c".to_owned()]).unwrap();
+        assert_eq!(session.ignore(&[burst_source(0x02)]), ["a"]);
+        assert_eq!(session.current().unwrap().id, "c");
+        capture_note(&mut session, 0, 30);
+        // a was emptied by the ignore: asked in this redo run, not left missing.
+        assert_eq!(session.current().unwrap().id, "a");
+        capture_note(&mut session, 2000, 10);
+        assert_eq!(session.current(), None);
+    }
+
+    #[test]
+    fn unignore_records_the_source_again() {
+        let mut session = CaptureSession::new(vec![step("a", StepKind::Button)]);
+        session.ignore(&[burst_source(0x02)]);
+        assert!(session.unignore(burst_source(0x02)));
+        assert!(!session.unignore(burst_source(0x02)));
+        feed_burst(&mut session, 0);
+        assert_eq!(session.poll(1000 * MS), StepStatus::Done);
+        assert_eq!(session.control("a").unwrap().messages.len(), 2);
+        assert!(session.fixture().meta.ignored.is_empty());
     }
 }

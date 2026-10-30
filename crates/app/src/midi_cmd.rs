@@ -92,6 +92,8 @@ enum Command {
     Noise,
     /// `g <step id>`.
     Goto(String),
+    /// `u <status> <data1>`: record an ignored source again.
+    Unignore(String),
     Quit,
     Unknown(String),
 }
@@ -103,6 +105,12 @@ fn parse_command(line: &str) -> Command {
         .or_else(|| (line == "g").then_some(""))
     {
         return Command::Goto(id.trim().to_owned());
+    }
+    if let Some(arg) = line
+        .strip_prefix("u ")
+        .or_else(|| (line == "u").then_some(""))
+    {
+        return Command::Unignore(arg.trim().to_owned());
     }
     match line.to_lowercase().as_str() {
         "" => Command::Enter,
@@ -197,6 +205,22 @@ impl Lines {
         while self.0.try_recv().is_ok() {}
     }
 
+    /// Like [`Lines::ask_yes_no`], but an empty line means `default`.
+    fn ask_default(&self, prompt: &str, default: bool) -> Option<bool> {
+        loop {
+            let line = self.ask(prompt)?;
+            if line.trim().is_empty() {
+                return Some(default);
+            }
+            match parse_answer(&line) {
+                Answer::Yes => return Some(true),
+                Answer::No => return Some(false),
+                Answer::Quit => return None,
+                Answer::Invalid => println!("  Please answer y, n or q."),
+            }
+        }
+    }
+
     /// Asks until the answer is y, n or q; `None` for q or end of input.
     fn ask_yes_no(&self, prompt: &str) -> Option<bool> {
         loop {
@@ -257,7 +281,7 @@ impl LedSink for TrackedLeds<'_> {
 }
 
 /// One help line, shown at the start and on an unknown command.
-const KEYS_HELP: &str = "Keys (then Enter): Enter = finish now / keep, r = redo, x = mark as noise, s = skip, g <step> = go to a step, q = save and quit";
+const KEYS_HELP: &str = "Keys (then Enter): Enter = finish now / keep, r = redo, x = mark as noise, u <status> <data1> = stop ignoring a source, s = skip, g <step> = go to a step, q = save and quit";
 
 /// `dj-software midi capture`: walks the checklist, recording each control,
 /// confirming it, and probing its LED. The fixture is saved after every step.
@@ -323,6 +347,7 @@ pub fn capture(
             &checklist.ignore,
             out,
             redo,
+            &lines,
         )?)
     };
     let Some(mut session) = session else {
@@ -338,7 +363,8 @@ pub fn capture(
     );
     println!("When a step asks you to prepare something first, do it, then press Enter.");
     println!("{KEYS_HELP}");
-    if !run_steps(&mut session, &rx, &lines, out, leds.as_deref())? {
+    let seeded = &checklist.ignore;
+    if !run_steps(&mut session, &rx, &lines, seeded, out, leds.as_deref())? {
         println!(
             "\nSaved {}. Run the same command again to continue.",
             out.display()
@@ -366,45 +392,86 @@ fn load_prior(out: &Path) -> anyhow::Result<Fixture> {
     })
 }
 
-/// Applies the checklist's ignore list and reports what it and noise
-/// detection removed.
-fn apply_ignores(session: &mut CaptureSession, ignore: &[Source]) {
+/// Applies the checklist's ignore list to a loaded fixture, then offers any
+/// noise suggestions.
+fn apply_ignores(session: &mut CaptureSession, ignore: &[Source], lines: &Lines) {
     let reopened = session.ignore(ignore);
     if !reopened.is_empty() {
         println!(
-            "note: {} recorded only ignored sources; asking again: {}",
-            if reopened.len() == 1 {
-                "1 step"
-            } else {
-                "some steps"
-            },
+            "note: only ignored sources were recorded for {}; asking again",
             reopened.join(", ")
         );
     }
-    report_noise(session);
+    confirm_noise(session, lines);
 }
 
-/// Prints noise found since the last call.
-fn report_noise(session: &mut CaptureSession) {
+/// Asks about each noise suggestion: yes (the default) ignores it, no means
+/// it is never suggested again.
+fn confirm_noise(session: &mut CaptureSession, lines: &Lines) {
     for noise in session.take_noise() {
         let sources: Vec<String> = noise.sources.iter().map(Source::to_string).collect();
-        println!(
-            "  ignoring noise: {} seen in {}",
+        let question = format!(
+            "  These look like noise: {} (in {}). Ignore them? [Y/n] ",
             sources.join(", "),
-            noise.ids.join(" and ")
+            noise.ids.join(", ")
         );
-        let again: Vec<&str> = noise
-            .ids
-            .iter()
-            .map(String::as_str)
-            .filter(|id| session.control(id).is_none())
-            .collect();
-        if !again.is_empty() {
-            println!(
-                "  (nothing else was recorded for {}; it will be asked again)",
-                again.join(", ")
-            );
+        match lines.ask_default(&question, true) {
+            Some(true) => {
+                let reopened = session.ignore(&noise.sources);
+                print_ignored(&noise.sources, &reopened);
+            }
+            Some(false) => session.decline_noise(&noise.sources),
+            None => {}
         }
+    }
+}
+
+/// Reports newly ignored sources, with how to undo it.
+fn print_ignored(sources: &[Source], reopened: &[String]) {
+    let list: Vec<String> = sources.iter().map(Source::to_string).collect();
+    println!("  ignoring from now on: {}", list.join(", "));
+    if !reopened.is_empty() {
+        println!(
+            "  only ignored sources were recorded for {}; asking again",
+            reopened.join(", ")
+        );
+    }
+    let undo: Vec<String> = sources.iter().map(|s| format!("u {s}")).collect();
+    println!(
+        "  (to undo: {}; recordings already stripped are not restored, use g <step> to redo them)",
+        undo.join(", ")
+    );
+}
+
+/// Parses `B5 02` (hex, `0x` optional) into a source.
+fn parse_source(arg: &str) -> Option<Source> {
+    let mut bytes = arg.split_whitespace().map(|token| {
+        let token = token.trim_start_matches("0x").trim_start_matches("0X");
+        u8::from_str_radix(token, 16).ok()
+    });
+    let status = bytes.next()??;
+    let data1 = bytes.next()??;
+    if bytes.next().is_some() || !(0x80..0xF0).contains(&status) || data1 > 0x7F {
+        return None;
+    }
+    Some(Source { status, data1 })
+}
+
+/// Handles `u <status> <data1>`.
+fn unignore(session: &mut CaptureSession, arg: &str, seeded: &[Source]) {
+    let Some(source) = parse_source(arg) else {
+        println!("  usage: u <status> <data1> in hex, e.g. u B5 02");
+        return;
+    };
+    if !session.unignore(source) {
+        println!("  {source} is not ignored");
+        return;
+    }
+    println!("  {source} ({}) is recorded again", source.describe());
+    if seeded.iter().any(|s| s.key() == source.key()) {
+        println!(
+            "  warning: it is in the checklist's [ignore] list, so the next run ignores it again; remove it there to make this permanent"
+        );
     }
 }
 
@@ -432,7 +499,7 @@ fn open_session(
         .filter(|id| !steps.iter().any(|s| &s.id == id))
         .collect();
     let mut session = CaptureSession::resume(steps.clone(), prior);
-    apply_ignores(&mut session, ignore);
+    apply_ignores(&mut session, ignore, lines);
     let (n, total) = session.position();
     println!(
         "{} already has {}/{total} steps done.",
@@ -476,10 +543,10 @@ fn open_redo_session(
     ignore: &[Source],
     out: &Path,
     redo: &[String],
+    lines: &Lines,
 ) -> anyhow::Result<CaptureSession> {
     let prior = load_prior(out)?;
     let mut session = CaptureSession::resume(steps, prior);
-    apply_ignores(&mut session, ignore);
     if let Err(unknown) = session.redo_only(redo) {
         bail!(
             "--redo: no step {unknown:?}{}",
@@ -487,6 +554,8 @@ fn open_redo_session(
         );
     }
     println!("Capturing again: {}", redo.join(", "));
+    // In redo mode, steps emptied by ignores are queued after the listed ones.
+    apply_ignores(&mut session, ignore, lines);
     Ok(session)
 }
 
@@ -521,6 +590,7 @@ fn run_steps(
     session: &mut CaptureSession,
     rx: &Receiver<TimedMidi>,
     lines: &Lines,
+    seeded: &[Source],
     out: &Path,
     leds: Option<&Leds>,
 ) -> anyhow::Result<bool> {
@@ -550,7 +620,7 @@ fn run_steps(
             ) {
                 None => Listened::Quit,
                 Some(line) => match parse_command(&line) {
-                    Command::Enter => listen(session, &step, rx, lines)?,
+                    Command::Enter => listen(session, &step, rx, lines, seeded)?,
                     Command::Skip => {
                         session.skip();
                         Listened::Skipped
@@ -558,6 +628,10 @@ fn run_steps(
                     Command::Redo => Listened::Redo,
                     Command::Goto(id) => Listened::Goto(id),
                     Command::Quit => Listened::Quit,
+                    Command::Unignore(arg) => {
+                        unignore(session, &arg, seeded);
+                        continue;
+                    }
                     Command::Noise | Command::Unknown(_) => {
                         println!("  {KEYS_HELP}");
                         shown_section = None;
@@ -566,18 +640,22 @@ fn run_steps(
                 },
             }
         } else {
-            listen(session, &step, rx, lines)?
+            listen(session, &step, rx, lines, seeded)?
         };
         match outcome {
             Listened::Done => {
-                report_noise(session);
-                let Some(control) = session.control(&step.id) else {
+                confirm_noise(session, lines);
+                // A capture that turned out to be all noise is asked again.
+                let refocused = session.current().is_some_and(|c| c.id == step.id);
+                let control = session.control(&step.id).filter(|_| !refocused);
+                let Some(control) = control else {
                     println!("  only ignored sources were recorded; listening again");
+                    save(out, session)?;
                     continue;
                 };
                 println!("  recorded {}", control.summary());
                 let probe = LedProbe::for_step(&step, control);
-                match review(session, &step, lines) {
+                match review(session, &step, lines, seeded) {
                     Review::Keep => {
                         save(out, session)?;
                         if let (Some(probe), Some(leds)) = (probe, leds)
@@ -624,30 +702,39 @@ enum Review {
 }
 
 /// Asks whether to keep the step just recorded.
-fn review(session: &mut CaptureSession, step: &Step, lines: &Lines) -> Review {
+fn review(session: &mut CaptureSession, step: &Step, lines: &Lines, seeded: &[Source]) -> Review {
     loop {
         let Some(line) = lines.ask(
-            "  Keep it? Enter = keep, r = record again, x = that was noise, g <step>, q = quit > ",
+            "  Keep it? Enter = keep, r = record again, x = that was noise, g <step>, u <src>, q = quit > ",
         ) else {
             return Review::Quit;
         };
         match parse_command(&line) {
             Command::Enter => return Review::Keep,
             Command::Redo => {
-                session.goto(&step.id);
+                // Drop this recording (the previous one, if any, comes back).
+                session.rebind(&step.id);
                 println!("  recording {} again", step.id);
                 return Review::Again;
             }
             Command::Noise => {
+                let varies = session
+                    .control(&step.id)
+                    .is_some_and(|c| c.messages.iter().any(|m| m.min != m.max));
+                if varies
+                    && lines.ask_default(
+                        "  This includes a source that changed value (looks like a real control). Ignore anyway? [y/N] ",
+                        false,
+                    ) != Some(true)
+                {
+                    continue;
+                }
                 let marked = session.mark_noise(&step.id);
-                let sources: Vec<String> = marked.iter().map(Source::to_string).collect();
-                println!(
-                    "  ignoring from now on: {}; recording {} again",
-                    sources.join(", "),
-                    step.id
-                );
+                print_ignored(&marked, &[]);
+                println!("  recording {} again", step.id);
                 return Review::Again;
             }
+            Command::Unignore(arg) => unignore(session, &arg, seeded),
             Command::Goto(id) => {
                 // Keep this step, then jump; otherwise explain and ask again.
                 if !id.is_empty() && session.goto(&id) {
@@ -676,6 +763,7 @@ fn listen(
     step: &Step,
     rx: &Receiver<TimedMidi>,
     lines: &Lines,
+    seeded: &[Source],
 ) -> anyhow::Result<Listened> {
     // Drop anything sent before listening (setup, fiddling between steps).
     while rx.try_recv().is_ok() {}
@@ -724,6 +812,7 @@ fn listen(
                 Command::Redo => return Ok(Listened::Redo),
                 Command::Goto(id) => return Ok(Listened::Goto(id)),
                 Command::Quit => return Ok(Listened::Quit),
+                Command::Unignore(arg) => unignore(session, &arg, seeded),
                 Command::Noise | Command::Unknown(_) => println!("  {KEYS_HELP}"),
             },
         }
@@ -833,6 +922,34 @@ mod tests {
         );
         assert_eq!(parse_command("g"), Command::Goto(String::new()));
         assert_eq!(parse_command("go"), Command::Unknown("go".to_owned()));
+        assert_eq!(
+            parse_command("u B5 02"),
+            Command::Unignore("B5 02".to_owned())
+        );
+        assert_eq!(parse_command("u"), Command::Unignore(String::new()));
+    }
+
+    #[test]
+    fn parses_sources_in_hex() {
+        assert_eq!(
+            parse_source("B5 02"),
+            Some(Source {
+                status: 0xB5,
+                data1: 0x02
+            })
+        );
+        assert_eq!(
+            parse_source("0xb5 0x22"),
+            Some(Source {
+                status: 0xB5,
+                data1: 0x22
+            })
+        );
+        assert_eq!(parse_source("B5"), None);
+        assert_eq!(parse_source("B5 02 03"), None);
+        assert_eq!(parse_source("35 02"), None);
+        assert_eq!(parse_source("B5 80"), None);
+        assert_eq!(parse_source("zz 02"), None);
     }
 
     #[test]
