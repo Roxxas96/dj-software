@@ -9,6 +9,12 @@ pub(crate) struct Deck {
     playing: bool,
     /// Playhead in track frames.
     position: f64,
+    /// Cue point in track frames.
+    cue: f64,
+    /// Cue is held down and playing back from the cue point.
+    preview: bool,
+    /// Play was pressed during preview, so releasing cue keeps playing.
+    play_latched: bool,
     tempo_slider: f32,
     tempo_range: TempoRange,
 }
@@ -19,6 +25,9 @@ impl Default for Deck {
             track: None,
             playing: false,
             position: 0.0,
+            cue: 0.0,
+            preview: false,
+            play_latched: false,
             tempo_slider: 0.5,
             tempo_range: TempoRange::default(),
         }
@@ -32,25 +41,92 @@ impl Deck {
     pub(crate) fn apply(&mut self, cmd: DeckCommand) -> Option<Arc<TrackBuffer>> {
         match cmd {
             DeckCommand::Load(track) => {
-                self.playing = false;
-                self.position = 0.0;
+                self.reset_transport();
                 return self.track.replace(track);
             }
             DeckCommand::Unload => {
-                self.playing = false;
-                self.position = 0.0;
+                self.reset_transport();
                 return self.track.take();
             }
-            DeckCommand::Play => self.playing = self.track.is_some(),
-            DeckCommand::Pause => self.playing = false,
-            DeckCommand::TogglePlay => self.playing = !self.playing && self.track.is_some(),
-            // CDJ cue behavior is not implemented yet.
-            DeckCommand::CuePress | DeckCommand::CueRelease => {}
-            DeckCommand::SetTempoSlider(value) => self.tempo_slider = value.clamp(0.0, 1.0),
+            DeckCommand::Play => self.play(),
+            DeckCommand::Pause => self.pause(),
+            DeckCommand::TogglePlay => {
+                if self.playing {
+                    self.pause();
+                } else {
+                    self.play();
+                }
+            }
+            DeckCommand::CuePress => self.cue_press(),
+            DeckCommand::CueRelease => self.cue_release(),
+            // Non-finite values would poison the playhead or tempo forever: drop them.
+            DeckCommand::SetTempoSlider(value) if value.is_finite() => {
+                self.tempo_slider = value.clamp(0.0, 1.0);
+            }
             DeckCommand::SetTempoRange(range) => self.tempo_range = range,
-            DeckCommand::Seek(frames) => self.position = frames.clamp(0.0, self.frames() as f64),
+            DeckCommand::Seek(frames) if frames.is_finite() => {
+                self.position = frames.clamp(0.0, self.frames() as f64);
+            }
+            DeckCommand::SetTempoSlider(_) | DeckCommand::Seek(_) => {}
         }
         None
+    }
+
+    fn reset_transport(&mut self) {
+        self.playing = false;
+        self.preview = false;
+        self.play_latched = false;
+        self.position = 0.0;
+        self.cue = 0.0;
+    }
+
+    fn play(&mut self) {
+        if self.track.is_none() {
+            return;
+        }
+        self.playing = true;
+        // Play pressed during cue preview: keep playing after cue is released.
+        self.play_latched = self.preview;
+    }
+
+    fn pause(&mut self) {
+        self.playing = false;
+        self.preview = false;
+        self.play_latched = false;
+    }
+
+    fn at_cue(&self) -> bool {
+        (self.position - self.cue).abs() < 1.0
+    }
+
+    fn cue_press(&mut self) {
+        if self.track.is_none() {
+            return;
+        }
+        if self.playing {
+            if !self.preview {
+                self.position = self.cue;
+                self.playing = false;
+            }
+        } else if self.at_cue() {
+            self.preview = true;
+            self.play_latched = false;
+            self.playing = true;
+        } else {
+            self.cue = self.position;
+        }
+    }
+
+    fn cue_release(&mut self) {
+        if !self.preview {
+            return;
+        }
+        self.preview = false;
+        if !self.play_latched {
+            self.position = self.cue;
+            self.playing = false;
+        }
+        self.play_latched = false;
     }
 
     fn frames(&self) -> usize {
@@ -78,7 +154,7 @@ impl Deck {
         for frame in out.as_chunks_mut::<2>().0 {
             if self.position >= end {
                 self.position = end;
-                self.playing = false;
+                self.pause();
                 return;
             }
             let index = self.position as usize;
@@ -101,6 +177,7 @@ impl Deck {
             duration_frames: self.frames(),
             track_sample_rate: self.track.as_ref().map_or(0, |t| t.sample_rate()),
             tempo_ratio: self.tempo_ratio(),
+            cue_frames: self.cue,
         }
     }
 }

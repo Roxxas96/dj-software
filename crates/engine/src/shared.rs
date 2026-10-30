@@ -13,6 +13,8 @@ pub struct DeckSnapshot {
     /// 0 when no track is loaded.
     pub track_sample_rate: u32,
     pub tempo_ratio: f64,
+    /// Cue point in track frames.
+    pub cue_frames: f64,
 }
 
 /// State the renderer publishes for the controller. Values are for display only, so each
@@ -40,6 +42,7 @@ struct DeckShared {
     duration_frames: AtomicUsize,
     track_sample_rate: AtomicU32,
     tempo_ratio: AtomicU64,
+    cue_frames: AtomicU64,
 }
 
 impl DeckShared {
@@ -54,6 +57,8 @@ impl DeckShared {
             .store(s.track_sample_rate, Ordering::Relaxed);
         self.tempo_ratio
             .store(s.tempo_ratio.to_bits(), Ordering::Relaxed);
+        self.cue_frames
+            .store(s.cue_frames.to_bits(), Ordering::Relaxed);
     }
 
     fn load(&self) -> DeckSnapshot {
@@ -64,6 +69,7 @@ impl DeckShared {
             duration_frames: self.duration_frames.load(Ordering::Relaxed),
             track_sample_rate: self.track_sample_rate.load(Ordering::Relaxed),
             tempo_ratio: f64::from_bits(self.tempo_ratio.load(Ordering::Relaxed)),
+            cue_frames: f64::from_bits(self.cue_frames.load(Ordering::Relaxed)),
         }
     }
 }

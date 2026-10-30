@@ -209,6 +209,29 @@ fn seek_clamps_to_track() {
 }
 
 #[test]
+fn seek_nan_is_ignored() {
+    let (mut c, mut r) = setup(SR);
+    send(&mut c, deck(0), DeckCommand::Load(ramp_track(SR, 4096)));
+    send(&mut c, deck(0), DeckCommand::Seek(500.0));
+    render(&mut r, 1);
+    send(&mut c, deck(0), DeckCommand::Seek(f64::NAN));
+    send(&mut c, deck(0), DeckCommand::Play);
+    render(&mut r, 1);
+    assert!(c.deck(deck(0)).position_frames < 505.0);
+    assert!(c.deck(deck(0)).position_frames >= 500.0);
+    let (master, _) = render(&mut r, 10);
+    assert!(master.iter().all(|s| s.is_finite()));
+}
+
+#[test]
+fn tempo_slider_nan_is_ignored() {
+    let (mut c, mut r) = setup(SR);
+    send(&mut c, deck(0), DeckCommand::SetTempoSlider(f32::NAN));
+    render(&mut r, 1);
+    assert_relative_eq!(c.deck(deck(0)).tempo_ratio, 1.0);
+}
+
+#[test]
 fn load_replaces_track_and_old_one_is_returned_as_garbage() {
     let (mut c, mut r) = setup(SR);
     let old = ramp_track(SR, 4096);
