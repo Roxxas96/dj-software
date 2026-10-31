@@ -356,12 +356,14 @@ fn tracks_query(
     limit: usize,
 ) -> Result<(String, Vec<Value>), LibraryError> {
     let (where_clause, mut params) = filter_clause(filter)?;
-    let column = match sort.key {
-        TrackSortKey::Title => "t.title COLLATE NOCASE",
-        TrackSortKey::Artist => "t.artist COLLATE NOCASE",
-        TrackSortKey::Bpm => "a.bpm",
-        TrackSortKey::Key => "a.key",
-        TrackSortKey::Added => "t.added_at",
+    // The same order inside (to pick the page) and outside (a subquery's order is not
+    // kept by the outer SELECT).
+    let (table, column) = match sort.key {
+        TrackSortKey::Title => ("t", "title COLLATE NOCASE"),
+        TrackSortKey::Artist => ("t", "artist COLLATE NOCASE"),
+        TrackSortKey::Bpm => ("a", "bpm"),
+        TrackSortKey::Key => ("a", "key"),
+        TrackSortKey::Added => ("t", "added_at"),
     };
     let dir = if sort.descending { "DESC" } else { "ASC" };
     let sql = format!(
@@ -370,9 +372,10 @@ fn tracks_query(
                   OR EXISTS (SELECT 1 FROM hotcues h WHERE h.track_id = p.id)), \
                  p.missing \
              FROM (SELECT t.id, t.title, t.artist, a.bpm, a.key, t.duration_frames, \
-                          t.sample_rate, t.missing \
+                          t.sample_rate, t.missing, t.added_at \
                    FROM tracks t LEFT JOIN analysis a ON a.track_id = t.id \
-                   {where_clause} ORDER BY {column} {dir}, t.id {dir} LIMIT ? OFFSET ?) p"
+                   {where_clause} ORDER BY {table}.{column} {dir}, t.id {dir} LIMIT ? OFFSET ?) p \
+             ORDER BY p.{column} {dir}, p.id {dir}"
     );
     params.push(Value::Integer(to_i64(limit)));
     params.push(Value::Integer(to_i64(offset)));
