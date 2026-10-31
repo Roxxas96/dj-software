@@ -163,8 +163,13 @@ pub fn waveform(track: &TrackBuffer, frames_per_bucket: u32) -> Waveform {
     let mut high = Lr4::new(true, MID_HIGH_HZ, sr);
 
     let count = track.frames().div_ceil(fpb);
-    let window_buckets = ((WINDOW_SECS * sr / fpb as f64).ceil() as usize).max(1);
-    // Per-bucket (sum of squares per band, frame count) for the last `window_buckets` buckets.
+    let window_buckets = ((WINDOW_SECS * sr / fpb as f64).ceil() as usize).clamp(1, count.max(1));
+    // Resum from scratch this often so floating-point drift in the running sums stays bounded.
+    let resum_every = window_buckets.max(1024);
+    // Per-bucket (sum of squares per band, frame count) for the last `window_buckets` buckets,
+    // with running totals so each bucket costs O(1).
+    let mut run_sq = [0.0f64; 3];
+    let mut run_n = 0.0f64;
     let mut recent: VecDeque<([f64; 3], f64)> = VecDeque::with_capacity(window_buckets);
     // (peak, low, mid, high) per bucket; bands hold windowed RMS.
     let mut raw: Vec<[f64; 4]> = Vec::with_capacity(count);
@@ -185,13 +190,31 @@ pub fn waveform(track: &TrackBuffer, frames_per_bucket: u32) -> Waveform {
             sq[2] += hi * hi;
         }
         if recent.len() == window_buckets {
-            recent.pop_front();
+            let (old_sq, old_n) = recent.pop_front().expect("window is non-empty");
+            for k in 0..3 {
+                run_sq[k] -= old_sq[k];
+            }
+            run_n -= old_n;
         }
-        recent.push_back((sq, (end - start) as f64));
-        let n: f64 = recent.iter().map(|r| r.1).sum();
+        let n_frames = (end - start) as f64;
+        recent.push_back((sq, n_frames));
+        for k in 0..3 {
+            run_sq[k] += sq[k];
+        }
+        run_n += n_frames;
+        if raw.len() % resum_every == resum_every - 1 {
+            run_sq = [0.0; 3];
+            run_n = 0.0;
+            for (r_sq, r_n) in &recent {
+                for k in 0..3 {
+                    run_sq[k] += r_sq[k];
+                }
+                run_n += r_n;
+            }
+        }
         let mut band = [0.0f64; 3];
         for (k, b) in band.iter_mut().enumerate() {
-            *b = (recent.iter().map(|r| r.0[k]).sum::<f64>() / n).sqrt();
+            *b = (run_sq[k].max(0.0) / run_n).sqrt();
         }
         raw.push([peak, band[0], band[1], band[2]]);
     }
