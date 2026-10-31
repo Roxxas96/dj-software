@@ -7,6 +7,7 @@
 //! committed or not there at all.
 
 mod backup;
+mod cues;
 mod db;
 pub mod fingerprint;
 mod grid;
@@ -67,6 +68,8 @@ pub enum LibraryError {
     NoSuchPlaylist(i64),
     #[error("track {0} does not exist")]
     NoSuchTrack(i64),
+    #[error("{0} is not a valid cue point: it must be finite and not negative")]
+    InvalidCue(f64),
     #[error("position {position} is out of range (the playlist has {len} entries)")]
     PositionOutOfRange { position: usize, len: usize },
     #[error("track {0}'s audio changed while it was being analyzed; analyze it again")]

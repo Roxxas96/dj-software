@@ -17,6 +17,7 @@ use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params_from_iter};
 
 use crate::LibraryError;
+use crate::cues;
 use crate::grid::{self, Beatgrid, GridEdit};
 use crate::scan::TrackFile;
 
@@ -66,6 +67,11 @@ pub enum WriteOp {
         edit: GridEdit,
         playhead_frames: Option<f64>,
     },
+    /// Stores `frames` (at the track's native sample rate) as track `track`'s cue point,
+    /// replacing any previous one. Fails with [`LibraryError::InvalidCue`] when `frames` is
+    /// not finite or is negative and with [`LibraryError::NoSuchTrack`] when the track is
+    /// gone, changing nothing.
+    SetCue { track: i64, frames: f64 },
     /// Flags these tracks' files as missing. Tracks are never deleted by a scan.
     MarkMissing(Vec<i64>),
     /// Adds a library folder (no-op if already there). Only the `folders` table changes.
@@ -407,6 +413,10 @@ fn apply(tx: &Transaction<'_>, op: &WriteOp) -> Result<WriteOutcome, LibraryErro
             edit,
             playhead_frames,
         } => grid::apply(tx, *track, *edit, *playhead_frames),
+        WriteOp::SetCue { track, frames } => {
+            cues::set(tx, *track, *frames)?;
+            Ok(WriteOutcome::Done)
+        }
         WriteOp::MarkMissing(ids) => {
             let mut stmt = tx.prepare_cached("UPDATE tracks SET missing = 1 WHERE id = ?1")?;
             for id in ids {
@@ -487,7 +497,7 @@ fn store_analysis(tx: &Transaction<'_>, a: &StoreAnalysis) -> Result<(), Library
 }
 
 /// Seconds since the Unix epoch (0 if the clock is before it).
-fn unix_now() -> i64 {
+pub(crate) fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
