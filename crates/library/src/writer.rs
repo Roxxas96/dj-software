@@ -17,7 +17,7 @@ use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params_from_iter};
 
 use crate::LibraryError;
-use crate::grid::{self, GridEdit};
+use crate::grid::{self, Beatgrid, GridEdit};
 use crate::scan::TrackFile;
 
 /// Capacity of the writer's queue. [`Writer::submit`] blocks while it is full rather than
@@ -58,8 +58,9 @@ pub enum WriteOp {
     /// same transaction (see [`crate::GridEdit`] for what each edit does). Creates the
     /// analysis row if the track has none. Fails with [`LibraryError::Grid`] when the edit
     /// is refused and [`LibraryError::NoSuchTrack`] when the track is gone, changing
-    /// nothing. A [`GridEdit::Tap`] here only creates the row: tap tempo keeps its taps in
-    /// the [`crate::Library`], so use [`crate::Library::edit_grid`] for taps.
+    /// nothing. Reports the resulting grid as [`WriteOutcome::Grid`]. A [`GridEdit::Tap`]
+    /// here only creates the row: tap tempo keeps its taps in the [`crate::Library`], so
+    /// use [`crate::Library::edit_grid`] for taps.
     EditGrid {
         track: i64,
         edit: GridEdit,
@@ -141,13 +142,16 @@ impl std::fmt::Debug for StoreAnalysis {
 }
 
 /// What a committed op produced.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum WriteOutcome {
     /// The op was committed and has nothing to report.
     Done,
     /// A [`WriteOp::CreatePlaylist`] was committed; this is the new playlist's id.
     Created { id: i64 },
+    /// A [`WriteOp::EditGrid`] was committed (or changed nothing); this is the track's
+    /// grid afterwards, read in the same transaction.
+    Grid(Beatgrid),
     /// A [`WriteOp::Raw`] was committed.
     Raw {
         rows_changed: usize,

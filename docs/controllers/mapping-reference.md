@@ -202,9 +202,12 @@ Button actions ignore releases, except `deck.cue` and `modifier.shift`.
 
 The `deck.grid_*` actions edit the loaded track's beatgrid in the library. Every grid edit
 except `deck.grid_lock_toggle` also locks the grid, so analyzing the track again never undoes
-a manual correction. The BPM stays between 40 and 300, and shifting or setting the downbeat
-needs a BPM (analyze the track first). The built-in DDJ-SB3 mapping does not bind the grid
-actions yet (the app's console will drive them); your own mappings can bind them.
+a manual correction. The BPM stays between 40 and 300. Shifting, setting the downbeat,
+halving and doubling all need a BPM, so analyze the track (or tap or set a BPM) first.
+
+The player does not perform grid edits yet: a binding to a `deck.grid_*` action is accepted
+but does nothing until the library-mode player handles them. The built-in DDJ-SB3 mapping
+does not bind the grid actions.
 
 ## State ids for LEDs
 

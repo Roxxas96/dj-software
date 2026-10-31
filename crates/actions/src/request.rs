@@ -12,8 +12,7 @@ pub enum AppRequest {
 }
 
 /// A beatgrid edit as an action asks for it, before the app knows the track: the app turns
-/// it into the library's grid edit, adding the track's sample rate, the playhead and the
-/// tap time.
+/// it into the library's grid edit, adding the track's sample rate and the playhead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GridEditRequest {
     /// Move every beat by this many milliseconds (negative moves earlier).
@@ -24,8 +23,9 @@ pub enum GridEditRequest {
     Halve,
     /// Double the BPM, keeping the beat nearest the playhead.
     Double,
-    /// A tap-tempo tap, timed by the app when it performs the request.
-    Tap,
+    /// A tap-tempo tap at `at_micros` on the controller clock (the MIDI message's time,
+    /// see `controller::clock::now_micros`).
+    Tap { at_micros: u64 },
     /// Lock or unlock the grid.
     ToggleLock,
 }

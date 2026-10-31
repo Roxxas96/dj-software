@@ -45,7 +45,7 @@ impl Rig {
 
     /// Applies `input` to `action` and renders one block so the engine takes it in.
     fn apply(&mut self, action: Action, input: Input) -> ApplyResult {
-        let result = apply(&action, input, &mut self.state, &mut self.c);
+        let result = apply(&action, input, 0, &mut self.state, &mut self.c);
         self.render(1);
         result
     }
@@ -420,7 +420,7 @@ fn full_queue_leaves_state_unchanged() {
         ),
     ] {
         assert_eq!(
-            apply(&action, input, &mut rig.state, &mut c),
+            apply(&action, input, 0, &mut rig.state, &mut c),
             ApplyResult::QueueFull
         );
     }
@@ -580,7 +580,7 @@ fn grid_actions_return_requests() {
         (ActionKind::GridSetDownbeat, E::SetDownbeat),
         (ActionKind::GridHalve, E::Halve),
         (ActionKind::GridDouble, E::Double),
-        (ActionKind::GridTap, E::Tap),
+        (ActionKind::GridTap, E::Tap { at_micros: 0 }),
         (ActionKind::GridLockToggle, E::ToggleLock),
     ];
     for (kind, edit) in cases {
@@ -590,6 +590,15 @@ fn grid_actions_return_requests() {
     }
     // Requests change no control state (the app performs them).
     assert_eq!(rig.state, before);
+
+    // A tap carries the time of its input.
+    let tap = deck_action(ActionKind::GridTap, 1);
+    assert_eq!(
+        apply(&tap, Input::Press, 1_234_567, &mut rig.state, &mut rig.c),
+        request(E::Tap {
+            at_micros: 1_234_567
+        })
+    );
 
     let back = deck_action(ActionKind::GridShiftBack, 1);
     let forward = deck_action(ActionKind::GridShiftForward, 1);

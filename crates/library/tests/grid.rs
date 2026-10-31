@@ -1,6 +1,6 @@
 //! Beatgrid editing: shift, downbeat, halve/double, set BPM, tap tempo and locking.
 
-use library::{GridEdit, Library, RawStatement, StoreAnalysis, WriteOp};
+use library::{Beatgrid, GridEdit, Library, RawStatement, StoreAnalysis, WriteOp, WriteOutcome};
 use rusqlite::types::Value;
 
 /// 120 BPM at 44.1 kHz: one beat every 22050 frames.
@@ -111,6 +111,23 @@ fn set_downbeat_puts_a_beat_exactly_there() {
 }
 
 #[test]
+fn set_downbeat_before_the_first_beat_wraps() {
+    let s = analyzed(1000.0);
+    let row = s
+        .lib
+        .edit_grid(
+            1,
+            GridEdit::SetDownbeat {
+                at_frames: -30_000.0,
+            },
+            None,
+        )
+        .unwrap();
+    // -30000 + 2 * 22050.
+    assert_eq!(row.first_beat_frames, Some(14_100.0));
+}
+
+#[test]
 fn halve_keeps_the_beat_at_the_playhead() {
     let s = analyzed(1000.0);
     // The beat nearest the playhead is 1000 + 22050 = 23050.
@@ -136,6 +153,8 @@ fn double_keeps_the_first_beat() {
     assert_eq!(row.first_beat_frames, Some(975.0));
 }
 
+/// Doubling keeps every old beat, so the playhead cannot change the result: this only
+/// checks the invariant that the beat nearest the playhead is still a beat.
 #[test]
 fn double_keeps_the_beat_at_the_playhead() {
     let s = analyzed(1000.0);
@@ -178,9 +197,23 @@ fn set_bpm_creates_the_analysis_row() {
     assert_eq!(row.bpm, Some(124.0));
     assert_eq!(row.first_beat_frames, Some(0.0));
     assert!(row.grid_locked);
-    assert_eq!(row.analyzer_version, 0, "never analyzed");
-    assert_eq!(row.key, None);
-    assert_eq!(row.waveform, None);
+    let stored = s.lib.analysis(1).unwrap().unwrap();
+    assert_eq!(
+        (stored.bpm, stored.first_beat_frames, stored.grid_locked),
+        (row.bpm, row.first_beat_frames, row.grid_locked)
+    );
+    assert_eq!(stored.analyzer_version, 0, "never analyzed");
+    assert_eq!(stored.key, None);
+    assert_eq!(stored.waveform, None);
+    // Analysis of the track later keeps the edited grid and fills in the rest.
+    analyze(&s.lib, 1, 90.0, 7.0);
+    let after = s.lib.analysis(1).unwrap().unwrap();
+    assert_eq!(
+        (after.bpm, after.first_beat_frames, after.grid_locked),
+        (Some(124.0), Some(0.0), true)
+    );
+    assert_eq!(after.analyzer_version, i64::from(library::ANALYZER_VERSION));
+    assert_eq!(after.key.map(|k| k.index()), Some(3));
 }
 
 #[test]
@@ -225,6 +258,26 @@ fn tap_restarts_after_a_two_second_gap() {
     assert_eq!(tap(4_900_000), Some(100.0));
     // Exactly 2 s is not a gap: (6.9 - 3.1) / 4 = 950 ms = 63.157... -> 63.16 BPM.
     assert_eq!(tap(6_900_000), Some(63.16));
+}
+
+#[test]
+fn a_tap_earlier_than_the_previous_one_restarts() {
+    let s = analyzed(1000.0);
+    let tap = |at_micros| {
+        s.lib
+            .edit_grid(1, GridEdit::Tap { at_micros }, None)
+            .unwrap()
+            .bpm
+    };
+    for at in [10_000_000, 10_500_000, 11_000_000] {
+        tap(at);
+    }
+    // The clock went back: a new sequence, so three more taps are still not enough.
+    for at in [5_000_000, 5_400_000, 5_800_000] {
+        assert_eq!(tap(at), Some(120.0));
+    }
+    // Four taps 400 ms apart: 150 BPM.
+    assert_eq!(tap(6_200_000), Some(150.0));
 }
 
 #[test]
@@ -331,5 +384,45 @@ fn edits_on_a_missing_track_error() {
     assert!(
         matches!(err, library::LibraryError::NoSuchTrack(9)),
         "{err}"
+    );
+}
+
+#[test]
+fn edit_grid_op_reports_the_new_grid() {
+    let s = analyzed(1000.0);
+    let outcome = s
+        .lib
+        .writer()
+        .submit_wait(WriteOp::EditGrid {
+            track: 1,
+            edit: GridEdit::Shift { frames: 50.0 },
+            playhead_frames: None,
+        })
+        .unwrap();
+    assert_eq!(
+        outcome,
+        WriteOutcome::Grid(Beatgrid {
+            bpm: Some(120.0),
+            first_beat_frames: Some(1050.0),
+            grid_locked: true,
+        })
+    );
+    // A no-op edit reports the grid as it is.
+    let outcome = s
+        .lib
+        .writer()
+        .submit_wait(WriteOp::EditGrid {
+            track: 1,
+            edit: GridEdit::Tap { at_micros: 0 },
+            playhead_frames: None,
+        })
+        .unwrap();
+    assert_eq!(
+        outcome,
+        WriteOutcome::Grid(Beatgrid {
+            bpm: Some(120.0),
+            first_beat_frames: Some(1050.0),
+            grid_locked: true,
+        })
     );
 }

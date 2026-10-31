@@ -33,7 +33,7 @@ impl Rig {
     fn send(&mut self, msg: MidiMessage) -> Resolved {
         let resolved = self.resolver.resolve(&msg, &self.state);
         for (action, input) in &resolved {
-            apply(action, *input, &mut self.state, &mut self.engine);
+            apply(action, *input, 0, &mut self.state, &mut self.engine);
         }
         let mut master = [0.0; 128];
         let mut headphones = [0.0; 128];
