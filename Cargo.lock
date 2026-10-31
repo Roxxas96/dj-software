@@ -38,6 +38,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "analysis"
+version = "0.0.0"
+dependencies = [
+ "engine",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "android-build"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
