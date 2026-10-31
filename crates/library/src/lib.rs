@@ -12,12 +12,14 @@ pub mod fingerprint;
 mod scan;
 pub mod schema;
 pub mod tags;
+mod watch;
 mod writer;
 
 pub use db::{Library, Reader};
 pub use scan::{
     EXTENSIONS, ScanProgress, ScanReport, TrackFile, add_folder, remove_folder, scan_folder,
 };
+pub use watch::{DEBOUNCE, Watcher, watch, watch_with_debounce};
 pub use writer::{FailedWrite, RawStatement, WriteOp, WriteOutcome, Writer};
 
 /// Everything that can go wrong opening or writing the library.
@@ -42,6 +44,8 @@ pub enum LibraryError {
     TooNew { found: i64, supported: usize },
     #[error("path is not valid UTF-8: {}", .0.display())]
     NonUtf8Path(std::path::PathBuf),
+    #[error("watching library folders failed: {0}")]
+    Watch(#[from] notify::Error),
     #[error("the library writer has shut down")]
     WriterGone,
     #[error("the library writer panicked while applying a change; it was rolled back")]
