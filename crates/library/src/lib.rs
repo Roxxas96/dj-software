@@ -8,10 +8,16 @@
 
 mod backup;
 mod db;
+pub mod fingerprint;
+mod scan;
 pub mod schema;
+pub mod tags;
 mod writer;
 
 pub use db::{Library, Reader};
+pub use scan::{
+    EXTENSIONS, ScanProgress, ScanReport, TrackFile, add_folder, remove_folder, scan_folder,
+};
 pub use writer::{FailedWrite, RawStatement, WriteOp, WriteOutcome, Writer};
 
 /// Everything that can go wrong opening or writing the library.
@@ -34,6 +40,8 @@ pub enum LibraryError {
          refusing to open it"
     )]
     TooNew { found: i64, supported: usize },
+    #[error("path is not valid UTF-8: {}", .0.display())]
+    NonUtf8Path(std::path::PathBuf),
     #[error("the library writer has shut down")]
     WriterGone,
     #[error("the library writer panicked while applying a change; it was rolled back")]

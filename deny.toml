@@ -16,6 +16,11 @@ allow = [
 
 [advisories]
 # defaults: known vulnerabilities are denied
+ignore = [
+  # `paste` is unmaintained (not vulnerable): a compile-time proc macro pulled in by lofty
+  # 0.25.5, the latest release. Drop this once lofty moves off it.
+  { id = "RUSTSEC-2024-0436", reason = "unmaintained build-time macro used by lofty; no vulnerability" },
+]
 
 [bans]
 multiple-versions = "warn"

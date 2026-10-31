@@ -17,6 +17,7 @@ use rusqlite::types::Value;
 use rusqlite::{Connection, Transaction, TransactionBehavior, params_from_iter};
 
 use crate::LibraryError;
+use crate::scan::TrackFile;
 
 /// Capacity of the writer's queue. [`Writer::submit`] blocks while it is full rather than
 /// dropping a change.
@@ -37,6 +38,20 @@ pub struct RawStatement {
 pub enum WriteOp {
     /// Sets a setting, or deletes it when `value` is `None`.
     SetSetting { key: String, value: Option<String> },
+    /// Adds a track for a newly found file.
+    InsertTrack(Box<TrackFile>),
+    /// Rewrites track `id` from `file` (path, fingerprint, size, mtime and tags) and clears
+    /// its `missing` flag, keeping its id and so its cues. Used both when a known file
+    /// changed and to relink a moved file.
+    UpdateTrack { id: i64, file: Box<TrackFile> },
+    /// Flags these tracks' files as missing. Tracks are never deleted by a scan.
+    MarkMissing(Vec<i64>),
+    /// Adds a library folder (no-op if already there). Only the `folders` table changes.
+    AddFolder(String),
+    /// Removes a library folder. Only the `folders` table changes: its tracks stay.
+    RemoveFolder(String),
+    /// Applies several ops in one transaction: all of them or none.
+    Batch(Vec<WriteOp>),
     /// Runs raw statements in one transaction. Meant for tests and maintenance; regular
     /// code uses the typed ops.
     #[doc(hidden)]
@@ -249,6 +264,79 @@ fn apply(tx: &Transaction<'_>, op: &WriteOp) -> Result<WriteOutcome, LibraryErro
             tx.execute("DELETE FROM settings WHERE key = ?1", [key])?;
             Ok(WriteOutcome::Done)
         }
+        WriteOp::InsertTrack(file) => {
+            tx.execute(
+                "INSERT INTO tracks(path, fingerprint, size, mtime, missing, title, artist, \
+                 album, genre, duration_frames, sample_rate, added_at) \
+                 VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                rusqlite::params![
+                    file.path,
+                    file.fingerprint,
+                    file.size,
+                    file.mtime,
+                    file.tags.title,
+                    file.tags.artist,
+                    file.tags.album,
+                    file.tags.genre,
+                    file.tags
+                        .duration_frames
+                        .and_then(|f| i64::try_from(f).ok()),
+                    file.tags.sample_rate,
+                    unix_now(),
+                ],
+            )?;
+            Ok(WriteOutcome::Done)
+        }
+        WriteOp::UpdateTrack { id, file } => {
+            let changed = tx.execute(
+                "UPDATE tracks SET path = ?2, fingerprint = ?3, size = ?4, mtime = ?5, \
+                 missing = 0, title = ?6, artist = ?7, album = ?8, genre = ?9, \
+                 duration_frames = ?10, sample_rate = ?11 WHERE id = ?1",
+                rusqlite::params![
+                    id,
+                    file.path,
+                    file.fingerprint,
+                    file.size,
+                    file.mtime,
+                    file.tags.title,
+                    file.tags.artist,
+                    file.tags.album,
+                    file.tags.genre,
+                    file.tags
+                        .duration_frames
+                        .and_then(|f| i64::try_from(f).ok()),
+                    file.tags.sample_rate,
+                ],
+            )?;
+            if changed == 0 {
+                return Err(LibraryError::Sqlite(rusqlite::Error::QueryReturnedNoRows));
+            }
+            Ok(WriteOutcome::Done)
+        }
+        WriteOp::MarkMissing(ids) => {
+            let mut stmt = tx.prepare_cached("UPDATE tracks SET missing = 1 WHERE id = ?1")?;
+            for id in ids {
+                stmt.execute([id])?;
+            }
+            Ok(WriteOutcome::Done)
+        }
+        WriteOp::AddFolder(path) => {
+            tx.execute(
+                "INSERT INTO folders(path) VALUES (?1) ON CONFLICT(path) DO NOTHING",
+                [path],
+            )?;
+            Ok(WriteOutcome::Done)
+        }
+        WriteOp::RemoveFolder(path) => {
+            tx.execute("DELETE FROM folders WHERE path = ?1", [path])?;
+            Ok(WriteOutcome::Done)
+        }
+        WriteOp::Batch(ops) => {
+            for op in ops {
+                apply(tx, op)?;
+            }
+            Ok(WriteOutcome::Done)
+        }
         WriteOp::Raw(statements) => run_raw(tx, statements),
         #[cfg(feature = "test-hooks")]
         WriteOp::PanicAfter { statements, after } => {
@@ -257,6 +345,13 @@ fn apply(tx: &Transaction<'_>, op: &WriteOp) -> Result<WriteOutcome, LibraryErro
             panic!("test hook: writer panicked inside a transaction");
         }
     }
+}
+
+/// Seconds since the Unix epoch (0 if the clock is before it).
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
 }
 
 fn run_raw(

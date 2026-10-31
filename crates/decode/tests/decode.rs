@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use decode::{DecodeError, decode_file};
+use decode::{DecodeError, decode_file, decode_prefix};
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -97,4 +97,23 @@ fn non_audio_file_is_unsupported() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
     let err = decode_file(&path).unwrap_err();
     assert!(matches!(err, DecodeError::Unsupported(_)), "{err:?}");
+}
+
+#[test]
+fn decode_prefix_is_the_start_of_the_full_decode() {
+    for ext in ["wav", "aiff", "flac", "mp3", "m4a", "ogg"] {
+        let path = fixture(&format!("sine440.{ext}"));
+        let full = decode_file(&path).unwrap();
+        for max in [1, 1_000, 10_000] {
+            let prefix = decode_prefix(&path, max).unwrap();
+            assert_eq!(prefix.sample_rate(), full.sample_rate(), "{ext}");
+            assert_eq!(prefix.frames(), max, "{ext}");
+            for i in 0..max {
+                assert_eq!(prefix.frame(i), full.frame(i), "{ext} frame {i}");
+            }
+        }
+        // A limit past the end returns the whole file.
+        assert_eq!(decode_prefix(&path, 10_000_000).unwrap(), full, "{ext}");
+    }
+    assert!(decode_prefix(&fixture("corrupt.mp3"), 1_000).is_err());
 }

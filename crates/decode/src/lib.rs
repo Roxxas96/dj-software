@@ -49,6 +49,23 @@ fn map_error(err: SymphoniaError) -> DecodeError {
 /// Returns [`DecodeError`] if the file cannot be read, is not a supported audio format, or
 /// contains no decodable audio.
 pub fn decode_file(path: &Path) -> Result<TrackBuffer, DecodeError> {
+    decode(path, None)
+}
+
+/// Like [`decode_file`], but stops once `max_frames` frames have been decoded, returning
+/// at most that many (fewer if the file is shorter). Used to fingerprint a file without
+/// decoding all of it.
+///
+/// # Errors
+///
+/// As [`decode_file`].
+pub fn decode_prefix(path: &Path, max_frames: usize) -> Result<TrackBuffer, DecodeError> {
+    decode(path, Some(max_frames))
+}
+
+/// The decode loop shared by [`decode_file`] and [`decode_prefix`]; `limit` caps the
+/// number of frames returned.
+fn decode(path: &Path, limit: Option<usize>) -> Result<TrackBuffer, DecodeError> {
     let file = File::open(path)?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
@@ -89,8 +106,26 @@ pub fn decode_file(path: &Path) -> Result<TrackBuffer, DecodeError> {
     let mut out: Vec<f32> = Vec::new();
     let mut scratch: Vec<f32> = Vec::new();
     let mut last_error: Option<SymphoniaError> = None;
+    // With a limit, decoding stops once it is reached. An MP4 edit list's encoder delay is
+    // trimmed from the front afterwards, so decode that much more; it is read once the
+    // decoded sample rate is known.
+    let mut stop_after: Option<usize> = None;
 
     loop {
+        if let Some(frames) = limit
+            && stop_after.is_none()
+            && let Some(rate) = sample_rate.filter(|_| !out.is_empty())
+        {
+            let delay = if track_delay_missing {
+                mp4_trim::read_trim(path, track_id, rate).map_or(0, |t| t.delay)
+            } else {
+                0
+            };
+            stop_after = Some(frames.saturating_add(delay).saturating_mul(2));
+        }
+        if stop_after.is_some_and(|samples| out.len() >= samples) {
+            break;
+        }
         let packet = match format.next_packet() {
             Ok(Some(p)) => p,
             // A read error after some audio is an early end of stream (e.g. truncation).
@@ -139,6 +174,9 @@ pub fn decode_file(path: &Path) -> Result<TrackBuffer, DecodeError> {
         if trim.length > 0 {
             out.truncate(trim.length.saturating_mul(2));
         }
+    }
+    if let Some(frames) = limit {
+        out.truncate(frames.saturating_mul(2));
     }
     if out.is_empty() {
         return Err(last_error.map_or(DecodeError::NoAudioTrack, map_error));

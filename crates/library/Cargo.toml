@@ -16,8 +16,12 @@ workspace = true
 test-hooks = []
 
 [dependencies]
+blake3.workspace = true
+decode = { path = "../decode" }
+lofty.workspace = true
 rusqlite.workspace = true
 thiserror.workspace = true
+walkdir.workspace = true
 
 [dev-dependencies]
 library = { path = ".", features = ["test-hooks"] }
