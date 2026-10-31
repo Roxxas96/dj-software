@@ -597,7 +597,8 @@ fn queries_stay_fast_with_50k_tracks() {
     println!("{}", timings.join("\n"));
 }
 
-/// Title, artist and added sorts are served by an index: no temp b-tree sort.
+/// Title, artist and added sorts pick their page through an index: no temp b-tree sort
+/// of the whole table.
 #[test]
 fn title_artist_added_sorts_use_indexes() {
     let (_d, lib) = open();
@@ -612,8 +613,14 @@ fn title_artist_added_sorts_use_indexes() {
             let plan = reader
                 .tracks_query_plan(&TrackFilter::default(), TrackSort { key, descending })
                 .unwrap();
+            // The page itself is picked through the index; only the outer SELECT
+            // re-sorts that one page (after "SCAN p").
+            let page = plan
+                .iter()
+                .position(|l| l == "SCAN p")
+                .unwrap_or(plan.len());
             assert!(
-                !plan.iter().any(|l| l.contains("TEMP B-TREE")),
+                !plan[..page].iter().any(|l| l.contains("TEMP B-TREE")),
                 "{key:?} desc={descending}: {plan:?}"
             );
             assert!(
