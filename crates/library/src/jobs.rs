@@ -49,7 +49,8 @@ pub struct AnalysisRow {
 #[non_exhaustive]
 pub enum AnalysisWarning {
     /// The track's audio ended early (a read or decode error, or shorter than its
-    /// container declares); what was decoded was analyzed.
+    /// container declares); what was decoded was analyzed and stored with analyzer
+    /// version 0, so it is analyzed again next time.
     Truncated { track_id: i64 },
     /// The stored `bpm_range` setting is invalid, so the 90–180 default was used.
     /// Reported once per distinct value.
@@ -85,6 +86,8 @@ pub const PROGRESS_TAIL: usize = 20;
 pub struct AnalysisProgress {
     /// Tracks waiting or being analyzed.
     pub queued: usize,
+    /// Of `queued`, the tracks being analyzed right now.
+    pub active: usize,
     /// Tracks analyzed and stored.
     pub done: usize,
     /// Tracks left alone because their analysis was already up to date.
@@ -118,6 +121,8 @@ struct State {
     /// ... with whether to analyze it even if up to date.
     force: HashMap<i64, bool>,
     running: usize,
+    /// At most this many jobs run at once (see [`Analyzer::set_max_active`]).
+    max_active: usize,
     done: usize,
     skipped: usize,
 }
@@ -208,7 +213,10 @@ impl Analyzer {
     /// [`LibraryError::Io`] if not a single worker thread could be spawned.
     pub fn start(lib: &Library, threads: usize) -> Result<Self, LibraryError> {
         let shared = Arc::new(Shared {
-            state: Mutex::default(),
+            state: Mutex::new(State {
+                max_active: usize::MAX,
+                ..State::default()
+            }),
             reports: Mutex::default(),
             wake: Condvar::new(),
             stop: AtomicBool::new(false),
@@ -254,17 +262,38 @@ impl Analyzer {
         self.shared.wake.notify_all();
     }
 
+    /// Lets at most `n` workers analyze at once; the others wait. `0` pauses analysis
+    /// (tracks being analyzed finish), and anything at or above the worker count lets
+    /// every worker run. A worker over the limit finishes its current track before it
+    /// waits. The queue is kept.
+    pub fn set_max_active(&self, n: usize) {
+        self.shared.state().max_active = n;
+        self.shared.wake.notify_all();
+    }
+
+    /// The limit set by [`Analyzer::set_max_active`] (`usize::MAX` when none was set).
+    #[must_use]
+    pub fn max_active(&self) -> usize {
+        self.shared.state().max_active
+    }
+
     /// What has happened so far. Takes the queue lock and the report lock one after the
     /// other, each only to copy counters and a short tail.
     #[must_use]
     pub fn progress(&self) -> AnalysisProgress {
-        let (queued, done, skipped) = {
+        let (queued, active, done, skipped) = {
             let state = self.shared.state();
-            (state.queue.len() + state.running, state.done, state.skipped)
+            (
+                state.queue.len() + state.running,
+                state.running,
+                state.done,
+                state.skipped,
+            )
         };
         let reports = self.shared.reports();
         AnalysisProgress {
             queued,
+            active,
             done,
             skipped,
             failed_count: reports.failed_count,
@@ -342,6 +371,7 @@ fn worker(shared: &Shared) {
             }
         }
         let mut state = shared.state();
+        // This worker takes the next job itself, so lowering `running` wakes no one.
         state.running -= 1;
         match outcome {
             Outcome::Done { .. } => state.done += 1,
@@ -358,7 +388,9 @@ fn next_job(shared: &Shared) -> Option<(i64, bool)> {
         if shared.stopped() {
             return None;
         }
-        if let Some(id) = state.queue.pop_front() {
+        if state.running >= state.max_active {
+            // Over the limit: wait for it to rise (or for the stop).
+        } else if let Some(id) = state.queue.pop_front() {
             let force = state.force.remove(&id).unwrap_or(false);
             state.running += 1;
             return Some((id, force));
@@ -464,7 +496,9 @@ fn run_job(
     let op = WriteOp::StoreAnalysis(Box::new(StoreAnalysis {
         track_id: id,
         fingerprint: info.fingerprint,
-        analyzer_version: ANALYZER_VERSION,
+        // An analysis of part of the audio is stored as out of date, so it is redone
+        // (say, once a file that was still being copied is complete).
+        analyzer_version: if truncated { 0 } else { ANALYZER_VERSION },
         bpm,
         first_beat_frames,
         key,
@@ -500,7 +534,38 @@ fn read_job(
     Ok(Some((info, range, invalid)))
 }
 
+/// A track that needs analysis, with its file's size and modification time as last
+/// scanned, so a caller can tell when a file changed after it was queued.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingTrack {
+    pub id: i64,
+    pub size: Option<i64>,
+    pub mtime: Option<i64>,
+}
+
 impl Reader {
+    /// The tracks [`Reader::track_ids_to_analyze`] lists (without the current ones), with
+    /// their file's size and mtime.
+    ///
+    /// # Errors
+    ///
+    /// Any database error.
+    pub fn tracks_to_analyze(&self) -> Result<Vec<PendingTrack>, LibraryError> {
+        let mut stmt = self.connection().prepare_cached(
+            "SELECT t.id, t.size, t.mtime FROM tracks t \
+             LEFT JOIN analysis a ON a.track_id = t.id \
+             WHERE t.missing = 0 AND a.analyzer_version IS NOT ?1 ORDER BY t.id",
+        )?;
+        let rows = stmt.query_map([ANALYZER_VERSION], |r| {
+            Ok(PendingTrack {
+                id: r.get(0)?,
+                size: r.get(1)?,
+                mtime: r.get(2)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
     /// The ids of the tracks whose file is present and that have no analysis by
     /// [`ANALYZER_VERSION`] yet, in id order; with `include_current`, every present track.
     ///

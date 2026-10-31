@@ -46,8 +46,14 @@ pub enum WriteOp {
     /// its `missing` flag, keeping its id and so its cues. Used both when a known file
     /// changed and to relink a moved file.
     UpdateTrack { id: i64, file: Box<TrackFile> },
-    /// Deletes a track's analysis, which no longer matches its audio. Cues are kept.
+    /// Deletes a track's analysis, which no longer matches its audio. A locked grid is
+    /// kept: only the waveform and key are cleared and the analyzer version set to 0, so
+    /// the track is analyzed again around the user's grid. Cues are kept.
     ClearAnalysis(i64),
+    /// Marks a track's analysis as out of date (analyzer version 0) so it is analyzed
+    /// again, keeping what is stored until then. Used when a file changed without its
+    /// fingerprint changing (say, a file scanned while still being copied).
+    ResetAnalysis(i64),
     /// Stores a track's analysis (waveform, beatgrid, key and analyzer version together),
     /// replacing any previous one. When the stored grid is locked, its `bpm` and
     /// `first_beat_frames` are kept and the ones given here are ignored. Fails with
@@ -401,7 +407,22 @@ fn apply(tx: &Transaction<'_>, op: &WriteOp) -> Result<WriteOutcome, LibraryErro
             Ok(WriteOutcome::Done)
         }
         WriteOp::ClearAnalysis(id) => {
-            tx.execute("DELETE FROM analysis WHERE track_id = ?1", [id])?;
+            tx.execute(
+                "UPDATE analysis SET analyzer_version = 0, waveform = NULL, key = NULL, \
+                 analyzed_at = NULL WHERE track_id = ?1 AND grid_locked",
+                [id],
+            )?;
+            tx.execute(
+                "DELETE FROM analysis WHERE track_id = ?1 AND NOT grid_locked",
+                [id],
+            )?;
+            Ok(WriteOutcome::Done)
+        }
+        WriteOp::ResetAnalysis(id) => {
+            tx.execute(
+                "UPDATE analysis SET analyzer_version = 0 WHERE track_id = ?1",
+                [id],
+            )?;
             Ok(WriteOutcome::Done)
         }
         WriteOp::StoreAnalysis(a) => {

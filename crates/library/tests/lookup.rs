@@ -86,6 +86,13 @@ fn track_ids_to_analyze_skips_current_and_missing() {
     let reader = lib.reader().unwrap();
     assert_eq!(reader.track_ids_to_analyze(false).unwrap(), vec![2, 3]);
     assert_eq!(reader.track_ids_to_analyze(true).unwrap(), vec![1, 2, 3]);
+    let pending: Vec<i64> = reader
+        .tracks_to_analyze()
+        .unwrap()
+        .into_iter()
+        .map(|t| t.id)
+        .collect();
+    assert_eq!(pending, vec![2, 3]);
 }
 
 #[test]

@@ -564,3 +564,109 @@ fn store_analysis_keeps_a_locked_grid() {
     assert_eq!(r.waveform, Some(waveform));
     assert_eq!(r.analyzer_version, i64::from(ANALYZER_VERSION));
 }
+
+/// Writes a click track whose header declares `SECS` but holds only the first `keep`
+/// fraction of the audio, as a file read while still being copied.
+fn write_partial_wav(path: &Path, keep: f64) {
+    write_wav(path, &clicks(128.0, 0.25));
+    let mut bytes = fs::read(path).unwrap();
+    let data_len = bytes.len() - 44;
+    let kept = ((data_len as f64 * keep) as usize) / 4 * 4;
+    bytes.truncate(44 + kept);
+    fs::write(path, bytes).unwrap();
+}
+
+#[test]
+fn truncated_analysis_is_stored_as_out_of_date() {
+    let s = setup();
+    let path = s.music.join("copying.wav");
+    write_partial_wav(&path, 0.5);
+    scan_folder(&s.lib, &s.music, &mut |_: ScanProgress| {}).unwrap();
+    let id = track_id(&s.lib, &path);
+    let p = analyze(&s, &[id], false);
+    assert_eq!(p.done, 1, "{p:?}");
+    assert_eq!(
+        p.warnings,
+        vec![AnalysisWarning::Truncated { track_id: id }]
+    );
+    assert_eq!(row(&s, id).analyzer_version, 0, "retried next time");
+    assert!(
+        s.lib
+            .reader()
+            .unwrap()
+            .track_ids_to_analyze(false)
+            .unwrap()
+            .contains(&id)
+    );
+}
+
+#[test]
+fn a_copy_completed_after_its_first_scan_is_reanalyzed_whole() {
+    let s = setup();
+    let path = s.music.join("copying.wav");
+    write_partial_wav(&path, 0.5);
+    scan_folder(&s.lib, &s.music, &mut |_: ScanProgress| {}).unwrap();
+    let id = track_id(&s.lib, &path);
+    analyze(&s, &[id], false);
+
+    // The copy completes: same first seconds (same fingerprint), new size.
+    write_wav(&path, &clicks(128.0, 0.25));
+    fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() + Duration::from_secs(10))
+        .unwrap();
+    let report = scan_folder(&s.lib, &s.music, &mut |_: ScanProgress| {}).unwrap();
+    assert_eq!((report.updated, report.added), (1, 0), "{report:?}");
+    assert_eq!(track_id(&s.lib, &path), id);
+    let p = analyze(&s, &[id], false);
+    assert_eq!(p.done, 1, "{p:?}");
+    assert!(p.warnings.is_empty(), "{p:?}");
+    let r = row(&s, id);
+    assert_eq!(r.analyzer_version, i64::from(ANALYZER_VERSION));
+    let frames = (SECS * f64::from(SR)) as usize;
+    assert_eq!(
+        r.waveform.expect("a waveform").buckets.len(),
+        frames.div_ceil(1024),
+        "the waveform covers the whole file"
+    );
+}
+
+#[test]
+fn max_active_limits_and_pauses_the_workers() {
+    let s = setup();
+    let ids: Vec<i64> = (0..4)
+        .map(|i| add_track(&s, &format!("{i}.wav"), 120.0 + f64::from(i), 0.1))
+        .collect();
+    let analyzer = Analyzer::start(&s.lib, 3).unwrap();
+    assert_eq!(analyzer.max_active(), usize::MAX);
+
+    // Paused: nothing starts.
+    analyzer.set_max_active(0);
+    analyzer.enqueue(&ids, false);
+    std::thread::sleep(Duration::from_millis(300));
+    let p = analyzer.progress();
+    assert_eq!((p.active, p.done, p.queued), (0, 0, 4), "{p:?}");
+
+    // One at a time.
+    analyzer.set_max_active(1);
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let mut seen_active = false;
+    loop {
+        let p = analyzer.progress();
+        assert!(p.active <= 1, "{p:?}");
+        seen_active |= p.active == 1;
+        if p.done >= 2 {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{p:?}");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(seen_active);
+
+    // Unlimited again: the rest finishes.
+    analyzer.set_max_active(usize::MAX);
+    let p = wait(&analyzer);
+    assert_eq!(p.done, 4, "{p:?}");
+}

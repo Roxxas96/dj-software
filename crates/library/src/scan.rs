@@ -55,7 +55,7 @@ pub struct ScanReport {
     /// Known files whose size or mtime changed (tags and fingerprint re-read, same id).
     pub updated: usize,
     /// Of `updated`, the files whose audio itself changed (different fingerprint). Their
-    /// stale analysis was deleted; cues are kept.
+    /// stale analysis was deleted (a locked grid is kept); cues are kept.
     pub audio_changed: usize,
     /// Tracks whose file was found under a new path (same id, cues kept).
     pub relinked: usize,
@@ -83,12 +83,15 @@ enum Change {
 ///
 /// - a known path with unchanged size and mtime is skipped;
 /// - a known path whose size or mtime changed gets its tags and fingerprint re-read
-///   (same id); if its audio changed, its now stale analysis is deleted;
+///   (same id) and its analysis marked out of date (analyzer version 0), since the
+///   fingerprint covers only the first seconds; if its audio changed, its now stale
+///   analysis is deleted (a locked grid is kept);
 /// - a new path whose fingerprint matches a track whose file no longer exists is relinked
-///   to it (path updated, `missing` cleared, same id). Two existing files with the same
-///   audio are never merged, and a track whose library folder is itself gone (say, on
-///   an unplugged drive) is never relinked. A track under no registered folder is only
-///   relinked when it was under `root`;
+///   to it (path updated, `missing` cleared, same id), provided the durations agree
+///   within max(1 s, 1%) and the match is unambiguous (see `relink_candidate`). Two
+///   existing files with the same audio are never merged, and a track whose library
+///   folder is itself gone (say, on an unplugged drive) is never relinked. A track under
+///   no registered folder is only relinked when it was under `root`;
 /// - any other new file is inserted.
 ///
 /// Paths are stored canonical, so a file reached twice through symlinks is one track.
@@ -451,13 +454,24 @@ impl Scan<'_> {
         let (op, change) = if let Some(Known {
             id,
             fingerprint: old_print,
+            size: old_size,
+            mtime: old_mtime,
             ..
         }) = known
         {
             self.touched.insert(id);
             let update = WriteOp::UpdateTrack { id, file };
-            if old_print == print {
+            if old_print == print && old_size == Some(size) && old_mtime == Some(mtime) {
+                // A missing file back unchanged.
                 (update, Change::Updated)
+            } else if old_print == print {
+                // The file changed but its first seconds did not: a retag, or a file
+                // scanned while still being copied. The analysis may cover only part of
+                // the audio, so it is redone (a locked grid and cues are kept).
+                (
+                    WriteOp::Batch(vec![update, WriteOp::ResetAnalysis(id)]),
+                    Change::Updated,
+                )
             } else {
                 // Same file, different audio: the analysis no longer matches it.
                 (
@@ -465,7 +479,7 @@ impl Scan<'_> {
                     Change::AudioChanged,
                 )
             }
-        } else if let Some(id) = self.relink_candidate(&print)? {
+        } else if let Some(id) = self.relink_candidate(&file)? {
             self.touched.insert(id);
             (WriteOp::UpdateTrack { id, file }, Change::Relinked)
         } else {
@@ -475,30 +489,55 @@ impl Scan<'_> {
         Ok(())
     }
 
-    /// A track with this fingerprint whose file no longer exists, whose library folder
-    /// does, and that this scan has not already claimed; missing-flagged tracks first,
-    /// then the oldest.
-    fn relink_candidate(&mut self, print: &[u8; 32]) -> Result<Option<i64>, rusqlite::Error> {
+    /// The track `file` (a new path) is a moved copy of, if exactly one fits: same
+    /// fingerprint, file no longer there, library folder present, not already claimed by
+    /// this scan, and the same duration within max(1 s, 1%) when both durations are known
+    /// (the fingerprint covers only the first seconds). Among several, the one with the
+    /// same file name wins; when that still leaves more than one, or none of several, the
+    /// match is ambiguous and `None` is returned: the file becomes a new track and the
+    /// old ones stay missing with their cues, rather than risk swapping them.
+    fn relink_candidate(&mut self, file: &TrackFile) -> Result<Option<i64>, rusqlite::Error> {
         let mut stmt = self.conn.prepare_cached(
-            "SELECT id, path FROM tracks WHERE fingerprint = ?1 ORDER BY missing DESC, id",
+            "SELECT id, path, duration_frames, sample_rate FROM tracks \
+             WHERE fingerprint = ?1 ORDER BY id",
         )?;
-        let mut rows = stmt.query([&print[..]])?;
+        let mut rows = stmt.query([&file.fingerprint[..]])?;
         let mut candidates = Vec::new();
         while let Some(row) = rows.next()? {
             let id: i64 = row.get(0)?;
             let path: String = row.get(1)?;
+            let duration: Option<i64> = row.get(2)?;
+            let rate: Option<i64> = row.get(3)?;
             if !self.touched.contains(&id) && is_gone(Path::new(&path)) {
-                candidates.push((id, path));
+                candidates.push((id, path, duration, rate));
             }
         }
         drop(rows);
         drop(stmt);
-        for (id, path) in candidates {
-            if self.folder_is_present(&path) {
-                return Ok(Some(id));
+        let new_duration = file
+            .tags
+            .duration_frames
+            .and_then(|f| i64::try_from(f).ok());
+        let new_rate = file.tags.sample_rate.map(i64::from);
+        let mut fits = Vec::new();
+        for (id, path, duration, rate) in candidates {
+            if same_duration(new_duration, duration, new_rate.or(rate))
+                && self.folder_is_present(&path)
+            {
+                fits.push((id, path));
             }
         }
-        Ok(None)
+        if let [(id, _)] = fits.as_slice() {
+            return Ok(Some(*id));
+        }
+        let name = Path::new(&file.path).file_name();
+        let mut same_name = fits
+            .iter()
+            .filter(|(_, path)| Path::new(path).file_name() == name);
+        match (same_name.next(), same_name.next()) {
+            (Some((id, _)), None) => Ok(Some(*id)),
+            _ => Ok(None),
+        }
     }
 
     /// Whether the library folder holding `path` exists: the longest registered folder
@@ -590,6 +629,17 @@ impl Scan<'_> {
         }
         Ok(())
     }
+}
+
+/// Whether two durations in frames (at `rate` Hz, 44.1 kHz if unknown) are within
+/// max(1 s, 1%) of each other; true when either is unknown.
+fn same_duration(a: Option<i64>, b: Option<i64>, rate: Option<i64>) -> bool {
+    let (Some(a), Some(b)) = (a, b) else {
+        return true;
+    };
+    let second = rate.filter(|&r| r > 0).unwrap_or(44_100);
+    let tolerance = second.max(a.max(b) / 100);
+    a.abs_diff(b) <= tolerance.unsigned_abs()
 }
 
 /// True only when `path` is known not to exist. When that cannot be checked (say, a

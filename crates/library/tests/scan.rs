@@ -611,3 +611,229 @@ fn folders_table_is_independent_of_tracks() {
         "removing a folder never deletes tracks"
     );
 }
+
+/// Writes a 16-bit stereo 44.1 kHz WAV: `silence` seconds of silence, then `tone`
+/// seconds of a sine at `freq` Hz. Files with the same leading silence (3 s or more)
+/// share a fingerprint, like a clean and a dirty edit of one song.
+fn write_silent_intro_wav(path: &Path, silence: f64, tone: f64, freq: f64) {
+    const SR: u32 = 44_100;
+    let silent = (silence * f64::from(SR)) as usize;
+    let total = silent + (tone * f64::from(SR)) as usize;
+    let data_len = u32::try_from(total * 4).unwrap();
+    let mut bytes = Vec::with_capacity(44 + total * 4);
+    bytes.extend_from_slice(b"RIFF");
+    bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
+    bytes.extend_from_slice(b"WAVEfmt ");
+    bytes.extend_from_slice(&16u32.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&2u16.to_le_bytes());
+    bytes.extend_from_slice(&SR.to_le_bytes());
+    bytes.extend_from_slice(&(SR * 4).to_le_bytes());
+    bytes.extend_from_slice(&4u16.to_le_bytes());
+    bytes.extend_from_slice(&16u16.to_le_bytes());
+    bytes.extend_from_slice(b"data");
+    bytes.extend_from_slice(&data_len.to_le_bytes());
+    for i in 0..total {
+        let v = if i < silent {
+            0
+        } else {
+            let t = (i - silent) as f64 / f64::from(SR);
+            ((std::f64::consts::TAU * freq * t).sin() * 8000.0) as i16
+        };
+        bytes.extend_from_slice(&v.to_le_bytes());
+        bytes.extend_from_slice(&v.to_le_bytes());
+    }
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).unwrap();
+    }
+    fs::write(path, bytes).unwrap();
+}
+
+fn set_cue(lib: &Library, id: i64, frames: f64) {
+    lib.writer()
+        .submit_wait(WriteOp::SetCue { track: id, frames })
+        .unwrap();
+}
+
+fn cue(lib: &Library, id: i64) -> Option<f64> {
+    lib.cue(id).unwrap()
+}
+
+#[test]
+fn relink_is_refused_when_the_duration_differs() {
+    let s = setup();
+    let old = s.music.join("a/song.wav");
+    write_silent_intro_wav(&old, 3.5, 5.0, 440.0);
+    scan(&s);
+    let id = track_at(&s.lib, &old).id;
+    set_cue(&s.lib, id, 1000.0);
+    // Gone; another file with the same intro but twice as long appears.
+    fs::remove_file(&old).unwrap();
+    let other = s.music.join("b/song.wav");
+    write_silent_intro_wav(&other, 3.5, 10.0, 440.0);
+    let report = scan(&s);
+    assert_eq!(
+        (report.added, report.relinked, report.missing),
+        (1, 0, 1),
+        "{report:?}"
+    );
+    assert_ne!(track_at(&s.lib, &other).id, id);
+    let old_row = track_at(&s.lib, &old);
+    assert!(old_row.missing);
+    assert_eq!(cue(&s.lib, id), Some(1000.0), "the old track keeps its cue");
+}
+
+#[test]
+fn clean_and_dirty_edits_moved_together_keep_their_own_cues() {
+    let s = setup();
+    let clean = s.music.join("old/song (clean).wav");
+    let dirty = s.music.join("old/song (dirty).wav");
+    // Same intro, same length, different audio after the fingerprinted seconds.
+    write_silent_intro_wav(&clean, 3.5, 5.0, 440.0);
+    write_silent_intro_wav(&dirty, 3.5, 5.0, 660.0);
+    scan(&s);
+    let clean_id = track_at(&s.lib, &clean).id;
+    let dirty_id = track_at(&s.lib, &dirty).id;
+    set_cue(&s.lib, clean_id, 111.0);
+    set_cue(&s.lib, dirty_id, 222.0);
+
+    // Moved together, keeping their names: each is relinked to its own track.
+    let new_dir = s.music.join("new");
+    fs::create_dir_all(&new_dir).unwrap();
+    let (new_clean, new_dirty) = (
+        new_dir.join("song (clean).wav"),
+        new_dir.join("song (dirty).wav"),
+    );
+    fs::rename(&clean, &new_clean).unwrap();
+    fs::rename(&dirty, &new_dirty).unwrap();
+    let report = scan(&s);
+    assert_eq!((report.added, report.relinked), (0, 2), "{report:?}");
+    assert_eq!(track_at(&s.lib, &new_clean).id, clean_id);
+    assert_eq!(track_at(&s.lib, &new_dirty).id, dirty_id);
+    assert_eq!(cue(&s.lib, clean_id), Some(111.0));
+    assert_eq!(cue(&s.lib, dirty_id), Some(222.0));
+
+    // Renamed together to names that tell nothing: ambiguous, so neither is relinked.
+    // The old tracks stay missing with their cues; the files come in as new tracks.
+    let (a, b) = (new_dir.join("1.wav"), new_dir.join("2.wav"));
+    fs::rename(&new_clean, &a).unwrap();
+    fs::rename(&new_dirty, &b).unwrap();
+    let report = scan(&s);
+    assert_eq!(
+        (report.added, report.relinked, report.missing),
+        (2, 0, 2),
+        "{report:?}"
+    );
+    for (path, id, frames) in [(&new_clean, clean_id, 111.0), (&new_dirty, dirty_id, 222.0)] {
+        let row = track_at(&s.lib, path);
+        assert_eq!(row.id, id);
+        assert!(row.missing);
+        assert_eq!(cue(&s.lib, id), Some(frames));
+    }
+    assert!(![clean_id, dirty_id].contains(&track_at(&s.lib, &a).id));
+    assert!(![clean_id, dirty_id].contains(&track_at(&s.lib, &b).id));
+}
+
+#[test]
+fn an_unambiguous_move_with_a_new_name_still_relinks() {
+    let s = setup();
+    let old = s.music.join("a/song.wav");
+    write_silent_intro_wav(&old, 3.5, 5.0, 440.0);
+    // A same-intro file that is still in place is no candidate.
+    write_silent_intro_wav(&s.music.join("a/other.wav"), 3.5, 5.0, 660.0);
+    scan(&s);
+    let id = track_at(&s.lib, &old).id;
+    set_cue(&s.lib, id, 333.0);
+    let new = s.music.join("b/renamed.wav");
+    fs::create_dir_all(new.parent().unwrap()).unwrap();
+    fs::rename(&old, &new).unwrap();
+    let report = scan(&s);
+    assert_eq!((report.added, report.relinked), (0, 1), "{report:?}");
+    assert_eq!(track_at(&s.lib, &new).id, id);
+    assert_eq!(cue(&s.lib, id), Some(333.0));
+}
+
+fn analysis_row(lib: &Library, id: i64) -> (i64, Option<f64>, Option<f64>, bool, bool) {
+    lib.reader()
+        .unwrap()
+        .connection()
+        .query_row(
+            "SELECT analyzer_version, bpm, first_beat_frames, grid_locked, waveform IS NOT NULL \
+             FROM analysis WHERE track_id = ?1",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .unwrap()
+}
+
+fn insert_locked_analysis(lib: &Library, id: i64) {
+    lib.writer()
+        .submit_wait(WriteOp::Raw(vec![RawStatement {
+            sql: "INSERT INTO analysis(track_id, analyzer_version, bpm, first_beat_frames, \
+                  grid_locked, key, waveform) VALUES (?1, 1, 126.0, 512.0, 1, 3, x'00')"
+                .into(),
+            params: vec![Value::Integer(id)],
+        }]))
+        .unwrap();
+}
+
+#[test]
+fn same_fingerprint_change_marks_analysis_out_of_date_keeping_a_locked_grid() {
+    let s = setup();
+    let path = s.music.join("track.wav");
+    copy_fixture("sine440.wav", &path);
+    scan(&s);
+    let id = track_at(&s.lib, &path).id;
+    insert_locked_analysis(&s.lib, id);
+    set_cue(&s.lib, id, 4321.0);
+
+    // The file changes but its first seconds do not (a retag here; a copy that was
+    // still in progress at the last scan looks the same).
+    retag_wav(&path, "Done Copying");
+    let report = scan(&s);
+    assert_eq!((report.updated, report.audio_changed), (1, 0), "{report:?}");
+    assert_eq!(
+        analysis_row(&s.lib, id),
+        (0, Some(126.0), Some(512.0), true, true),
+        "version 0 so it is re-analyzed; the locked grid stays"
+    );
+    assert_eq!(cue(&s.lib, id), Some(4321.0));
+    assert!(
+        s.lib
+            .reader()
+            .unwrap()
+            .track_ids_to_analyze(false)
+            .unwrap()
+            .contains(&id)
+    );
+}
+
+#[test]
+fn changed_audio_keeps_a_locked_grid() {
+    let s = setup();
+    let path = s.music.join("track.wav");
+    copy_fixture("sine440.wav", &path);
+    scan(&s);
+    let id = track_at(&s.lib, &path).id;
+    insert_locked_analysis(&s.lib, id);
+
+    change_wav_audio(&path);
+    touch_later(&path);
+    let report = scan(&s);
+    assert_eq!(report.audio_changed, 1, "{report:?}");
+    assert_eq!(
+        analysis_row(&s.lib, id),
+        (0, Some(126.0), Some(512.0), true, false),
+        "the locked grid stays; waveform and key are cleared"
+    );
+    let key: Option<i64> = s
+        .lib
+        .reader()
+        .unwrap()
+        .connection()
+        .query_row("SELECT key FROM analysis WHERE track_id = ?1", [id], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(key, None);
+}
