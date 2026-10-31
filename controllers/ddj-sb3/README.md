@@ -69,10 +69,13 @@ that is still to be investigated.
 
 The SB3 is both the audio interface and the MIDI controller, on one USB cable. A short
 USB dropout can make the audio stream report an error and leave the MIDI link silent
-even though the SB3 is still listed. When `play` sees an audio stream error, it prints
-the error and reconnects the controller by itself ("controller reconnected after an
-audio/USB hiccup"). If the controller still does not respond, press Enter in the
-terminal running `play` to reconnect it by hand. Unplugging and plugging the SB3 back in
+even though the SB3 is still listed. When `play` sees an audio stream error saying the
+device went away or changed, it prints the error and reconnects the controller by itself
+("controller reconnected after an audio/USB hiccup"), at most once every 5 seconds. A
+mere audio glitch (the computer could not keep up) is only printed as a warning. If the
+controller still does not respond, press Enter in the terminal running `play` to
+reconnect it by hand (this needs `play` to run in a terminal, not with its input
+redirected). Unplugging and plugging the SB3 back in
 also works. After any reconnect, values set meanwhile are kept, and knobs and faders
 must be picked up again (soft takeover).
 

@@ -5,7 +5,7 @@ use cpal::{BufferSize, Device, SampleFormat, StreamConfig, SupportedStreamConfig
 use engine::{EngineConfig, EngineRenderer};
 use thiserror::Error;
 
-use crate::errors::{StreamErrors, stream_errors};
+use crate::errors::{StreamError, StreamErrors, stream_errors};
 use crate::routing::{
     OutputRouting, RoutingError, Scratch, fill_device_buffer, fill_device_buffer_i16,
 };
@@ -220,10 +220,10 @@ impl OutputStream {
         self.errors.count()
     }
 
-    /// The messages of the errors cpal reported since the last call, oldest first. At most
-    /// [`ERROR_QUEUE_CAPACITY`](crate::ERROR_QUEUE_CAPACITY) wait between calls; later ones
-    /// are only counted in [`errors`](Self::errors).
-    pub fn take_errors(&mut self) -> Vec<String> {
+    /// The errors cpal reported since the last call, oldest first, with their kind and
+    /// message. At most [`ERROR_QUEUE_CAPACITY`](crate::ERROR_QUEUE_CAPACITY) wait between
+    /// calls; later ones are only counted in [`errors`](Self::errors).
+    pub fn take_errors(&mut self) -> Vec<StreamError> {
         self.errors.take()
     }
 }

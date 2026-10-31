@@ -11,7 +11,9 @@ mod routing;
 pub use device::{
     AudioError, OutputDeviceInfo, OutputStream, PendingOutput, list_output_devices, open_output,
 };
-pub use errors::{ERROR_QUEUE_CAPACITY, ErrorSink, StreamErrors, stream_errors};
+pub use errors::{
+    ERROR_QUEUE_CAPACITY, ErrorSink, StreamError, StreamErrorKind, StreamErrors, stream_errors,
+};
 pub use routing::{
     OutputRouting, RoutingError, Scratch, fill_device_buffer, fill_device_buffer_i16,
 };
