@@ -1,5 +1,6 @@
 //! Three-band waveform overview: per bucket `[peak, low, mid, high]`, each `0..=255`.
 
+use std::collections::VecDeque;
 use std::f64::consts::{FRAC_1_SQRT_2, TAU};
 
 use engine::TrackBuffer;
@@ -12,6 +13,10 @@ pub const DEFAULT_FRAMES_PER_BUCKET: u32 = 256;
 const LOW_MID_HZ: f64 = 250.0;
 const MID_HIGH_HZ: f64 = 2500.0;
 
+/// Band energy is averaged over a sliding window of this length (hop = one bucket), so
+/// low frequencies do not ripple with phase at small bucket sizes.
+const WINDOW_SECS: f64 = 0.05;
+
 const BLOB_VERSION: u8 = 1;
 const HEADER_LEN: usize = 9;
 
@@ -19,6 +24,10 @@ const HEADER_LEN: usize = 9;
 pub enum WaveformError {
     #[error("waveform blob is truncated")]
     Truncated,
+    #[error("waveform blob length does not match its bucket count")]
+    BadLength,
+    #[error("waveform blob has zero frames per bucket")]
+    ZeroFramesPerBucket,
     #[error("unknown waveform blob version {0}")]
     UnknownVersion(u8),
 }
@@ -54,10 +63,15 @@ impl Waveform {
             return Err(WaveformError::Truncated);
         }
         let frames_per_bucket = u32::from_le_bytes(rest[0..4].try_into().unwrap());
+        if frames_per_bucket == 0 {
+            return Err(WaveformError::ZeroFramesPerBucket);
+        }
         let count = u32::from_le_bytes(rest[4..8].try_into().unwrap()) as usize;
         let body = &rest[8..];
-        if count.checked_mul(4) != Some(body.len()) {
-            return Err(WaveformError::Truncated);
+        match count.checked_mul(4) {
+            Some(expected) if expected == body.len() => {}
+            Some(expected) if expected > body.len() => return Err(WaveformError::Truncated),
+            _ => return Err(WaveformError::BadLength),
         }
         let buckets = body.as_chunks::<4>().0.to_vec();
         Ok(Self {
@@ -149,7 +163,10 @@ pub fn waveform(track: &TrackBuffer, frames_per_bucket: u32) -> Waveform {
     let mut high = Lr4::new(true, MID_HIGH_HZ, sr);
 
     let count = track.frames().div_ceil(fpb);
-    // (peak, low, mid, high) per bucket; bands hold RMS.
+    let window_buckets = ((WINDOW_SECS * sr / fpb as f64).ceil() as usize).max(1);
+    // Per-bucket (sum of squares per band, frame count) for the last `window_buckets` buckets.
+    let mut recent: VecDeque<([f64; 3], f64)> = VecDeque::with_capacity(window_buckets);
+    // (peak, low, mid, high) per bucket; bands hold windowed RMS.
     let mut raw: Vec<[f64; 4]> = Vec::with_capacity(count);
     for start in (0..track.frames()).step_by(fpb) {
         let end = (start + fpb).min(track.frames());
@@ -157,6 +174,7 @@ pub fn waveform(track: &TrackBuffer, frames_per_bucket: u32) -> Waveform {
         let mut sq = [0.0f64; 3];
         for i in start..end {
             let [l, r] = track.frame(i);
+            let (l, r) = (finite(l), finite(r));
             peak = peak.max(f64::from(l.abs().max(r.abs())));
             let x = f64::from(l + r) * 0.5;
             let lo = low.run(x);
@@ -166,13 +184,16 @@ pub fn waveform(track: &TrackBuffer, frames_per_bucket: u32) -> Waveform {
             sq[1] += mi * mi;
             sq[2] += hi * hi;
         }
-        let n = (end - start) as f64;
-        raw.push([
-            peak,
-            (sq[0] / n).sqrt(),
-            (sq[1] / n).sqrt(),
-            (sq[2] / n).sqrt(),
-        ]);
+        if recent.len() == window_buckets {
+            recent.pop_front();
+        }
+        recent.push_back((sq, (end - start) as f64));
+        let n: f64 = recent.iter().map(|r| r.1).sum();
+        let mut band = [0.0f64; 3];
+        for (k, b) in band.iter_mut().enumerate() {
+            *b = (recent.iter().map(|r| r.0[k]).sum::<f64>() / n).sqrt();
+        }
+        raw.push([peak, band[0], band[1], band[2]]);
     }
 
     let loudest = raw
@@ -195,4 +216,9 @@ pub fn waveform(track: &TrackBuffer, frames_per_bucket: u32) -> Waveform {
         frames_per_bucket: fpb as u32,
         buckets,
     }
+}
+
+/// Non-finite samples would poison the filter state for good, so treat them as silence.
+fn finite(x: f32) -> f32 {
+    if x.is_finite() { x } else { 0.0 }
 }
