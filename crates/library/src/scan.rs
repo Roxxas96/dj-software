@@ -53,19 +53,27 @@ pub struct ScanReport {
     pub added: usize,
     /// Known files whose size or mtime changed (tags and fingerprint re-read, same id).
     pub updated: usize,
+    /// Of `updated`, the files whose audio itself changed (different fingerprint). Their
+    /// stale analysis was deleted; cues are kept.
+    pub audio_changed: usize,
     /// Tracks whose file was found under a new path (same id, cues kept).
     pub relinked: usize,
     /// Tracks under the root newly flagged missing.
     pub missing: usize,
-    /// Paths that could not be scanned, with the reason: unreadable or undecodable
-    /// files, unsupported file types, unreadable directories, symlink loops.
+    /// Files with a supported extension that could not be scanned (unreadable or
+    /// undecodable), and walk errors (unreadable directories, symlink loops), with the
+    /// reason.
     pub skipped: Vec<(PathBuf, String)>,
+    /// Files without a supported audio extension (covers, playlists, notes...), counted
+    /// but not listed.
+    pub ignored: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
 enum Change {
     Added,
     Updated,
+    AudioChanged,
     Relinked,
 }
 
@@ -74,16 +82,20 @@ enum Change {
 ///
 /// - a known path with unchanged size and mtime is skipped;
 /// - a known path whose size or mtime changed gets its tags and fingerprint re-read
-///   (same id);
+///   (same id); if its audio changed, its now stale analysis is deleted;
 /// - a new path whose fingerprint matches a track whose file no longer exists is relinked
 ///   to it (path updated, `missing` cleared, same id). Two existing files with the same
-///   audio are never merged;
+///   audio are never merged, and a track whose library folder is itself gone (say, on
+///   an unplugged drive) is never relinked. A track under no registered folder is only
+///   relinked when it was under `root`;
 /// - any other new file is inserted.
 ///
+/// Paths are stored canonical, so a file reached twice through symlinks is one track.
 /// Afterwards, tracks under `root` whose file no longer exists are flagged missing.
-/// Problems with single files or directories are reported in [`ScanReport::skipped`]
-/// and do not stop the scan. Hidden entries (names starting with `.`, such as macOS
-/// `._*` resource forks) are ignored.
+/// Problems with audio files or directories are reported in [`ScanReport::skipped`]
+/// and do not stop the scan; other files are only counted in [`ScanReport::ignored`].
+/// Hidden entries (names starting with `.`, such as macOS `._*` resource forks) are
+/// skipped silently.
 ///
 /// # Errors
 ///
@@ -94,12 +106,22 @@ pub fn scan_folder(
     progress: &mut dyn FnMut(ScanProgress),
 ) -> Result<ScanReport, LibraryError> {
     let root = fs::canonicalize(root)?;
+    let root_prefix = dir_prefix(&root)?;
     let reader = lib.reader()?;
+    let folders = {
+        let mut stmt = reader.connection().prepare("SELECT path FROM folders")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        rows.map(|r| r.map(|f| (f, None)))
+            .collect::<Result<_, _>>()?
+    };
     let mut scan = Scan {
         lib,
         conn: reader.connection(),
+        root_prefix,
+        folders,
         pending: Vec::new(),
         touched: HashSet::new(),
+        seen: HashSet::new(),
         report: ScanReport::default(),
     };
     let mut scanned = 0;
@@ -122,19 +144,38 @@ pub fn scan_folder(
         }
         let path = entry.path();
         if !is_supported(path) {
+            scan.report.ignored += 1;
+            continue;
+        }
+        let canonical = match fs::canonicalize(path) {
+            Ok(canonical) => canonical,
+            Err(err) => {
+                scan.report.skipped.push((path.to_owned(), err.to_string()));
+                continue;
+            }
+        };
+        let Some(text) = canonical.to_str() else {
             scan.report
                 .skipped
-                .push((path.to_owned(), "not a supported audio file".into()));
+                .push((path.to_owned(), "path is not valid UTF-8".into()));
+            continue;
+        };
+        // The same file reached again through a symlink.
+        if !scan.seen.insert(text.to_owned()) {
             continue;
         }
         scanned += 1;
         progress(ScanProgress {
             scanned,
-            path: path.to_owned(),
+            path: canonical.clone(),
         });
-        match scan.file(path) {
+        let result = entry
+            .metadata()
+            .map_err(|e| FileError::Skip(e.to_string()))
+            .and_then(|meta| scan.file(&canonical, text, &meta));
+        match result {
             Ok(()) => {}
-            Err(FileError::Skip(reason)) => scan.report.skipped.push((path.to_owned(), reason)),
+            Err(FileError::Skip(reason)) => scan.report.skipped.push((canonical, reason)),
             Err(FileError::Library(err)) => return Err(err),
         }
         if scan.pending.len() >= BATCH_SIZE {
@@ -142,7 +183,7 @@ pub fn scan_folder(
         }
     }
     scan.flush()?;
-    scan.flag_missing(&root)?;
+    scan.flag_missing()?;
     Ok(scan.report)
 }
 
@@ -187,9 +228,24 @@ impl From<rusqlite::Error> for FileError {
     }
 }
 
+/// The stored state of a track found by path.
+struct Known {
+    id: i64,
+    size: Option<i64>,
+    mtime: Option<i64>,
+    missing: bool,
+    fingerprint: Vec<u8>,
+}
+
 struct Scan<'a> {
     lib: &'a Library,
     conn: &'a Connection,
+    /// The canonical root followed by a separator.
+    root_prefix: String,
+    /// Registered library folders, with whether each exists once checked.
+    folders: Vec<(String, Option<bool>)>,
+    /// Canonical paths of every audio file reached by this scan.
+    seen: HashSet<String>,
     /// Changes not yet written, with the file they are for.
     pending: Vec<(PathBuf, WriteOp, Change)>,
     /// Tracks updated or relinked by this scan, which no other file may relink.
@@ -198,11 +254,8 @@ struct Scan<'a> {
 }
 
 impl Scan<'_> {
-    fn file(&mut self, path: &Path) -> Result<(), FileError> {
-        let text = path
-            .to_str()
-            .ok_or_else(|| FileError::Skip("path is not valid UTF-8".into()))?;
-        let meta = fs::metadata(path).map_err(|e| FileError::Skip(e.to_string()))?;
+    /// Handles one audio file at canonical `path` (`text` is the same path).
+    fn file(&mut self, path: &Path, text: &str, meta: &fs::Metadata) -> Result<(), FileError> {
         let size = i64::try_from(meta.len()).unwrap_or(i64::MAX);
         let mtime = meta
             .modified()
@@ -210,17 +263,25 @@ impl Scan<'_> {
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .map_or(0, |d| i64::try_from(d.as_nanos()).unwrap_or(i64::MAX));
 
-        let known: Option<(i64, Option<i64>, Option<i64>, bool)> = self
+        let known: Option<Known> = self
             .conn
-            .query_row(
-                "SELECT id, size, mtime, missing FROM tracks WHERE path = ?1",
-                [text],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-            )
+            .prepare_cached(
+                "SELECT id, size, mtime, missing, fingerprint FROM tracks WHERE path = ?1",
+            )?
+            .query_row([text], |r| {
+                Ok(Known {
+                    id: r.get(0)?,
+                    size: r.get(1)?,
+                    mtime: r.get(2)?,
+                    missing: r.get(3)?,
+                    fingerprint: r.get(4)?,
+                })
+            })
             .optional()?;
-        if let Some((_, Some(s), Some(m), false)) = known
-            && s == size
-            && m == mtime
+        if let Some(k) = &known
+            && !k.missing
+            && k.size == Some(size)
+            && k.mtime == Some(mtime)
         {
             return Ok(());
         }
@@ -233,9 +294,23 @@ impl Scan<'_> {
             mtime,
             tags: tags::read(path),
         });
-        let (op, change) = if let Some((id, ..)) = known {
+        let (op, change) = if let Some(Known {
+            id,
+            fingerprint: old_print,
+            ..
+        }) = known
+        {
             self.touched.insert(id);
-            (WriteOp::UpdateTrack { id, file }, Change::Updated)
+            let update = WriteOp::UpdateTrack { id, file };
+            if old_print == print {
+                (update, Change::Updated)
+            } else {
+                // Same file, different audio: the analysis no longer matches it.
+                (
+                    WriteOp::Batch(vec![update, WriteOp::ClearAnalysis(id)]),
+                    Change::AudioChanged,
+                )
+            }
         } else if let Some(id) = self.relink_candidate(&print)? {
             self.touched.insert(id);
             (WriteOp::UpdateTrack { id, file }, Change::Relinked)
@@ -246,21 +321,47 @@ impl Scan<'_> {
         Ok(())
     }
 
-    /// A track with this fingerprint whose file no longer exists and that this scan has
-    /// not already claimed; missing-flagged tracks first, then the oldest.
-    fn relink_candidate(&self, print: &[u8; 32]) -> Result<Option<i64>, rusqlite::Error> {
+    /// A track with this fingerprint whose file no longer exists, whose library folder
+    /// does, and that this scan has not already claimed; missing-flagged tracks first,
+    /// then the oldest.
+    fn relink_candidate(&mut self, print: &[u8; 32]) -> Result<Option<i64>, rusqlite::Error> {
         let mut stmt = self.conn.prepare_cached(
             "SELECT id, path FROM tracks WHERE fingerprint = ?1 ORDER BY missing DESC, id",
         )?;
         let mut rows = stmt.query([&print[..]])?;
+        let mut candidates = Vec::new();
         while let Some(row) = rows.next()? {
             let id: i64 = row.get(0)?;
             let path: String = row.get(1)?;
             if !self.touched.contains(&id) && is_gone(Path::new(&path)) {
+                candidates.push((id, path));
+            }
+        }
+        drop(rows);
+        drop(stmt);
+        for (id, path) in candidates {
+            if self.folder_is_present(&path) {
                 return Ok(Some(id));
             }
         }
         Ok(None)
+    }
+
+    /// Whether the library folder holding `path` exists: the longest registered folder
+    /// containing it, else the scanned root if `path` is under it. A path under neither
+    /// has no known folder and counts as absent.
+    fn folder_is_present(&mut self, path: &str) -> bool {
+        let best = self
+            .folders
+            .iter_mut()
+            .filter(|(folder, _)| is_under(path, folder))
+            .max_by_key(|(folder, _)| folder.len());
+        match best {
+            Some((folder, present)) => {
+                *present.get_or_insert_with(|| matches!(Path::new(folder).try_exists(), Ok(true)))
+            }
+            None => path.starts_with(&self.root_prefix),
+        }
     }
 
     /// Writes the pending changes in one transaction. If that fails, retries each change
@@ -297,16 +398,18 @@ impl Scan<'_> {
         match change {
             Change::Added => self.report.added += 1,
             Change::Updated => self.report.updated += 1,
+            Change::AudioChanged => {
+                self.report.updated += 1;
+                self.report.audio_changed += 1;
+            }
             Change::Relinked => self.report.relinked += 1,
         }
     }
 
-    /// Flags tracks under `root` (not merely sharing its prefix) whose file is gone.
-    fn flag_missing(&mut self, root: &Path) -> Result<(), LibraryError> {
-        let mut prefix = utf8(root)?.to_owned();
-        if !prefix.ends_with(MAIN_SEPARATOR) {
-            prefix.push(MAIN_SEPARATOR);
-        }
+    /// Flags tracks under the root (not merely sharing its prefix) whose file is gone.
+    /// Files seen during the walk are present; only the others are checked on disk.
+    fn flag_missing(&mut self) -> Result<(), LibraryError> {
+        let prefix = self.root_prefix.clone();
         // Every path starting with `prefix` sorts in [prefix, upper): the separator's
         // successor replaces it. This range uses the `path` index.
         let mut upper = prefix.clone();
@@ -321,7 +424,7 @@ impl Scan<'_> {
             let mut rows = stmt.query([&prefix, &upper])?;
             while let Some(row) = rows.next()? {
                 let path: String = row.get(1)?;
-                if is_gone(Path::new(&path)) {
+                if !self.seen.contains(&path) && is_gone(Path::new(&path)) {
                     gone.push(row.get::<_, i64>(0)?);
                 }
             }
@@ -339,6 +442,21 @@ impl Scan<'_> {
 /// directory without permission) the file is assumed to still be there.
 fn is_gone(path: &Path) -> bool {
     matches!(path.try_exists(), Ok(false))
+}
+
+/// `dir` as a string ending with a separator, for prefix matching.
+fn dir_prefix(dir: &Path) -> Result<String, LibraryError> {
+    let mut prefix = utf8(dir)?.to_owned();
+    if !prefix.ends_with(MAIN_SEPARATOR) {
+        prefix.push(MAIN_SEPARATOR);
+    }
+    Ok(prefix)
+}
+
+/// Whether `path` lies inside directory `dir` (both canonical strings).
+fn is_under(path: &str, dir: &str) -> bool {
+    path.strip_prefix(dir)
+        .is_some_and(|rest| dir.ends_with(MAIN_SEPARATOR) || rest.starts_with(MAIN_SEPARATOR))
 }
 
 fn is_hidden(name: &std::ffi::OsStr) -> bool {

@@ -94,11 +94,12 @@ fn assert_noop(report: &ScanReport) {
         (
             report.added,
             report.updated,
+            report.audio_changed,
             report.relinked,
             report.missing,
             report.skipped.len()
         ),
-        (0, 0, 0, 0, 0),
+        (0, 0, 0, 0, 0, 0),
         "{report:?}"
     );
 }
@@ -278,6 +279,8 @@ fn file_moved_between_library_folders_is_relinked() {
     let other = s.music.parent().unwrap().join("other");
     fs::create_dir_all(&other).unwrap();
     let other = fs::canonicalize(other).unwrap();
+    library::add_folder(&s.lib, &s.music).unwrap();
+    library::add_folder(&s.lib, &other).unwrap();
     let old = s.music.join("track.wav");
     copy_fixture("sine440.wav", &old);
     scan(&s);
@@ -290,6 +293,119 @@ fn file_moved_between_library_folders_is_relinked() {
     assert_eq!(track_at(&s.lib, &new).id, id);
     // The old folder's rescan finds nothing missing: the track lives elsewhere now.
     assert_noop(&scan(&s));
+}
+
+#[test]
+fn track_on_an_absent_library_folder_is_not_relinked_to_a_local_copy() {
+    let s = setup();
+    let usb = s.music.parent().unwrap().join("usb");
+    fs::create_dir_all(&usb).unwrap();
+    let usb = fs::canonicalize(usb).unwrap();
+    library::add_folder(&s.lib, &s.music).unwrap();
+    library::add_folder(&s.lib, &usb).unwrap();
+    let on_usb = usb.join("track.wav");
+    copy_fixture("sine440.wav", &on_usb);
+    scan_folder(&s.lib, &usb, &mut |_| {}).unwrap();
+    let usb_id = track_at(&s.lib, &on_usb).id;
+
+    // The drive is unplugged (its whole folder is gone); a copy of the audio is local.
+    fs::remove_dir_all(&usb).unwrap();
+    let local = s.music.join("track.wav");
+    copy_fixture("sine440.wav", &local);
+    let report = scan(&s);
+    assert_eq!((report.added, report.relinked), (1, 0), "{report:?}");
+    assert_ne!(track_at(&s.lib, &local).id, usb_id);
+    let usb_row = track_at(&s.lib, &on_usb);
+    assert_eq!(
+        usb_row.id, usb_id,
+        "the drive's track keeps its path for when it returns"
+    );
+}
+
+#[test]
+fn track_outside_the_root_and_any_folder_is_not_relinked() {
+    let s = setup();
+    let elsewhere = s.music.parent().unwrap().join("elsewhere");
+    fs::create_dir_all(&elsewhere).unwrap();
+    let elsewhere = fs::canonicalize(elsewhere).unwrap();
+    let old = elsewhere.join("track.wav");
+    copy_fixture("sine440.wav", &old);
+    scan_folder(&s.lib, &elsewhere, &mut |_| {}).unwrap();
+    fs::remove_dir_all(&elsewhere).unwrap();
+    copy_fixture("sine440.wav", &s.music.join("track.wav"));
+    let report = scan(&s);
+    assert_eq!((report.added, report.relinked), (1, 0), "{report:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn file_reached_twice_through_symlinks_is_one_track() {
+    let s = setup();
+    copy_fixture("sine440.wav", &s.music.join("a/x.wav"));
+    std::os::unix::fs::symlink(s.music.join("a"), s.music.join("fav")).unwrap();
+    std::os::unix::fs::symlink(s.music.join("a/x.wav"), s.music.join("link.wav")).unwrap();
+    // Another library folder linking into this one.
+    let other = s.music.parent().unwrap().join("other");
+    fs::create_dir_all(&other).unwrap();
+    std::os::unix::fs::symlink(s.music.join("a"), other.join("shared")).unwrap();
+
+    let report = scan(&s);
+    assert_eq!((report.added, report.skipped.len()), (1, 0), "{report:?}");
+    let report = scan_folder(&s.lib, &other, &mut |_| {}).unwrap();
+    assert_noop(&report);
+    let rows = tracks(&s.lib);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(Path::new(&rows[0].path), s.music.join("a/x.wav"));
+    assert_noop(&scan(&s));
+}
+
+fn insert_analysis(lib: &Library, id: i64) {
+    lib.writer()
+        .submit_wait(WriteOp::Raw(vec![RawStatement {
+            sql: "INSERT INTO analysis(track_id, analyzer_version, bpm) VALUES (?1, 1, 120.0)"
+                .into(),
+            params: vec![Value::Integer(id)],
+        }]))
+        .unwrap();
+}
+
+fn has_analysis(lib: &Library, id: i64) -> bool {
+    lib.reader()
+        .unwrap()
+        .connection()
+        .query_row(
+            "SELECT count(*) FROM analysis WHERE track_id = ?1",
+            [id],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap()
+        == 1
+}
+
+#[test]
+fn changed_audio_keeps_the_id_but_drops_stale_analysis() {
+    let s = setup();
+    let path = s.music.join("track.wav");
+    copy_fixture("sine440.wav", &path);
+    scan(&s);
+    let id = track_at(&s.lib, &path).id;
+    insert_analysis(&s.lib, id);
+
+    change_wav_audio(&path);
+    touch_later(&path);
+    let report = scan(&s);
+    assert_eq!(
+        (
+            report.added,
+            report.updated,
+            report.audio_changed,
+            report.relinked
+        ),
+        (0, 1, 1, 0),
+        "{report:?}"
+    );
+    assert_eq!(track_at(&s.lib, &path).id, id);
+    assert!(!has_analysis(&s.lib, id));
 }
 
 #[test]
@@ -325,13 +441,23 @@ fn retagged_file_keeps_identity() {
     copy_fixture("sine440.wav", &path);
     scan(&s);
     let before = track_at(&s.lib, &path);
+    insert_analysis(&s.lib, before.id);
 
     retag_wav(&path, "New Title");
     let report = scan(&s);
     assert_eq!(
-        (report.added, report.updated, report.relinked),
-        (0, 1, 0),
+        (
+            report.added,
+            report.updated,
+            report.audio_changed,
+            report.relinked
+        ),
+        (0, 1, 0, 0),
         "{report:?}"
+    );
+    assert!(
+        has_analysis(&s.lib, before.id),
+        "same audio keeps its analysis"
     );
     let after = track_at(&s.lib, &path);
     assert_eq!(after.id, before.id);
@@ -378,11 +504,7 @@ fn scan_skips_unreadable_and_non_audio() {
     copy_fixture("corrupt.mp3", &s.music.join("corrupt.mp3"));
     fs::write(s.music.join("empty.mp3"), b"").unwrap();
     fs::write(s.music.join("notes.txt"), b"not audio").unwrap();
-    let mut expected = vec![
-        s.music.join("corrupt.mp3"),
-        s.music.join("empty.mp3"),
-        s.music.join("notes.txt"),
-    ];
+    let mut expected = vec![s.music.join("corrupt.mp3"), s.music.join("empty.mp3")];
 
     #[cfg(unix)]
     let locked = {
@@ -426,6 +548,7 @@ fn scan_skips_unreadable_and_non_audio() {
             .any(|r| Path::new(&r.path) == s.music.join("good.wav"))
     );
     assert!(report.added >= 1);
+    assert_eq!(report.ignored, 1, "notes.txt is counted, not listed");
 }
 
 #[test]
