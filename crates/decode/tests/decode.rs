@@ -34,7 +34,9 @@ fn decodes_every_supported_format() {
         ("m4a", false),
         ("ogg", false),
     ] {
-        let buf = decode_file(&fixture(&format!("sine440.{ext}"))).unwrap();
+        let buf = decode_file(&fixture(&format!("sine440.{ext}")))
+            .unwrap()
+            .track;
         let (frames, p, f) = (buf.frames(), peak(&buf), frequency(&buf));
         println!(
             "{ext}: rate={} frames={frames} peak={p} freq={f}",
@@ -53,7 +55,7 @@ fn decodes_every_supported_format() {
 
 #[test]
 fn mono_file_is_duplicated_to_both_channels() {
-    let buf = decode_file(&fixture("sine440_mono.wav")).unwrap();
+    let buf = decode_file(&fixture("sine440_mono.wav")).unwrap().track;
     assert!(buf.frames() > 0);
     for i in 0..buf.frames() {
         let [l, r] = buf.frame(i);
@@ -73,7 +75,7 @@ fn corrupt_file_is_an_error() {
 
 #[test]
 fn truncated_file_decodes_what_it_can() {
-    let buf = decode_file(&fixture("truncated.mp3")).unwrap();
+    let buf = decode_file(&fixture("truncated.mp3")).unwrap().track;
     assert!(
         buf.frames() > 0 && buf.frames() < 44_100,
         "{} frames",
@@ -103,7 +105,7 @@ fn non_audio_file_is_unsupported() {
 fn decode_prefix_is_the_start_of_the_full_decode() {
     for ext in ["wav", "aiff", "flac", "mp3", "m4a", "ogg"] {
         let path = fixture(&format!("sine440.{ext}"));
-        let full = decode_file(&path).unwrap();
+        let full = decode_file(&path).unwrap().track;
         for max in [1, 1_000, 10_000] {
             let prefix = decode_prefix(&path, max).unwrap();
             assert_eq!(prefix.sample_rate(), full.sample_rate(), "{ext}");
@@ -116,4 +118,28 @@ fn decode_prefix_is_the_start_of_the_full_decode() {
         assert_eq!(decode_prefix(&path, 10_000_000).unwrap(), full, "{ext}");
     }
     assert!(decode_prefix(&fixture("corrupt.mp3"), 1_000).is_err());
+}
+
+#[test]
+fn big_endian_16_bit_aiff_decodes() {
+    let buf = decode_file(&fixture("sine440_s16be.aiff")).unwrap().track;
+    assert_eq!(buf.sample_rate(), 44_100);
+    assert_eq!(buf.frames(), 44_100);
+    assert!((peak(&buf) - 0.5).abs() < 0.05);
+    assert!((frequency(&buf) - 440.0).abs() <= 5.0);
+}
+
+#[test]
+fn twenty_four_bit_wav_decodes() {
+    let buf = decode_file(&fixture("sine440_s24.wav")).unwrap().track;
+    assert_eq!(buf.sample_rate(), 44_100);
+    assert_eq!(buf.frames(), 44_100);
+    assert!((peak(&buf) - 0.5).abs() < 0.05);
+    assert!((frequency(&buf) - 440.0).abs() <= 5.0);
+}
+
+#[test]
+fn truncated_file_reports_truncated() {
+    assert!(decode_file(&fixture("truncated.mp3")).unwrap().truncated);
+    assert!(!decode_file(&fixture("sine440.mp3")).unwrap().truncated);
 }
