@@ -144,3 +144,63 @@ pub fn stereo_lr(l: &[f32], r: &[f32], sr: u32) -> TrackBuffer {
         .collect();
     TrackBuffer::new(sr, interleaved).expect("valid buffer")
 }
+
+/// Beat times in seconds: every `step_beats` beats starting at beat `offset_beats`, the
+/// first beat (beat 0) at `first_beat_secs`, up to `secs`.
+pub fn beat_times(
+    bpm: f64,
+    secs: f32,
+    first_beat_secs: f64,
+    step_beats: f64,
+    offset_beats: f64,
+) -> Vec<f64> {
+    let period = 60.0 / bpm;
+    (0..)
+        .map(|k| first_beat_secs + (offset_beats + f64::from(k) * step_beats) * period)
+        .take_while(|&t| t < f64::from(secs))
+        .collect()
+}
+
+/// Places a copy of `hit` at each time (seconds, rounded to the nearest frame), summing
+/// overlaps; the output is `secs` long and not normalized.
+pub fn place(hit: &[f32], times_secs: &[f64], secs: f32, sr: u32) -> Vec<f32> {
+    let n = len(secs, sr);
+    let mut out = vec![0.0f32; n];
+    for &t in times_secs {
+        let start = (t * f64::from(sr)).round() as usize;
+        for (o, h) in out.iter_mut().skip(start).zip(hit) {
+            *o += h;
+        }
+    }
+    out
+}
+
+/// Snare-like hit: a 200 Hz tone (decay 40 ms) plus white noise (decay 80 ms), 250 ms long.
+pub fn snare_hit(sr: u32, seed: u64) -> Vec<f32> {
+    let sr_f = f64::from(sr);
+    let mut rng = Rng::new(seed);
+    (0..(0.25 * sr_f) as usize)
+        .map(|k| {
+            let t = k as f64 / sr_f;
+            let tone = 0.4 * (TAU * 200.0 * t).sin() * (-t / 0.04).exp();
+            let noise = 0.6 * f64::from(rng.next_f32()) * (-t / 0.08).exp();
+            (tone + noise) as f32
+        })
+        .collect()
+}
+
+/// Hi-hat-like hit: first-differenced (high-passed) white noise with a 15 ms decay, 60 ms long.
+pub fn hat_hit(sr: u32, seed: u64) -> Vec<f32> {
+    let sr_f = f64::from(sr);
+    let mut rng = Rng::new(seed);
+    let mut prev = 0.0f64;
+    (0..(0.06 * sr_f) as usize)
+        .map(|k| {
+            let t = k as f64 / sr_f;
+            let x = f64::from(rng.next_f32());
+            let hp = x - prev;
+            prev = x;
+            (0.3 * hp * (-t / 0.015).exp()) as f32
+        })
+        .collect()
+}
