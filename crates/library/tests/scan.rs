@@ -25,8 +25,9 @@ fn setup() -> Setup {
     let lib = Library::open(&dir.path().join("db").join("library.sqlite3")).unwrap();
     let music = dir.path().join("music");
     fs::create_dir_all(&music).unwrap();
-    // Paths are stored canonical (macOS temp dirs live behind a /var symlink).
-    let music = fs::canonicalize(&music).unwrap();
+    // Paths are stored canonical (macOS temp dirs live behind a /var symlink), the way
+    // the library normalizes them.
+    let music = dunce::canonicalize(&music).unwrap();
     Setup {
         _dir: dir,
         lib,
@@ -278,7 +279,7 @@ fn file_moved_between_library_folders_is_relinked() {
     let s = setup();
     let other = s.music.parent().unwrap().join("other");
     fs::create_dir_all(&other).unwrap();
-    let other = fs::canonicalize(other).unwrap();
+    let other = dunce::canonicalize(other).unwrap();
     library::add_folder(&s.lib, &s.music).unwrap();
     library::add_folder(&s.lib, &other).unwrap();
     let old = s.music.join("track.wav");
@@ -300,7 +301,7 @@ fn track_on_an_absent_library_folder_is_not_relinked_to_a_local_copy() {
     let s = setup();
     let usb = s.music.parent().unwrap().join("usb");
     fs::create_dir_all(&usb).unwrap();
-    let usb = fs::canonicalize(usb).unwrap();
+    let usb = dunce::canonicalize(usb).unwrap();
     library::add_folder(&s.lib, &s.music).unwrap();
     library::add_folder(&s.lib, &usb).unwrap();
     let on_usb = usb.join("track.wav");
@@ -327,7 +328,7 @@ fn track_outside_the_root_and_any_folder_is_not_relinked() {
     let s = setup();
     let elsewhere = s.music.parent().unwrap().join("elsewhere");
     fs::create_dir_all(&elsewhere).unwrap();
-    let elsewhere = fs::canonicalize(elsewhere).unwrap();
+    let elsewhere = dunce::canonicalize(elsewhere).unwrap();
     let old = elsewhere.join("track.wav");
     copy_fixture("sine440.wav", &old);
     scan_folder(&s.lib, &elsewhere, &mut |_| {}).unwrap();

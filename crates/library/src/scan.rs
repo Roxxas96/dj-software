@@ -105,7 +105,7 @@ pub fn scan_folder(
     root: &Path,
     progress: &mut dyn FnMut(ScanProgress),
 ) -> Result<ScanReport, LibraryError> {
-    let root = fs::canonicalize(root)?;
+    let root = normalize_path(root)?;
     let root_prefix = dir_prefix(&root)?;
     let reader = lib.reader()?;
     let folders = {
@@ -147,7 +147,7 @@ pub fn scan_folder(
             scan.report.ignored += 1;
             continue;
         }
-        let canonical = match fs::canonicalize(path) {
+        let canonical = match normalize_path(path) {
             Ok(canonical) => canonical,
             Err(err) => {
                 scan.report.skipped.push((path.to_owned(), err.to_string()));
@@ -194,9 +194,8 @@ pub fn scan_folder(
 ///
 /// Fails if `path` cannot be resolved, is not valid UTF-8, or the write fails.
 pub fn add_folder(lib: &Library, path: &Path) -> Result<(), LibraryError> {
-    let path = fs::canonicalize(path)?;
     lib.writer()
-        .submit_wait(WriteOp::AddFolder(utf8(&path)?.to_owned()))?;
+        .submit_wait(WriteOp::AddFolder(normalized_text(path)?))?;
     Ok(())
 }
 
@@ -208,8 +207,8 @@ pub fn add_folder(lib: &Library, path: &Path) -> Result<(), LibraryError> {
 /// Fails if `path` is not valid UTF-8 or the write fails.
 pub fn remove_folder(lib: &Library, path: &Path) -> Result<(), LibraryError> {
     let mut ops = vec![WriteOp::RemoveFolder(utf8(path)?.to_owned())];
-    if let Ok(canonical) = fs::canonicalize(path) {
-        ops.push(WriteOp::RemoveFolder(utf8(&canonical)?.to_owned()));
+    if let Ok(canonical) = normalized_text(path) {
+        ops.push(WriteOp::RemoveFolder(canonical));
     }
     lib.writer().submit_wait(WriteOp::Batch(ops))?;
     Ok(())
@@ -444,6 +443,19 @@ fn is_gone(path: &Path) -> bool {
     matches!(path.try_exists(), Ok(false))
 }
 
+/// The one way paths are canonicalized for the library: absolute, symlinks resolved,
+/// and on Windows without the `\\?\` verbatim prefix where a plain path works (via
+/// `dunce`), so stored paths match paths that arrive by other routes.
+pub(crate) fn normalize_path(path: &Path) -> std::io::Result<PathBuf> {
+    dunce::canonicalize(path)
+}
+
+/// [`normalize_path`] as the UTF-8 text stored in the database (library folders).
+fn normalized_text(path: &Path) -> Result<String, LibraryError> {
+    let path = normalize_path(path)?;
+    Ok(utf8(&path)?.to_owned())
+}
+
 /// `dir` as a string ending with a separator, for prefix matching.
 fn dir_prefix(dir: &Path) -> Result<String, LibraryError> {
     let mut prefix = utf8(dir)?.to_owned();
@@ -472,4 +484,24 @@ fn is_supported(path: &Path) -> bool {
 fn utf8(path: &Path) -> Result<&str, LibraryError> {
     path.to_str()
         .ok_or_else(|| LibraryError::NonUtf8Path(path.to_owned()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_path_is_absolute_without_verbatim_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let normalized = normalize_path(dir.path()).unwrap();
+        assert!(normalized.is_absolute(), "{}", normalized.display());
+        #[cfg(windows)]
+        assert!(
+            !normalized.to_string_lossy().starts_with(r"\\?\"),
+            "{}",
+            normalized.display()
+        );
+        #[cfg(unix)]
+        assert_eq!(normalized, fs::canonicalize(dir.path()).unwrap());
+    }
 }
