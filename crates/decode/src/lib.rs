@@ -61,7 +61,7 @@ pub struct Decoded {
 /// Gapless mode is on, so encoder delay and padding are trimmed. A packet that fails to decode
 /// is skipped; a stream that ends early yields the audio decoded so far and sets
 /// [`Decoded::truncated`]. Besides read/decode errors, truncation is inferred when the
-/// decode falls over 10% short of the length the container declares. That declared length
+/// decode falls short by more than max(10%, 2048 frames) of the length the container declares. That declared length
 /// is ignored for MP3s without a Xing/Info/LAME header, where it is only a bitrate
 /// estimate. A file cut cleanly at a packet boundary without a declared length is not
 /// detected.
