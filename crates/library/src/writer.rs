@@ -52,6 +52,30 @@ pub enum WriteOp {
     AddFolder(String),
     /// Removes a library folder. Only the `folders` table changes: its tracks stay.
     RemoveFolder(String),
+    /// Creates a playlist at the end of the playlist list; reports its id as
+    /// [`WriteOutcome::Created`].
+    CreatePlaylist { name: String },
+    /// Renames a playlist.
+    RenamePlaylist { id: i64, name: String },
+    /// Deletes a playlist and its membership rows; tracks are never touched.
+    DeletePlaylist(i64),
+    /// Moves a playlist to `to_position` in the playlist list (clamped to the end).
+    MovePlaylist { id: i64, to_position: usize },
+    /// Inserts `track` at position `at` of `playlist` (appended when `None` or past the
+    /// end). The same track may be added any number of times.
+    AddToPlaylist {
+        playlist: i64,
+        track: i64,
+        at: Option<usize>,
+    },
+    /// Removes the entry at `position` (the track stays in the library).
+    RemoveFromPlaylist { playlist: i64, position: usize },
+    /// Moves the entry at `from` so it ends up at position `to` (clamped to the end).
+    MoveInPlaylist {
+        playlist: i64,
+        from: usize,
+        to: usize,
+    },
     /// Applies several ops in one transaction: all of them or none.
     Batch(Vec<WriteOp>),
     /// Runs raw statements in one transaction. Meant for tests and maintenance; regular
@@ -73,6 +97,8 @@ pub enum WriteOp {
 pub enum WriteOutcome {
     /// The op was committed and has nothing to report.
     Done,
+    /// A [`WriteOp::CreatePlaylist`] was committed; this is the new playlist's id.
+    Created { id: i64 },
     /// A [`WriteOp::Raw`] was committed.
     Raw {
         rows_changed: usize,
@@ -337,6 +363,13 @@ fn apply(tx: &Transaction<'_>, op: &WriteOp) -> Result<WriteOutcome, LibraryErro
             tx.execute("DELETE FROM folders WHERE path = ?1", [path])?;
             Ok(WriteOutcome::Done)
         }
+        WriteOp::CreatePlaylist { .. }
+        | WriteOp::RenamePlaylist { .. }
+        | WriteOp::DeletePlaylist(_)
+        | WriteOp::MovePlaylist { .. }
+        | WriteOp::AddToPlaylist { .. }
+        | WriteOp::RemoveFromPlaylist { .. }
+        | WriteOp::MoveInPlaylist { .. } => crate::playlists::apply(tx, op),
         WriteOp::Batch(ops) => {
             for op in ops {
                 apply(tx, op)?;
