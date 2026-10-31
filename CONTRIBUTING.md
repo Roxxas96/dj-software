@@ -1,7 +1,9 @@
 # Contributing
 
-New controllers are the most welcome contribution. A guide for adding one is coming; until
-then, open a "Controller support" issue and we can work it out together.
+New controllers are the most welcome contribution. Follow
+[Adding a controller](docs/controllers/adding-a-controller.md); the mapping file format is in the
+[mapping reference](docs/controllers/mapping-reference.md). If you get stuck or want to claim a
+controller, open a "Controller support" issue.
 
 ## Setup
 

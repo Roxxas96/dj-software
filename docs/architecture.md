@@ -11,9 +11,13 @@ Each plan that adds or changes a crate updates this page. The full design is in
   single-producer/single-consumer command queues inward, and atomics or SPSC queues outward for
   playhead, level and state. In debug builds and tests, an allocation guard on the callback
   (e.g. `assert_no_alloc`) turns any allocation into a test failure.
-- **MIDI thread:** receives controller input, resolves it through the mapping into actions, and
-  sends engine commands. LED/feedback output also comes from here, driven by state changes.
-  Input-to-engine latency should be a single queue hop.
+- **MIDI input callback and control thread:** the `midir` input callback only timestamps each
+  message and forwards it over a channel; it never touches the engine. The control thread (the
+  `play` loop) drains the channel, resolves messages through the mapping into actions, applies
+  them (engine commands plus the app-side control state) and sends LED updates (about 30 Hz,
+  only values that changed). None of this runs on the audio thread. It also notices when the
+  controller is unplugged or plugged back in (polled once a second): audio keeps playing, held
+  buttons are released, and on return soft takeover is armed and every LED is sent again.
 - **Loader/analysis workers:** decode tracks into memory ahead of playback (no streaming from
   disk on the audio thread), and run BPM/key/waveform analysis in the background.
 - **UI thread:** reads published state snapshots. A slow UI frame or a slow folder scan must
@@ -27,4 +31,8 @@ Each plan that adds or changes a crate updates this page. The full design is in
 | `engine` | Audio engine: decks, mixing and effects. Real-time safe, no I/O, no UI or MIDI knowledge. Testable without an audio device by rendering frames into a buffer. |
 | `decode` | Decodes audio files into memory. |
 | `audio-io` | Audio device enumeration and output. |
-| `dj-software` (`crates/app`) | The application binary. Currently a command-line player (`devices`, `play`) that wires the other crates together. |
+| `actions` | The named actions controls can trigger (ids such as `deck.play_pause`), the app-side control state (which deck each side shows, SHIFT, last set values) and the LED rules. `apply` turns an action into engine commands. No MIDI knowledge. |
+| `controller` | MIDI ports and messages, the mapping file format, the resolver that turns messages into actions (conditions, soft takeover), LED feedback, the capture tools' logic, and the built-in mappings (`controllers/<name>/mapping.toml`). Tested with fake ports. |
+| `dj-software` (`crates/app`) | The application binary. A command-line player and MIDI tools (`devices`, `play`, `midi` with `ports`, `monitor`, `capture` and `led-scan`) that wire the other crates together. |
+
+Controllers are documented in [`controllers/`](controllers/): the [mapping reference](controllers/mapping-reference.md) and [adding a controller](controllers/adding-a-controller.md).
