@@ -1,8 +1,38 @@
 //! How library tracks, keys and beatgrids are shown, shared by `library` and `play
 //! --library`.
 
+use std::borrow::Cow;
+
 use analysis::{Key, KeyNotation};
 use library::{Beatgrid, TrackRow};
+
+/// `text` with every control character (C0 such as ESC and BEL, DEL, and C1
+/// U+0080–U+009F) replaced by U+FFFD, so tags and file names from downloaded files cannot
+/// send escape sequences to the terminal. Other Unicode is kept.
+pub fn sanitize_for_terminal(text: &str) -> Cow<'_, str> {
+    if text.chars().any(char::is_control) {
+        Cow::Owned(
+            text.chars()
+                .map(|c| if c.is_control() { '\u{FFFD}' } else { c })
+                .collect(),
+        )
+    } else {
+        Cow::Borrowed(text)
+    }
+}
+
+/// [`sanitize_for_terminal`] on each line of `text`, keeping the line breaks.
+pub fn sanitize_lines(text: &str) -> Cow<'_, str> {
+    if !text.chars().any(|c| c.is_control() && c != '\n') {
+        return Cow::Borrowed(text);
+    }
+    Cow::Owned(
+        text.split('\n')
+            .map(sanitize_for_terminal)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+}
 
 /// The `key_notation` setting value for each notation.
 pub fn notation_setting(notation: KeyNotation) -> &'static str {
@@ -32,10 +62,11 @@ pub fn key_text(key: Option<u8>, notation: KeyNotation) -> String {
 /// "Artist – Title", or just the title without an artist.
 pub fn track_name(row: &TrackRow) -> String {
     let title = row.title.as_deref().unwrap_or("(untitled)");
-    match row.artist.as_deref().filter(|a| !a.is_empty()) {
+    let name = match row.artist.as_deref().filter(|a| !a.is_empty()) {
         Some(artist) => format!("{artist} – {title}"),
         None => title.to_owned(),
-    }
+    };
+    sanitize_for_terminal(&name).into_owned()
 }
 
 /// A BPM with two decimals, such as "128.00".
@@ -92,8 +123,9 @@ pub fn grid_text(grid: &Beatgrid, sample_rate: Option<u32>) -> String {
 
 /// Cuts `text` to at most `max` characters, ending with "…" when cut.
 pub fn truncate(text: &str, max: usize) -> String {
+    let text = sanitize_for_terminal(text);
     if text.chars().count() <= max {
-        return text.to_owned();
+        return text.into_owned();
     }
     let mut out: String = text.chars().take(max.saturating_sub(1)).collect();
     out.push('…');
@@ -156,5 +188,23 @@ mod tests {
         assert_eq!(length_text(&mix), "1:00:00");
         assert_eq!(truncate("abcdef", 4), "abc…");
         assert_eq!(truncate("abc", 4), "abc");
+    }
+
+    #[test]
+    fn control_characters_are_replaced() {
+        let evil = "Ti\u{1b}]0;pwned\u{7}tle\u{1b}[2J\u{9b}31m";
+        let clean = sanitize_for_terminal(evil);
+        assert!(!clean.chars().any(char::is_control), "{clean:?}");
+        assert_eq!(clean, "Ti\u{FFFD}]0;pwned\u{FFFD}tle\u{FFFD}[2J\u{FFFD}31m");
+        let fine = "Café – Señorita 🎧 日本";
+        assert!(matches!(sanitize_for_terminal(fine), Cow::Borrowed(t) if t == fine));
+        assert_eq!(sanitize_lines("a\u{1b}b\nc\u{7}"), "a\u{FFFD}b\nc\u{FFFD}");
+        assert_eq!(sanitize_lines("line 1\nline 2"), "line 1\nline 2");
+        let row = TrackRow {
+            artist: Some("A\u{1b}[31m".into()),
+            ..row()
+        };
+        assert_eq!(track_name(&row), "A\u{FFFD}[31m – Title");
+        assert_eq!(truncate("x\u{7}y", 10), "x\u{FFFD}y");
     }
 }

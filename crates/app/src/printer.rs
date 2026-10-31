@@ -5,6 +5,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Sender, channel};
 
+use crate::format::{sanitize_for_terminal, sanitize_lines};
+
 /// Status lines are cut to this many characters on a terminal, so they do not wrap (a
 /// wrapped line would break redrawing them in place).
 const STATUS_WIDTH: usize = 110;
@@ -96,6 +98,12 @@ impl Screen {
     }
 
     fn status(&mut self, out: &mut Vec<u8>, lines: Vec<String>) {
+        // Library text (tags, file names) may hold control characters: strip them before
+        // adding our own `\r` and escape sequences.
+        let lines: Vec<String> = lines
+            .iter()
+            .map(|l| sanitize_for_terminal(l).into_owned())
+            .collect();
         if self.tty {
             self.erase(out);
             let cut: Vec<String> = lines
@@ -111,6 +119,7 @@ impl Screen {
     }
 
     fn event(&mut self, out: &mut Vec<u8>, text: &str) {
+        let text = &*sanitize_lines(text);
         if self.tty {
             self.erase(out);
             out.extend_from_slice(format!("{text}\n").as_bytes());
@@ -158,6 +167,27 @@ mod tests {
             text(&out),
             "\r\x1b[2K\x1b[1A\x1b[2KDeck 1 ◂ A – B\nbrowser 2\ndeck 1"
         );
+    }
+
+    #[test]
+    fn library_text_cannot_inject_escapes() {
+        for tty in [true, false] {
+            let mut screen = Screen::new(tty);
+            let mut out = Vec::new();
+            screen.status(&mut out, vec!["Deck 1  A\u{1b}[2J\u{7}".into()]);
+            screen.event(&mut out, "Deck 1 ◂ B\u{1b}]0;x\u{7}\nnext line é🎧");
+            let text = text(&out);
+            assert!(
+                !text.contains("[2J\u{1b}") && !text.contains('\u{7}'),
+                "{text:?}"
+            );
+            assert!(
+                !text.contains("\u{1b}[2J") && !text.contains("\u{1b}]0"),
+                "{text:?}"
+            );
+            assert!(text.contains("A\u{FFFD}[2J\u{FFFD}"), "{text:?}");
+            assert!(text.contains("\nnext line é🎧"), "{text:?}");
+        }
     }
 
     #[test]

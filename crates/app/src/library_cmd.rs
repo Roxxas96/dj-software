@@ -17,6 +17,21 @@ use crate::format::{
     notation_setting, truncate,
 };
 
+/// `println!` with control characters in the text (library tags, file names) replaced,
+/// see [`crate::format::sanitize_lines`].
+macro_rules! out {
+    ($($arg:tt)*) => {
+        println!("{}", crate::format::sanitize_lines(&format!($($arg)*)))
+    };
+}
+
+/// [`out!`] on stderr.
+macro_rules! err_out {
+    ($($arg:tt)*) => {
+        eprintln!("{}", crate::format::sanitize_lines(&format!($($arg)*)))
+    };
+}
+
 /// How many skipped files a scan report lists.
 const SKIPPED_SHOWN: usize = 20;
 /// How often progress lines are redrawn.
@@ -217,7 +232,7 @@ pub fn run(args: &LibraryArgs) -> anyhow::Result<()> {
         LibraryCommand::RemoveFolder { dir } => {
             library::remove_folder(&lib, dir)
                 .with_context(|| format!("removing {}", dir.display()))?;
-            println!(
+            out!(
                 "removed {} from the library folders (its tracks and cues are kept)",
                 dir.display()
             );
@@ -231,25 +246,25 @@ pub fn run(args: &LibraryArgs) -> anyhow::Result<()> {
         LibraryCommand::Grid { track, action } => grid(&lib, *track, *action),
     };
     for failed in lib.take_failed_writes() {
-        eprintln!("warning: a library change was not saved: {}", failed.error);
+        err_out!("warning: a library change was not saved: {}", failed.error);
     }
     result
 }
 
 fn add_folder(lib: &Library, dir: &Path) -> anyhow::Result<()> {
     library::add_folder(lib, dir).with_context(|| format!("adding {}", dir.display()))?;
-    println!("added folder {}", dir.display());
+    out!("added folder {}", dir.display());
     scan_one(lib, dir)
 }
 
 fn scan_all(lib: &Library) -> anyhow::Result<()> {
     let folders = lib.reader()?.folders()?;
     if folders.is_empty() {
-        println!("no library folders; add one with `dj-software library add-folder <DIR>`");
+        out!("no library folders; add one with `dj-software library add-folder <DIR>`");
     }
     for folder in folders {
         if !folder.exists() {
-            println!(
+            out!(
                 "{}: not found (unplugged drive?), skipped; its tracks are kept",
                 folder.display()
             );
@@ -266,7 +281,11 @@ fn scan_one(lib: &Library, dir: &Path) -> anyhow::Result<()> {
     let mut progress = |p: ScanProgress| {
         if tty && last.elapsed() >= PROGRESS_EVERY {
             last = Instant::now();
-            eprint!("\rscanning {}: {} files", dir.display(), p.scanned);
+            eprint!(
+                "\rscanning {}: {} files",
+                crate::format::sanitize_for_terminal(&dir.display().to_string()),
+                p.scanned
+            );
             let _ = std::io::stderr().flush();
         }
     };
@@ -275,8 +294,8 @@ fn scan_one(lib: &Library, dir: &Path) -> anyhow::Result<()> {
     if tty {
         eprint!("\r\x1b[2K");
     }
-    println!("{}:", dir.display());
-    print!("{}", scan_report_text(&report));
+    out!("{}:", dir.display());
+    out!("{}", scan_report_text(&report).trim_end());
     Ok(())
 }
 
@@ -346,17 +365,20 @@ fn list_tracks(lib: &Library, args: &ListArgs) -> anyhow::Result<()> {
             (rows, reader.track_count(&filter)?, None)
         }
     };
-    print!("{}", track_table(&rows, positions.as_deref(), notation));
+    out!(
+        "{}",
+        track_table(&rows, positions.as_deref(), notation).trim_end()
+    );
     if rows.len() < total {
-        println!(
+        out!(
             "showing {} of {total} tracks (use --limit to see more)",
             rows.len()
         );
     } else {
-        println!("{total} track(s)");
+        out!("{total} track(s)");
     }
     if rows.iter().any(is_long_mix) {
-        println!(
+        out!(
             "note: tracks over 30 minutes (DJ mixes) get one constant beatgrid, which may \
              not fit them"
         );
@@ -448,7 +470,7 @@ fn analyze(lib: &Library, tracks: &[i64], force: bool) -> anyhow::Result<()> {
         tracks.to_vec()
     };
     if ids.is_empty() {
-        println!("nothing to analyze: every track is up to date (--force analyzes again)");
+        out!("nothing to analyze: every track is up to date (--force analyzes again)");
         return Ok(());
     }
     let analyzer = Analyzer::start(lib, default_threads()).context("starting the analyzer")?;
@@ -471,15 +493,17 @@ fn analyze(lib: &Library, tracks: &[i64], force: bool) -> anyhow::Result<()> {
         eprintln!();
     }
     let p = analyzer.progress();
-    println!(
+    out!(
         "analyzed {}, already up to date {}, failed {}",
-        p.done, p.skipped, p.failed_count
+        p.done,
+        p.skipped,
+        p.failed_count
     );
     for (id, why) in analyzer.take_failures() {
-        println!("  track {id}: {why}");
+        out!("  track {id}: {why}");
     }
     for warning in analyzer.take_warnings() {
-        println!("  warning: {warning}");
+        out!("  warning: {warning}");
     }
     Ok(())
 }
@@ -500,7 +524,7 @@ fn set_setting(lib: &Library, set: &SetCommand) -> anyhow::Result<()> {
             let (range, warning) = validate_bpm_range(&format!("{min}-{max}"))
                 .map_err(|e| anyhow::anyhow!("invalid BPM range {min}-{max}: {e}"))?;
             if let Some(warning) = warning {
-                eprintln!("warning: {warning}");
+                err_out!("warning: {warning}");
             }
             let value = format_bpm_range(range);
             let message = format!(
@@ -519,7 +543,7 @@ fn set_setting(lib: &Library, set: &SetCommand) -> anyhow::Result<()> {
         key: key.to_owned(),
         value: Some(value),
     })?;
-    println!("{message}");
+    out!("{message}");
     Ok(())
 }
 
@@ -565,8 +589,8 @@ fn playlist(lib: &Library, cmd: &PlaylistCommand) -> anyhow::Result<()> {
             }
             let outcome = writer.submit_wait(WriteOp::CreatePlaylist { name: name.clone() })?;
             match outcome {
-                WriteOutcome::Created { id } => println!("created playlist \"{name}\" (id {id})"),
-                _ => println!("created playlist \"{name}\""),
+                WriteOutcome::Created { id } => out!("created playlist \"{name}\" (id {id})"),
+                _ => out!("created playlist \"{name}\""),
             }
         }
         PlaylistCommand::Rename { name, new_name } => {
@@ -575,14 +599,15 @@ fn playlist(lib: &Library, cmd: &PlaylistCommand) -> anyhow::Result<()> {
                 id: p.id,
                 name: new_name.clone(),
             })?;
-            println!("renamed \"{}\" to \"{new_name}\"", p.name);
+            out!("renamed \"{}\" to \"{new_name}\"", p.name);
         }
         PlaylistCommand::Delete { name } => {
             let p = find_playlist(&reader, name)?;
             writer.submit_wait(WriteOp::DeletePlaylist(p.id))?;
-            println!(
+            out!(
                 "deleted playlist \"{}\" ({} entries; the tracks stay in the library)",
-                p.name, p.track_count
+                p.name,
+                p.track_count
             );
         }
         PlaylistCommand::Add { name, tracks, at } => {
@@ -599,7 +624,7 @@ fn playlist(lib: &Library, cmd: &PlaylistCommand) -> anyhow::Result<()> {
                 })
                 .collect();
             writer.submit_wait(WriteOp::Batch(ops))?;
-            println!("added {} track(s) to \"{}\"", tracks.len(), p.name);
+            out!("added {} track(s) to \"{}\"", tracks.len(), p.name);
         }
         PlaylistCommand::Remove {
             name,
@@ -611,7 +636,7 @@ fn playlist(lib: &Library, cmd: &PlaylistCommand) -> anyhow::Result<()> {
                 playlist: p.id,
                 position: at,
             })?;
-            println!("removed entry {pos} from \"{}\"", p.name);
+            out!("removed entry {pos} from \"{}\"", p.name);
         }
         PlaylistCommand::Move { name, from, to } => {
             let p = find_playlist(&reader, name)?;
@@ -622,17 +647,20 @@ fn playlist(lib: &Library, cmd: &PlaylistCommand) -> anyhow::Result<()> {
                 from: from0,
                 to: to0,
             })?;
-            println!("moved entry {from} to {to} in \"{}\"", p.name);
+            out!("moved entry {from} to {to} in \"{}\"", p.name);
         }
         PlaylistCommand::List { name: None } => {
             let all = reader.playlists()?;
             if all.is_empty() {
-                println!("no playlists; create one with `library playlist create <NAME>`");
+                out!("no playlists; create one with `library playlist create <NAME>`");
             }
             for p in all {
-                println!(
+                out!(
                     "{:>4}  {}  ({} tracks, {} without cues)",
-                    p.id, p.name, p.track_count, p.unprepared_count
+                    p.id,
+                    p.name,
+                    p.track_count,
+                    p.unprepared_count
                 );
             }
         }
@@ -664,7 +692,7 @@ fn grid(lib: &Library, track: i64, action: GridAction) -> anyhow::Result<()> {
             let text = reader
                 .beatgrid(track)?
                 .map_or_else(|| "not analyzed yet".to_owned(), |g| grid_text(&g, rate));
-            println!("{track}  {name}: {text}");
+            out!("{track}  {name}: {text}");
             return Ok(());
         }
         GridAction::Shift { ms } => {
@@ -680,7 +708,7 @@ fn grid(lib: &Library, track: i64, action: GridAction) -> anyhow::Result<()> {
             let want = action == GridAction::Lock;
             let locked = reader.beatgrid(track)?.is_some_and(|g| g.grid_locked);
             if locked == want {
-                println!(
+                out!(
                     "{track}  {name}: already {}",
                     if want { "locked" } else { "unlocked" }
                 );
@@ -692,7 +720,7 @@ fn grid(lib: &Library, track: i64, action: GridAction) -> anyhow::Result<()> {
     let grid = lib
         .edit_grid(track, edit, None)
         .with_context(|| format!("editing the beatgrid of track {track}"))?;
-    println!("{track}  {name}: {}", grid_text(&grid, rate));
+    out!("{track}  {name}: {}", grid_text(&grid, rate));
     Ok(())
 }
 
