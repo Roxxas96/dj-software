@@ -1,7 +1,7 @@
 use actions::{Action, Input, Side};
 use controller::builtin::{builtin_mapping, load_mapping, load_mapping_from};
 use controller::mapping::{Mapping, parse_mapping};
-use controller::{MidiMessage, MidiOut, Runtime, TimedMidi};
+use controller::{MidiMessage, MidiOut, PresenceChange, Reconnect, Runtime, TimedMidi};
 use std::sync::Arc;
 
 use engine::{
@@ -422,6 +422,107 @@ fn reconnect_still_arms_takeover() {
     let start = (0.8f32 * 127.0).round() as u8;
     let stats = rig.batch(&[cc(6, 33, start)]);
     assert_eq!(stats.applied, 1, "picked up near the current value");
+}
+
+/// A connection whose reopening succeeds or fails on demand, with no real ports.
+struct FakeConnection {
+    out: Recorder,
+    connected: bool,
+    reopen_works: bool,
+    reconnects: u32,
+}
+
+impl FakeConnection {
+    fn new(reopen_works: bool) -> Self {
+        Self {
+            out: Recorder::default(),
+            connected: true,
+            reopen_works,
+            reconnects: 0,
+        }
+    }
+}
+
+impl MidiOut for FakeConnection {
+    fn send(&mut self, msg: MidiMessage) {
+        if self.connected {
+            self.out.send(msg);
+        }
+    }
+}
+
+impl Reconnect for FakeConnection {
+    fn force_reconnect(&mut self) -> PresenceChange {
+        self.reconnects += 1;
+        let was_connected = self.connected;
+        self.connected = self.reopen_works;
+        match (was_connected, self.connected) {
+            (_, true) => PresenceChange::Back,
+            (true, false) => PresenceChange::Lost,
+            (false, false) => PresenceChange::None,
+        }
+    }
+}
+
+#[test]
+fn force_reconnect_releases_resyncs_and_arms_takeover() {
+    let mut rig = Rig::attached();
+    let start = (0.8f32 * 127.0).round() as u8;
+    rig.batch(&[cc(6, 33, start), cc(6, 31, 127), on(0, 63)]);
+    assert!(rig.runtime.state().side(Side::Left).shift);
+
+    let mut connection = FakeConnection::new(true);
+    let change = rig
+        .runtime
+        .force_reconnect(&mut rig.engine, &mut connection);
+    assert_eq!(change, PresenceChange::Back);
+    assert_eq!(connection.reconnects, 1);
+    let state = rig.runtime.state();
+    assert!(!state.side(Side::Left).shift, "held SHIFT released");
+    assert_eq!(state.crossfader, 1.0, "init not applied again");
+    assert_eq!(
+        connection.out.take(),
+        [led(63, 0), led(114, 0), led(84, 0)],
+        "every LED sent again"
+    );
+    // Takeover is armed: the knob must be picked up again.
+    assert_eq!(rig.batch(&[cc(6, 33, 0)]).applied, 0);
+    assert_eq!(rig.batch(&[cc(6, 33, start)]).applied, 1);
+}
+
+#[test]
+fn failed_force_reconnect_leaves_the_controller_detached() {
+    let mut rig = Rig::attached();
+    let mut connection = FakeConnection::new(false);
+    let change = rig
+        .runtime
+        .force_reconnect(&mut rig.engine, &mut connection);
+    assert_eq!(change, PresenceChange::Lost);
+    assert_eq!(rig.batch(&[on(0, 63)]).applied, 0, "ignored while detached");
+    rig.runtime.tick(10, &rig.engine, &mut connection);
+    assert!(connection.out.take().is_empty());
+
+    // Presence polling later finds it again: the usual reconnect.
+    connection.connected = true;
+    rig.runtime.on_reconnect(&mut rig.engine, &mut connection);
+    assert_eq!(rig.batch(&[on(0, 63)]).applied, 1);
+}
+
+#[test]
+fn force_reconnect_before_the_first_attach_attaches() {
+    let mut rig = Rig::new();
+    let mut connection = FakeConnection::new(true);
+    connection.connected = false;
+    let change = rig
+        .runtime
+        .force_reconnect(&mut rig.engine, &mut connection);
+    assert_eq!(change, PresenceChange::Back);
+    assert_eq!(rig.runtime.state().deck(d(0)).trim, 0.25, "init applied");
+    assert_eq!(
+        rig.batch(&[cc(6, 33, 0)]).applied,
+        1,
+        "first attach: the first value is taken"
+    );
 }
 
 #[test]
