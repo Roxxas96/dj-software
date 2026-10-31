@@ -29,7 +29,7 @@ pub use grid::{
 };
 pub use jobs::{
     ANALYZER_VERSION, AnalysisProgress, AnalysisRow, AnalysisWarning, Analyzer, PROGRESS_TAIL,
-    REPORT_CAPACITY, WAVEFORM_FRAMES_PER_BUCKET, default_threads,
+    PendingTrack, REPORT_CAPACITY, WAVEFORM_FRAMES_PER_BUCKET, default_threads,
 };
 pub use playlists::{
     PlaylistSummary, TrackDetails, TrackFilter, TrackRow, TrackSort, TrackSortKey,
