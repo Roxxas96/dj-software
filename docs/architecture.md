@@ -20,9 +20,21 @@ Each plan that adds or changes a crate updates this page. The full design is in
   buttons are released, and on return soft takeover is armed and every LED is sent again.
 - **Loader/analysis workers:** decode tracks into memory ahead of playback (no streaming from
   disk on the audio thread), and run BPM/key/waveform analysis in the background.
+  In library mode (`play --library`) the control loop never waits on the database or a
+  decode: a **library worker** thread does browser moves, track lookups and grid edits, and
+  a **loader** thread decodes the selected track, handing the buffer back to the control
+  loop, which sends it to the engine.
+- **Analyzer pool:** a pool of worker threads (CPU cores minus one, at least one) that
+  decodes and analyzes tracks (waveform, BPM and grid, key) and sends results to the
+  writer. Analysis never blocks the control loop or audio.
+- **Folder watcher:** watches the library folders, debounces events (2 s) and applies the
+  same per-file logic as a scan; when the OS watch fails it rescans every 10 minutes.
 - **UI thread:** reads published state snapshots. A slow UI frame or a slow folder scan must
   never affect audio.
-- **Database writer:** serializes writes to the library DB off the UI and audio threads.
+- **Database writer:** one thread owns the write connection to the library DB. Every change
+  (scan results, cues, grid edits, analysis, playlists, settings) is a write operation sent
+  to it and applied in one transaction, so writes are serialized and never run on the UI or
+  audio threads. Readers use their own read-only connections.
 
 ## Crates
 
@@ -33,6 +45,8 @@ Each plan that adds or changes a crate updates this page. The full design is in
 | `audio-io` | Audio device enumeration and output. |
 | `actions` | The named actions controls can trigger (ids such as `deck.play_pause`), the app-side control state (which deck each side shows, SHIFT, last set values) and the LED rules. `apply` turns an action into engine commands. No MIDI knowledge. |
 | `controller` | MIDI ports and messages, the mapping file format, the resolver that turns messages into actions (conditions, soft takeover), LED feedback, the capture tools' logic, and the built-in mappings (`controllers/<name>/mapping.toml`). Tested with fake ports. |
-| `dj-software` (`crates/app`) | The application binary. A command-line player and MIDI tools (`devices`, `play`, `midi` with `ports`, `monitor`, `capture` and `led-scan`) that wire the other crates together. |
+| `analysis` | Offline track analysis written for this project: three-band waveform, tempo and constant beatgrid, and musical key with Camelot, standard and Open Key notation. Pure functions on decoded audio; no database. |
+| `library` | The SQLite library: schema and migrations, startup backups, folder scans and the watcher, fingerprints, tags, cues, playlists, beatgrid edits, the writer thread and the analyzer pool that stores `analysis` results. See [library.md](library.md). |
+| `dj-software` (`crates/app`) | The application binary. A command-line player and MIDI tools (`devices`, `play`, `library` and `midi` with `ports`, `monitor`, `capture` and `led-scan`) that wire the other crates together. |
 
 Controllers are documented in [`controllers/`](controllers/): the [mapping reference](controllers/mapping-reference.md) and [adding a controller](controllers/adding-a-controller.md).
