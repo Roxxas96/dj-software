@@ -29,7 +29,8 @@ AF=anull ff -ac 1 -c:a pcm_s24le "$out/sine440_s24.wav"
 # Headerless MP3 (no Xing/Info) with a trailing ID3v1 tag: symphonia estimates its length
 # from the bitrate, which the trailing tag inflates; it must not be reported as truncated.
 AF=anull ff -ac 1 -c:a libmp3lame -b:a 64k -write_xing 0 -id3v2_version 0 -write_id3v1 0 "$out/sine440_noxing_tagged.mp3"
-{ printf 'TAG'; head -c 125 /dev/zero; } >> "$out/sine440_noxing_tagged.mp3"
+# ~8 KB of APEv2-style trailing data roughly doubles the estimate (file is ~8 KB of audio).
+{ printf 'APETAGEX'; head -c 8184 /dev/zero; printf 'TAG'; head -c 125 /dev/zero; } >> "$out/sine440_noxing_tagged.mp3"
 
 # Deterministic pseudo-random bytes (fixed-seed LCG), so the file is not decodable.
 LC_ALL=C awk 'BEGIN { x = 12345; for (i = 0; i < 4096; i++) { x = (x * 1103515245 + 12345) % 2147483648; printf "%c", int(x / 65536) % 256 } }' \
