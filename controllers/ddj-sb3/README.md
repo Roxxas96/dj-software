@@ -13,9 +13,16 @@ Every binding in the mapping is replayed from the capture by
 ## Using it
 
 ```sh
-dj-software play a.mp3 --controller ddj-sb3 --cue-track b.mp3 --headphones 3,4
+dj-software play a.mp3 --device "DDJ-SB3" --controller ddj-sb3 --cue-track b.mp3 --headphones 3,4
 dj-software midi monitor --controller ddj-sb3
 ```
+
+`--headphones 3,4` are the SB3's own headphone channels, so `--device "DDJ-SB3"` plays
+through the SB3's audio interface.
+
+When the controller first connects, the four channel faders start closed (the mapping
+sets them to 0), so no deck is heard until you move its fader. The first move of each
+knob or fader is taken where it is.
 
 To change the mapping without rebuilding, copy `mapping.toml` to
 `<config dir>/controllers/ddj-sb3/mapping.toml` (on macOS,
@@ -37,7 +44,7 @@ knobs and faders use soft takeover: they act once they reach the new deck's valu
 | PLAY/PAUSE | play/pause |
 | CUE | cue (hold to preview when paused at the cue point) |
 | SHIFT + CUE | return to the start of the track |
-| TEMPO slider | tempo; toward you is faster |
+| TEMPO slider | tempo; toward you is faster (checked on the owner's SB3) |
 | SHIFT + KEY LOCK | next tempo range (6, 10, 16, 100 %) |
 | SHIFT | shift |
 | DECK | switch the side's deck |
@@ -57,6 +64,17 @@ and without audio streaming to the SB3) found no message that lights PLAY or CUE
 the headphone CUE LED did not respond during the capture. SHIFT and DECK have no
 lights. The PLAY and CUE LEDs probably need a "software connected" handshake first;
 that is still to be investigated.
+
+## Troubleshooting
+
+The SB3 is both the audio interface and the MIDI controller, on one USB cable. A short
+USB dropout can make the audio stream report an error and leave the MIDI link silent
+even though the SB3 is still listed. When `play` sees an audio stream error, it prints
+the error and reconnects the controller by itself ("controller reconnected after an
+audio/USB hiccup"). If the controller still does not respond, press Enter in the
+terminal running `play` to reconnect it by hand. Unplugging and plugging the SB3 back in
+also works. After any reconnect, values set meanwhile are kept, and knobs and faders
+must be picked up again (soft takeover).
 
 ## Not mapped yet
 
