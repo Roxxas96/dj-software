@@ -71,7 +71,16 @@ impl std::fmt::Display for AnalysisWarning {
     }
 }
 
-/// A snapshot of an [`Analyzer`]'s work since it started.
+/// How many of the most recent failures and warnings an [`Analyzer`] keeps for
+/// [`Analyzer::take_failures`] and [`Analyzer::take_warnings`]; older ones are dropped
+/// (the totals still count them).
+pub const REPORT_CAPACITY: usize = 1000;
+
+/// How many of the most recent failures and warnings [`Analyzer::progress`] copies.
+pub const PROGRESS_TAIL: usize = 20;
+
+/// A snapshot of an [`Analyzer`]'s work since it started. Cheap to take: it copies
+/// counters and at most [`PROGRESS_TAIL`] failures and warnings.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct AnalysisProgress {
     /// Tracks waiting or being analyzed.
@@ -80,9 +89,16 @@ pub struct AnalysisProgress {
     pub done: usize,
     /// Tracks left alone because their analysis was already up to date.
     pub skipped: usize,
-    /// Tracks that could not be analyzed, with the reason. Their existing analysis, if
-    /// any, is untouched.
+    /// Tracks that could not be analyzed since the analyzer started. Their existing
+    /// analysis, if any, is untouched.
+    pub failed_count: usize,
+    /// Warnings since the analyzer started.
+    pub warning_count: usize,
+    /// The most recent failures (at most [`PROGRESS_TAIL`]), oldest first, with the
+    /// reason. Failures taken with [`Analyzer::take_failures`] are no longer listed.
     pub failed: Vec<(i64, String)>,
+    /// The most recent warnings (at most [`PROGRESS_TAIL`]), oldest first. Warnings taken
+    /// with [`Analyzer::take_warnings`] are no longer listed.
     pub warnings: Vec<AnalysisWarning>,
 }
 
@@ -102,14 +118,53 @@ struct State {
     /// ... with whether to analyze it even if up to date.
     force: HashMap<i64, bool>,
     running: usize,
-    progress: AnalysisProgress,
+    done: usize,
+    skipped: usize,
+}
+
+/// Failures and warnings, behind their own lock so reporting never contends with the job
+/// queue.
+#[derive(Debug, Default)]
+struct Reports {
+    failed: VecDeque<(i64, String)>,
+    failed_count: usize,
+    warnings: VecDeque<AnalysisWarning>,
+    warning_count: usize,
     /// The last invalid `bpm_range` value reported, so it is reported once.
     reported_bpm_range: Option<String>,
+}
+
+impl Reports {
+    fn fail(&mut self, id: i64, error: String) {
+        self.failed_count += 1;
+        push_capped(&mut self.failed, (id, error));
+    }
+
+    fn warn(&mut self, warning: AnalysisWarning) {
+        self.warning_count += 1;
+        push_capped(&mut self.warnings, warning);
+    }
+}
+
+fn push_capped<T>(items: &mut VecDeque<T>, item: T) {
+    if items.len() >= REPORT_CAPACITY {
+        items.pop_front();
+    }
+    items.push_back(item);
+}
+
+fn tail<T: Clone>(items: &VecDeque<T>) -> Vec<T> {
+    items
+        .iter()
+        .skip(items.len().saturating_sub(PROGRESS_TAIL))
+        .cloned()
+        .collect()
 }
 
 #[derive(Debug)]
 struct Shared {
     state: Mutex<State>,
+    reports: Mutex<Reports>,
     wake: Condvar,
     stop: AtomicBool,
     db_path: PathBuf,
@@ -119,6 +174,10 @@ struct Shared {
 impl Shared {
     fn state(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn reports(&self) -> MutexGuard<'_, Reports> {
+        self.reports.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn stopped(&self) -> bool {
@@ -142,27 +201,39 @@ impl Analyzer {
     /// portable way to set one and this crate forbids `unsafe`, so they run at normal
     /// priority; [`default_threads`] leaves a core free instead.
     ///
-    /// A worker that cannot be spawned is skipped; if none can, enqueued tracks stay
-    /// queued.
-    #[must_use]
-    pub fn start(lib: &Library, threads: usize) -> Self {
+    /// A worker that cannot be spawned is skipped.
+    ///
+    /// # Errors
+    ///
+    /// [`LibraryError::Io`] if not a single worker thread could be spawned.
+    pub fn start(lib: &Library, threads: usize) -> Result<Self, LibraryError> {
         let shared = Arc::new(Shared {
             state: Mutex::default(),
+            reports: Mutex::default(),
             wake: Condvar::new(),
             stop: AtomicBool::new(false),
             db_path: lib.path().to_owned(),
             writer: lib.writer(),
         });
-        let threads = (0..threads.max(1))
-            .filter_map(|i| {
-                let shared = Arc::clone(&shared);
-                std::thread::Builder::new()
-                    .name(format!("library-analysis-{i}"))
-                    .spawn(move || worker(&shared))
-                    .ok()
-            })
-            .collect();
-        Self { shared, threads }
+        let mut handles = Vec::new();
+        let mut last_error = None;
+        for i in 0..threads.max(1) {
+            let thread_shared = Arc::clone(&shared);
+            match std::thread::Builder::new()
+                .name(format!("library-analysis-{i}"))
+                .spawn(move || worker(&thread_shared))
+            {
+                Ok(handle) => handles.push(handle),
+                Err(e) => last_error = Some(e),
+            }
+        }
+        match last_error {
+            Some(e) if handles.is_empty() => Err(LibraryError::Io(e)),
+            _ => Ok(Self {
+                shared,
+                threads: handles,
+            }),
+        }
     }
 
     /// Queues tracks for analysis. Tracks whose stored analysis was made by
@@ -183,14 +254,38 @@ impl Analyzer {
         self.shared.wake.notify_all();
     }
 
-    /// What has happened so far.
+    /// What has happened so far. Takes the queue lock and the report lock one after the
+    /// other, each only to copy counters and a short tail.
     #[must_use]
     pub fn progress(&self) -> AnalysisProgress {
-        let state = self.shared.state();
+        let (queued, done, skipped) = {
+            let state = self.shared.state();
+            (state.queue.len() + state.running, state.done, state.skipped)
+        };
+        let reports = self.shared.reports();
         AnalysisProgress {
-            queued: state.queue.len() + state.running,
-            ..state.progress.clone()
+            queued,
+            done,
+            skipped,
+            failed_count: reports.failed_count,
+            warning_count: reports.warning_count,
+            failed: tail(&reports.failed),
+            warnings: tail(&reports.warnings),
         }
+    }
+
+    /// Takes the kept failures (the most recent [`REPORT_CAPACITY`]), oldest first. The
+    /// total in [`AnalysisProgress::failed_count`] is unchanged.
+    #[must_use]
+    pub fn take_failures(&self) -> Vec<(i64, String)> {
+        self.shared.reports().failed.drain(..).collect()
+    }
+
+    /// Takes the kept warnings (the most recent [`REPORT_CAPACITY`]), oldest first. The
+    /// total in [`AnalysisProgress::warning_count`] is unchanged.
+    #[must_use]
+    pub fn take_warnings(&self) -> Vec<AnalysisWarning> {
+        self.shared.reports().warnings.drain(..).collect()
     }
 }
 
@@ -228,30 +323,30 @@ fn worker(shared: &Shared) {
             run_job(shared, &mut reader, id, force, &mut invalid_range)
         }))
         .unwrap_or_else(|_| Outcome::Failed("analysis panicked".into()));
+        // Reports first, so once `queued` reads 0 every report is visible. The two locks
+        // are never held together.
+        {
+            let mut reports = shared.reports();
+            if let Some(InvalidBpmRange { value, error }) = invalid_range
+                && reports.reported_bpm_range.as_ref() != Some(&value)
+            {
+                reports.reported_bpm_range = Some(value.clone());
+                reports.warn(AnalysisWarning::InvalidBpmRange { value, error });
+            }
+            match &outcome {
+                Outcome::Done { truncated: true } => {
+                    reports.warn(AnalysisWarning::Truncated { track_id: id });
+                }
+                Outcome::Failed(error) => reports.fail(id, error.clone()),
+                Outcome::Done { .. } | Outcome::Skipped | Outcome::Stopped => {}
+            }
+        }
         let mut state = shared.state();
         state.running -= 1;
-        if let Some(InvalidBpmRange { value, error }) = invalid_range
-            && state.reported_bpm_range.as_ref() != Some(&value)
-        {
-            state.reported_bpm_range = Some(value.clone());
-            state
-                .progress
-                .warnings
-                .push(AnalysisWarning::InvalidBpmRange { value, error });
-        }
         match outcome {
-            Outcome::Done { truncated } => {
-                state.progress.done += 1;
-                if truncated {
-                    state
-                        .progress
-                        .warnings
-                        .push(AnalysisWarning::Truncated { track_id: id });
-                }
-            }
-            Outcome::Skipped => state.progress.skipped += 1,
-            Outcome::Stopped => {}
-            Outcome::Failed(error) => state.progress.failed.push((id, error)),
+            Outcome::Done { .. } => state.done += 1,
+            Outcome::Skipped => state.skipped += 1,
+            Outcome::Stopped | Outcome::Failed(_) => {}
         }
     }
 }

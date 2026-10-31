@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 
 use library::{
     ANALYZER_VERSION, AnalysisProgress, AnalysisRow, AnalysisWarning, Analyzer, BpmRangeError,
-    Library, LibraryError, RawStatement, ScanProgress, StoreAnalysis, WriteOp, parse_bpm_range,
-    scan_folder, validate_bpm_range,
+    Library, LibraryError, PROGRESS_TAIL, REPORT_CAPACITY, RawStatement, ScanProgress,
+    StoreAnalysis, WriteOp, parse_bpm_range, scan_folder, validate_bpm_range,
 };
 use rusqlite::types::Value;
 
@@ -134,7 +134,7 @@ fn wait(analyzer: &Analyzer) -> AnalysisProgress {
 }
 
 fn analyze(s: &Setup, ids: &[i64], force: bool) -> AnalysisProgress {
-    let analyzer = Analyzer::start(&s.lib, 2);
+    let analyzer = Analyzer::start(&s.lib, 2).unwrap();
     analyzer.enqueue(ids, force);
     wait(&analyzer)
 }
@@ -393,7 +393,7 @@ fn low_bpm_ranges_get_a_warning() {
 fn duplicate_enqueues_run_once() {
     let s = setup();
     let id = add_track(&s, "a.wav", 128.0, 0.25);
-    let analyzer = Analyzer::start(&s.lib, 1);
+    let analyzer = Analyzer::start(&s.lib, 1).unwrap();
     analyzer.enqueue(&[id, id, id], false);
     let p = wait(&analyzer);
     assert_eq!(p.done + p.skipped, 1, "{p:?}");
@@ -405,7 +405,7 @@ fn drop_stops_without_draining_the_queue() {
     let ids: Vec<i64> = (0..4)
         .map(|i| add_track(&s, &format!("{i}.wav"), 120.0 + f64::from(i), 0.1))
         .collect();
-    let analyzer = Analyzer::start(&s.lib, 1);
+    let analyzer = Analyzer::start(&s.lib, 1).unwrap();
     analyzer.enqueue(&ids, false);
     let deadline = Instant::now() + Duration::from_secs(120);
     while analyzer.progress().done == 0 {
@@ -470,4 +470,97 @@ fn stale_analysis_is_not_stored() {
         .submit_wait(op(vec![0; 32], 4242))
         .unwrap_err();
     assert!(matches!(err, LibraryError::NoSuchTrack(4242)), "{err}");
+}
+
+#[test]
+fn failures_are_capped_but_counted() {
+    let s = setup();
+    let analyzer = Analyzer::start(&s.lib, 1).unwrap();
+    let extra = 5;
+    let ids: Vec<i64> = (0..i64::try_from(REPORT_CAPACITY + extra).unwrap())
+        .map(|i| 100_000 + i)
+        .collect();
+    analyzer.enqueue(&ids, false);
+    let p = wait(&analyzer);
+    assert_eq!(p.failed_count, ids.len());
+    // Progress copies only a short tail: the latest failures.
+    assert_eq!(p.failed.len(), PROGRESS_TAIL);
+    assert_eq!(p.failed.last().unwrap().0, *ids.last().unwrap());
+    // The kept failures are the most recent REPORT_CAPACITY, oldest first.
+    let kept = analyzer.take_failures();
+    assert_eq!(kept.len(), REPORT_CAPACITY);
+    assert_eq!(kept[0].0, ids[extra]);
+    assert_eq!(kept.last().unwrap().0, *ids.last().unwrap());
+    assert!(analyzer.take_failures().is_empty());
+    let p = analyzer.progress();
+    assert!(p.failed.is_empty());
+    assert_eq!(p.failed_count, ids.len(), "the total survives taking");
+}
+
+#[test]
+fn warnings_can_be_taken() {
+    let s = setup();
+    let id = add_track(&s, "a.wav", 128.0, 0.25);
+    s.lib
+        .writer()
+        .submit_wait(WriteOp::SetSetting {
+            key: "bpm_range".into(),
+            value: Some("nonsense".into()),
+        })
+        .unwrap();
+    let analyzer = Analyzer::start(&s.lib, 1).unwrap();
+    analyzer.enqueue(&[id], false);
+    let p = wait(&analyzer);
+    assert_eq!(p.warning_count, 1, "{p:?}");
+    let taken = analyzer.take_warnings();
+    assert!(
+        matches!(&taken[..], [AnalysisWarning::InvalidBpmRange { value, .. }] if value == "nonsense"),
+        "{taken:?}"
+    );
+    let p = analyzer.progress();
+    assert!(p.warnings.is_empty());
+    assert_eq!(p.warning_count, 1);
+}
+
+#[test]
+fn store_analysis_keeps_a_locked_grid() {
+    let s = setup();
+    let id = add_track(&s, "a.wav", 128.0, 0.25);
+    raw(
+        &s.lib,
+        "INSERT INTO analysis(track_id, analyzer_version, bpm, first_beat_frames, grid_locked) \
+         VALUES (?1, 0, 127.5, 1234.0, 1)",
+        vec![Value::Integer(id)],
+    );
+    let fingerprint: Vec<u8> = s
+        .lib
+        .reader()
+        .unwrap()
+        .connection()
+        .query_row("SELECT fingerprint FROM tracks WHERE id = ?1", [id], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    let waveform = analysis::Waveform {
+        frames_per_bucket: 1024,
+        buckets: vec![[1, 2, 3, 4]],
+    };
+    s.lib
+        .writer()
+        .submit_wait(WriteOp::StoreAnalysis(Box::new(StoreAnalysis {
+            track_id: id,
+            fingerprint,
+            analyzer_version: ANALYZER_VERSION,
+            bpm: Some(120.0),
+            first_beat_frames: Some(0.0),
+            key: Some(3),
+            waveform: waveform.to_bytes(),
+        })))
+        .unwrap();
+    let r = row(&s, id);
+    assert!(r.grid_locked);
+    assert_eq!((r.bpm, r.first_beat_frames), (Some(127.5), Some(1234.0)));
+    assert_eq!(r.key.map(analysis::Key::index), Some(3));
+    assert_eq!(r.waveform, Some(waveform));
+    assert_eq!(r.analyzer_version, i64::from(ANALYZER_VERSION));
 }
