@@ -40,7 +40,7 @@ knobs and faders use soft takeover: they act once they reach the new deck's valu
 ## Browsing and loading
 
 With `play --library`, the BROWSE knob scrolls the library browser (clockwise moves
-down), and pressing it switches between the tree (all tracks, folders, playlists) and the
+down), and pressing it switches between the tree (playlists, folders, all tracks) and the
 track list. LOAD loads the selected track onto the deck its side currently shows: the left
 LOAD onto deck 1 or 3, the right LOAD onto deck 2 or 4, following the DECK buttons. A cue
 point you set is remembered and comes back when the track is loaded again. See
@@ -93,6 +93,9 @@ must be picked up again (soft takeover).
 ## Not mapped yet
 
 SYNC, KEY LOCK, VINYL, the loop buttons, the jog wheels, the pad mode buttons and
-pads, the FX section and fader start: they need actions from later plans.
-The beatgrid actions (`deck.grid_*`) exist but are not bound yet; use the `grid` console
-commands. Their messages are listed at the end of `mapping.toml`.
+pads, the FX section and fader start: they need actions from later plans. The MIDI
+messages these unmapped controls send are listed in a comment at the end of
+`mapping.toml`.
+
+The beatgrid actions (`deck.grid_*`) exist but no SB3 control is bound to them yet; use
+the `grid` console commands.
