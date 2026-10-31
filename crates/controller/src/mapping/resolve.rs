@@ -28,7 +28,8 @@ pub struct Resolver {
     cc14: HashMap<MidiSource, (u8, u8)>,
     /// Per physical source: the value targets its last message drove and its last
     /// absolute value (before `invert`). When a SHIFT or deck layer moves the control
-    /// onto a target it did not drive last time, that target is armed.
+    /// onto a target it did not drive last time, that target is armed. A message for which
+    /// no binding fired (its conditions did not hold) is recorded with no target.
     sources: HashMap<MidiSource, SourceMemory>,
     /// The active deck per side as of the last message, to arm takeover on a switch.
     seen_active: Option<[DeckId; 2]>,
@@ -103,6 +104,9 @@ impl Resolver {
         self.observe_deck_switches(state);
         let mut resolved = Resolved::new();
         let mut driven: HashMap<MidiSource, SourceMemory> = HashMap::new();
+        // Absolute sources this message came from, with their plain value, whether or not
+        // a binding fired for them.
+        let mut moved: Vec<(MidiSource, f32)> = Vec::new();
 
         // A button release goes to whatever its press resolved to. If this control has
         // held presses, its other button bindings stay silent.
@@ -119,6 +123,9 @@ impl Resolver {
             // Read before the conditions so a 14-bit half is stored even when no binding
             // on its control fires.
             let raw = self.raw_value(&binding.midi, msg);
+            if binding.value == ValueKind::Absolute {
+                moved.push((binding.midi, absolute(raw)));
+            }
             if binding.value == ValueKind::Button && releasing_held {
                 if let Some(action) = self.held.remove(&i) {
                     resolved.push((action, Input::Release));
@@ -169,6 +176,20 @@ impl Resolver {
                 }
             };
             resolved.push((action, input));
+        }
+        // A move no binding drove (its conditions did not hold) still changes where the
+        // control is: remember it with no target, so the next target it drives is armed
+        // with that position.
+        for (source, value) in moved {
+            if !driven.contains_key(&source) {
+                self.sources.insert(
+                    source,
+                    SourceMemory {
+                        targets: Vec::new(),
+                        value,
+                    },
+                );
+            }
         }
         self.sources.extend(driven);
         resolved

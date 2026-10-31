@@ -460,6 +460,32 @@ shift = true
 }
 
 #[test]
+fn takeover_remembers_moves_no_binding_fired_for() {
+    // The knob only drives the filter without SHIFT. Moved with SHIFT held, nothing fires,
+    // but where it went is remembered: back without SHIFT, the filter must not jump.
+    let mut rig = Rig::new(&format!(
+        r#"{LEFT_SIDE}
+[[input]]
+midi = {{ cc = 23, channel = 1 }}
+action = "channel.filter"
+side = "left"
+shift = false
+"#
+    ));
+    // Pick the filter up at 0.5.
+    assert_eq!(absolute(&rig.send(cc(0, 23, 64))), 64.0 / 127.0);
+    rig.send(on(0, 63));
+    assert!(rig.send(cc(0, 23, 127)).is_empty(), "no binding with SHIFT");
+    rig.send(off(0, 63));
+    // The knob is at the top now, far from the filter's 0.5.
+    assert!(rig.send(cc(0, 23, 120)).is_empty(), "no jump to the knob");
+    assert!(rig.send(cc(0, 23, 100)).is_empty());
+    assert_eq!(rig.state.deck(d(0)).filter, 64.0 / 127.0);
+    // Turning down past 0.5 picks the filter up.
+    assert_eq!(absolute(&rig.send(cc(0, 23, 40))), 40.0 / 127.0);
+}
+
+#[test]
 fn takeover_after_deck_switch_detects_crossing_from_previous_position() {
     let mut rig = Rig::new(&format!("{LEFT_SIDE}{FADERS}"));
     rig.state.deck_mut(d(2)).fader = 0.5;

@@ -135,6 +135,10 @@ value, then takes over.
   being unplugged or reconnected, when a deck becomes the one a side shows, when a SHIFT
   layer or deck layer moves the same physical control onto a different value, and when
   something else changes the value after the control last set it.
+- Moves that no binding acts on still count. A knob bound only with `shift = false`, turned
+  while SHIFT is held, changes nothing, but the app remembers where it went: once SHIFT is
+  released, the knob is armed and must be picked up again (by coming within 0.02 of the
+  value or crossing it) before it changes the value.
 - Once the control has taken over, every move passes through until it is armed again.
 - Buttons and relative controls are never affected.
 
