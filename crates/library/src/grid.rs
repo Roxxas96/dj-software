@@ -14,7 +14,7 @@ use std::sync::{Mutex, PoisonError};
 
 use rusqlite::{OptionalExtension, Transaction};
 
-use crate::{Library, LibraryError, WriteOp, WriteOutcome};
+use crate::{Library, LibraryError, Reader, WriteOp, WriteOutcome};
 
 /// The lowest BPM a grid can be set to.
 pub const MIN_GRID_BPM: f64 = 40.0;
@@ -246,6 +246,30 @@ impl Taps {
         )]
         let mean = (last - first) as f64 / (taps.len() - 1) as f64;
         Some((60_000_000.0 / mean * 100.0).round() / 100.0)
+    }
+}
+
+impl Reader {
+    /// Track `track`'s beatgrid, or `None` if it has no analysis row (not analyzed and
+    /// never edited). Reads only the grid columns.
+    ///
+    /// # Errors
+    ///
+    /// Any database error.
+    pub fn beatgrid(&self, track: i64) -> Result<Option<Beatgrid>, LibraryError> {
+        Ok(self
+            .connection()
+            .prepare_cached(
+                "SELECT bpm, first_beat_frames, grid_locked FROM analysis WHERE track_id = ?1",
+            )?
+            .query_row([track], |r| {
+                Ok(Beatgrid {
+                    bpm: r.get(0)?,
+                    first_beat_frames: r.get(1)?,
+                    grid_locked: r.get(2)?,
+                })
+            })
+            .optional()?)
     }
 }
 

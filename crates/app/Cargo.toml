@@ -23,3 +23,10 @@ ctrlc.workspace = true
 controller = { path = "../controller" }
 decode = { path = "../decode" }
 engine = { path = "../engine" }
+directories.workspace = true
+dunce.workspace = true
+library = { path = "../library" }
+analysis = { path = "../analysis" }
+
+[dev-dependencies]
+tempfile.workspace = true

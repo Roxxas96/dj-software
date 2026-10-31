@@ -7,7 +7,7 @@
 use std::path::{MAIN_SEPARATOR, PathBuf};
 
 use rusqlite::types::Value;
-use rusqlite::{Row, Transaction, params_from_iter};
+use rusqlite::{OptionalExtension, Row, Transaction, params_from_iter};
 
 use crate::writer::{WriteOp, WriteOutcome};
 use crate::{LibraryError, Reader};
@@ -37,6 +37,13 @@ pub struct TrackRow {
     /// The track has a cue point or at least one hot cue.
     pub has_cues: bool,
     pub missing: bool,
+}
+
+/// One track with its file, as [`Reader::track`] returns it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrackDetails {
+    pub row: TrackRow,
+    pub path: PathBuf,
 }
 
 /// Which tracks [`Reader::tracks`] returns. Every set field must match.
@@ -137,6 +144,28 @@ impl Reader {
             })
         })?;
         Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// Track `id` with its file path, or `None` if there is no such track.
+    ///
+    /// # Errors
+    ///
+    /// Any database error.
+    pub fn track(&self, id: i64) -> Result<Option<TrackDetails>, LibraryError> {
+        let sql = format!(
+            "SELECT {TRACK_COLUMNS}, t.path FROM tracks t \
+             LEFT JOIN analysis a ON a.track_id = t.id WHERE t.id = ?1"
+        );
+        Ok(self
+            .connection()
+            .prepare_cached(&sql)?
+            .query_row([id], |r| {
+                Ok(TrackDetails {
+                    row: track_row(r)?,
+                    path: PathBuf::from(r.get::<_, String>(9)?),
+                })
+            })
+            .optional()?)
     }
 
     /// A page of a playlist's entries in playlist order.

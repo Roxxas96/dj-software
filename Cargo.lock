@@ -474,13 +474,18 @@ name = "dj-software"
 version = "0.0.0"
 dependencies = [
  "actions",
+ "analysis",
  "anyhow",
  "audio-io",
  "clap",
  "controller",
  "ctrlc",
  "decode",
+ "directories",
+ "dunce",
  "engine",
+ "library",
+ "tempfile",
 ]
 
 [[package]]
