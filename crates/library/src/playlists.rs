@@ -174,58 +174,94 @@ impl Reader {
         offset: usize,
         limit: usize,
     ) -> Result<Vec<TrackRow>, LibraryError> {
-        let mut conds: Vec<&str> = Vec::new();
-        let mut params: Vec<Value> = Vec::new();
-        if let Some(folder) = &filter.folder {
-            let folder = folder
-                .to_str()
-                .ok_or_else(|| LibraryError::NonUtf8Path(folder.clone()))?;
-            let prefix = format!(
-                "{}{MAIN_SEPARATOR}",
-                folder.trim_end_matches(MAIN_SEPARATOR)
-            );
-            // Range on the unique path index: everything from "dir/" up to "dir0" ('/' + 1).
-            let upper = format!("{}{}", prefix.trim_end_matches(MAIN_SEPARATOR), {
-                char::from(u8::try_from(MAIN_SEPARATOR).unwrap_or(b'/') + 1)
-            });
-            conds.push("t.path >= ? AND t.path < ?");
-            params.push(Value::Text(prefix));
-            params.push(Value::Text(upper));
-        }
-        if let Some(text) = filter.text.as_deref().filter(|t| !t.is_empty()) {
-            let pattern = Value::Text(format!("%{}%", escape_like(text)));
-            conds.push("(t.title LIKE ? ESCAPE '\\' OR t.artist LIKE ? ESCAPE '\\')");
-            params.push(pattern.clone());
-            params.push(pattern);
-        }
-        if let Some(missing) = filter.missing {
-            conds.push("t.missing = ?");
-            params.push(Value::Integer(i64::from(missing)));
-        }
-        let where_clause = if conds.is_empty() {
-            String::new()
-        } else {
-            format!("WHERE {}", conds.join(" AND "))
-        };
-        let column = match sort.key {
-            TrackSortKey::Title => "t.title COLLATE NOCASE",
-            TrackSortKey::Artist => "t.artist COLLATE NOCASE",
-            TrackSortKey::Bpm => "a.bpm",
-            TrackSortKey::Key => "a.key",
-            TrackSortKey::Added => "t.added_at",
-        };
-        let dir = if sort.descending { "DESC" } else { "ASC" };
-        let sql = format!(
-            "SELECT {TRACK_COLUMNS} FROM tracks t \
-             LEFT JOIN analysis a ON a.track_id = t.id \
-             {where_clause} ORDER BY {column} {dir}, t.id {dir} LIMIT ? OFFSET ?"
-        );
-        params.push(Value::Integer(to_i64(limit)));
-        params.push(Value::Integer(to_i64(offset)));
+        let (sql, params) = tracks_query(filter, sort, offset, limit)?;
         let mut stmt = self.connection().prepare_cached(&sql)?;
         let rows = stmt.query_map(params_from_iter(&params), track_row)?;
         Ok(rows.collect::<Result<_, _>>()?)
     }
+
+    /// The `EXPLAIN QUERY PLAN` detail lines of the exact statement [`Reader::tracks`]
+    /// runs, to test that a sort is served by an index.
+    ///
+    /// # Errors
+    ///
+    /// Any database error.
+    #[doc(hidden)]
+    pub fn tracks_query_plan(
+        &self,
+        filter: &TrackFilter,
+        sort: TrackSort,
+    ) -> Result<Vec<String>, LibraryError> {
+        let (sql, params) = tracks_query(filter, sort, 0, 100)?;
+        let mut stmt = self
+            .connection()
+            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+        let rows = stmt.query_map(params_from_iter(&params), |r| r.get::<_, String>(3))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+}
+
+/// The SQL and parameters for one page of [`Reader::tracks`].
+fn tracks_query(
+    filter: &TrackFilter,
+    sort: TrackSort,
+    offset: usize,
+    limit: usize,
+) -> Result<(String, Vec<Value>), LibraryError> {
+    let mut conds: Vec<&str> = Vec::new();
+    let mut params: Vec<Value> = Vec::new();
+    if let Some(folder) = &filter.folder {
+        let folder = folder
+            .to_str()
+            .ok_or_else(|| LibraryError::NonUtf8Path(folder.clone()))?;
+        let prefix = format!(
+            "{}{MAIN_SEPARATOR}",
+            folder.trim_end_matches(MAIN_SEPARATOR)
+        );
+        // Range on the unique path index: everything from "dir/" up to "dir0" ('/' + 1).
+        let upper = format!("{}{}", prefix.trim_end_matches(MAIN_SEPARATOR), {
+            char::from(u8::try_from(MAIN_SEPARATOR).unwrap_or(b'/') + 1)
+        });
+        conds.push("t.path >= ? AND t.path < ?");
+        params.push(Value::Text(prefix));
+        params.push(Value::Text(upper));
+    }
+    if let Some(text) = filter.text.as_deref().filter(|t| !t.is_empty()) {
+        let pattern = Value::Text(format!("%{}%", escape_like(text)));
+        conds.push("(t.title LIKE ? ESCAPE '\\' OR t.artist LIKE ? ESCAPE '\\')");
+        params.push(pattern.clone());
+        params.push(pattern);
+    }
+    if let Some(missing) = filter.missing {
+        conds.push("t.missing = ?");
+        params.push(Value::Integer(i64::from(missing)));
+    }
+    let where_clause = if conds.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", conds.join(" AND "))
+    };
+    let column = match sort.key {
+        TrackSortKey::Title => "t.title COLLATE NOCASE",
+        TrackSortKey::Artist => "t.artist COLLATE NOCASE",
+        TrackSortKey::Bpm => "a.bpm",
+        TrackSortKey::Key => "a.key",
+        TrackSortKey::Added => "t.added_at",
+    };
+    let dir = if sort.descending { "DESC" } else { "ASC" };
+    let sql = format!(
+        "SELECT p.id, p.title, p.artist, p.bpm, p.key, p.duration_frames, p.sample_rate, \
+                 (EXISTS (SELECT 1 FROM cues c WHERE c.track_id = p.id) \
+                  OR EXISTS (SELECT 1 FROM hotcues h WHERE h.track_id = p.id)), \
+                 p.missing \
+             FROM (SELECT t.id, t.title, t.artist, a.bpm, a.key, t.duration_frames, \
+                          t.sample_rate, t.missing \
+                   FROM tracks t LEFT JOIN analysis a ON a.track_id = t.id \
+                   {where_clause} ORDER BY {column} {dir}, t.id {dir} LIMIT ? OFFSET ?) p"
+    );
+    params.push(Value::Integer(to_i64(limit)));
+    params.push(Value::Integer(to_i64(offset)));
+    Ok((sql, params))
 }
 
 /// Applies a playlist op inside the writer's transaction.
@@ -274,6 +310,14 @@ pub(crate) fn apply(tx: &Transaction<'_>, op: &WriteOp) -> Result<WriteOutcome, 
             at,
         } => {
             let mut entries = entries(tx, *playlist)?;
+            let known: bool = tx.query_row(
+                "SELECT EXISTS (SELECT 1 FROM tracks WHERE id = ?1)",
+                [track],
+                |r| r.get(0),
+            )?;
+            if !known {
+                return Err(LibraryError::NoSuchTrack(*track));
+            }
             entries.insert(at.unwrap_or(usize::MAX).min(entries.len()), *track);
             rewrite(tx, *playlist, &entries)?;
             Ok(WriteOutcome::Done)

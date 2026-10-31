@@ -251,6 +251,18 @@ fn deleting_playlist_keeps_tracks() {
     for id in &t {
         add(&lib, p, *id, None);
     }
+    lib.writer()
+        .submit_wait(WriteOp::Raw(vec![
+            raw(
+                "INSERT INTO cues(track_id, cue_frames) VALUES (?1, 10.0)",
+                vec![Value::Integer(t[0])],
+            ),
+            raw(
+                "INSERT INTO hotcues(track_id, slot, frames) VALUES (?1, 1, 10.0)",
+                vec![Value::Integer(t[0])],
+            ),
+        ]))
+        .unwrap();
     submit(&lib, WriteOp::DeletePlaylist(p));
     let reader = lib.reader().unwrap();
     let conn = reader.connection();
@@ -261,6 +273,8 @@ fn deleting_playlist_keeps_tracks() {
     assert_eq!(count("tracks"), 3);
     assert_eq!(count("playlist_tracks"), 0);
     assert_eq!(count("playlists"), 0);
+    assert_eq!(count("cues"), 1);
+    assert_eq!(count("hotcues"), 1);
 }
 
 #[test]
@@ -356,6 +370,25 @@ fn paged_queries_return_stable_order() {
             );
         }
         assert_eq!(paged, all);
+        // Ties within an artist group break by id: ascending, or descending with `descending`.
+        for group in ["ant", "bee", "cat"] {
+            let ids_in_group: Vec<i64> = all
+                .iter()
+                .filter(|r| {
+                    r.artist
+                        .as_deref()
+                        .is_some_and(|a| a.eq_ignore_ascii_case(group))
+                })
+                .map(|r| r.id)
+                .collect();
+            assert!(ids_in_group.len() >= 8);
+            let mut sorted = ids_in_group.clone();
+            sorted.sort_unstable();
+            if descending {
+                sorted.reverse();
+            }
+            assert_eq!(ids_in_group, sorted, "{group} descending={descending}");
+        }
         // Artist sort is case-insensitive: "ant" < "Bee" < "Cat".
         let artists: Vec<_> = all.iter().filter_map(|r| r.artist.as_deref()).collect();
         let mut expected = artists.clone();
@@ -498,35 +531,197 @@ fn rows_carry_analysis_and_sort_by_bpm_key_added() {
 }
 
 /// Guards against table scans: runs in every build, with a bound loose enough for debug.
+/// Times the first and a deep page for every sort key.
 #[test]
 fn queries_stay_fast_with_50k_tracks() {
+    const N: i64 = 50_000;
     let (_d, lib) = open();
-    // One op, one transaction.
-    let stmts: Vec<RawStatement> = (0..50_000)
+    // Seeded in one op, one transaction: varied artists/titles/added_at, and analysis rows
+    // (varied bpm and key) for four tracks in five.
+    let mut stmts: Vec<RawStatement> = (0..N)
         .map(|i| {
-            insert_track_stmt(
-                &format!("/m/{i}.flac"),
-                &format!("title {i}"),
-                &format!("artist {:05}", (i * 7919) % 50_000),
+            raw(
+                "INSERT INTO tracks(path, fingerprint, title, artist, added_at) \
+                 VALUES (?1, x'00', ?2, ?3, ?4)",
+                vec![
+                    Value::Text(format!("/m/{i}.flac")),
+                    Value::Text(format!("Title {:05}", (i * 31) % N)),
+                    Value::Text(format!("artist {:05}", (i * 7919) % N)),
+                    Value::Integer((i * 104_729) % 1_000_003),
+                ],
             )
         })
         .collect();
+    stmts.push(raw(
+        "INSERT INTO analysis(track_id, analyzer_version, bpm, key) \
+         SELECT id, 1, 80.0 + (id * 37) % 9000 / 100.0, id % 24 FROM tracks WHERE id % 5 != 0",
+        vec![],
+    ));
     lib.writer().submit_wait(WriteOp::Raw(stmts)).unwrap();
 
     let reader = lib.reader().unwrap();
-    let sort = TrackSort {
-        key: TrackSortKey::Artist,
-        descending: false,
-    };
-    let start = Instant::now();
-    let rows = reader
-        .tracks(&TrackFilter::default(), sort, 25_000, 100)
-        .unwrap();
-    let elapsed = start.elapsed();
-    assert_eq!(rows.len(), 100);
-    assert_eq!(rows[0].artist.as_deref(), Some("artist 25000"));
-    assert!(
-        elapsed < Duration::from_millis(250),
-        "paged artist query took {elapsed:?}"
+    let mut timings = Vec::new();
+    for key in [
+        TrackSortKey::Title,
+        TrackSortKey::Artist,
+        TrackSortKey::Bpm,
+        TrackSortKey::Key,
+        TrackSortKey::Added,
+    ] {
+        for offset in [0, 49_800] {
+            let sort = TrackSort {
+                key,
+                descending: false,
+            };
+            let start = Instant::now();
+            let rows = reader
+                .tracks(&TrackFilter::default(), sort, offset, 100)
+                .unwrap();
+            let elapsed = start.elapsed();
+            timings.push(format!("{key:?}@{offset}: {elapsed:?}"));
+            assert_eq!(rows.len(), 100, "{key:?}@{offset}");
+            assert!(
+                elapsed < Duration::from_millis(250),
+                "{key:?} page at offset {offset} took {elapsed:?}"
+            );
+        }
+    }
+    println!("{}", timings.join("\n"));
+}
+
+/// Title, artist and added sorts are served by an index: no temp b-tree sort.
+#[test]
+fn title_artist_added_sorts_use_indexes() {
+    let (_d, lib) = open();
+    n_tracks(&lib, 10);
+    let reader = lib.reader().unwrap();
+    for key in [
+        TrackSortKey::Title,
+        TrackSortKey::Artist,
+        TrackSortKey::Added,
+    ] {
+        for descending in [false, true] {
+            let plan = reader
+                .tracks_query_plan(&TrackFilter::default(), TrackSort { key, descending })
+                .unwrap();
+            assert!(
+                !plan.iter().any(|l| l.contains("TEMP B-TREE")),
+                "{key:?} desc={descending}: {plan:?}"
+            );
+            assert!(
+                plan.iter().any(|l| l.contains("USING INDEX tracks_")
+                    || l.contains("USING COVERING INDEX tracks_")),
+                "{key:?} desc={descending}: {plan:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn adding_unknown_track_is_a_typed_error() {
+    let (_d, lib) = open();
+    let p = create(&lib, "P");
+    let err = lib
+        .writer()
+        .submit_wait(WriteOp::AddToPlaylist {
+            playlist: p,
+            track: 999,
+            at: None,
+        })
+        .unwrap_err();
+    assert!(matches!(err, LibraryError::NoSuchTrack(999)), "{err:?}");
+    assert!(order(&lib, p).is_empty());
+}
+
+#[test]
+fn playlist_edit_boundaries() {
+    let (_d, lib) = open();
+    let t = n_tracks(&lib, 3);
+    let p = create(&lib, "B");
+    for id in &t {
+        add(&lib, p, *id, None);
+    }
+    // Remove the last entry.
+    submit(
+        &lib,
+        WriteOp::RemoveFromPlaylist {
+            playlist: p,
+            position: 2,
+        },
     );
+    assert_eq!(order(&lib, p), [t[0], t[1]]);
+    assert_eq!(positions(&lib, p), [0, 1]);
+    // from == to is a no-op.
+    submit(
+        &lib,
+        WriteOp::MoveInPlaylist {
+            playlist: p,
+            from: 1,
+            to: 1,
+        },
+    );
+    assert_eq!(order(&lib, p), [t[0], t[1]]);
+    // Move a duplicate to the end (and past the end).
+    add(&lib, p, t[0], None);
+    assert_eq!(order(&lib, p), [t[0], t[1], t[0]]);
+    submit(
+        &lib,
+        WriteOp::MoveInPlaylist {
+            playlist: p,
+            from: 0,
+            to: 2,
+        },
+    );
+    assert_eq!(order(&lib, p), [t[1], t[0], t[0]]);
+    submit(
+        &lib,
+        WriteOp::MoveInPlaylist {
+            playlist: p,
+            from: 0,
+            to: 99,
+        },
+    );
+    assert_eq!(order(&lib, p), [t[0], t[0], t[1]]);
+    assert_eq!(positions(&lib, p), [0, 1, 2]);
+    // Move from out of range fails and changes nothing.
+    let err = lib
+        .writer()
+        .submit_wait(WriteOp::MoveInPlaylist {
+            playlist: p,
+            from: 3,
+            to: 0,
+        })
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            LibraryError::PositionOutOfRange {
+                position: 3,
+                len: 3
+            }
+        ),
+        "{err:?}"
+    );
+    assert_eq!(order(&lib, p), [t[0], t[0], t[1]]);
+
+    // MovePlaylist: unknown id errors; a position past the end clamps to last.
+    let q = create(&lib, "Q");
+    let r = create(&lib, "R");
+    let err = lib
+        .writer()
+        .submit_wait(WriteOp::MovePlaylist {
+            id: 9999,
+            to_position: 0,
+        })
+        .unwrap_err();
+    assert!(matches!(err, LibraryError::NoSuchPlaylist(9999)), "{err:?}");
+    submit(
+        &lib,
+        WriteOp::MovePlaylist {
+            id: p,
+            to_position: 99,
+        },
+    );
+    let ids: Vec<i64> = playlists(&lib).into_iter().map(|s| s.id).collect();
+    assert_eq!(ids, [q, r, p]);
 }

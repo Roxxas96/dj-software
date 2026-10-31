@@ -50,6 +50,8 @@ pub enum LibraryError {
     Watch(#[from] notify::Error),
     #[error("playlist {0} does not exist")]
     NoSuchPlaylist(i64),
+    #[error("track {0} does not exist")]
+    NoSuchTrack(i64),
     #[error("position {position} is out of range (the playlist has {len} entries)")]
     PositionOutOfRange { position: usize, len: usize },
     #[error("the library writer has shut down")]
