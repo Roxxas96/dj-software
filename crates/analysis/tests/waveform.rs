@@ -182,3 +182,16 @@ fn non_finite_samples_do_not_poison_later_buckets() {
     assert!(w.buckets[100][0] > 0);
     assert!(w.buckets[100][1..].iter().any(|&v| v > 0));
 }
+
+#[test]
+fn tiny_buckets_at_high_sample_rate_stay_fast() {
+    let sr = 192_000;
+    let t = synth::stereo(&synth::sine(1000.0, 0.5, sr), sr);
+    let start = std::time::Instant::now();
+    let w = waveform(&t, 1);
+    assert!(start.elapsed() < std::time::Duration::from_secs(5));
+    assert_eq!(w.buckets.len(), 96_000);
+    // Past the 50 ms window the 1 kHz tone is steady: mid is the loudest band.
+    let tail = &w.buckets[20_000..];
+    assert!(tail.iter().all(|b| b[2] >= 250 && b[1] < 20 && b[3] < 20));
+}
