@@ -31,6 +31,31 @@ value = 1.0
 action = "master.headphone_level"
 value = 1.0
 
+# Soft takeover starts disarmed when the controller first attaches (nothing is known
+# about where the faders are), so a channel would sound at whatever level its fader
+# happens to sit on at startup. Closing every channel fader here keeps the decks silent
+# until their fader is touched; the first touch then takes the fader's position.
+
+[[init]]
+action = "channel.fader"
+deck = 1
+value = 0.0
+
+[[init]]
+action = "channel.fader"
+deck = 2
+value = 0.0
+
+[[init]]
+action = "channel.fader"
+deck = 3
+value = 0.0
+
+[[init]]
+action = "channel.fader"
+deck = 4
+value = 0.0
+
 # ---------------------------------------------------------------- left deck (1 / 3)
 
 [[input]]

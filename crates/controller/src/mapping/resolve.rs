@@ -63,10 +63,22 @@ impl Resolver {
         }
     }
 
-    /// The controller (re)attached: arm takeover everywhere and forget held presses and
+    /// The controller reattached: arm takeover everywhere and forget held presses and
     /// half-received 14-bit values.
     pub fn attach(&mut self) {
         self.takeover.arm_all();
+        self.forget();
+    }
+
+    /// The controller attached for the first time: like [`attach`](Self::attach), but
+    /// takeover starts disarmed, so the first value of each control is taken as is (a deck
+    /// switch, a layer change or a value changed elsewhere still arms it).
+    pub fn first_attach(&mut self) {
+        self.takeover.disarm_all();
+        self.forget();
+    }
+
+    fn forget(&mut self) {
         self.held.clear();
         self.cc14.clear();
         self.sources.clear();

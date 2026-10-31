@@ -45,6 +45,8 @@ pub struct Runtime {
     feedback: Feedback,
     /// Whether the controller is attached; LEDs are only sent while it is.
     attached: bool,
+    /// Whether [`attach`](Runtime::attach) ran already.
+    attached_once: bool,
     /// Absolute values of the current run, in order of their last occurrence.
     pending: Vec<Pending>,
     last: Vec<(MidiMessage, Resolved)>,
@@ -58,6 +60,7 @@ impl Runtime {
             init: mapping.init,
             state: ControlState::default(),
             attached: false,
+            attached_once: false,
             pending: Vec::new(),
             last: Vec::new(),
         }
@@ -68,8 +71,13 @@ impl Runtime {
         &self.state
     }
 
-    /// The controller attached: applies the `[[init]]` actions, arms soft takeover for
-    /// every target and sends every LED.
+    /// The controller attached: applies the `[[init]]` actions and sends every LED.
+    ///
+    /// On the first attach soft takeover starts disarmed: nothing is known about where the
+    /// controls are, so the first value of each one is taken as is (a mapping that wants a
+    /// value to stay put until touched, like a closed fader, sets it with `[[init]]`). Any
+    /// later attach arms takeover for every target, like
+    /// [`on_reconnect`](Self::on_reconnect).
     ///
     /// An init action the engine's queue has no room for is skipped.
     pub fn attach(&mut self, engine: &mut EngineController, out: &mut dyn MidiOut) {
@@ -81,7 +89,13 @@ impl Runtime {
                 engine,
             );
         }
-        self.reattach(engine, out);
+        if self.attached_once {
+            self.resolver.attach();
+        } else {
+            self.resolver.first_attach();
+        }
+        self.attached_once = true;
+        self.resync(engine, out);
     }
 
     /// The controller went away. Every held press is released (a held CUE stops
@@ -99,14 +113,14 @@ impl Runtime {
     }
 
     /// The controller came back: like [`attach`](Self::attach) but without the `[[init]]`
-    /// actions, so the values set meanwhile are kept. Takeover is armed and every LED is
-    /// sent again.
+    /// actions, so the values set meanwhile are kept. Takeover is armed for every target
+    /// (the controls may have moved meanwhile) and every LED is sent again.
     pub fn on_reconnect(&mut self, engine: &mut EngineController, out: &mut dyn MidiOut) {
-        self.reattach(engine, out);
+        self.resolver.attach();
+        self.resync(engine, out);
     }
 
-    fn reattach(&mut self, engine: &mut EngineController, out: &mut dyn MidiOut) {
-        self.resolver.attach();
+    fn resync(&mut self, engine: &mut EngineController, out: &mut dyn MidiOut) {
         self.feedback.resync();
         self.attached = true;
         self.tick(clock::now_micros(), engine, out);

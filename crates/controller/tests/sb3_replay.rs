@@ -459,30 +459,42 @@ fn deck_switch_affects_deck_3_only_and_headphone_master_led_follows_state() {
 }
 
 #[test]
+fn faders_start_closed_and_first_move_is_taken() {
+    // `[[init]]` closes every channel fader, so nothing is heard until a fader is touched,
+    // and the first move of each fader is taken wherever the hardware fader sits.
+    let mut rig = Rig::attached();
+    for n in 1..=4 {
+        assert_eq!(rig.runtime.state().deck(d(n)).fader, 0.0, "deck {n}");
+    }
+    let moved = rig.cc14("channel1.fader", 100, 0);
+    assert!(moved.contains(&Action::Fader(d(1))), "{moved:?}");
+    assert!((rig.runtime.state().deck(d(1)).fader - 100.0 / 127.0).abs() < 0.01);
+}
+
+#[test]
 fn soft_takeover_after_deck_switch_on_fader() {
     let mut rig = Rig::attached();
-    // Pick deck 1's fader up at the top (its default, 1.0), then pull it down to 0.
+    // Deck 1's fader takes the first physical value (the top) at once.
     rig.cc14("channel1.fader", 127, 127);
-    rig.cc14("channel1.fader", 0, 0);
-    assert_eq!(rig.runtime.state().deck(d(1)).fader, 0.0);
+    assert_eq!(rig.runtime.state().deck(d(1)).fader, 1.0);
 
-    // Deck 3's fader is still at 1.0 while the physical fader sits at 0.
+    // Deck 3's fader is still closed while the physical fader sits at the top.
     rig.press("deck1.deck_select");
     let moved = rig.cc14("channel3.fader", 40, 0);
     assert!(moved.is_empty(), "no jump to deck 3: {moved:?}");
-    assert_eq!(rig.runtime.state().deck(d(3)).fader, 1.0);
+    assert_eq!(rig.runtime.state().deck(d(3)).fader, 0.0);
 
     // Reaching deck 3's value picks it up.
-    let moved = rig.cc14("channel3.fader", 127, 127);
+    let moved = rig.cc14("channel3.fader", 0, 0);
     assert!(moved.contains(&Action::Fader(d(3))));
     rig.cc14("channel3.fader", 64, 0);
     assert!((rig.runtime.state().deck(d(3)).fader - 0.5).abs() < 0.01);
 
-    // Back on deck 1 (at 0) with the physical fader at the middle: no jump either.
+    // Back on deck 1 (at the top) with the physical fader at the middle: no jump either.
     rig.press("deck3.deck_select");
     let moved = rig.cc14("channel1.fader", 80, 0);
     assert!(moved.is_empty(), "no jump to deck 1: {moved:?}");
-    assert_eq!(rig.runtime.state().deck(d(1)).fader, 0.0);
+    assert_eq!(rig.runtime.state().deck(d(1)).fader, 1.0);
 }
 
 #[test]
