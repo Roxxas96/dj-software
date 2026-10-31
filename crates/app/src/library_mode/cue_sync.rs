@@ -100,6 +100,11 @@ impl CueSync {
         }
     }
 
+    /// The decoded track's sample rate.
+    pub fn rate(&self) -> u32 {
+        self.rate
+    }
+
     /// Whether the snapshot has shown this track loaded (so the deck's playhead is this
     /// track's).
     pub fn load_applied(&self) -> bool {

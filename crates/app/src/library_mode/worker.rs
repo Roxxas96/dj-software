@@ -11,7 +11,8 @@ use std::thread::JoinHandle;
 
 use engine::{DeckId, TrackBuffer};
 use library::{
-    Beatgrid, Browser, BrowserRequest, BrowserView, GridEdit, Library, Reader, TrackRow,
+    Beatgrid, Browser, BrowserRequest, BrowserView, GridEdit, Library, PendingTrack, Reader,
+    TrackRow,
 };
 
 use crate::format::safe;
@@ -62,7 +63,7 @@ pub enum Event {
         row: TrackRow,
     },
     /// Tracks that need analysis.
-    NewTracks(Vec<i64>),
+    NewTracks(Vec<PendingTrack>),
 }
 
 /// A decoded track, ready for the deck.
@@ -152,9 +153,9 @@ fn run(lib: &Library, jobs: &Receiver<Job>, events: &Sender<Event>, decode: Deco
                     Err(e) => say(format!("warning: library browser: {}", safe(e))),
                 }
                 if find_new_tracks {
-                    match reader.track_ids_to_analyze(false) {
-                        Ok(ids) => {
-                            let _ = events.send(Event::NewTracks(ids));
+                    match reader.tracks_to_analyze() {
+                        Ok(tracks) => {
+                            let _ = events.send(Event::NewTracks(tracks));
                         }
                         Err(e) => say(format!(
                             "warning: could not look for tracks to analyze: {}",
@@ -511,6 +512,6 @@ mod tests {
             Event::NewTracks(ids) => Some(ids),
             _ => None,
         });
-        assert!(new.contains(&0), "{new:?}");
+        assert!(new.iter().any(|t| t.id == 0), "{new:?}");
     }
 }
