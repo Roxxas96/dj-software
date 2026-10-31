@@ -282,3 +282,57 @@ fn refresh_sees_library_changes() {
     assert_eq!(view.path, "Playlists ▸ Closing");
     assert_eq!(view.track.map(|t| t.id), Some(f.ids[5]));
 }
+
+#[test]
+fn refresh_keeps_the_selected_track() {
+    let f = fixture();
+    let mut b = browser(&f.lib);
+    scroll(&mut b, 4); // All tracks
+    toggle(&mut b);
+    let view = scroll(&mut b, 2);
+    assert_eq!(view.track.as_ref().map(|t| t.id), Some(f.ids[2]));
+    // A track sorting before the cursor appears (say, found by the folder watcher).
+    f.lib
+        .writer()
+        .submit_wait(WriteOp::Raw(vec![RawStatement {
+            sql: "INSERT INTO tracks(path, fingerprint, title, artist, added_at) \
+                  VALUES ('/new.flac', x'00', 'new', '0 first', 0)"
+                .into(),
+            params: vec![],
+        }]))
+        .unwrap();
+    let view = b.refresh().unwrap();
+    assert_eq!(view.track.map(|t| t.id), Some(f.ids[2]));
+    assert_eq!((view.index, view.count), (3, 7));
+}
+
+#[test]
+fn refresh_keeps_the_selected_playlist_entry_or_falls_back_to_the_row() {
+    let f = fixture();
+    let mut b = browser(&f.lib);
+    toggle(&mut b); // Peak time: ids 4, 0, 3
+    let view = scroll(&mut b, 1);
+    assert_eq!(view.track.as_ref().map(|t| t.id), Some(f.ids[0]));
+    let playlist = f.lib.reader().unwrap().playlists().unwrap()[0].id;
+    let writer = f.lib.writer();
+    writer
+        .submit_wait(WriteOp::AddToPlaylist {
+            playlist,
+            track: f.ids[5],
+            at: Some(0),
+        })
+        .unwrap();
+    let view = b.refresh().unwrap();
+    assert_eq!(view.track.map(|t| t.id), Some(f.ids[0]));
+    assert_eq!((view.index, view.count), (2, 4));
+    // The selected entry is removed: the cursor stays on the same row.
+    writer
+        .submit_wait(WriteOp::RemoveFromPlaylist {
+            playlist,
+            position: 2,
+        })
+        .unwrap();
+    let view = b.refresh().unwrap();
+    assert_eq!(view.track.map(|t| t.id), Some(f.ids[3]));
+    assert_eq!(view.index, 2);
+}

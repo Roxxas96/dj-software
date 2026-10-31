@@ -8,6 +8,7 @@
 mod cue_sync;
 mod worker;
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -24,7 +25,7 @@ use library::{
 };
 
 use crate::console::ConsoleCommand;
-use crate::format::{bpm_text, grid_text, key_text, notation_from_setting, track_name};
+use crate::format::{bpm_text, grid_text, key_text, notation_from_setting, safe, track_name};
 use crate::printer::Printer;
 use cue_sync::{CueAction, CueSync};
 use worker::{Event, Job};
@@ -45,8 +46,11 @@ pub struct LibraryMode {
     lib: Arc<Library>,
     writer: Writer,
     analyzer: Option<Analyzer>,
-    /// Tracks queued for analysis since the start.
-    analysis_total: usize,
+    /// Tracks queued for analysis since the start (each once: a track that fails is not
+    /// retried until the next session or `library analyze`).
+    enqueued: HashSet<i64>,
+    /// The watcher scanned something: look for tracks to analyze at the next refresh.
+    find_new_tracks: bool,
     last_done: usize,
     watcher: Option<Watcher>,
     watch_scans: u64,
@@ -76,15 +80,11 @@ impl LibraryMode {
         let notation = notation_from_setting(reader.setting(KEY_NOTATION)?.as_deref());
 
         let pending = reader.track_ids_to_analyze(false)?;
-        let analyzer = if pending.is_empty() {
-            None
-        } else {
-            let analyzer =
-                Analyzer::start(&lib, default_threads()).context("starting the analyzer")?;
-            analyzer.enqueue(&pending, false);
+        // Started even with nothing to do: the watcher may find new tracks.
+        let analyzer = Analyzer::start(&lib, default_threads()).context("starting the analyzer")?;
+        if !pending.is_empty() {
             println!("analyzing {} track(s) in the background", pending.len());
-            Some(analyzer)
-        };
+        }
 
         let folders = reader.folders()?;
         let watcher = if folders.is_empty() {
@@ -93,7 +93,7 @@ impl LibraryMode {
             match library::watch(&lib, &folders) {
                 Ok(watcher) => Some(watcher),
                 Err(e) => {
-                    println!("warning: not watching the library folders: {e}");
+                    println!("warning: not watching the library folders: {}", safe(e));
                     None
                 }
             }
@@ -102,11 +102,12 @@ impl LibraryMode {
         let (events_tx, events) = channel();
         let (jobs, worker) =
             worker::spawn(Arc::clone(&lib), events_tx).context("starting the library worker")?;
-        Ok(Self {
+        let mut mode = Self {
             writer: lib.writer(),
             lib,
-            analyzer,
-            analysis_total: pending.len(),
+            analyzer: Some(analyzer),
+            enqueued: HashSet::new(),
+            find_new_tracks: false,
             last_done: 0,
             watcher,
             watch_scans: 0,
@@ -124,7 +125,21 @@ impl LibraryMode {
             refresh_wanted: false,
             last_refresh: None,
             dirty: true,
-        })
+        };
+        mode.enqueue_new(&pending);
+        Ok(mode)
+    }
+
+    /// Queues for analysis the tracks of `ids` not queued yet this session.
+    fn enqueue_new(&mut self, ids: &[i64]) {
+        let new: Vec<i64> = ids
+            .iter()
+            .copied()
+            .filter(|id| self.enqueued.insert(*id))
+            .collect();
+        if let (Some(analyzer), false) = (&self.analyzer, new.is_empty()) {
+            analyzer.enqueue(&new, false);
+        }
     }
 
     fn send_job(&self, job: Job, printer: &Printer) {
@@ -184,21 +199,45 @@ impl LibraryMode {
         engine: &EngineController,
         printer: &Printer,
     ) {
+        match self.grid_job(deck, edit, engine) {
+            Ok(job) => self.send_job(job, printer),
+            Err(message) => printer.event(message),
+        }
+    }
+
+    /// The worker job for a grid edit on `deck`, or why it is refused: no library track,
+    /// the track still loading (the playhead would be the previous track's), or an
+    /// unknown sample rate (the shift is converted with the track's own rate).
+    fn grid_job(
+        &self,
+        deck: DeckId,
+        edit: GridEditRequest,
+        engine: &EngineController,
+    ) -> Result<Job, String> {
+        let n = deck.index() + 1;
         let Some(track) = &self.decks[deck.index()] else {
-            printer.event(format!(
-                "Deck {}: load a library track to edit its beatgrid",
-                deck.index() + 1
+            return Err(format!(
+                "Deck {n}: load a library track to edit its beatgrid"
             ));
-            return;
         };
-        let snap = engine.deck(deck);
-        let job = Job::Grid {
+        if !track.cue.load_applied() {
+            return Err(format!(
+                "Deck {n}: the track is still loading; edit its beatgrid in a moment"
+            ));
+        }
+        let Some(rate) = track.row.sample_rate else {
+            return Err(format!(
+                "Deck {n}: the track's sample rate is unknown; rescan it before editing its \
+                 beatgrid"
+            ));
+        };
+        let playhead = engine.deck(deck).position_frames;
+        Ok(Job::Grid {
             deck,
             track: track.row.id,
-            edit: grid_edit(edit, snap.track_sample_rate, snap.position_frames),
-            playhead: Some(snap.position_frames),
-        };
-        self.send_job(job, printer);
+            edit: grid_edit(edit, rate, playhead),
+            playhead: Some(playhead),
+        })
     }
 
     /// Takes whether the status lines changed since the last call.
@@ -228,7 +267,14 @@ impl LibraryMode {
                     .into_iter()
                     .filter_map(|d| self.decks[d.index()].as_ref().map(|t| (d, t.row.id)))
                     .collect();
-                self.send_job(Job::Refresh { decks }, printer);
+                let find_new_tracks = std::mem::take(&mut self.find_new_tracks);
+                self.send_job(
+                    Job::Refresh {
+                        decks,
+                        find_new_tracks,
+                    },
+                    printer,
+                );
             }
         }
     }
@@ -255,6 +301,7 @@ impl LibraryMode {
                 }
                 self.refresh_wanted = true;
             }
+            Event::NewTracks(ids) => self.enqueue_new(&ids),
             Event::Track { deck, row } => {
                 if let Some(t) = self.decks[deck.index()]
                     .as_mut()
@@ -325,8 +372,9 @@ impl LibraryMode {
                 };
                 if let Err(e) = self.writer.submit(op) {
                     printer.event(format!(
-                        "warning: could not save the cue point for {}: {e}",
-                        track_name(&track.row)
+                        "warning: could not save the cue point for {}: {}",
+                        track_name(&track.row),
+                        safe(e)
                     ));
                 }
                 self.refresh_wanted |= !track.row.has_cues;
@@ -358,9 +406,9 @@ impl LibraryMode {
         match name {
             Some(name) => format!(
                 "warning: could not save {what} for {name}: {}",
-                failed.error
+                safe(&failed.error)
             ),
-            None => format!("warning: could not save {what}: {}", failed.error),
+            None => format!("warning: could not save {what}: {}", safe(&failed.error)),
         }
     }
 
@@ -370,13 +418,8 @@ impl LibraryMode {
         };
         let p = analyzer.progress();
         let finished = p.done + p.skipped + p.failed_count;
-        let status = (p.queued > 0).then(|| {
-            format!(
-                "analyzing {}/{}",
-                finished.min(self.analysis_total),
-                self.analysis_total
-            )
-        });
+        let total = self.enqueued.len();
+        let status = (p.queued > 0).then(|| format!("analyzing {}/{total}", finished.min(total)));
         if status != self.analysis_status {
             self.analysis_status = status;
             self.dirty = true;
@@ -387,7 +430,7 @@ impl LibraryMode {
         }
         let failures = analyzer.take_failures();
         for (id, why) in failures.iter().take(REPORTS_SHOWN) {
-            printer.event(format!("analysis failed for track {id}: {why}"));
+            printer.event(format!("analysis failed for track {id}: {}", safe(why)));
         }
         if failures.len() > REPORTS_SHOWN {
             printer.event(format!(
@@ -395,8 +438,15 @@ impl LibraryMode {
                 failures.len() - REPORTS_SHOWN
             ));
         }
-        for warning in analyzer.take_warnings().iter().take(REPORTS_SHOWN) {
-            printer.event(format!("warning: {warning}"));
+        let warnings = analyzer.take_warnings();
+        for warning in warnings.iter().take(REPORTS_SHOWN) {
+            printer.event(format!("warning: {}", safe(warning)));
+        }
+        if warnings.len() > REPORTS_SHOWN {
+            printer.event(format!(
+                "… and {} more analysis warnings",
+                warnings.len() - REPORTS_SHOWN
+            ));
         }
     }
 
@@ -409,7 +459,8 @@ impl LibraryMode {
         {
             self.degraded_reported = true;
             printer.event(format!(
-                "library watching degraded: {reason} (rescanning every 10 minutes)"
+                "library watching degraded: {} (rescanning every 10 minutes)",
+                safe(reason)
             ));
         }
         // The health report covers watch errors; empty the queue so it never grows.
@@ -418,15 +469,21 @@ impl LibraryMode {
         if scans != self.watch_scans {
             self.watch_scans = scans;
             self.refresh_wanted = true;
+            self.find_new_tracks = true;
         }
         let skipped = watcher.skipped_count();
         if skipped != self.watch_skipped {
-            let new = usize::try_from(skipped - self.watch_skipped).unwrap_or(usize::MAX);
+            let new =
+                usize::try_from(skipped.saturating_sub(self.watch_skipped)).unwrap_or(usize::MAX);
             self.watch_skipped = skipped;
             let recent = watcher.skipped();
             let shown = new.min(REPORTS_SHOWN).min(recent.len());
             for (path, why) in &recent[recent.len() - shown..] {
-                printer.event(format!("library: could not scan {}: {why}", path.display()));
+                printer.event(format!(
+                    "library: could not scan {}: {}",
+                    safe(path.display()),
+                    safe(why)
+                ));
             }
         }
     }
@@ -624,5 +681,97 @@ mod tests {
             grid_edit(GridEditRequest::ToggleLock, 44_100, 0.0),
             GridEdit::ToggleLock
         );
+    }
+
+    fn mode() -> (tempfile::TempDir, LibraryMode, EngineController, Printer) {
+        let dir = tempfile::tempdir().unwrap();
+        let mode = LibraryMode::start(Some(&dir.path().join("library.sqlite3"))).unwrap();
+        let (engine, _renderer) = engine::engine(engine::EngineConfig {
+            sample_rate: 44_100,
+            max_block_frames: 512,
+        });
+        (dir, mode, engine, Printer::spawn())
+    }
+
+    fn loaded(seq: u64) -> worker::Loaded {
+        worker::Loaded {
+            deck: DeckId::new(0).unwrap(),
+            seq,
+            row: row(),
+            buffer: Arc::new(engine::TrackBuffer::new(44_100, vec![0.0; 2 * 4410]).unwrap()),
+            cue: None,
+        }
+    }
+
+    #[test]
+    fn a_stale_decode_is_dropped() {
+        let (_dir, mut mode, mut engine, printer) = mode();
+        let deck = DeckId::new(0).unwrap();
+        mode.next_seq(deck);
+        mode.next_seq(deck); // A second LOAD was asked for after the first.
+        mode.load(loaded(1), &mut engine, &printer);
+        assert!(
+            mode.decks[0].is_none(),
+            "the first, stale decode must not load"
+        );
+        mode.load(loaded(2), &mut engine, &printer);
+        assert_eq!(mode.decks[0].as_ref().map(|t| t.row.id), Some(7));
+        mode.shutdown(&mut engine, &printer);
+        printer.finish();
+    }
+
+    #[test]
+    fn grid_edits_wait_for_the_load_and_use_the_track_rate() {
+        let (_dir, mut mode, engine, printer) = mode();
+        let deck = DeckId::new(0).unwrap();
+        let shift = GridEditRequest::Shift { millis: 10 };
+        let refused = |mode: &LibraryMode| mode.grid_job(deck, shift, &engine).unwrap_err();
+        assert!(refused(&mode).contains("load a library track"));
+        let mut cue = CueSync::new(4410, 48_000, None);
+        mode.decks[0] = Some(DeckTrack {
+            row: TrackRow {
+                sample_rate: Some(48_000),
+                ..row()
+            },
+            cue,
+        });
+        assert!(
+            refused(&mode).contains("still loading"),
+            "{}",
+            refused(&mode)
+        );
+        // The engine shows the new track loaded.
+        let snap = DeckSnapshot {
+            loaded: true,
+            playing: false,
+            position_frames: 0.0,
+            duration_frames: 4410,
+            track_sample_rate: 48_000,
+            tempo_ratio: 1.0,
+            cue_frames: 0.0,
+            previewing: false,
+        };
+        cue.step(&snap);
+        mode.decks[0].as_mut().unwrap().cue = cue;
+        match mode.grid_job(deck, shift, &engine).unwrap() {
+            Job::Grid { track, edit, .. } => {
+                assert_eq!(track, 7);
+                assert_eq!(edit, GridEdit::Shift { frames: 480.0 });
+            }
+            other => panic!("{other:?}"),
+        }
+        mode.decks[0].as_mut().unwrap().row.sample_rate = None;
+        assert!(refused(&mode).contains("sample rate is unknown"));
+        drop(printer);
+    }
+
+    #[test]
+    fn new_tracks_are_queued_once() {
+        let (_dir, mut mode, mut engine, printer) = mode();
+        mode.on_event(Event::NewTracks(vec![1, 2]), &mut engine, &printer);
+        mode.on_event(Event::NewTracks(vec![2, 3]), &mut engine, &printer);
+        assert_eq!(mode.enqueued.len(), 3);
+        mode.shutdown(&mut engine, &printer);
+        printer.finish();
     }
 }

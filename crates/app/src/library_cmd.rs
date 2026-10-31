@@ -17,18 +17,19 @@ use crate::format::{
     notation_setting, truncate,
 };
 
-/// `println!` with control characters in the text (library tags, file names) replaced,
-/// see [`crate::format::sanitize_lines`].
+/// `println!` of one line with every control character in it (from library tags, file
+/// names, error messages) replaced, line breaks included, see [`crate::format::safe`].
+/// Multi-line text is printed a line at a time.
 macro_rules! out {
     ($($arg:tt)*) => {
-        println!("{}", crate::format::sanitize_lines(&format!($($arg)*)))
+        println!("{}", crate::format::safe(format!($($arg)*)))
     };
 }
 
 /// [`out!`] on stderr.
 macro_rules! err_out {
     ($($arg:tt)*) => {
-        eprintln!("{}", crate::format::sanitize_lines(&format!($($arg)*)))
+        eprintln!("{}", crate::format::safe(format!($($arg)*)))
     };
 }
 
@@ -283,7 +284,7 @@ fn scan_one(lib: &Library, dir: &Path) -> anyhow::Result<()> {
             last = Instant::now();
             eprint!(
                 "\rscanning {}: {} files",
-                crate::format::sanitize_for_terminal(&dir.display().to_string()),
+                crate::format::safe(dir.display()),
                 p.scanned
             );
             let _ = std::io::stderr().flush();
@@ -295,7 +296,9 @@ fn scan_one(lib: &Library, dir: &Path) -> anyhow::Result<()> {
         eprint!("\r\x1b[2K");
     }
     out!("{}:", dir.display());
-    out!("{}", scan_report_text(&report).trim_end());
+    for line in scan_report_text(&report).lines() {
+        out!("{line}");
+    }
     Ok(())
 }
 
@@ -314,7 +317,11 @@ fn scan_report_text(report: &ScanReport) -> String {
     if !report.skipped.is_empty() {
         text.push_str(&format!("  skipped {} file(s):\n", report.skipped.len()));
         for (path, why) in report.skipped.iter().take(SKIPPED_SHOWN) {
-            text.push_str(&format!("    {}: {why}\n", path.display()));
+            text.push_str(&format!(
+                "    {}: {}\n",
+                crate::format::safe(path.display()),
+                crate::format::safe(why)
+            ));
         }
         if report.skipped.len() > SKIPPED_SHOWN {
             text.push_str(&format!(
@@ -365,10 +372,9 @@ fn list_tracks(lib: &Library, args: &ListArgs) -> anyhow::Result<()> {
             (rows, reader.track_count(&filter)?, None)
         }
     };
-    out!(
-        "{}",
-        track_table(&rows, positions.as_deref(), notation).trim_end()
-    );
+    for line in track_table(&rows, positions.as_deref(), notation).lines() {
+        out!("{line}");
+    }
     if rows.len() < total {
         out!(
             "showing {} of {total} tracks (use --limit to see more)",

@@ -87,3 +87,65 @@ fn track_ids_to_analyze_skips_current_and_missing() {
     assert_eq!(reader.track_ids_to_analyze(false).unwrap(), vec![2, 3]);
     assert_eq!(reader.track_ids_to_analyze(true).unwrap(), vec![1, 2, 3]);
 }
+
+#[test]
+fn track_position_follows_the_sort() {
+    use library::{TrackFilter, TrackSort, TrackSortKey};
+    let (_dir, lib) = open();
+    // Artists: 1 "b", 2 NULL, 3 "A", 4 "b", 5 "c" (missing, filtered out below).
+    for (id, artist) in [
+        (1, Some("b")),
+        (2, None),
+        (3, Some("A")),
+        (4, Some("b")),
+        (5, Some("c")),
+    ] {
+        add_track(&lib, id, id == 5);
+        raw(
+            &lib,
+            "UPDATE tracks SET artist = ?2, title = ?3 WHERE id = ?1",
+            vec![
+                Value::Integer(id),
+                artist.map_or(Value::Null, |a| Value::Text(a.into())),
+                Value::Text(format!("t{}", 6 - id)),
+            ],
+        );
+    }
+    let reader = lib.reader().unwrap();
+    let all = TrackFilter::default();
+    for key in [
+        TrackSortKey::Artist,
+        TrackSortKey::Title,
+        TrackSortKey::Bpm,
+        TrackSortKey::Added,
+    ] {
+        for descending in [false, true] {
+            let sort = TrackSort { key, descending };
+            let rows = reader.tracks(&all, sort, 0, 100).unwrap();
+            for (i, row) in rows.iter().enumerate() {
+                assert_eq!(
+                    reader.track_position(&all, sort, row.id).unwrap(),
+                    Some(i),
+                    "{key:?} desc={descending} track {}",
+                    row.id
+                );
+            }
+        }
+    }
+    let present = TrackFilter {
+        missing: Some(false),
+        ..TrackFilter::default()
+    };
+    assert_eq!(
+        reader
+            .track_position(&present, TrackSort::default(), 5)
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        reader
+            .track_position(&all, TrackSort::default(), 99)
+            .unwrap(),
+        None
+    );
+}

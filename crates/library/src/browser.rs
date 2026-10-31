@@ -138,8 +138,10 @@ impl Browser {
     }
 
     /// Reads the tree and the selected list again, to see library changes (new
-    /// playlists, scanned tracks). The selected entry stays selected, with its list cursor
-    /// kept where it fits; if the entry is gone, the cursor stays at the same tree row.
+    /// playlists, scanned tracks). The selected entry stays selected and so does the
+    /// selected track, wherever it moved in the list (in a playlist, the occurrence
+    /// nearest the old cursor); if the track left the list, the cursor stays on the same
+    /// row where it fits. If the entry is gone, the cursor stays at the same tree row.
     ///
     /// # Errors
     ///
@@ -147,11 +149,20 @@ impl Browser {
     pub fn refresh(&mut self) -> Result<BrowserView, LibraryError> {
         let entries = entries(&self.reader)?;
         let current = &self.entries[self.tree_cursor].source;
-        let (tree_cursor, list_cursor) =
-            match entries.iter().position(|e| e.source.same_entry(current)) {
-                Some(i) => (i, self.list.cursor),
-                None => (self.tree_cursor.min(entries.len() - 1), 0),
-            };
+        let (tree_cursor, list_cursor) = match entries
+            .iter()
+            .position(|e| e.source.same_entry(current))
+        {
+            Some(i) => {
+                let selected = self.selected_track().map(|t| t.id);
+                let found = match selected {
+                    Some(id) => find_track(&self.reader, &entries[i].source, id, self.list.cursor)?,
+                    None => None,
+                };
+                (i, found.unwrap_or(self.list.cursor))
+            }
+            None => (self.tree_cursor.min(entries.len() - 1), 0),
+        };
         let list = open_list(&self.reader, &entries[tree_cursor].source, list_cursor)?;
         self.entries = entries;
         self.tree_cursor = tree_cursor;
@@ -268,6 +279,41 @@ fn open_list(reader: &Reader, source: &Source, cursor: usize) -> Result<List, Li
         offset,
         rows,
     })
+}
+
+/// Where track `id` is in `source`'s list, if it is there; in a playlist (where a track
+/// may appear more than once), the occurrence nearest `near`. A playlist is read a page at
+/// a time; a folder or "All tracks" takes one count query.
+fn find_track(
+    reader: &Reader,
+    source: &Source,
+    id: i64,
+    near: usize,
+) -> Result<Option<usize>, LibraryError> {
+    match source {
+        Source::Playlist { id: playlist, len } => {
+            let mut best: Option<usize> = None;
+            let mut offset = 0;
+            while offset < *len {
+                let rows = reader.playlist_tracks(*playlist, offset, BROWSER_PAGE_ROWS)?;
+                if rows.is_empty() {
+                    break;
+                }
+                for (i, row) in rows.iter().enumerate() {
+                    let at = offset + i;
+                    if row.id == id && best.is_none_or(|b| at.abs_diff(near) < b.abs_diff(near)) {
+                        best = Some(at);
+                    }
+                }
+                offset += rows.len();
+            }
+            Ok(best)
+        }
+        Source::Folder(folder) => {
+            reader.track_position(&folder_filter(folder), TrackSort::default(), id)
+        }
+        Source::All => reader.track_position(&TrackFilter::default(), TrackSort::default(), id),
+    }
 }
 
 /// The page of `source` around `index`: its offset and rows.
