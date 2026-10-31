@@ -42,6 +42,9 @@ fn map_error(err: SymphoniaError) -> DecodeError {
 /// truncated (gapless trimming is not exact across encoders).
 const DECLARED_SLACK_FRAMES: usize = 2_048;
 
+/// A shortfall against the declared length only counts past this fraction of it.
+const DECLARED_SHORTFALL_DIVISOR: usize = 10;
+
 /// A decoded track plus whether decoding ended early.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Decoded {
@@ -56,8 +59,12 @@ pub struct Decoded {
 ///
 /// Mono is duplicated to both channels; with more than two channels the first two are kept.
 /// Gapless mode is on, so encoder delay and padding are trimmed. A packet that fails to decode
-/// is skipped; a stream that ends early yields the audio decoded so far, flagged
-/// [`Decoded::truncated`].
+/// is skipped; a stream that ends early yields the audio decoded so far and sets
+/// [`Decoded::truncated`]. Besides read/decode errors, truncation is inferred when the
+/// decode falls over 10% short of the length the container declares. That declared length
+/// is ignored for MP3s without a Xing/Info/LAME header, where it is only a bitrate
+/// estimate. A file cut cleanly at a packet boundary without a declared length is not
+/// detected.
 ///
 /// # Errors
 ///
@@ -106,13 +113,22 @@ fn decode(path: &Path, limit: Option<usize>) -> Result<Decoded, DecodeError> {
         .default_track(TrackType::Audio)
         .ok_or(DecodeError::NoAudioTrack)?;
     let track_id = track.id;
-    let declared_frames = track.num_frames;
+    let mut declared_frames = track.num_frames;
+    let has_gapless_header = track.delay.is_some();
     let track_delay_missing = track.delay.is_none();
     let params = track
         .codec_params
         .as_ref()
         .and_then(|p| p.audio())
         .ok_or(DecodeError::NoAudioTrack)?;
+
+    // Without a Xing/Info/LAME header symphonia estimates an MP3's length from its bitrate,
+    // which trailing tags or a quiet VBR intro inflate; only a header's count is reliable.
+    if params.codec == symphonia::core::codecs::audio::well_known::CODEC_ID_MP3
+        && !has_gapless_header
+    {
+        declared_frames = None;
+    }
 
     let mut decoder = symphonia::default::get_codecs()
         .make_audio_decoder(params, &AudioDecoderOptions::default().gapless(true))
@@ -194,10 +210,14 @@ fn decode(path: &Path, limit: Option<usize>) -> Result<Decoded, DecodeError> {
     }
 
     // A stream cut at a packet boundary ends cleanly, so also compare with the length the
-    // container declares; a shortfall bigger than a packet or two means data is missing.
+    // container declares; a shortfall of over 10% (and more than a packet or two) means
+    // data is missing. Declared lengths are only used where the container states them.
     if limit.is_none()
         && let Some(declared) = declared_frames
-        && usize::try_from(declared).is_ok_and(|d| out.len() / 2 + DECLARED_SLACK_FRAMES < d)
+        && usize::try_from(declared).is_ok_and(|d| {
+            let shortfall = d.saturating_sub(out.len() / 2);
+            shortfall > DECLARED_SLACK_FRAMES.max(d / DECLARED_SHORTFALL_DIVISOR)
+        })
     {
         truncated = true;
     }
