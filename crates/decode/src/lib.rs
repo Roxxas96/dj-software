@@ -38,17 +38,32 @@ fn map_error(err: SymphoniaError) -> DecodeError {
     }
 }
 
+/// Frames a decode may fall short of the container's declared length before it counts as
+/// truncated (gapless trimming is not exact across encoders).
+const DECLARED_SLACK_FRAMES: usize = 2_048;
+
+/// A decoded track plus whether decoding ended early.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Decoded {
+    /// The decoded audio.
+    pub track: TrackBuffer,
+    /// A read or decode error, or a shortfall against the container's declared length,
+    /// ended the track after some audio, so it may be incomplete.
+    pub truncated: bool,
+}
+
 /// Decodes `path` at its native sample rate into interleaved stereo.
 ///
 /// Mono is duplicated to both channels; with more than two channels the first two are kept.
 /// Gapless mode is on, so encoder delay and padding are trimmed. A packet that fails to decode
-/// is skipped; a stream that ends early yields the audio decoded so far.
+/// is skipped; a stream that ends early yields the audio decoded so far, flagged
+/// [`Decoded::truncated`].
 ///
 /// # Errors
 ///
 /// Returns [`DecodeError`] if the file cannot be read, is not a supported audio format, or
 /// contains no decodable audio.
-pub fn decode_file(path: &Path) -> Result<TrackBuffer, DecodeError> {
+pub fn decode_file(path: &Path) -> Result<Decoded, DecodeError> {
     decode(path, None)
 }
 
@@ -60,12 +75,12 @@ pub fn decode_file(path: &Path) -> Result<TrackBuffer, DecodeError> {
 ///
 /// As [`decode_file`].
 pub fn decode_prefix(path: &Path, max_frames: usize) -> Result<TrackBuffer, DecodeError> {
-    decode(path, Some(max_frames))
+    decode(path, Some(max_frames)).map(|d| d.track)
 }
 
 /// The decode loop shared by [`decode_file`] and [`decode_prefix`]; `limit` caps the
 /// number of frames returned.
-fn decode(path: &Path, limit: Option<usize>) -> Result<TrackBuffer, DecodeError> {
+fn decode(path: &Path, limit: Option<usize>) -> Result<Decoded, DecodeError> {
     let file = File::open(path)?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
@@ -91,6 +106,7 @@ fn decode(path: &Path, limit: Option<usize>) -> Result<TrackBuffer, DecodeError>
         .default_track(TrackType::Audio)
         .ok_or(DecodeError::NoAudioTrack)?;
     let track_id = track.id;
+    let declared_frames = track.num_frames;
     let track_delay_missing = track.delay.is_none();
     let params = track
         .codec_params
@@ -106,6 +122,10 @@ fn decode(path: &Path, limit: Option<usize>) -> Result<TrackBuffer, DecodeError>
     let mut out: Vec<f32> = Vec::new();
     let mut scratch: Vec<f32> = Vec::new();
     let mut last_error: Option<SymphoniaError> = None;
+    let mut truncated = false;
+    // True while the most recent packet failed to decode; if the stream then ends, the
+    // tail of the file was lost.
+    let mut trailing_error = false;
     // With a limit, decoding stops once it is reached. An MP4 edit list's encoder delay is
     // trimmed from the front afterwards, so decode that much more; it is read once the
     // decoded sample rate is known.
@@ -129,8 +149,14 @@ fn decode(path: &Path, limit: Option<usize>) -> Result<TrackBuffer, DecodeError>
         let packet = match format.next_packet() {
             Ok(Some(p)) => p,
             // A read error after some audio is an early end of stream (e.g. truncation).
-            Ok(None) => break,
-            Err(_) if !out.is_empty() => break,
+            Ok(None) => {
+                truncated |= trailing_error;
+                break;
+            }
+            Err(_) if !out.is_empty() => {
+                truncated = true;
+                break;
+            }
             Err(e) => return Err(map_error(e)),
         };
         if packet.track_id != track_id {
@@ -138,6 +164,7 @@ fn decode(path: &Path, limit: Option<usize>) -> Result<TrackBuffer, DecodeError>
         }
         match decoder.decode(&packet) {
             Ok(buf) => {
+                trailing_error = false;
                 let spec = buf.spec();
                 sample_rate = Some(spec.rate());
                 let channels = spec.channels().count();
@@ -153,17 +180,27 @@ fn decode(path: &Path, limit: Option<usize>) -> Result<TrackBuffer, DecodeError>
                 }
             }
             Err(e @ (SymphoniaError::DecodeError(_) | SymphoniaError::IoError(_))) => {
+                trailing_error = true;
                 last_error = Some(e);
             }
             Err(e) => {
                 if out.is_empty() {
                     return Err(map_error(e));
                 }
+                truncated = true;
                 break;
             }
         }
     }
 
+    // A stream cut at a packet boundary ends cleanly, so also compare with the length the
+    // container declares; a shortfall bigger than a packet or two means data is missing.
+    if limit.is_none()
+        && let Some(declared) = declared_frames
+        && usize::try_from(declared).is_ok_and(|d| out.len() / 2 + DECLARED_SLACK_FRAMES < d)
+    {
+        truncated = true;
+    }
     if track_delay_missing
         && let Some(rate) = sample_rate
         && let Some(trim) = mp4_trim::read_trim(path, track_id, rate)
@@ -182,5 +219,6 @@ fn decode(path: &Path, limit: Option<usize>) -> Result<TrackBuffer, DecodeError>
         return Err(last_error.map_or(DecodeError::NoAudioTrack, map_error));
     }
     let rate = sample_rate.ok_or_else(|| DecodeError::Corrupt("unknown sample rate".into()))?;
-    TrackBuffer::new(rate, out).map_err(|e| DecodeError::Corrupt(e.to_string()))
+    let track = TrackBuffer::new(rate, out).map_err(|e| DecodeError::Corrupt(e.to_string()))?;
+    Ok(Decoded { track, truncated })
 }

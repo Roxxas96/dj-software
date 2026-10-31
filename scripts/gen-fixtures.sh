@@ -20,6 +20,9 @@ AF=$STEREO ff -c:a libmp3lame -b:a 128k "$out/sine440.mp3"
 AF=$STEREO ff -c:a aac -b:a 128k "$out/sine440.m4a"
 AF=$STEREO ff -c:a vorbis -strict -2 -b:a 128k "$out/sine440.ogg"
 AF=anull ff -ac 1 "$out/sine440_mono.wav"
+# Mono keeps 16-bit big-endian AIFF and 24-bit WAV under the fixture size limit.
+AF=anull ff -ac 1 -c:a pcm_s16be "$out/sine440_s16be.aiff"
+AF=anull ff -ac 1 -c:a pcm_s24le "$out/sine440_s24.wav"
 
 # Deterministic pseudo-random bytes (fixed-seed LCG), so the file is not decodable.
 LC_ALL=C awk 'BEGIN { x = 12345; for (i = 0; i < 4096; i++) { x = (x * 1103515245 + 12345) % 2147483648; printf "%c", int(x / 65536) % 256 } }' \

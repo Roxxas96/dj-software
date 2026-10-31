@@ -121,9 +121,15 @@ pub fn describe_audio_error(error: &AudioError) -> String {
 }
 
 fn decode(path: &Path) -> anyhow::Result<Arc<engine::TrackBuffer>> {
-    let track =
+    let decoded =
         decode::decode_file(path).with_context(|| format!("decoding {}", path.display()))?;
-    Ok(Arc::new(track))
+    if decoded.truncated {
+        eprintln!(
+            "warning: {} may be incomplete (decoding stopped early)",
+            path.display()
+        );
+    }
+    Ok(Arc::new(decoded.track))
 }
 
 fn send(controller: &mut engine::EngineController, command: Command) -> anyhow::Result<()> {
