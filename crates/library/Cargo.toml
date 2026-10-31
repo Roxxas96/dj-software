@@ -18,11 +18,13 @@ test-hooks = []
 [dependencies]
 blake3.workspace = true
 decode = { path = "../decode" }
+dunce.workspace = true
 lofty.workspace = true
 rusqlite.workspace = true
 thiserror.workspace = true
 walkdir.workspace = true
 
 [dev-dependencies]
+dunce.workspace = true
 library = { path = ".", features = ["test-hooks"] }
 tempfile.workspace = true
