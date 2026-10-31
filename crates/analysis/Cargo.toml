@@ -13,5 +13,3 @@ workspace = true
 [dependencies]
 engine = { path = "../engine" }
 thiserror.workspace = true
-
-[dev-dependencies]
