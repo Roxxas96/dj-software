@@ -175,6 +175,13 @@ Ids are what you write in `action = "..."`. "Target" is what the binding needs:
 | `deck.tempo` | deck | absolute | The tempo slider: 0.5 is the original tempo. Which end is faster depends on the controller, so use `invert` to match the slider's printed direction. |
 | `deck.tempo_range_next` | deck | button | Press to go to the next tempo range: 6 %, 10 %, 16 %, 100 %, then back to 6 %. |
 | `deck.return_to_start` | deck | button | Press to jump to the start of the track. |
+| `deck.grid_shift_back` | deck | button | Press to move the beatgrid 5 ms earlier, or 1 ms with SHIFT held on the binding's side. |
+| `deck.grid_shift_forward` | deck | button | Press to move the beatgrid 5 ms later, or 1 ms with SHIFT held on the binding's side. |
+| `deck.grid_set_downbeat` | deck | button | Press to move the beatgrid so a beat falls exactly at the playhead. |
+| `deck.grid_halve` | deck | button | Press to halve the BPM, keeping the beat nearest the playhead. |
+| `deck.grid_double` | deck | button | Press to double the BPM, keeping the beat nearest the playhead. |
+| `deck.grid_tap` | deck | button | Tap tempo: from the fourth tap on, the BPM follows the mean interval of the taps. A pause of more than 2 s starts over. |
+| `deck.grid_lock_toggle` | deck | button | Press to lock or unlock the beatgrid. A locked grid is kept when the track is analyzed again. |
 | `channel.trim` | deck | absolute | Channel gain (TRIM). |
 | `channel.eq_high` | deck | absolute | High EQ. |
 | `channel.eq_mid` | deck | absolute | Mid EQ. |
@@ -192,6 +199,12 @@ Ids are what you write in `action = "..."`. "Target" is what the binding needs:
 
 Only "absolute" actions can be used in `[[init]]`. `soft_takeover` has an effect only on absolute bindings, and `invert` flips absolute values (or negates relative steps).
 Button actions ignore releases, except `deck.cue` and `modifier.shift`.
+
+The `deck.grid_*` actions edit the loaded track's beatgrid in the library. Every grid edit
+except `deck.grid_lock_toggle` also locks the grid, so analyzing the track again never undoes
+a manual correction. The BPM stays between 40 and 300, and shifting or setting the downbeat
+needs a BPM (analyze the track first). The built-in DDJ-SB3 mapping does not bind the grid
+actions yet (the app's console will drive them); your own mappings can bind them.
 
 ## State ids for LEDs
 

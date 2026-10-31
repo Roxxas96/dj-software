@@ -9,6 +9,7 @@
 mod backup;
 mod db;
 pub mod fingerprint;
+mod grid;
 mod jobs;
 mod playlists;
 mod scan;
@@ -19,6 +20,9 @@ mod watch;
 mod writer;
 
 pub use db::{Library, Reader};
+pub use grid::{
+    GridEdit, GridError, MAX_GRID_BPM, MIN_GRID_BPM, MIN_TAPS, TAP_RESET_MICROS, TAP_WINDOW,
+};
 pub use jobs::{
     ANALYZER_VERSION, AnalysisProgress, AnalysisRow, AnalysisWarning, Analyzer, PROGRESS_TAIL,
     REPORT_CAPACITY, WAVEFORM_FRAMES_PER_BUCKET, default_threads,
@@ -72,6 +76,8 @@ pub enum LibraryError {
         #[source]
         source: analysis::WaveformError,
     },
+    #[error(transparent)]
+    Grid(#[from] GridError),
     #[error("the library writer has shut down")]
     WriterGone,
     #[error("the library writer panicked while applying a change; it was rolled back")]

@@ -92,6 +92,13 @@ pub enum ActionKind {
     Tempo,
     TempoRangeNext,
     ReturnToStart,
+    GridShiftBack,
+    GridShiftForward,
+    GridSetDownbeat,
+    GridHalve,
+    GridDouble,
+    GridTap,
+    GridLockToggle,
     Trim,
     EqHigh,
     EqMid,
@@ -109,12 +116,19 @@ pub enum ActionKind {
 }
 
 impl ActionKind {
-    pub const ALL: [ActionKind; 19] = [
+    pub const ALL: [ActionKind; 26] = [
         ActionKind::PlayPause,
         ActionKind::Cue,
         ActionKind::Tempo,
         ActionKind::TempoRangeNext,
         ActionKind::ReturnToStart,
+        ActionKind::GridShiftBack,
+        ActionKind::GridShiftForward,
+        ActionKind::GridSetDownbeat,
+        ActionKind::GridHalve,
+        ActionKind::GridDouble,
+        ActionKind::GridTap,
+        ActionKind::GridLockToggle,
         ActionKind::Trim,
         ActionKind::EqHigh,
         ActionKind::EqMid,
@@ -139,6 +153,13 @@ impl ActionKind {
             ActionKind::Tempo => "deck.tempo",
             ActionKind::TempoRangeNext => "deck.tempo_range_next",
             ActionKind::ReturnToStart => "deck.return_to_start",
+            ActionKind::GridShiftBack => "deck.grid_shift_back",
+            ActionKind::GridShiftForward => "deck.grid_shift_forward",
+            ActionKind::GridSetDownbeat => "deck.grid_set_downbeat",
+            ActionKind::GridHalve => "deck.grid_halve",
+            ActionKind::GridDouble => "deck.grid_double",
+            ActionKind::GridTap => "deck.grid_tap",
+            ActionKind::GridLockToggle => "deck.grid_lock_toggle",
             ActionKind::Trim => "channel.trim",
             ActionKind::EqHigh => "channel.eq_high",
             ActionKind::EqMid => "channel.eq_mid",
@@ -168,6 +189,13 @@ impl ActionKind {
             | ActionKind::Tempo
             | ActionKind::TempoRangeNext
             | ActionKind::ReturnToStart
+            | ActionKind::GridShiftBack
+            | ActionKind::GridShiftForward
+            | ActionKind::GridSetDownbeat
+            | ActionKind::GridHalve
+            | ActionKind::GridDouble
+            | ActionKind::GridTap
+            | ActionKind::GridLockToggle
             | ActionKind::Trim
             | ActionKind::EqHigh
             | ActionKind::EqMid
@@ -228,6 +256,13 @@ pub enum Action {
     Tempo(DeckId),
     TempoRangeNext(DeckId),
     ReturnToStart(DeckId),
+    GridShiftBack(DeckId),
+    GridShiftForward(DeckId),
+    GridSetDownbeat(DeckId),
+    GridHalve(DeckId),
+    GridDouble(DeckId),
+    GridTap(DeckId),
+    GridLockToggle(DeckId),
     Trim(DeckId),
     EqHigh(DeckId),
     EqMid(DeckId),
@@ -254,6 +289,13 @@ impl Action {
             (K::Tempo, Target::Deck(d)) => Action::Tempo(d),
             (K::TempoRangeNext, Target::Deck(d)) => Action::TempoRangeNext(d),
             (K::ReturnToStart, Target::Deck(d)) => Action::ReturnToStart(d),
+            (K::GridShiftBack, Target::Deck(d)) => Action::GridShiftBack(d),
+            (K::GridShiftForward, Target::Deck(d)) => Action::GridShiftForward(d),
+            (K::GridSetDownbeat, Target::Deck(d)) => Action::GridSetDownbeat(d),
+            (K::GridHalve, Target::Deck(d)) => Action::GridHalve(d),
+            (K::GridDouble, Target::Deck(d)) => Action::GridDouble(d),
+            (K::GridTap, Target::Deck(d)) => Action::GridTap(d),
+            (K::GridLockToggle, Target::Deck(d)) => Action::GridLockToggle(d),
             (K::Trim, Target::Deck(d)) => Action::Trim(d),
             (K::EqHigh, Target::Deck(d)) => Action::EqHigh(d),
             (K::EqMid, Target::Deck(d)) => Action::EqMid(d),
@@ -289,6 +331,13 @@ impl Action {
             Action::Tempo(_) => ActionKind::Tempo,
             Action::TempoRangeNext(_) => ActionKind::TempoRangeNext,
             Action::ReturnToStart(_) => ActionKind::ReturnToStart,
+            Action::GridShiftBack(_) => ActionKind::GridShiftBack,
+            Action::GridShiftForward(_) => ActionKind::GridShiftForward,
+            Action::GridSetDownbeat(_) => ActionKind::GridSetDownbeat,
+            Action::GridHalve(_) => ActionKind::GridHalve,
+            Action::GridDouble(_) => ActionKind::GridDouble,
+            Action::GridTap(_) => ActionKind::GridTap,
+            Action::GridLockToggle(_) => ActionKind::GridLockToggle,
             Action::Trim(_) => ActionKind::Trim,
             Action::EqHigh(_) => ActionKind::EqHigh,
             Action::EqMid(_) => ActionKind::EqMid,
@@ -313,6 +362,13 @@ impl Action {
             | Action::Tempo(d)
             | Action::TempoRangeNext(d)
             | Action::ReturnToStart(d)
+            | Action::GridShiftBack(d)
+            | Action::GridShiftForward(d)
+            | Action::GridSetDownbeat(d)
+            | Action::GridHalve(d)
+            | Action::GridDouble(d)
+            | Action::GridTap(d)
+            | Action::GridLockToggle(d)
             | Action::Trim(d)
             | Action::EqHigh(d)
             | Action::EqMid(d)

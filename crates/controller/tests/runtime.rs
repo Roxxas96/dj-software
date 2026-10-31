@@ -613,3 +613,66 @@ fn builtin_mappings_parse() {
     let mapping = parse_mapping("ddj-sb3", text).unwrap();
     assert_eq!(mapping.controller.port, "DDJ-SB3");
 }
+
+#[test]
+fn requests_are_returned_in_order() {
+    use actions::{AppRequest, GridEditRequest as E};
+    let map = format!(
+        "{MAP}{}",
+        r#"
+[[input]]
+midi = { note = 1, channel = 1 }
+action = "deck.grid_tap"
+side = "left"
+
+[[input]]
+midi = { note = 2, channel = 1 }
+action = "deck.grid_shift_forward"
+side = "left"
+
+[[input]]
+midi = { note = 3, channel = 1 }
+action = "deck.grid_shift_back"
+side = "left"
+
+[[input]]
+midi = { note = 4, channel = 1 }
+action = "deck.grid_lock_toggle"
+side = "left"
+"#
+    );
+    let mut rig = Rig::new();
+    rig.runtime = Runtime::new(parse_mapping("test.toml", &map).unwrap());
+    rig.runtime.attach(&mut rig.engine, &mut rig.out);
+    let stats = rig.batch(&[
+        fader(10),
+        on(0, 1),
+        fader(20),
+        fader(30),
+        on(0, 63),
+        on(0, 2),
+        off(0, 2),
+        on(0, 114),
+        on(0, 4),
+        off(0, 63),
+        on(0, 3),
+    ]);
+    let grid = |deck, edit| AppRequest::Grid { deck, edit };
+    assert_eq!(
+        stats.requests,
+        [
+            grid(d(0), E::Tap),
+            // SHIFT held on the left: 1 ms steps.
+            grid(d(0), E::Shift { millis: 1 }),
+            // The deck toggle took effect before the next press.
+            grid(d(2), E::ToggleLock),
+            grid(d(2), E::Shift { millis: -5 }),
+        ]
+    );
+    assert_eq!(stats.coalesced, 1);
+    // Two fader values, SHIFT on and off, the deck toggle and the four requests.
+    assert_eq!(stats.applied, 2 + 3 + 4);
+    assert_eq!(stats.queue_full, 0);
+    // Nothing is left over for the next batch.
+    assert!(rig.batch(&[fader(40)]).requests.is_empty());
+}

@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 
+use crate::grid::Taps;
 use crate::writer::{self, Writer};
 use crate::{LibraryError, backup, schema};
 
@@ -19,6 +20,8 @@ pub struct Library {
     path: PathBuf,
     writer: Writer,
     thread: Option<JoinHandle<()>>,
+    /// Recent tap-tempo taps per track, for [`Library::edit_grid`].
+    pub(crate) taps: Taps,
 }
 
 /// A read-only connection for one thread. Each statement sees everything committed
@@ -76,6 +79,7 @@ impl Library {
             path: path.to_owned(),
             writer,
             thread: Some(thread),
+            taps: Taps::default(),
         })
     }
 

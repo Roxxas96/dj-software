@@ -2,7 +2,9 @@ use engine::{
     ChannelCommand, Command, DeckCommand, DeckId, EngineController, MasterCommand, TempoRange,
 };
 
-use crate::{Action, ActionKind, ControlState, Input, ValueTarget};
+use crate::{
+    Action, ActionKind, AppRequest, ControlState, GridEditRequest, Input, Side, ValueTarget,
+};
 
 /// What [`apply`] did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,7 +16,16 @@ pub enum ApplyResult {
     Ignored,
     /// The engine's command queue was full; nothing changed.
     QueueFull,
+    /// The action needs the app (the library, the loaded track): nothing was sent and the
+    /// caller hands this request to the app.
+    Request(AppRequest),
 }
+
+/// How far `deck.grid_shift_back` and `deck.grid_shift_forward` move the grid, in
+/// milliseconds.
+pub const GRID_SHIFT_MILLIS: i32 = 5;
+/// The same with SHIFT held on the binding's side.
+pub const GRID_SHIFT_FINE_MILLIS: i32 = 1;
 
 /// A state change committed once the engine accepted the command.
 enum Update {
@@ -45,6 +56,15 @@ pub fn apply(
             state.side_mut(side).shift = input == Input::Press;
             return ApplyResult::Sent(0);
         }
+
+        // Grid edits need the library and the loaded track: the app performs them.
+        (Action::GridShiftBack(d), Input::Press) => return grid(d, shift_by(state, d, -1)),
+        (Action::GridShiftForward(d), Input::Press) => return grid(d, shift_by(state, d, 1)),
+        (Action::GridSetDownbeat(d), Input::Press) => return grid(d, GridEditRequest::SetDownbeat),
+        (Action::GridHalve(d), Input::Press) => return grid(d, GridEditRequest::Halve),
+        (Action::GridDouble(d), Input::Press) => return grid(d, GridEditRequest::Double),
+        (Action::GridTap(d), Input::Press) => return grid(d, GridEditRequest::Tap),
+        (Action::GridLockToggle(d), Input::Press) => return grid(d, GridEditRequest::ToggleLock),
 
         (Action::PlayPause(d), Input::Press) => (deck(d, DeckCommand::TogglePlay), Update::None),
         (Action::Cue(d), Input::Press) => (deck(d, DeckCommand::CuePress), Update::None),
@@ -96,6 +116,23 @@ pub fn apply(
         Update::Pfl(d, on) => state.deck_mut(d).pfl = on,
     }
     ApplyResult::Sent(1)
+}
+
+fn grid(deck: DeckId, edit: GridEditRequest) -> ApplyResult {
+    ApplyResult::Request(AppRequest::Grid { deck, edit })
+}
+
+/// A grid shift in `direction` (+1 or -1): [`GRID_SHIFT_MILLIS`], or
+/// [`GRID_SHIFT_FINE_MILLIS`] while SHIFT is held on `deck`'s side.
+fn shift_by(state: &ControlState, deck: DeckId, direction: i32) -> GridEditRequest {
+    let step = if state.side(Side::of(deck)).shift {
+        GRID_SHIFT_FINE_MILLIS
+    } else {
+        GRID_SHIFT_MILLIS
+    };
+    GridEditRequest::Shift {
+        millis: direction * step,
+    }
 }
 
 fn deck(id: DeckId, cmd: DeckCommand) -> Command {
