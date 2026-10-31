@@ -21,7 +21,14 @@ pub fn sanitize_for_terminal(text: &str) -> Cow<'_, str> {
     }
 }
 
-/// [`sanitize_for_terminal`] on each line of `text`, keeping the line breaks.
+/// `value` as text with every control character replaced, line breaks included: for
+/// untrusted text (tags, paths, error messages naming them) inside a message.
+pub fn safe(value: impl std::fmt::Display) -> String {
+    sanitize_for_terminal(&value.to_string()).into_owned()
+}
+
+/// [`sanitize_for_terminal`] on each line of `text`, keeping the line breaks. Only for
+/// text whose line breaks are ours; untrusted parts go through [`safe`] first.
 pub fn sanitize_lines(text: &str) -> Cow<'_, str> {
     if !text.chars().any(|c| c.is_control() && c != '\n') {
         return Cow::Borrowed(text);
@@ -206,5 +213,13 @@ mod tests {
         };
         assert_eq!(track_name(&row), "A\u{FFFD}[31m – Title");
         assert_eq!(truncate("x\u{7}y", 10), "x\u{FFFD}y");
+        // Untrusted line breaks would break the status line count: replaced too.
+        assert_eq!(safe("a\nb\rc"), "a\u{FFFD}b\u{FFFD}c");
+        let row = TrackRow {
+            title: Some("two\nlines\r".into()),
+            artist: None,
+            ..row
+        };
+        assert_eq!(track_name(&row), "two\u{FFFD}lines\u{FFFD}");
     }
 }

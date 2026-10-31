@@ -209,6 +209,71 @@ impl Reader {
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
+    /// Where track `id` is in the list [`Reader::tracks`] returns for `filter` and `sort`
+    /// (from 0), or `None` if it does not match `filter`. One count query, served by the
+    /// sort column's index where there is one.
+    ///
+    /// # Errors
+    ///
+    /// Any database error, or [`LibraryError::NonUtf8Path`] for a folder filter that is
+    /// not valid UTF-8.
+    pub fn track_position(
+        &self,
+        filter: &TrackFilter,
+        sort: TrackSort,
+        id: i64,
+    ) -> Result<Option<usize>, LibraryError> {
+        let (where_clause, params) = filter_clause(filter)?;
+        let and = if where_clause.is_empty() {
+            "WHERE".to_owned()
+        } else {
+            format!("{where_clause} AND")
+        };
+        let member_sql = format!("SELECT count(*) FROM tracks t {and} t.id = ?");
+        let mut member_params = params.clone();
+        member_params.push(Value::Integer(id));
+        let member: i64 = self
+            .connection()
+            .prepare_cached(&member_sql)?
+            .query_row(params_from_iter(&member_params), |r| r.get(0))?;
+        if member == 0 {
+            return Ok(None);
+        }
+        let (column, value) = match sort.key {
+            TrackSortKey::Title => ("t.title COLLATE NOCASE", "t.title"),
+            TrackSortKey::Artist => ("t.artist COLLATE NOCASE", "t.artist"),
+            TrackSortKey::Bpm => ("a.bpm", "a.bpm"),
+            TrackSortKey::Key => ("a.key", "a.key"),
+            TrackSortKey::Added => ("t.added_at", "t.added_at"),
+        };
+        // Rows before the target in `ORDER BY column dir, id dir`, where SQLite puts NULLs
+        // first ascending and last descending.
+        let before = if sort.descending {
+            format!(
+                "(({column}) IS NOT NULL AND x.v IS NULL) OR ({column}) > x.v \
+                 OR (({column}) IS x.v AND t.id > x.id)"
+            )
+        } else {
+            format!(
+                "(({column}) IS NULL AND x.v IS NOT NULL) OR ({column}) < x.v \
+                 OR (({column}) IS x.v AND t.id < x.id)"
+            )
+        };
+        let sql = format!(
+            "SELECT count(*) FROM tracks t LEFT JOIN analysis a ON a.track_id = t.id, \
+                 (SELECT {value} AS v, t.id AS id FROM tracks t \
+                  LEFT JOIN analysis a ON a.track_id = t.id WHERE t.id = ?) x \
+             {and} ({before})"
+        );
+        let mut all_params = vec![Value::Integer(id)];
+        all_params.extend(params);
+        let n: i64 = self
+            .connection()
+            .prepare_cached(&sql)?
+            .query_row(params_from_iter(&all_params), |r| r.get(0))?;
+        Ok(Some(usize::try_from(n).unwrap_or(0)))
+    }
+
     /// How many library tracks match `filter`, without loading them.
     ///
     /// # Errors

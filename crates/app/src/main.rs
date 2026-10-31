@@ -138,7 +138,7 @@ fn main() -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("error: {}", format::sanitize_lines(&format!("{error:#}")));
+            eprintln!("error: {}", format::safe(format!("{error:#}")));
             ExitCode::FAILURE
         }
     }

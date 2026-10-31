@@ -100,6 +100,12 @@ impl CueSync {
         }
     }
 
+    /// Whether the snapshot has shown this track loaded (so the deck's playhead is this
+    /// track's).
+    pub fn load_applied(&self) -> bool {
+        self.state != State::AwaitLoad
+    }
+
     /// The `SetCue` of [`CueAction::Restore`] could not be sent: try again next time.
     pub fn restore_failed(&mut self) {
         self.state = State::AwaitLoad;
@@ -126,10 +132,12 @@ mod tests {
     #[test]
     fn restores_after_the_load_shows_then_writes_changes() {
         let mut sync = CueSync::new(1000, 44_100, Some(500.0));
+        assert!(!sync.load_applied());
         // The previous track (another length, its own cue) is still on the deck.
         assert_eq!(sync.step(&snap(2000, 700.0)), CueAction::Nothing);
         // The load applied: the engine reset the cue.
         assert_eq!(sync.step(&snap(1000, 0.0)), CueAction::Restore(500.0));
+        assert!(sync.load_applied());
         // The SetCue is not applied yet: the reset 0 is never saved.
         assert_eq!(sync.step(&snap(1000, 0.0)), CueAction::Nothing);
         assert_eq!(sync.step(&snap(1000, 500.0)), CueAction::Nothing);
