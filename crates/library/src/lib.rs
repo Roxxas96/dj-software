@@ -19,7 +19,7 @@ pub use db::{Library, Reader};
 pub use scan::{
     EXTENSIONS, ScanProgress, ScanReport, TrackFile, add_folder, remove_folder, scan_folder,
 };
-pub use watch::{DEBOUNCE, Watcher, watch, watch_with_debounce};
+pub use watch::{DEBOUNCE, RESCAN_INTERVAL, WatchHealth, Watcher, watch, watch_with_debounce};
 pub use writer::{FailedWrite, RawStatement, WriteOp, WriteOutcome, Writer};
 
 /// Everything that can go wrong opening or writing the library.

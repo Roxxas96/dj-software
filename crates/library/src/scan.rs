@@ -7,6 +7,7 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::UNIX_EPOCH;
 
 use rusqlite::{Connection, OptionalExtension};
@@ -106,18 +107,27 @@ pub fn scan_folder(
     progress: &mut dyn FnMut(ScanProgress),
 ) -> Result<ScanReport, LibraryError> {
     let reader = lib.reader()?;
-    scan_folder_with(&lib.writer(), reader.connection(), root, None, progress)
+    scan_folder_with(
+        &lib.writer(),
+        reader.connection(),
+        root,
+        None,
+        None,
+        progress,
+    )
 }
 
 /// [`scan_folder`] on a writer handle and a read connection, for threads that do not
 /// hold the [`Library`] itself. `relink_root`, when given, is the folder that moved files
 /// may come from (a watched root holding the scanned subfolder); missing tracks are still
-/// only flagged under `root`.
+/// only flagged under `root`. When `stop` becomes true the scan ends early (changes
+/// already found are written, nothing is flagged missing).
 pub(crate) fn scan_folder_with(
     writer: &Writer,
     conn: &Connection,
     root: &Path,
     relink_root: Option<&Path>,
+    stop: Option<&AtomicBool>,
     progress: &mut dyn FnMut(ScanProgress),
 ) -> Result<ScanReport, LibraryError> {
     let root = normalize_path(root)?;
@@ -132,6 +142,10 @@ pub(crate) fn scan_folder_with(
         .into_iter()
         .filter_entry(|e| e.depth() == 0 || !is_hidden(e.file_name()));
     for entry in walk {
+        if stop.is_some_and(|s| s.load(Ordering::Relaxed)) {
+            scan.flush()?;
+            return Ok(scan.report);
+        }
         let entry = match entry {
             Ok(entry) => entry,
             Err(err) => {
@@ -202,6 +216,7 @@ pub(crate) fn scan_path(
     root: &Path,
     path: &Path,
     dirs: bool,
+    stop: Option<&AtomicBool>,
 ) -> Result<ScanReport, LibraryError> {
     let root = normalize_path(root)?;
     let path = resolve_path(path)?;
@@ -214,7 +229,7 @@ pub(crate) fn scan_path(
     match fs::metadata(&path) {
         Ok(meta) if meta.is_dir() => {
             if dirs {
-                scan_folder_with(writer, conn, &path, Some(&root), &mut |_| {})
+                scan_folder_with(writer, conn, &path, Some(&root), stop, &mut |_| {})
             } else {
                 Ok(ScanReport::default())
             }
@@ -225,7 +240,12 @@ pub(crate) fn scan_path(
                 scan.report.ignored += 1;
                 return Ok(scan.report);
             }
-            let text = utf8(&path)?;
+            let Some(text) = path.to_str() else {
+                scan.report
+                    .skipped
+                    .push((path.clone(), "path is not valid UTF-8".into()));
+                return Ok(scan.report);
+            };
             match scan.file(&path, text, &meta) {
                 Ok(()) => {}
                 Err(FileError::Skip(reason)) => scan.report.skipped.push((path.clone(), reason)),
@@ -236,8 +256,10 @@ pub(crate) fn scan_path(
         }
         Err(_) if is_gone(&path) => {
             let mut scan = Scan::new(writer, conn, dir_prefix(&path)?)?;
-            scan.flag_exact(utf8(&path)?)?;
-            scan.flag_missing()?;
+            if let Some(text) = path.to_str() {
+                scan.flag_exact(text)?;
+                scan.flag_missing()?;
+            }
             Ok(scan.report)
         }
         Err(err) => Ok(ScanReport {
@@ -620,5 +642,84 @@ mod tests {
         );
         #[cfg(unix)]
         assert_eq!(normalized, fs::canonicalize(dir.path()).unwrap());
+    }
+
+    fn fixture() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../decode/tests/fixtures/sine440.wav")
+    }
+
+    /// Renames a tracked file and applies the remove and the create as `scan_path`
+    /// calls in either order: same track id, cue intact, not missing.
+    fn rename_in_order(remove_first: bool, registered: bool) {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = Library::open(&dir.path().join("db").join("library.sqlite3")).unwrap();
+        let root = dir.path().join("music");
+        fs::create_dir_all(&root).unwrap();
+        let root = normalize_path(&root).unwrap();
+        if registered {
+            add_folder(&lib, &root).unwrap();
+        }
+        let old = root.join("old.wav");
+        fs::copy(fixture(), &old).unwrap();
+        scan_folder(&lib, &root, &mut |_| {}).unwrap();
+        let reader = lib.reader().unwrap();
+        let conn = reader.connection();
+        let id: i64 = conn
+            .query_row("SELECT id FROM tracks", [], |r| r.get(0))
+            .unwrap();
+        lib.writer()
+            .submit_wait(WriteOp::Raw(vec![crate::RawStatement {
+                sql: "INSERT INTO cues(track_id, cue_frames) VALUES (?1, 1234.0)".into(),
+                params: vec![rusqlite::types::Value::Integer(id)],
+            }]))
+            .unwrap();
+
+        let new = root.join("sub").join("new.wav");
+        fs::create_dir_all(new.parent().unwrap()).unwrap();
+        fs::rename(&old, &new).unwrap();
+        let writer = lib.writer();
+        let remove = || scan_path(&writer, conn, &root, &old, false, None).unwrap();
+        let create = || scan_path(&writer, conn, &root, &new, false, None).unwrap();
+        if remove_first {
+            remove();
+            create();
+        } else {
+            create();
+            remove();
+        }
+        let rows: Vec<(i64, String, bool)> = conn
+            .prepare("SELECT id, path, missing FROM tracks")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(rows, [(id, new.to_str().unwrap().to_owned(), false)]);
+        let cues: i64 = conn
+            .query_row("SELECT COUNT(*) FROM cues WHERE track_id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(cues, 1);
+    }
+
+    #[test]
+    fn rename_remove_then_create_relinks() {
+        rename_in_order(true, false);
+    }
+
+    #[test]
+    fn rename_create_then_remove_relinks() {
+        rename_in_order(false, false);
+    }
+
+    #[test]
+    fn rename_remove_then_create_relinks_with_registered_folder() {
+        rename_in_order(true, true);
+    }
+
+    #[test]
+    fn rename_create_then_remove_relinks_with_registered_folder() {
+        rename_in_order(false, true);
     }
 }
