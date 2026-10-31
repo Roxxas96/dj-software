@@ -4,8 +4,25 @@ Open-source DJ software written in Rust. It aims for a VirtualDJ-like workflow, 
 precise controller mapping: every control on a supported controller is mapped to a named action,
 and LEDs follow the app state.
 
-**Status: early development.** The audio engine, file decoding, audio output and the first
-controller mapping work from a command-line player; there is no UI yet.
+**Status: early development.** The audio engine, file decoding, audio output, the first
+controller mapping and a music library with BPM, key and beatgrid analysis work from the
+command line; there is no UI yet.
+
+## Library
+
+A SQLite library of your music folders, kept next to your user data and backed up on every
+start (the 10 newest backups are kept):
+
+- Folder scans that keep cues and grids when files are moved, renamed or retagged, and
+  flag missing files instead of deleting them.
+- Background analysis: three-band waveform, BPM and beatgrid, and musical key (Camelot,
+  standard or Open Key notation).
+- Cue points that are remembered per track, playlists, and beatgrid editing (shift, set
+  downbeat, halve, double, set BPM, tap, lock).
+- Browsing and loading from the DDJ-SB3 (BROWSE knob and LOAD buttons) with `play --library`.
+
+BPM and key come from detectors written for this project and can be wrong: there is no
+confidence value. See [docs/library.md](docs/library.md) for details and known limits.
 
 ## Supported controllers
 
@@ -44,12 +61,21 @@ cargo run --release -p dj-software -- play <track-a>
 cargo run --release -p dj-software -- play <track-a> --cue-track <track-b> \
   --deck3 <track-c> --deck4 <track-d> --controller ddj-sb3 --device "DDJ-SB3" --master 3,4
 
+# Build a library: add a folder (scans it), then analyze BPM, key and beatgrids
+cargo run --release -p dj-software -- library add-folder <music-folder>
+cargo run --release -p dj-software -- library analyze
+cargo run --release -p dj-software -- library list --sort bpm --limit 20
+
+# Browse the library and load tracks from the DDJ-SB3
+cargo run --release -p dj-software -- play --library --controller ddj-sb3 \
+  --device "DDJ-SB3" --master 3,4
+
 # Check what a controller sends and what the mapping does with it
 cargo run --release -p dj-software -- midi monitor --controller ddj-sb3
 ```
 
 Channel numbers are 1-based, as printed on the hardware. `--cue-track` needs `--headphones`.
-Press Ctrl-C to stop.
+`--library` needs `--controller`. Press Ctrl-C to stop.
 
 ## Architecture
 

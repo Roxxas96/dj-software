@@ -37,6 +37,15 @@ each side shows: each DECK press switches the left side between decks 1 and 3, o
 right side between decks 2 and 4. Decks 1 and 2 are shown at start. After a switch the
 knobs and faders use soft takeover: they act once they reach the new deck's value.
 
+## Browsing and loading
+
+With `play --library`, the BROWSE knob scrolls the library browser (clockwise moves
+down), and pressing it switches between the tree (all tracks, folders, playlists) and the
+track list. LOAD loads the selected track onto the deck its side currently shows: the left
+LOAD onto deck 1 or 3, the right LOAD onto deck 2 or 4, following the DECK buttons. A cue
+point you set is remembered and comes back when the track is loaded again. See
+[docs/library.md](../../docs/library.md).
+
 ## Supported controls
 
 | SB3 control | action |
@@ -52,6 +61,8 @@ knobs and faders use soft takeover: they act once they reach the new deck's valu
 | headphone CUE | headphone cue (PFL) on/off |
 | crossfader | crossfader |
 | headphone MASTER button | headphones hear the master instead of the cue |
+| BROWSE turn, BROWSE press | scroll the library, switch tree and list (`--library`) |
+| LOAD left, LOAD right | load the selected track onto the side's deck (`--library`) |
 
 The MASTER and HEADPHONES level knobs send MIDI, but the SB3 applies them in its own
 audio interface, so they are left unbound and the software levels are set to full when
@@ -82,5 +93,6 @@ must be picked up again (soft takeover).
 ## Not mapped yet
 
 SYNC, KEY LOCK, VINYL, the loop buttons, the jog wheels, the pad mode buttons and
-pads, the FX section, BROWSE, LOAD and fader start: they need actions from later plans.
-Their messages are listed at the end of `mapping.toml`.
+pads, the FX section and fader start: they need actions from later plans.
+The beatgrid actions (`deck.grid_*`) exist but are not bound yet; use the `grid` console
+commands. Their messages are listed at the end of `mapping.toml`.
