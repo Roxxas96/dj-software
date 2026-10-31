@@ -61,9 +61,10 @@ Both keys are required.
 
 ### `[[init]]`
 
-Sets a value when the controller attaches. Use it for knobs the controller applies itself,
-so the software level does not also quiet the sound. It is not applied again after a
-reconnect, so values you set meanwhile are kept.
+Sets a value when the controller first attaches. Use it for knobs the controller applies
+itself, so the software level does not also quiet the sound, and for values that should not
+follow wherever a control happens to sit at startup (see [soft takeover](#soft-takeover)).
+It is not applied again after a reconnect, so values you set meanwhile are kept.
 
 | Key | Meaning |
 |---|---|
@@ -126,10 +127,14 @@ value jump. Soft takeover prevents that: the control is ignored until it reaches
 value, then takes over.
 
 - A move reaches the value when it comes within 0.02 (2 % of the range) of it, or crosses it.
-- A control is armed (it must be picked up again) when the controller attaches or reattaches,
-  when a deck becomes the one a side shows, when a SHIFT layer or deck layer
-  moves the same physical control onto a different value, and when something else changes
-  the value after the control last set it.
+- When the controller first attaches, nothing is known about where its controls are, so
+  every control starts disarmed: its first move is taken as is, wherever it sits. To keep a
+  value from jumping at startup, set it with `[[init]]` (the DDJ-SB3 mapping closes every
+  channel fader, so no deck is heard until its fader is touched).
+- A control is armed (it must be picked up again) when the controller reattaches after
+  being unplugged or reconnected, when a deck becomes the one a side shows, when a SHIFT
+  layer or deck layer moves the same physical control onto a different value, and when
+  something else changes the value after the control last set it.
 - Once the control has taken over, every move passes through until it is armed again.
 - Buttons and relative controls are never affected.
 

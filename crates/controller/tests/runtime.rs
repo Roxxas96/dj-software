@@ -396,6 +396,35 @@ fn reconnect_arms_takeover() {
 }
 
 #[test]
+fn first_attach_takes_first_physical_value() {
+    // The master level (takeover on) starts at 0.8. On the first attach nothing is known
+    // about where the knob is, so its first value is taken as is, however far away.
+    let mut rig = Rig::attached();
+    let stats = rig.batch(&[cc(6, 33, 0)]);
+    assert_eq!(stats.applied, 1);
+    assert_eq!(rig.runtime.state().master_level, 0.0);
+    // Once taken, a value changed elsewhere still arms takeover as usual: covered by
+    // the resolver tests. Here, a later move keeps passing.
+    rig.batch(&[cc(6, 33, 127)]);
+    assert_eq!(rig.runtime.state().master_level, 1.0);
+}
+
+#[test]
+fn reconnect_still_arms_takeover() {
+    // Unlike the first attach, a reconnect arms takeover even for a control never moved
+    // since startup: the knob may have moved while the controller was away.
+    let mut rig = Rig::attached();
+    rig.runtime.on_disconnect(&mut rig.engine);
+    rig.runtime.on_reconnect(&mut rig.engine, &mut rig.out);
+    let stats = rig.batch(&[cc(6, 33, 0)]);
+    assert_eq!(stats.applied, 0);
+    assert_eq!(rig.runtime.state().master_level, 0.8);
+    let start = (0.8f32 * 127.0).round() as u8;
+    let stats = rig.batch(&[cc(6, 33, start)]);
+    assert_eq!(stats.applied, 1, "picked up near the current value");
+}
+
+#[test]
 fn last_resolved_pairs_messages_with_actions() {
     let mut rig = Rig::attached();
     rig.batch(&[on(0, 12), cc(9, 99, 1)]);
