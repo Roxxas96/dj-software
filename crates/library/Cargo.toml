@@ -1,0 +1,24 @@
+[package]
+name = "library"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+# Fault-injection hooks for tests (a write op that panics mid-transaction and opening with
+# a custom migration list). Only the crate's own tests enable it.
+test-hooks = []
+
+[dependencies]
+rusqlite.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+library = { path = ".", features = ["test-hooks"] }
+tempfile.workspace = true
