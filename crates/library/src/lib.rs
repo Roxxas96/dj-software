@@ -21,7 +21,8 @@ mod writer;
 
 pub use db::{Library, Reader};
 pub use grid::{
-    GridEdit, GridError, MAX_GRID_BPM, MIN_GRID_BPM, MIN_TAPS, TAP_RESET_MICROS, TAP_WINDOW,
+    Beatgrid, GridEdit, GridError, MAX_GRID_BPM, MIN_GRID_BPM, MIN_TAPS, TAP_RESET_MICROS,
+    TAP_WINDOW,
 };
 pub use jobs::{
     ANALYZER_VERSION, AnalysisProgress, AnalysisRow, AnalysisWarning, Analyzer, PROGRESS_TAIL,

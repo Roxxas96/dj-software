@@ -236,13 +236,13 @@ fn play_and_cue_leds_follow_engine() {
     assert_eq!(out.take()[..2], [note(11, 127), note(12, 100)]);
 
     let play = Action::new(ActionKind::PlayPause, Target::Deck(d(0))).unwrap();
-    apply(&play, Input::Press, &mut state, &mut c);
+    apply(&play, Input::Press, 0, &mut state, &mut c);
     render(&mut r, 8);
     fb.update(0, &state, &snaps(&c), &mut out);
     assert_eq!(out.take(), [note(12, 1)], "playing: play solid on, cue off");
 
     // Pause away from the cue point: both blink, off in the second half of the period.
-    apply(&play, Input::Press, &mut state, &mut c);
+    apply(&play, Input::Press, 0, &mut state, &mut c);
     render(&mut r, 1);
     fb.update(250_000, &state, &snaps(&c), &mut out);
     assert_eq!(

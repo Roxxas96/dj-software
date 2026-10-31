@@ -644,7 +644,8 @@ side = "left"
     let mut rig = Rig::new();
     rig.runtime = Runtime::new(parse_mapping("test.toml", &map).unwrap());
     rig.runtime.attach(&mut rig.engine, &mut rig.out);
-    let stats = rig.batch(&[
+    // Each message's time is 1 s plus 100 ms per message.
+    let msgs = [
         fader(10),
         on(0, 1),
         fader(20),
@@ -656,22 +657,45 @@ side = "left"
         on(0, 4),
         off(0, 63),
         on(0, 3),
-    ]);
+        off(0, 1),
+        on(0, 1),
+    ];
+    let timed: Vec<TimedMidi> = msgs
+        .iter()
+        .enumerate()
+        .map(|(i, &message)| TimedMidi {
+            micros: 1_000_000 + 100_000 * i as u64,
+            message,
+        })
+        .collect();
+    let stats = rig.runtime.handle_batch(&timed, &mut rig.engine);
     let grid = |deck, edit| AppRequest::Grid { deck, edit };
     assert_eq!(
         stats.requests,
         [
-            grid(d(0), E::Tap),
+            // A tap carries its message's time.
+            grid(
+                d(0),
+                E::Tap {
+                    at_micros: 1_100_000
+                }
+            ),
             // SHIFT held on the left: 1 ms steps.
             grid(d(0), E::Shift { millis: 1 }),
             // The deck toggle took effect before the next press.
             grid(d(2), E::ToggleLock),
             grid(d(2), E::Shift { millis: -5 }),
+            grid(
+                d(2),
+                E::Tap {
+                    at_micros: 2_200_000
+                }
+            ),
         ]
     );
     assert_eq!(stats.coalesced, 1);
-    // Two fader values, SHIFT on and off, the deck toggle and the four requests.
-    assert_eq!(stats.applied, 2 + 3 + 4);
+    // Two fader values, SHIFT on and off, the deck toggle and the five requests.
+    assert_eq!(stats.applied, 2 + 3 + 5);
     assert_eq!(stats.queue_full, 0);
     // Nothing is left over for the next batch.
     assert!(rig.batch(&[fader(40)]).requests.is_empty());

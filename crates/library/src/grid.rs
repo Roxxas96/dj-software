@@ -14,7 +14,7 @@ use std::sync::{Mutex, PoisonError};
 
 use rusqlite::{OptionalExtension, Transaction};
 
-use crate::{AnalysisRow, Library, LibraryError, WriteOp, WriteOutcome};
+use crate::{Library, LibraryError, WriteOp, WriteOutcome};
 
 /// The lowest BPM a grid can be set to.
 pub const MIN_GRID_BPM: f64 = 40.0;
@@ -62,12 +62,14 @@ pub enum GridError {
     NotFinite(f64),
 }
 
-/// The grid columns of an analysis row.
+/// A track's beatgrid: the grid columns of its analysis row.
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct Grid {
-    bpm: Option<f64>,
-    first_beat_frames: Option<f64>,
-    locked: bool,
+pub struct Beatgrid {
+    pub bpm: Option<f64>,
+    /// In frames at the track's native sample rate.
+    pub first_beat_frames: Option<f64>,
+    /// Re-analysis keeps a locked grid.
+    pub grid_locked: bool,
 }
 
 /// Applies `edit` to track `track`'s grid inside `tx`. A [`GridEdit::Tap`] here only makes
@@ -79,17 +81,17 @@ pub(crate) fn apply(
     edit: GridEdit,
     playhead_frames: Option<f64>,
 ) -> Result<WriteOutcome, LibraryError> {
-    let row: Option<(Option<u32>, Option<Grid>)> = tx
+    let row: Option<(Option<u32>, Option<Beatgrid>)> = tx
         .query_row(
             "SELECT t.sample_rate, a.track_id IS NOT NULL, a.bpm, a.first_beat_frames, \
                     coalesce(a.grid_locked, 0) \
              FROM tracks t LEFT JOIN analysis a ON a.track_id = t.id WHERE t.id = ?1",
             [track],
             |r| {
-                let grid = r.get::<_, bool>(1)?.then_some(Grid {
+                let grid = r.get::<_, bool>(1)?.then_some(Beatgrid {
                     bpm: r.get(2)?,
                     first_beat_frames: r.get(3)?,
-                    locked: r.get(4)?,
+                    grid_locked: r.get(4)?,
                 });
                 Ok((r.get(0)?, grid))
             },
@@ -99,14 +101,14 @@ pub(crate) fn apply(
         return Err(LibraryError::NoSuchTrack(track));
     };
     let exists = current.is_some();
-    let current = current.unwrap_or(Grid {
+    let current = current.unwrap_or(Beatgrid {
         bpm: None,
         first_beat_frames: None,
-        locked: false,
+        grid_locked: false,
     });
     let new = edited(current, sample_rate, edit, playhead_frames)?;
     if exists && new == current {
-        return Ok(WriteOutcome::Done);
+        return Ok(WriteOutcome::Grid(new));
     }
     // A new row has never been analyzed: analyzer version 0, so analysis still runs (and
     // keeps the grid if it is locked).
@@ -117,18 +119,18 @@ pub(crate) fn apply(
              bpm = excluded.bpm, \
              first_beat_frames = excluded.first_beat_frames, \
              grid_locked = excluded.grid_locked",
-        rusqlite::params![track, new.bpm, new.first_beat_frames, new.locked],
+        rusqlite::params![track, new.bpm, new.first_beat_frames, new.grid_locked],
     )?;
-    Ok(WriteOutcome::Done)
+    Ok(WriteOutcome::Grid(new))
 }
 
 /// The grid after `edit`.
 fn edited(
-    current: Grid,
+    current: Beatgrid,
     sample_rate: Option<u32>,
     edit: GridEdit,
     playhead_frames: Option<f64>,
-) -> Result<Grid, GridError> {
+) -> Result<Beatgrid, GridError> {
     let period = |bpm: f64| {
         sample_rate
             .filter(|&sr| sr > 0)
@@ -136,14 +138,14 @@ fn edited(
             .ok_or(GridError::NoSampleRate)
     };
     let first = current.first_beat_frames.unwrap_or(0.0);
-    let locked = |bpm, first_beat_frames| Grid {
+    let locked = |bpm, first_beat_frames| Beatgrid {
         bpm: Some(bpm),
         first_beat_frames: Some(first_beat_frames),
-        locked: true,
+        grid_locked: true,
     };
     match edit {
-        GridEdit::ToggleLock => Ok(Grid {
-            locked: !current.locked,
+        GridEdit::ToggleLock => Ok(Beatgrid {
+            grid_locked: !current.grid_locked,
             ..current
         }),
         GridEdit::Tap { .. } => Ok(current),
@@ -248,7 +250,7 @@ impl Taps {
 }
 
 impl Library {
-    /// Applies `edit` to track `track`'s beatgrid and returns its analysis afterwards.
+    /// Applies `edit` to track `track`'s beatgrid and returns the grid as committed.
     /// `playhead_frames` is where the track is playing, for [`GridEdit::Halve`] and
     /// [`GridEdit::Double`].
     ///
@@ -267,7 +269,7 @@ impl Library {
         track: i64,
         edit: GridEdit,
         playhead_frames: Option<f64>,
-    ) -> Result<AnalysisRow, LibraryError> {
+    ) -> Result<Beatgrid, LibraryError> {
         let edit = match edit {
             GridEdit::Tap { at_micros } => self
                 .taps
@@ -275,12 +277,14 @@ impl Library {
                 .map_or(edit, GridEdit::SetBpm),
             other => other,
         };
-        self.writer().submit_wait(WriteOp::EditGrid {
+        match self.writer().submit_wait(WriteOp::EditGrid {
             track,
             edit,
             playhead_frames,
-        })?;
-        self.analysis(track)?
-            .ok_or(LibraryError::NoSuchTrack(track))
+        })? {
+            WriteOutcome::Grid(grid) => Ok(grid),
+            // `EditGrid` always reports its grid.
+            other => unreachable!("EditGrid reported {other:?}"),
+        }
     }
 }

@@ -36,6 +36,8 @@ struct Pending {
     value: f32,
     /// The state's value before the run, restored if the command cannot be sent.
     original: f32,
+    /// When the value's message came in.
+    at_micros: u64,
 }
 
 /// One controller's mapping at work: resolves its messages, applies the actions to the
@@ -84,10 +86,12 @@ impl Runtime {
     ///
     /// An init action the engine's queue has no room for is skipped.
     pub fn attach(&mut self, engine: &mut EngineController, out: &mut dyn MidiOut) {
+        let now = clock::now_micros();
         for init in &self.init {
             apply(
                 &init.action,
                 Input::Absolute(init.value),
+                now,
                 &mut self.state,
                 engine,
             );
@@ -106,8 +110,9 @@ impl Runtime {
     /// it comes back. A release the engine's queue has no room for is dropped.
     pub fn on_disconnect(&mut self, engine: &mut EngineController) {
         self.attached = false;
+        let now = clock::now_micros();
         for action in self.resolver.release_all_held() {
-            apply(&action, Input::Release, &mut self.state, engine);
+            apply(&action, Input::Release, now, &mut self.state, engine);
         }
         // Fallback: SHIFT is held state too, whether or not its press is still tracked.
         for side in Side::ALL {
@@ -187,11 +192,13 @@ impl Runtime {
             for &(action, input) in &resolved {
                 match (input, action.value_target()) {
                     (Input::Absolute(v), Some(target)) if v.is_finite() => {
-                        self.stage(target, action, v.clamp(0.0, 1.0), &mut stats, engine);
+                        let v = v.clamp(0.0, 1.0);
+                        self.stage(target, action, v, timed.micros, &mut stats, engine);
                     }
                     _ => {
                         self.flush(engine, &mut stats);
-                        count(&mut stats, apply(&action, input, &mut self.state, engine));
+                        let result = apply(&action, input, timed.micros, &mut self.state, engine);
+                        count(&mut stats, result);
                     }
                 }
             }
@@ -208,6 +215,7 @@ impl Runtime {
         target: ValueTarget,
         action: Action,
         value: f32,
+        at_micros: u64,
         stats: &mut BatchStats,
         engine: &mut EngineController,
     ) {
@@ -221,7 +229,8 @@ impl Runtime {
                 // Not a value the state tracks: nothing to coalesce on, send it now.
                 None => {
                     self.flush(engine, stats);
-                    let result = apply(&action, Input::Absolute(value), &mut self.state, engine);
+                    let input = Input::Absolute(value);
+                    let result = apply(&action, input, at_micros, &mut self.state, engine);
                     count(stats, result);
                     return;
                 }
@@ -235,6 +244,7 @@ impl Runtime {
             action,
             value,
             original,
+            at_micros,
         });
     }
 
@@ -242,7 +252,8 @@ impl Runtime {
     /// in the state, so the state keeps matching the engine.
     fn flush(&mut self, engine: &mut EngineController, stats: &mut BatchStats) {
         for p in self.pending.drain(..) {
-            let result = apply(&p.action, Input::Absolute(p.value), &mut self.state, engine);
+            let input = Input::Absolute(p.value);
+            let result = apply(&p.action, input, p.at_micros, &mut self.state, engine);
             if !matches!(result, ApplyResult::Sent(_))
                 && let Some(field) = self.state.value_mut(p.target)
             {

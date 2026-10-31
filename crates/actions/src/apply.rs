@@ -36,11 +36,13 @@ enum Update {
 }
 
 /// Performs `action` for `input` on `engine`, and records the result in `state` when the
-/// engine accepted it. Inputs the action does not take (including `Release` for press-only
+/// engine accepted it. `at_micros` is when the input happened on the controller clock
+/// (the MIDI message's time); only requests that need a time, such as a tap, use it. Inputs the action does not take (including `Release` for press-only
 /// actions and non-finite absolute values) are ignored.
 pub fn apply(
     action: &Action,
     input: Input,
+    at_micros: u64,
     state: &mut ControlState,
     engine: &mut EngineController,
 ) -> ApplyResult {
@@ -63,7 +65,7 @@ pub fn apply(
         (Action::GridSetDownbeat(d), Input::Press) => return grid(d, GridEditRequest::SetDownbeat),
         (Action::GridHalve(d), Input::Press) => return grid(d, GridEditRequest::Halve),
         (Action::GridDouble(d), Input::Press) => return grid(d, GridEditRequest::Double),
-        (Action::GridTap(d), Input::Press) => return grid(d, GridEditRequest::Tap),
+        (Action::GridTap(d), Input::Press) => return grid(d, GridEditRequest::Tap { at_micros }),
         (Action::GridLockToggle(d), Input::Press) => return grid(d, GridEditRequest::ToggleLock),
 
         (Action::PlayPause(d), Input::Press) => (deck(d, DeckCommand::TogglePlay), Update::None),
