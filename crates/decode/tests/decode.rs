@@ -143,3 +143,22 @@ fn truncated_file_reports_truncated() {
     assert!(decode_file(&fixture("truncated.mp3")).unwrap().truncated);
     assert!(!decode_file(&fixture("sine440.mp3")).unwrap().truncated);
 }
+
+#[test]
+fn clean_fixtures_are_not_truncated() {
+    let mut names: Vec<String> = ["wav", "aiff", "flac", "mp3", "m4a", "ogg"]
+        .iter()
+        .map(|e| format!("sine440.{e}"))
+        .collect();
+    names.extend(["sine440_mono.wav", "sine440_s16be.aiff", "sine440_s24.wav"].map(String::from));
+    for name in names {
+        assert!(!decode_file(&fixture(&name)).unwrap().truncated, "{name}");
+    }
+}
+
+#[test]
+fn headerless_mp3_with_trailing_tag_is_not_truncated() {
+    let d = decode_file(&fixture("sine440_noxing_tagged.mp3")).unwrap();
+    assert!(!d.truncated);
+    assert!(d.track.frames() > 40_000);
+}
