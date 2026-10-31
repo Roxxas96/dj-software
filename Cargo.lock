@@ -830,6 +830,7 @@ dependencies = [
 name = "library"
 version = "0.0.0"
 dependencies = [
+ "analysis",
  "blake3",
  "decode",
  "dunce",

@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 use std::thread::JoinHandle;
 
 use rusqlite::types::Value;
-use rusqlite::{Connection, Transaction, TransactionBehavior, params_from_iter};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params_from_iter};
 
 use crate::LibraryError;
 use crate::scan::TrackFile;
@@ -46,6 +46,13 @@ pub enum WriteOp {
     UpdateTrack { id: i64, file: Box<TrackFile> },
     /// Deletes a track's analysis, which no longer matches its audio. Cues are kept.
     ClearAnalysis(i64),
+    /// Stores a track's analysis (waveform, beatgrid, key and analyzer version together),
+    /// replacing any previous one. When the stored grid is locked, its `bpm` and
+    /// `first_beat_frames` are kept and the ones given here are ignored. Fails with
+    /// [`LibraryError::TrackChanged`] when the track's fingerprint is no longer
+    /// `fingerprint` (its audio changed while it was being analyzed) and with
+    /// [`LibraryError::NoSuchTrack`] when the track is gone, storing nothing.
+    StoreAnalysis(Box<StoreAnalysis>),
     /// Flags these tracks' files as missing. Tracks are never deleted by a scan.
     MarkMissing(Vec<i64>),
     /// Adds a library folder (no-op if already there). Only the `folders` table changes.
@@ -89,6 +96,36 @@ pub enum WriteOp {
         statements: Vec<RawStatement>,
         after: usize,
     },
+}
+
+/// The payload of [`WriteOp::StoreAnalysis`].
+#[derive(Clone, PartialEq)]
+pub struct StoreAnalysis {
+    pub track_id: i64,
+    /// The track's fingerprint when its audio was read.
+    pub fingerprint: Vec<u8>,
+    pub analyzer_version: u32,
+    pub bpm: Option<f64>,
+    pub first_beat_frames: Option<f64>,
+    /// [`analysis::Key::index`].
+    pub key: Option<u8>,
+    /// [`analysis::Waveform::to_bytes`].
+    pub waveform: Vec<u8>,
+}
+
+impl std::fmt::Debug for StoreAnalysis {
+    /// Shows the blobs' lengths rather than their bytes, keeping logged failures short.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StoreAnalysis")
+            .field("track_id", &self.track_id)
+            .field("fingerprint_len", &self.fingerprint.len())
+            .field("analyzer_version", &self.analyzer_version)
+            .field("bpm", &self.bpm)
+            .field("first_beat_frames", &self.first_beat_frames)
+            .field("key", &self.key)
+            .field("waveform_len", &self.waveform.len())
+            .finish()
+    }
 }
 
 /// What a committed op produced.
@@ -345,6 +382,10 @@ fn apply(tx: &Transaction<'_>, op: &WriteOp) -> Result<WriteOutcome, LibraryErro
             tx.execute("DELETE FROM analysis WHERE track_id = ?1", [id])?;
             Ok(WriteOutcome::Done)
         }
+        WriteOp::StoreAnalysis(a) => {
+            store_analysis(tx, a)?;
+            Ok(WriteOutcome::Done)
+        }
         WriteOp::MarkMissing(ids) => {
             let mut stmt = tx.prepare_cached("UPDATE tracks SET missing = 1 WHERE id = ?1")?;
             for id in ids {
@@ -384,6 +425,44 @@ fn apply(tx: &Transaction<'_>, op: &WriteOp) -> Result<WriteOutcome, LibraryErro
             panic!("test hook: writer panicked inside a transaction");
         }
     }
+}
+
+fn store_analysis(tx: &Transaction<'_>, a: &StoreAnalysis) -> Result<(), LibraryError> {
+    let fingerprint: Option<Vec<u8>> = tx
+        .query_row(
+            "SELECT fingerprint FROM tracks WHERE id = ?1",
+            [a.track_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    match fingerprint {
+        None => return Err(LibraryError::NoSuchTrack(a.track_id)),
+        Some(f) if f != a.fingerprint => return Err(LibraryError::TrackChanged(a.track_id)),
+        Some(_) => {}
+    }
+    tx.execute(
+        "INSERT INTO analysis(track_id, analyzer_version, bpm, first_beat_frames, \
+                              grid_locked, key, waveform, analyzed_at) \
+         VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6, ?7) \
+         ON CONFLICT(track_id) DO UPDATE SET \
+             analyzer_version = excluded.analyzer_version, \
+             bpm = CASE WHEN grid_locked THEN bpm ELSE excluded.bpm END, \
+             first_beat_frames = CASE WHEN grid_locked THEN first_beat_frames \
+                                      ELSE excluded.first_beat_frames END, \
+             key = excluded.key, \
+             waveform = excluded.waveform, \
+             analyzed_at = excluded.analyzed_at",
+        rusqlite::params![
+            a.track_id,
+            a.analyzer_version,
+            a.bpm,
+            a.first_beat_frames,
+            a.key,
+            a.waveform,
+            unix_now(),
+        ],
+    )?;
+    Ok(())
 }
 
 /// Seconds since the Unix epoch (0 if the clock is before it).

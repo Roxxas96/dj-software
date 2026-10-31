@@ -9,20 +9,30 @@
 mod backup;
 mod db;
 pub mod fingerprint;
+mod jobs;
 mod playlists;
 mod scan;
 pub mod schema;
+mod settings;
 pub mod tags;
 mod watch;
 mod writer;
 
 pub use db::{Library, Reader};
+pub use jobs::{
+    ANALYZER_VERSION, AnalysisProgress, AnalysisRow, AnalysisWarning, Analyzer,
+    WAVEFORM_FRAMES_PER_BUCKET, default_threads,
+};
 pub use playlists::{PlaylistSummary, TrackFilter, TrackRow, TrackSort, TrackSortKey};
 pub use scan::{
     EXTENSIONS, ScanProgress, ScanReport, TrackFile, add_folder, remove_folder, scan_folder,
 };
+pub use settings::{
+    BPM_RANGE, BpmRangeError, InvalidBpmRange, KEY_NOTATION, LOW_BPM_RANGE_WARNING,
+    format_bpm_range, parse_bpm_range, validate_bpm_range,
+};
 pub use watch::{DEBOUNCE, RESCAN_INTERVAL, WatchHealth, Watcher, watch, watch_with_debounce};
-pub use writer::{FailedWrite, RawStatement, WriteOp, WriteOutcome, Writer};
+pub use writer::{FailedWrite, RawStatement, StoreAnalysis, WriteOp, WriteOutcome, Writer};
 
 /// Everything that can go wrong opening or writing the library.
 #[derive(Debug, thiserror::Error)]
@@ -54,6 +64,14 @@ pub enum LibraryError {
     NoSuchTrack(i64),
     #[error("position {position} is out of range (the playlist has {len} entries)")]
     PositionOutOfRange { position: usize, len: usize },
+    #[error("track {0}'s audio changed while it was being analyzed; analyze it again")]
+    TrackChanged(i64),
+    #[error("track {track_id} has a corrupt stored waveform: {source}")]
+    CorruptWaveform {
+        track_id: i64,
+        #[source]
+        source: analysis::WaveformError,
+    },
     #[error("the library writer has shut down")]
     WriterGone,
     #[error("the library writer panicked while applying a change; it was rolled back")]

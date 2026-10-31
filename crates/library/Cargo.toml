@@ -16,6 +16,7 @@ workspace = true
 test-hooks = []
 
 [dependencies]
+analysis = { path = "../analysis" }
 blake3.workspace = true
 decode = { path = "../decode" }
 dunce.workspace = true
