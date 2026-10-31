@@ -118,6 +118,7 @@ dependencies = [
  "assert_no_alloc",
  "cpal",
  "engine",
+ "rtrb",
  "thiserror 2.0.21",
 ]
 
