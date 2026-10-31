@@ -19,7 +19,8 @@ use crate::{Feedback, MidiMessage, TimedMidi, clock};
 pub struct BatchStats {
     /// Actions that took effect, requests included.
     pub applied: u32,
-    /// Absolute values dropped because a later value for the same target replaced them.
+    /// Inputs folded into another: absolute values replaced by a later value for the same
+    /// target, and relative steps added to other steps for the same action.
     pub coalesced: u32,
     /// Actions dropped because the engine's command queue was full.
     pub queue_full: u32,
@@ -28,16 +29,26 @@ pub struct BatchStats {
     pub requests: Vec<AppRequest>,
 }
 
-/// An absolute value whose engine command waits for the end of its run.
+/// An input whose action waits for the end of its run.
 #[derive(Debug, Clone, Copy)]
 struct Pending {
-    target: ValueTarget,
     action: Action,
-    value: f32,
-    /// The state's value before the run, restored if the command cannot be sent.
-    original: f32,
-    /// When the value's message came in.
+    staged: Staged,
+    /// When the (last) message came in.
     at_micros: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Staged {
+    /// An absolute value, already recorded in the state.
+    Value {
+        target: ValueTarget,
+        value: f32,
+        /// The state's value before the run, restored if the command cannot be sent.
+        original: f32,
+    },
+    /// The sum of the relative steps of the run.
+    Steps(i32),
 }
 
 /// One controller's mapping at work: resolves its messages, applies the actions to the
@@ -52,7 +63,8 @@ pub struct Runtime {
     attached: bool,
     /// Whether [`attach`](Runtime::attach) ran already.
     attached_once: bool,
-    /// Absolute values of the current run, in order of their last occurrence.
+    /// Absolute values and relative steps of the current run, in order of their last
+    /// occurrence.
     pending: Vec<Pending>,
     last: Vec<(MidiMessage, Resolved)>,
 }
@@ -165,14 +177,20 @@ impl Runtime {
     /// Resolves and applies `msgs` in order. Ignored while the controller is not attached.
     ///
     /// Each resolved action is applied before the next message is resolved, as the
-    /// resolver requires, with one exception: within a run of messages not interrupted by a
-    /// button (or any non-absolute) action, absolute values for the same target are
-    /// coalesced to the last one. Only that value is sent to the engine, at the end of the
-    /// run, so a burst of fader messages costs one command. The control state follows
-    /// every value immediately, so soft takeover and later messages see where the control
-    /// is. Presses and releases are never coalesced and keep their order, and a run ends
+    /// resolver requires, with two exceptions within a run of messages not interrupted by
+    /// a press or release:
+    /// - absolute values for the same target are coalesced to the last one. Only that
+    ///   value is sent to the engine, at the end of the run, so a burst of fader messages
+    ///   costs one command. The control state follows every value immediately, so soft
+    ///   takeover and later messages see where the control is;
+    /// - relative steps for the same action are summed and applied once at the end of the
+    ///   run, so a fast turn of the BROWSE knob is one scroll. Steps that sum to 0 do
+    ///   nothing.
+    ///
+    /// Presses and releases are never coalesced and keep their order, and a run ends
     /// before each of them so they see (and the engine gets) every value sent before.
-    /// Requests come out in [`BatchStats::requests`] in the order of their presses.
+    /// Requests come out in [`BatchStats::requests`] in order: a press's at the press, a
+    /// run's at the end of the run.
     pub fn handle_batch(
         &mut self,
         msgs: &[TimedMidi],
@@ -194,6 +212,9 @@ impl Runtime {
                     (Input::Absolute(v), Some(target)) if v.is_finite() => {
                         let v = v.clamp(0.0, 1.0);
                         self.stage(target, action, v, timed.micros, &mut stats, engine);
+                    }
+                    (Input::Relative(steps), _) => {
+                        self.stage_steps(action, steps, timed.micros, &mut stats);
                     }
                     _ => {
                         self.flush(engine, &mut stats);
@@ -219,10 +240,23 @@ impl Runtime {
         stats: &mut BatchStats,
         engine: &mut EngineController,
     ) {
-        let original = match self.pending.iter().position(|p| p.target == target) {
-            Some(i) => {
+        let staged = self
+            .pending
+            .iter()
+            .enumerate()
+            .find_map(|(i, p)| match p.staged {
+                Staged::Value {
+                    target: t,
+                    original,
+                    ..
+                } if t == target => Some((i, original)),
+                _ => None,
+            });
+        let original = match staged {
+            Some((i, original)) => {
                 stats.coalesced += 1;
-                self.pending.remove(i).original
+                self.pending.remove(i);
+                original
             }
             None => match self.state.value(target) {
                 Some(v) => v,
@@ -240,25 +274,62 @@ impl Runtime {
             *field = value;
         }
         self.pending.push(Pending {
-            target,
             action,
-            value,
-            original,
+            staged: Staged::Value {
+                target,
+                value,
+                original,
+            },
             at_micros,
         });
     }
 
-    /// Sends the staged values of the run. A value the engine did not take is rolled back
-    /// in the state, so the state keeps matching the engine.
+    /// Adds `steps` to the steps staged for `action` in this run (if any) and defers the
+    /// action to the end of the run.
+    fn stage_steps(&mut self, action: Action, steps: i32, at_micros: u64, stats: &mut BatchStats) {
+        let staged = self
+            .pending
+            .iter()
+            .position(|p| p.action == action && matches!(p.staged, Staged::Steps(_)));
+        let total = match staged.map(|i| self.pending.remove(i).staged) {
+            Some(Staged::Steps(before)) => {
+                stats.coalesced += 1;
+                before.saturating_add(steps)
+            }
+            _ => steps,
+        };
+        self.pending.push(Pending {
+            action,
+            staged: Staged::Steps(total),
+            at_micros,
+        });
+    }
+
+    /// Applies the staged values and steps of the run. A value the engine did not take is
+    /// rolled back in the state, so the state keeps matching the engine.
     fn flush(&mut self, engine: &mut EngineController, stats: &mut BatchStats) {
         for p in self.pending.drain(..) {
-            let input = Input::Absolute(p.value);
-            let result = apply(&p.action, input, p.at_micros, &mut self.state, engine);
-            if !matches!(result, ApplyResult::Sent(_))
-                && let Some(field) = self.state.value_mut(p.target)
-            {
-                *field = p.original;
-            }
+            let result = match p.staged {
+                Staged::Value {
+                    target,
+                    value,
+                    original,
+                } => {
+                    let input = Input::Absolute(value);
+                    let result = apply(&p.action, input, p.at_micros, &mut self.state, engine);
+                    if !matches!(result, ApplyResult::Sent(_))
+                        && let Some(field) = self.state.value_mut(target)
+                    {
+                        *field = original;
+                    }
+                    result
+                }
+                Staged::Steps(0) => continue,
+                Staged::Steps(steps) => {
+                    let input = Input::Relative(steps);
+                    apply(&p.action, input, p.at_micros, &mut self.state, engine)
+                }
+            };
             count(stats, result);
         }
     }

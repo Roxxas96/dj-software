@@ -295,6 +295,22 @@ pub fn add_folder(lib: &Library, path: &Path) -> Result<(), LibraryError> {
     Ok(())
 }
 
+impl crate::Reader {
+    /// The registered library folders, sorted by path.
+    ///
+    /// # Errors
+    ///
+    /// Any database error.
+    pub fn folders(&self) -> Result<Vec<PathBuf>, LibraryError> {
+        let mut stmt = self
+            .connection()
+            .prepare_cached("SELECT path FROM folders ORDER BY path")?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        rows.map(|r| r.map(PathBuf::from).map_err(LibraryError::from))
+            .collect()
+    }
+}
+
 /// Removes `path` (as given, and in canonical form if it still resolves) from the library
 /// folders. Its tracks, and their cues, are kept.
 ///

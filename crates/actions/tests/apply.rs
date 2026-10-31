@@ -105,6 +105,9 @@ fn ids_round_trip_for_every_action() {
         "master.headphone_master_toggle",
         "side.deck_toggle",
         "modifier.shift",
+        "browser.scroll",
+        "browser.toggle_focus",
+        "deck.load_selected",
     ];
     let ids: HashSet<_> = ActionKind::ALL.iter().map(|k| k.id()).collect();
     assert_eq!(ids, expected.into_iter().collect::<HashSet<_>>());
@@ -562,7 +565,12 @@ fn accepts_matches_what_apply_does() {
                 "{kind:?} {input:?} -> {result:?}"
             );
         }
-        assert!(!kind.accepts(InputKind::Relative));
+        // `browser.scroll` is the only action that takes relative steps.
+        assert_eq!(
+            kind.accepts(InputKind::Relative),
+            kind == ActionKind::BrowserScroll,
+            "{kind:?}"
+        );
         assert_eq!(kind.is_absolute(), kind.accepts(InputKind::Absolute));
     }
 }
@@ -626,6 +634,43 @@ fn grid_actions_return_requests() {
             edit: E::Shift { millis: 1 }
         })
     );
+}
+
+#[test]
+fn browser_and_load_actions_return_requests() {
+    use actions::{AppRequest, BrowserRequest, Scope};
+    assert_eq!(ActionKind::BrowserScroll.scope(), Scope::Global);
+    assert_eq!(ActionKind::BrowserToggleFocus.scope(), Scope::Global);
+    assert_eq!(ActionKind::LoadSelected.scope(), Scope::Deck);
+
+    let mut rig = Rig::new();
+    let before = rig.state.clone();
+    let scroll = global_action(ActionKind::BrowserScroll);
+    for steps in [1, -1, 5, -64] {
+        assert_eq!(
+            rig.apply(scroll, Input::Relative(steps)),
+            ApplyResult::Request(AppRequest::Browser(BrowserRequest::Scroll(steps)))
+        );
+    }
+    assert_eq!(rig.apply(scroll, Input::Press), ApplyResult::Ignored);
+
+    let focus = global_action(ActionKind::BrowserToggleFocus);
+    assert_eq!(
+        rig.apply(focus, Input::Press),
+        ApplyResult::Request(AppRequest::Browser(BrowserRequest::ToggleFocus))
+    );
+    assert_eq!(rig.apply(focus, Input::Release), ApplyResult::Ignored);
+
+    for deck in 0..4 {
+        let load = deck_action(ActionKind::LoadSelected, deck);
+        assert_eq!(
+            rig.apply(load, Input::Press),
+            ApplyResult::Request(AppRequest::LoadSelected { deck: d(deck) })
+        );
+        assert_eq!(rig.apply(load, Input::Release), ApplyResult::Ignored);
+    }
+    // Requests change no control state (the app performs them).
+    assert_eq!(rig.state, before);
 }
 
 #[test]

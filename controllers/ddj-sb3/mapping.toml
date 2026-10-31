@@ -227,6 +227,31 @@ action = "master.crossfader"
 midi = { channel = 7, note = 0x5B }
 action = "master.headphone_master_toggle"
 
+# --------------------------------------------------------------------------- browser
+
+# BROWSE rotate: the capture sent 1 per click clockwise and 127 counter-clockwise, so
+# two's complement steps, with clockwise moving down the list.
+[[input]]
+midi = { channel = 7, cc = 0x40 }
+action = "browser.scroll"
+value = "relative_twos"
+
+# BROWSE press switches between the tree and the track list.
+[[input]]
+midi = { channel = 7, note = 0x41 }
+action = "browser.toggle_focus"
+
+# LOAD loads the selected track onto the deck the side shows (1/3 left, 2/4 right).
+[[input]]
+midi = { channel = 7, note = 0x46 }
+action = "deck.load_selected"
+side = "left"
+
+[[input]]
+midi = { channel = 7, note = 0x47 }
+action = "deck.load_selected"
+side = "right"
+
 # ------------------------------------------------------------------------ LEDs
 #
 # Only the headphone MASTER LED responds. A full LED scan (all 16 channels, note-on,
@@ -274,7 +299,7 @@ off = 0
 #   Global, channel 7 (0x96/0xB6):
 #     MASTER level         cc14 0x08/0x28   (applied by the SB3 itself, see [[init]])
 #     HEADPHONES level     cc14 0x0D/0x2D   (applied by the SB3 itself, see [[init]])
-#     BROWSE rotate        cc 0x40          SHIFT+rotate      cc 0x64
-#     BROWSE press         note 0x41        SHIFT+press       note 0x42
-#     LOAD left            note 0x46        SHIFT             note 0x58
-#     LOAD right           note 0x47        SHIFT             note 0x59
+#     SHIFT+BROWSE rotate  cc 0x64
+#     SHIFT+BROWSE press   note 0x42
+#     SHIFT+LOAD left      note 0x58
+#     SHIFT+LOAD right     note 0x59

@@ -1,5 +1,5 @@
 //! Work an action asks the app to do because it needs more than the engine: the library,
-//! the loaded track's sample rate or the playhead.
+//! the loaded track's sample rate, the playhead or the browser.
 
 use engine::DeckId;
 
@@ -9,6 +9,19 @@ use engine::DeckId;
 pub enum AppRequest {
     /// Edit the beatgrid of the track loaded on `deck`.
     Grid { deck: DeckId, edit: GridEditRequest },
+    /// Move through the library browser.
+    Browser(BrowserRequest),
+    /// Load the track selected in the library browser onto `deck`.
+    LoadSelected { deck: DeckId },
+}
+
+/// A move in the library browser (the BROWSE knob).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrowserRequest {
+    /// Move the cursor of the focused pane by this many rows (positive is down the list).
+    Scroll(i32),
+    /// Switch focus between the tree (playlists, folders, all tracks) and the track list.
+    ToggleFocus,
 }
 
 /// A beatgrid edit as an action asks for it, before the app knows the track: the app turns

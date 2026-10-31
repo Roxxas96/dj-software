@@ -180,6 +180,20 @@ impl Reader {
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
+    /// How many library tracks match `filter`, without loading them.
+    ///
+    /// # Errors
+    ///
+    /// Any database error, or [`LibraryError::NonUtf8Path`] for a folder filter that is
+    /// not valid UTF-8.
+    pub fn track_count(&self, filter: &TrackFilter) -> Result<usize, LibraryError> {
+        let (where_clause, params) = filter_clause(filter)?;
+        let sql = format!("SELECT count(*) FROM tracks t {where_clause}");
+        let mut stmt = self.connection().prepare_cached(&sql)?;
+        let n: i64 = stmt.query_row(params_from_iter(&params), |r| r.get(0))?;
+        Ok(usize::try_from(n).unwrap_or(0))
+    }
+
     /// The `EXPLAIN QUERY PLAN` detail lines of the exact statement [`Reader::tracks`]
     /// runs, to test that a sort is served by an index.
     ///
@@ -201,13 +215,9 @@ impl Reader {
     }
 }
 
-/// The SQL and parameters for one page of [`Reader::tracks`].
-fn tracks_query(
-    filter: &TrackFilter,
-    sort: TrackSort,
-    offset: usize,
-    limit: usize,
-) -> Result<(String, Vec<Value>), LibraryError> {
+/// The `WHERE` clause (empty when nothing is filtered) and its parameters selecting the
+/// tracks (aliased `t`) that match `filter`.
+fn filter_clause(filter: &TrackFilter) -> Result<(String, Vec<Value>), LibraryError> {
     let mut conds: Vec<&str> = Vec::new();
     let mut params: Vec<Value> = Vec::new();
     if let Some(folder) = &filter.folder {
@@ -241,6 +251,17 @@ fn tracks_query(
     } else {
         format!("WHERE {}", conds.join(" AND "))
     };
+    Ok((where_clause, params))
+}
+
+/// The SQL and parameters for one page of [`Reader::tracks`].
+fn tracks_query(
+    filter: &TrackFilter,
+    sort: TrackSort,
+    offset: usize,
+    limit: usize,
+) -> Result<(String, Vec<Value>), LibraryError> {
+    let (where_clause, mut params) = filter_clause(filter)?;
     let column = match sort.key {
         TrackSortKey::Title => "t.title COLLATE NOCASE",
         TrackSortKey::Artist => "t.artist COLLATE NOCASE",
