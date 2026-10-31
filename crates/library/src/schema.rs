@@ -30,6 +30,7 @@ CREATE TABLE tracks (
 CREATE INDEX tracks_fingerprint ON tracks(fingerprint);
 CREATE INDEX tracks_artist ON tracks(artist COLLATE NOCASE);
 CREATE INDEX tracks_title ON tracks(title COLLATE NOCASE);
+CREATE INDEX tracks_added ON tracks(added_at);
 
 CREATE TABLE folders (
     id INTEGER PRIMARY KEY,
