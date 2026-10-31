@@ -17,6 +17,7 @@ use rusqlite::types::Value;
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params_from_iter};
 
 use crate::LibraryError;
+use crate::grid::{self, GridEdit};
 use crate::scan::TrackFile;
 
 /// Capacity of the writer's queue. [`Writer::submit`] blocks while it is full rather than
@@ -53,6 +54,17 @@ pub enum WriteOp {
     /// `fingerprint` (its audio changed while it was being analyzed) and with
     /// [`LibraryError::NoSuchTrack`] when the track is gone, storing nothing.
     StoreAnalysis(Box<StoreAnalysis>),
+    /// Applies a manual edit to track `track`'s beatgrid, reading the current grid in the
+    /// same transaction (see [`crate::GridEdit`] for what each edit does). Creates the
+    /// analysis row if the track has none. Fails with [`LibraryError::Grid`] when the edit
+    /// is refused and [`LibraryError::NoSuchTrack`] when the track is gone, changing
+    /// nothing. A [`GridEdit::Tap`] here only creates the row: tap tempo keeps its taps in
+    /// the [`crate::Library`], so use [`crate::Library::edit_grid`] for taps.
+    EditGrid {
+        track: i64,
+        edit: GridEdit,
+        playhead_frames: Option<f64>,
+    },
     /// Flags these tracks' files as missing. Tracks are never deleted by a scan.
     MarkMissing(Vec<i64>),
     /// Adds a library folder (no-op if already there). Only the `folders` table changes.
@@ -386,6 +398,11 @@ fn apply(tx: &Transaction<'_>, op: &WriteOp) -> Result<WriteOutcome, LibraryErro
             store_analysis(tx, a)?;
             Ok(WriteOutcome::Done)
         }
+        WriteOp::EditGrid {
+            track,
+            edit,
+            playhead_frames,
+        } => grid::apply(tx, *track, *edit, *playhead_frames),
         WriteOp::MarkMissing(ids) => {
             let mut stmt = tx.prepare_cached("UPDATE tracks SET missing = 1 WHERE id = ?1")?;
             for id in ids {

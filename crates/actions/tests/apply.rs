@@ -84,6 +84,13 @@ fn ids_round_trip_for_every_action() {
         "deck.tempo",
         "deck.tempo_range_next",
         "deck.return_to_start",
+        "deck.grid_shift_back",
+        "deck.grid_shift_forward",
+        "deck.grid_set_downbeat",
+        "deck.grid_halve",
+        "deck.grid_double",
+        "deck.grid_tap",
+        "deck.grid_lock_toggle",
         "channel.trim",
         "channel.eq_high",
         "channel.eq_mid",
@@ -558,6 +565,58 @@ fn accepts_matches_what_apply_does() {
         assert!(!kind.accepts(InputKind::Relative));
         assert_eq!(kind.is_absolute(), kind.accepts(InputKind::Absolute));
     }
+}
+
+#[test]
+fn grid_actions_return_requests() {
+    use actions::{AppRequest, GridEditRequest as E};
+    let mut rig = Rig::new();
+    let before = rig.state.clone();
+    let deck2 = d(1);
+    let request = |edit| ApplyResult::Request(AppRequest::Grid { deck: deck2, edit });
+    let cases = [
+        (ActionKind::GridShiftBack, E::Shift { millis: -5 }),
+        (ActionKind::GridShiftForward, E::Shift { millis: 5 }),
+        (ActionKind::GridSetDownbeat, E::SetDownbeat),
+        (ActionKind::GridHalve, E::Halve),
+        (ActionKind::GridDouble, E::Double),
+        (ActionKind::GridTap, E::Tap),
+        (ActionKind::GridLockToggle, E::ToggleLock),
+    ];
+    for (kind, edit) in cases {
+        let action = deck_action(kind, 1);
+        assert_eq!(rig.apply(action, Input::Press), request(edit), "{kind:?}");
+        assert_eq!(rig.apply(action, Input::Release), ApplyResult::Ignored);
+    }
+    // Requests change no control state (the app performs them).
+    assert_eq!(rig.state, before);
+
+    let back = deck_action(ActionKind::GridShiftBack, 1);
+    let forward = deck_action(ActionKind::GridShiftForward, 1);
+    // SHIFT on the other side does not count.
+    rig.state.side_mut(Side::Left).shift = true;
+    assert_eq!(
+        rig.apply(back, Input::Press),
+        request(E::Shift { millis: -5 })
+    );
+    // SHIFT on deck 2's side: 1 ms steps.
+    rig.state.side_mut(Side::Right).shift = true;
+    assert_eq!(
+        rig.apply(back, Input::Press),
+        request(E::Shift { millis: -1 })
+    );
+    assert_eq!(
+        rig.apply(forward, Input::Press),
+        request(E::Shift { millis: 1 })
+    );
+    // Deck 4 is on the right side too.
+    assert_eq!(
+        rig.apply(deck_action(ActionKind::GridShiftForward, 3), Input::Press),
+        ApplyResult::Request(AppRequest::Grid {
+            deck: d(3),
+            edit: E::Shift { millis: 1 }
+        })
+    );
 }
 
 #[test]

@@ -4,7 +4,7 @@
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
-use actions::{Action, ApplyResult, ControlState, Input, Side, ValueTarget, apply};
+use actions::{Action, AppRequest, ApplyResult, ControlState, Input, Side, ValueTarget, apply};
 use engine::{DeckId, EngineController};
 
 use crate::mapping::{InitAction, Mapping, Resolved, Resolver};
@@ -15,14 +15,17 @@ use crate::ports::{
 use crate::{Feedback, MidiMessage, TimedMidi, clock};
 
 /// What one [`Runtime::handle_batch`] did.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BatchStats {
-    /// Actions that took effect.
+    /// Actions that took effect, requests included.
     pub applied: u32,
     /// Absolute values dropped because a later value for the same target replaced them.
     pub coalesced: u32,
     /// Actions dropped because the engine's command queue was full.
     pub queue_full: u32,
+    /// What the actions asked the app to do (such as grid edits), in the order their
+    /// presses came in. The app performs them.
+    pub requests: Vec<AppRequest>,
 }
 
 /// An absolute value whose engine command waits for the end of its run.
@@ -164,6 +167,7 @@ impl Runtime {
     /// every value immediately, so soft takeover and later messages see where the control
     /// is. Presses and releases are never coalesced and keep their order, and a run ends
     /// before each of them so they see (and the engine gets) every value sent before.
+    /// Requests come out in [`BatchStats::requests`] in the order of their presses.
     pub fn handle_batch(
         &mut self,
         msgs: &[TimedMidi],
@@ -268,6 +272,10 @@ impl Runtime {
 fn count(stats: &mut BatchStats, result: ApplyResult) {
     match result {
         ApplyResult::Sent(_) => stats.applied += 1,
+        ApplyResult::Request(request) => {
+            stats.applied += 1;
+            stats.requests.push(request);
+        }
         ApplyResult::QueueFull => stats.queue_full += 1,
         ApplyResult::Ignored => {}
     }
