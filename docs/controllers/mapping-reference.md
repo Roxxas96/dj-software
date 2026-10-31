@@ -109,7 +109,7 @@ Exactly one of these, plus `channel` (1-16):
 |---|---|---|
 | `button` | Pressed when note on, or a control change above 0. Released when note off, or a control change of 0. | note, cc |
 | `absolute` | A position from 0 to 1 (0-127 is divided by 127; 14-bit values by 16383). | note, cc, cc14, pitchbend |
-| `relative_twos` | Steps as two's complement: 1 to 63 forward, 65 to 127 backward. | cc |
+| `relative_twos` | Steps as two's complement: 1 to 63 forward, 64 to 127 backward (64 is -64). | cc |
 | `relative_offset` | Steps offset by 64: 65 is +1, 63 is -1. | cc |
 
 If you leave `value` out, notes are `button` and everything else is `absolute`.
@@ -181,7 +181,7 @@ Ids are what you write in `action = "..."`. "Target" is what the binding needs:
 | `side.deck_toggle` | side | button | Press to make the side show its other deck (left: 1 and 3, right: 2 and 4). |
 | `modifier.shift` | side | button | Press and release track whether SHIFT is held on that side. |
 
-"Absolute" actions are the ones that can have `[[init]]`, `soft_takeover` and `invert`.
+Only "absolute" actions can be used in `[[init]]`. `soft_takeover` has an effect only on absolute bindings, and `invert` flips absolute values (or negates relative steps).
 Button actions ignore releases, except `deck.cue` and `modifier.shift`.
 
 ## State ids for LEDs

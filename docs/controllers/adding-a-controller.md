@@ -116,7 +116,7 @@ The tool lights groups of messages and asks whether the LED you are watching lit
 the group by binary search until it finds the message. It switches everything off again
 afterwards, and appends what it finds to `controllers/ddj-sb3/led-scan.toml` by default
 (change that with `--out`). Useful options: `--channels 1,2,5` (1-based), `--kind note|cc`,
-`--value 127`, and `--try <STATUS> <DATA1> [<VALUE>]` to check a single message in hex. Some
+`--velocity 127`, and `--try <STATUS> <DATA1> [<VALUE>]` to check a single message in hex. Some
 controllers only light their LEDs after a handshake the app does not send yet. If no
 message works, say so in the PR.
 
