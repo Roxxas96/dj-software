@@ -4,16 +4,18 @@ Open-source DJ software written in Rust. It aims for a VirtualDJ-like workflow, 
 precise controller mapping: every control on a supported controller is mapped to a named action,
 and LEDs follow the app state.
 
-**Status: early development.** The foundation (audio engine, file decoding, audio output) works
-from a command-line player; there is no UI or controller support yet.
+**Status: early development.** The audio engine, file decoding, audio output and the first
+controller mapping work from a command-line player; there is no UI yet.
 
 ## Supported controllers
 
 | Controller | Status |
 |---|---|
-| Pioneer DDJ-SB3 | In progress |
+| Pioneer DDJ-SB3 | Transport (play, cue), tempo, mixer and deck switching (software layering). Headphone MASTER LED; PLAY and CUE LEDs are not driven yet. Jog wheels, pads, loops and FX are not mapped. See [controllers/ddj-sb3](controllers/ddj-sb3/README.md). |
 
-New controllers are welcome, see [CONTRIBUTING.md](CONTRIBUTING.md).
+New controllers are welcome, see [CONTRIBUTING.md](CONTRIBUTING.md) and
+[Adding a controller](docs/controllers/adding-a-controller.md). The mapping file format is in the
+[mapping reference](docs/controllers/mapping-reference.md).
 
 ## Building from source
 
@@ -37,6 +39,13 @@ cargo run --release -p dj-software -- play <track-a> --cue-track <track-b> \
 
 # Play on the default output
 cargo run --release -p dj-software -- play <track-a>
+
+# Drive up to four decks with a DDJ-SB3 (tracks load paused; use the controller to play)
+cargo run --release -p dj-software -- play <track-a> --cue-track <track-b> \
+  --deck3 <track-c> --deck4 <track-d> --controller ddj-sb3 --device "DDJ-SB3" --master 3,4
+
+# Check what a controller sends and what the mapping does with it
+cargo run --release -p dj-software -- midi monitor --controller ddj-sb3
 ```
 
 Channel numbers are 1-based, as printed on the hardware. `--cue-track` needs `--headphones`.

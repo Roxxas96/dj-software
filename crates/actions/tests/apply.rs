@@ -569,3 +569,26 @@ fn state_key_scopes() {
     assert_eq!(StateKey::Shift.scope(), Scope::Side);
     assert_eq!(StateKey::HeadphoneMaster.scope(), Scope::Global);
 }
+
+#[test]
+fn docs_list_every_action_id() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../docs/controllers/mapping-reference.md"
+    );
+    let docs = std::fs::read_to_string(path).expect("the mapping reference exists");
+    for kind in ActionKind::ALL {
+        assert!(
+            docs.contains(&format!("`{}`", kind.id())),
+            "docs/controllers/mapping-reference.md does not list action `{}`",
+            kind.id()
+        );
+    }
+    for key in StateKey::ALL {
+        assert!(
+            docs.contains(&format!("`{}`", key.id())),
+            "docs/controllers/mapping-reference.md does not list state `{}`",
+            key.id()
+        );
+    }
+}
