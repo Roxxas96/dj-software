@@ -3,6 +3,10 @@
 //! `<dir>/backups/library-<UTC yyyymmdd-hhmmss>.sqlite3`, and only the newest
 //! [`KEEP`] backups are kept.
 //!
+//! Before anything else the database is checked with `PRAGMA quick_check`; a damaged
+//! one is refused ([`LibraryError::Corrupt`]) so it is neither opened nor copied over
+//! the good backups.
+//!
 //! A backup is always taken when a migration is pending. Otherwise it is skipped when a
 //! backup less than [`MIN_INTERVAL`] old already exists, so frequent short-lived opens
 //! (CLI commands) cannot rotate the real backups away.
@@ -49,6 +53,14 @@ pub(crate) fn backup_if_needed(db: &Path, latest: usize) -> Result<Option<PathBu
     )
     .map_err(LibraryError::Backup)?;
     src.busy_timeout(LOCK_WAIT).map_err(LibraryError::Backup)?;
+    // A damaged database is never opened, nor rotated into the backups over good copies.
+    if let Err(detail) = quick_check(&src) {
+        return Err(LibraryError::Corrupt {
+            db: db.to_owned(),
+            backups: dir,
+            detail,
+        });
+    }
     let version: i64 = src
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .map_err(LibraryError::Backup)?;
@@ -67,6 +79,29 @@ pub(crate) fn backup_if_needed(db: &Path, latest: usize) -> Result<Option<PathBu
 
     prune(&dir, KEEP, &target);
     Ok(Some(target))
+}
+
+/// Runs `PRAGMA quick_check`: `Ok` when SQLite reports the database sound, else what it
+/// found. Busy and locked errors are not corruption and pass (the backup then reports
+/// them).
+fn quick_check(conn: &Connection) -> Result<(), String> {
+    let result = conn.prepare("PRAGMA quick_check").and_then(|mut stmt| {
+        stmt.query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()
+    });
+    match result {
+        Ok(rows) if rows.len() == 1 && rows[0] == "ok" => Ok(()),
+        Ok(rows) => Err(rows.into_iter().take(3).collect::<Vec<_>>().join("; ")),
+        Err(rusqlite::Error::SqliteFailure(e, _))
+            if matches!(
+                e.code,
+                rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+            ) =>
+        {
+            Ok(())
+        }
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// Copies the whole database in one step (a consistent snapshot), retrying while another

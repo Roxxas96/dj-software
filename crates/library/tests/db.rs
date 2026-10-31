@@ -545,3 +545,63 @@ fn cues_survive_track_delete_attempt() {
     let reader = lib.reader().unwrap();
     assert_eq!(count(reader.connection(), "cues"), 1);
 }
+
+/// Fills `path` with tracks so the tracks table spans many pages, then closes it.
+fn library_with_rows(path: &Path) {
+    let lib = library::Library::open(path).unwrap();
+    let statements = (0..400)
+        .map(|i| RawStatement {
+            sql: "INSERT INTO tracks(path, fingerprint, title, added_at) \
+                  VALUES (?1, zeroblob(32), ?2, 0)"
+                .into(),
+            params: vec![
+                Value::Text(format!("/music/{i:04}-{}.wav", "x".repeat(100))),
+                Value::Text(format!("title {i}")),
+            ],
+        })
+        .collect();
+    lib.writer().submit_wait(WriteOp::Raw(statements)).unwrap();
+    drop(lib);
+}
+
+#[test]
+fn corrupt_database_is_refused_and_not_backed_up() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = db_path(&dir);
+    library_with_rows(&path);
+    age_backups(&path);
+    let before = backups(&path);
+    // Overwrite pages in the middle of the file (b-tree pages, not the header).
+    let mut bytes = std::fs::read(&path).unwrap();
+    assert!(bytes.len() > 8 * 4096, "{} bytes", bytes.len());
+    for b in &mut bytes[3 * 4096..6 * 4096] {
+        *b = 0xA5;
+    }
+    std::fs::write(&path, bytes).unwrap();
+
+    let err = library::Library::open(&path).unwrap_err();
+    match &err {
+        LibraryError::Corrupt { db, backups, .. } => {
+            assert_eq!(db, &path);
+            assert_eq!(backups, &path.parent().unwrap().join("backups"));
+        }
+        other => panic!("expected Corrupt, got {other}"),
+    }
+    let text = err.to_string();
+    assert!(
+        text.contains(path.to_str().unwrap()) && text.contains("backups"),
+        "{text}"
+    );
+    assert_eq!(backups(&path), before, "the damaged file was not backed up");
+}
+
+#[test]
+fn a_file_that_is_not_a_database_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = db_path(&dir);
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, vec![0x5Au8; 64 * 1024]).unwrap();
+    let err = library::Library::open(&path).unwrap_err();
+    assert!(matches!(err, LibraryError::Corrupt { .. }), "{err}");
+    assert_eq!(backup_count(&path), 0);
+}

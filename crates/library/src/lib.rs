@@ -53,6 +53,17 @@ pub enum LibraryError {
     Sqlite(#[from] rusqlite::Error),
     #[error("could not back up the library before opening it: {0}")]
     Backup(#[source] rusqlite::Error),
+    #[error(
+        "the library database {} failed its integrity check ({detail}); refusing to open \
+         it. Restore a backup from {}",
+        .db.display(),
+        .backups.display()
+    )]
+    Corrupt {
+        db: std::path::PathBuf,
+        backups: std::path::PathBuf,
+        detail: String,
+    },
     #[error("library migration to version {version} failed: {source}")]
     Migration {
         version: usize,
