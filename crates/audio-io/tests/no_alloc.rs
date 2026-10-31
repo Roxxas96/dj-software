@@ -4,7 +4,10 @@
 use std::sync::Arc;
 
 use assert_no_alloc::{AllocDisabler, assert_no_alloc};
-use audio_io::{OutputRouting, Scratch, fill_device_buffer, fill_device_buffer_i16};
+use audio_io::{
+    ERROR_QUEUE_CAPACITY, OutputRouting, Scratch, fill_device_buffer, fill_device_buffer_i16,
+    stream_errors,
+};
 use engine::{
     ChannelCommand, Command, DeckCommand, DeckId, EngineConfig, EngineController, EngineRenderer,
     MasterCommand, TrackBuffer, XfaderAssign, engine,
@@ -103,4 +106,33 @@ fn fill_device_buffer_i16_converts_without_allocating() {
             );
         }
     }
+}
+
+#[test]
+fn error_sink_reports_without_allocating() {
+    let (mut sink, mut errors) = stream_errors();
+    let with_message = cpal::Error::with_message(cpal::ErrorKind::DeviceNotAvailable, "gone");
+    let plain: Vec<cpal::Error> = (0..ERROR_QUEUE_CAPACITY + 2)
+        .map(|_| cpal::Error::new(cpal::ErrorKind::DeviceBusy))
+        .collect();
+    let mut plain = plain.into_iter();
+    let first = plain.next().unwrap();
+    assert_no_alloc(|| {
+        // The owned error, message included, is moved into the queue.
+        sink.report(with_message);
+        sink.report(first);
+    });
+    // Overflowing the queue drops the extra errors (these own no heap memory).
+    let rest: Vec<cpal::Error> = plain.collect();
+    let mut rest = rest.into_iter();
+    assert_no_alloc(|| {
+        for error in rest.by_ref() {
+            sink.report(error);
+        }
+    });
+    drop(rest);
+    assert_eq!(errors.count(), (ERROR_QUEUE_CAPACITY + 3) as u64);
+    let messages = errors.take();
+    assert_eq!(messages.len(), ERROR_QUEUE_CAPACITY);
+    assert_eq!(messages[0], "gone");
 }

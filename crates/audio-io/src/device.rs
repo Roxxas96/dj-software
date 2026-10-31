@@ -1,13 +1,11 @@
 //! Output device discovery and the cpal stream that drives the engine.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, Device, SampleFormat, StreamConfig, SupportedStreamConfigRange};
 use engine::{EngineConfig, EngineRenderer};
 use thiserror::Error;
 
+use crate::errors::{StreamErrors, stream_errors};
 use crate::routing::{
     OutputRouting, RoutingError, Scratch, fill_device_buffer, fill_device_buffer_i16,
 };
@@ -169,12 +167,10 @@ impl PendingOutput {
         let channels = usize::from(self.config.channels);
         let routing = self.routing;
         let mut scratch = Scratch::new(renderer.max_block_frames());
-        let errors = Arc::new(AtomicU64::new(0));
-        let error_count = Arc::clone(&errors);
-        // Real-time: only bumps a counter. The error value is cpal's to allocate and drop.
-        let on_error = move |_: cpal::Error| {
-            error_count.fetch_add(1, Ordering::Relaxed);
-        };
+        let (mut sink, errors) = stream_errors();
+        // Real-time: bumps a counter and moves cpal's error into a bounded lock-free queue
+        // (dropped when full). Nothing is allocated, locked or printed here.
+        let on_error = move |error: cpal::Error| sink.report(error);
 
         let stream = match self.sample_format {
             SampleFormat::I16 => {
@@ -215,13 +211,20 @@ impl PendingOutput {
 /// A playing output stream. Audio stops when it is dropped.
 pub struct OutputStream {
     _stream: cpal::Stream,
-    errors: Arc<AtomicU64>,
+    errors: StreamErrors,
 }
 
 impl OutputStream {
     /// How many errors cpal has reported for this stream so far.
     pub fn errors(&self) -> u64 {
-        self.errors.load(Ordering::Relaxed)
+        self.errors.count()
+    }
+
+    /// The messages of the errors cpal reported since the last call, oldest first. At most
+    /// [`ERROR_QUEUE_CAPACITY`](crate::ERROR_QUEUE_CAPACITY) wait between calls; later ones
+    /// are only counted in [`errors`](Self::errors).
+    pub fn take_errors(&mut self) -> Vec<String> {
+        self.errors.take()
     }
 }
 
