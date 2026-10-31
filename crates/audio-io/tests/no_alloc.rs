@@ -118,7 +118,7 @@ fn error_sink_reports_without_allocating() {
     let mut plain = plain.into_iter();
     let first = plain.next().unwrap();
     assert_no_alloc(|| {
-        // The owned error, message included, is moved into the queue.
+        // The owned error, message included, is classified and moved into the queue.
         sink.report(with_message);
         sink.report(first);
     });
@@ -134,5 +134,6 @@ fn error_sink_reports_without_allocating() {
     assert_eq!(errors.count(), (ERROR_QUEUE_CAPACITY + 3) as u64);
     let messages = errors.take();
     assert_eq!(messages.len(), ERROR_QUEUE_CAPACITY);
-    assert_eq!(messages[0], "gone");
+    assert_eq!(messages[0].message, "gone");
+    assert_eq!(messages[0].kind, audio_io::StreamErrorKind::DeviceLost);
 }

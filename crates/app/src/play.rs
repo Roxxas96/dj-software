@@ -1,7 +1,7 @@
 //! The `play` command: decode up to four tracks and play them through an output device,
 //! optionally driven by a MIDI controller.
 
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -9,7 +9,9 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, channel, sync_chan
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow};
-use audio_io::{AudioError, OutputRouting, OutputStream, RoutingError};
+use audio_io::{
+    AudioError, OutputRouting, OutputStream, RoutingError, StreamError, StreamErrorKind,
+};
 use controller::builtin::load_mapping;
 use controller::{Connection, PresenceChange, Runtime, TimedMidi, clock};
 use engine::{
@@ -23,6 +25,8 @@ const MIDI_WAIT: Duration = Duration::from_millis(10);
 const LED_TICK: Duration = Duration::from_millis(33);
 /// How long deck 1 may take to report that it is playing before we give up.
 const START_TIMEOUT: Duration = Duration::from_secs(5);
+/// The shortest time between two automatic controller reconnects.
+const AUTO_RECONNECT_INTERVAL: Duration = Duration::from_secs(5);
 const DEVICES_HINT: &str = "run `dj-software devices` to see the available devices and channels";
 
 #[derive(Debug, clap::Args)]
@@ -249,7 +253,7 @@ fn playback_loop(
             println!();
             return Err(anyhow!("deck 1 did not start playing"));
         }
-        if let Some(warning) = stream_warning(stream, &mut reported_errors) {
+        if let (Some(warning), _) = poll_stream_errors(stream, &mut reported_errors) {
             eprintln!("\n{warning}");
         }
         let _ = write!(stdout, "\r{}", deck_line(deck1, &snapshot));
@@ -260,28 +264,89 @@ fn playback_loop(
     Ok(())
 }
 
-/// A warning for the errors the audio stream reported since the last call, with their
-/// messages, or `None` if there are none. `reported` is the count already warned about.
-fn stream_warning(stream: &mut OutputStream, reported: &mut u64) -> Option<String> {
-    // Messages first: an error is counted before its message is queued, so the count read
-    // after covers every message taken.
-    let messages = stream.take_errors();
-    let errors = stream.errors();
-    if errors <= *reported && messages.is_empty() {
-        return None;
+/// The errors the audio stream reported since the last call, with a warning for them
+/// (`None` if there are none). `reported` is the count already warned about.
+fn poll_stream_errors(
+    stream: &mut OutputStream,
+    reported: &mut u64,
+) -> (Option<String>, Vec<StreamError>) {
+    // Errors first: an error is counted before it is queued, so the count read after
+    // covers every error taken.
+    let taken = stream.take_errors();
+    let count = stream.errors();
+    if count <= *reported && taken.is_empty() {
+        return (None, taken);
     }
-    *reported = errors;
-    Some(stream_warning_text(errors, &messages))
+    *reported = count;
+    (Some(stream_warning_text(count, &taken)), taken)
 }
 
-fn stream_warning_text(errors: u64, messages: &[String]) -> String {
-    let mut text =
-        format!("warning: the audio stream reported {errors} error(s); playback may glitch");
-    for message in messages {
+fn stream_warning_text(count: u64, errors: &[StreamError]) -> String {
+    let only_xruns = !errors.is_empty() && errors.iter().all(|e| e.kind == StreamErrorKind::Xrun);
+    let mut text = if only_xruns {
+        format!(
+            "warning: audio glitch, the device could not keep up ({count} stream error(s) so far)"
+        )
+    } else {
+        format!("warning: the audio stream reported {count} error(s); playback may glitch")
+    };
+    for error in errors.iter().filter(|e| e.kind != StreamErrorKind::Xrun) {
         text.push_str("\n  audio error: ");
-        text.push_str(message);
+        text.push_str(&error.message);
     }
     text
+}
+
+/// When to drop and reopen the controller's ports.
+#[derive(Debug, Default)]
+struct ReconnectPolicy {
+    last_auto: Option<Instant>,
+}
+
+impl ReconnectPolicy {
+    /// Why to reconnect now, if at all. A `manual` request (Enter) always reconnects.
+    /// Stream errors reconnect only when one may mean the device, and so a link it shares
+    /// with the controller, went away (never for an xrun, which macOS reports on every
+    /// processor overload), and at most once per [`AUTO_RECONNECT_INTERVAL`].
+    fn decide(
+        &mut self,
+        now: Instant,
+        manual: bool,
+        errors: &[StreamError],
+    ) -> Option<&'static str> {
+        if manual {
+            return Some("on request");
+        }
+        if !errors.iter().any(|e| e.kind == StreamErrorKind::DeviceLost) {
+            return None;
+        }
+        if self
+            .last_auto
+            .is_some_and(|last| now.duration_since(last) < AUTO_RECONNECT_INTERVAL)
+        {
+            return None;
+        }
+        self.last_auto = Some(now);
+        Some("after an audio/USB hiccup")
+    }
+}
+
+/// Forces the controller's ports closed and reopened (see [`Runtime::force_reconnect`]).
+/// Messages the old ports queued are dropped, so they are not applied to the state after
+/// the reconnect; those of the new ports are kept in `batch` for the next round.
+fn reconnect_controller(
+    runtime: &mut Runtime,
+    engine: &mut EngineController,
+    connection: &mut Connection,
+    rx: &Receiver<TimedMidi>,
+    batch: &mut Vec<TimedMidi>,
+) -> PresenceChange {
+    let change = runtime.force_reconnect(engine, connection);
+    // The old input port is closed by now: anything it sent is stamped before this.
+    let reopened_at = clock::now_micros();
+    batch.retain(|m| m.micros > reopened_at);
+    batch.extend(rx.try_iter().filter(|m| m.micros > reopened_at));
+    change
 }
 
 /// What to print after a forced controller reconnect, `why` saying what caused it.
@@ -318,8 +383,9 @@ fn spawn_enter_reader() -> Receiver<()> {
 /// Ctrl-C. A finished track does not quit: the DJ may start it again.
 ///
 /// The controller's ports are dropped and reopened when the audio stream reports an error
-/// (on the DDJ-SB3 audio and MIDI share one USB link, and a dropout shorter than the
-/// presence poll can leave the MIDI connection dead) and when Enter is pressed.
+/// that may mean the device went away (on the DDJ-SB3 audio and MIDI share one USB link,
+/// and a dropout shorter than the presence poll can leave the MIDI connection dead), at
+/// most every [`AUTO_RECONNECT_INTERVAL`], and when Enter is pressed (stdin a terminal).
 fn control_loop(
     mapping: controller::mapping::Mapping,
     engine: &mut EngineController,
@@ -331,24 +397,29 @@ fn control_loop(
     let mut connection = Connection::new(&mapping, tx).context("opening the controller")?;
     let mut runtime = Runtime::new(mapping);
     let printer = Printer::spawn();
-    let enter = spawn_enter_reader();
-    const KEYS: &str = "press Enter to reconnect the controller, Ctrl-C to quit";
+    let enter = std::io::stdin().is_terminal().then(spawn_enter_reader);
+    let keys = if enter.is_some() {
+        "press Enter to reconnect the controller, Ctrl-C to quit"
+    } else {
+        "Ctrl-C to quit; Enter-to-reconnect unavailable, stdin is not a terminal"
+    };
 
     // `[[init]]` is applied on the first attach only; later ones keep the values set.
     let mut attached_once = false;
     match connection.port_names() {
         Some((input, _)) => {
-            printer.event(format!("{name} connected on {input} ({KEYS})"));
+            printer.event(format!("{name} connected on {input} ({keys})"));
             runtime.attach(engine, &mut connection);
             attached_once = true;
         }
-        None => printer.event(format!("{name} not found; waiting for it ({KEYS})")),
+        None => printer.event(format!("{name} not found; waiting for it ({keys})")),
     }
 
     let mut batch: Vec<TimedMidi> = Vec::new();
     let mut last_led = Instant::now();
     let mut last_status: Option<Instant> = None;
     let mut reported_errors = 0;
+    let mut policy = ReconnectPolicy::default();
     while !interrupted.load(Ordering::Relaxed) {
         receive_batch(&rx, &mut batch);
         if !batch.is_empty() {
@@ -386,24 +457,24 @@ fn control_loop(
             }
         }
 
-        let mut reconnect_why = None;
-        if enter.try_iter().count() > 0 {
-            reconnect_why = Some("on request");
-        }
+        let manual = enter.as_ref().is_some_and(|rx| rx.try_iter().count() > 0);
+        let mut stream_errors = Vec::new();
 
         if last_status.is_none_or(|last| now.duration_since(last) >= TICK) {
             last_status = Some(now);
             engine.collect_garbage();
-            if let Some(warning) = stream_warning(stream, &mut reported_errors) {
+            let (warning, errors) = poll_stream_errors(stream, &mut reported_errors);
+            if let Some(warning) = warning {
                 printer.event(warning);
-                reconnect_why = Some("after an audio/USB hiccup");
             }
+            stream_errors = errors;
             let snapshots = DeckId::ALL.map(|id| (id, engine.deck(id)));
             printer.status(decks_line(&snapshots));
         }
 
-        if let Some(why) = reconnect_why {
-            let change = runtime.force_reconnect(engine, &mut connection);
+        if let Some(why) = policy.decide(now, manual, &stream_errors) {
+            let change =
+                reconnect_controller(&mut runtime, engine, &mut connection, &rx, &mut batch);
             attached_once |= change == PresenceChange::Back;
             printer.event(reconnect_message(change, why));
         }
@@ -503,14 +574,74 @@ mod tests {
         assert!(describe_audio_error(&overlap).contains("output channel 1 is routed"));
     }
 
+    fn err(kind: StreamErrorKind, message: &str) -> StreamError {
+        StreamError {
+            kind,
+            message: message.to_owned(),
+        }
+    }
+
     #[test]
     fn stream_warning_lists_messages() {
         assert_eq!(
             stream_warning_text(1, &[]),
             "warning: the audio stream reported 1 error(s); playback may glitch"
         );
-        let text = stream_warning_text(2, &["device gone".to_owned(), "busy".to_owned()]);
+        let text = stream_warning_text(
+            2,
+            &[
+                err(StreamErrorKind::DeviceLost, "device gone"),
+                err(StreamErrorKind::Other, "busy"),
+            ],
+        );
         assert!(text.ends_with("\n  audio error: device gone\n  audio error: busy"));
+        let text = stream_warning_text(3, &[err(StreamErrorKind::Xrun, "xrun")]);
+        assert!(text.starts_with("warning: audio glitch"), "{text}");
+        assert!(!text.contains("audio error"), "{text}");
+    }
+
+    #[test]
+    fn xrun_never_triggers_a_reconnect() {
+        let mut policy = ReconnectPolicy::default();
+        let start = Instant::now();
+        for i in 0..20 {
+            let now = start + AUTO_RECONNECT_INTERVAL * i;
+            let errors = [err(StreamErrorKind::Xrun, "xrun")];
+            assert_eq!(policy.decide(now, false, &errors), None);
+        }
+        let other = [err(StreamErrorKind::Other, "busy")];
+        assert_eq!(policy.decide(start, false, &other), None);
+        assert_eq!(policy.decide(start, false, &[]), None);
+    }
+
+    #[test]
+    fn device_lost_triggers_a_reconnect_at_most_every_interval() {
+        let mut policy = ReconnectPolicy::default();
+        let lost = [
+            err(StreamErrorKind::Xrun, "xrun"),
+            err(StreamErrorKind::DeviceLost, "gone"),
+        ];
+        let start = Instant::now();
+        assert_eq!(
+            policy.decide(start, false, &lost),
+            Some("after an audio/USB hiccup")
+        );
+        let soon = start + Duration::from_secs(2);
+        assert_eq!(policy.decide(soon, false, &lost), None, "within 5 s");
+        let later = start + AUTO_RECONNECT_INTERVAL;
+        assert!(policy.decide(later, false, &lost).is_some());
+    }
+
+    #[test]
+    fn enter_bypasses_the_interval() {
+        let mut policy = ReconnectPolicy::default();
+        let lost = [err(StreamErrorKind::DeviceLost, "gone")];
+        let start = Instant::now();
+        assert!(policy.decide(start, false, &lost).is_some());
+        let soon = start + Duration::from_millis(100);
+        assert_eq!(policy.decide(soon, true, &[]), Some("on request"));
+        assert_eq!(policy.decide(soon, true, &lost), Some("on request"));
+        assert_eq!(policy.decide(soon, false, &lost), None);
     }
 
     #[test]
