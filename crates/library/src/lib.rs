@@ -31,7 +31,9 @@ pub use jobs::{
     ANALYZER_VERSION, AnalysisProgress, AnalysisRow, AnalysisWarning, Analyzer, PROGRESS_TAIL,
     REPORT_CAPACITY, WAVEFORM_FRAMES_PER_BUCKET, default_threads,
 };
-pub use playlists::{PlaylistSummary, TrackFilter, TrackRow, TrackSort, TrackSortKey};
+pub use playlists::{
+    PlaylistSummary, TrackDetails, TrackFilter, TrackRow, TrackSort, TrackSortKey,
+};
 pub use scan::{
     EXTENSIONS, ScanProgress, ScanReport, TrackFile, add_folder, remove_folder, scan_folder,
 };

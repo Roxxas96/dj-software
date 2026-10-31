@@ -1,9 +1,16 @@
 //! Command-line entry point: argument parsing and dispatch.
 
+mod console;
+mod format;
 mod led_scan;
+mod library_cmd;
+mod library_mode;
 mod midi_cmd;
 mod play;
+mod printer;
 
+#[cfg(test)]
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -11,6 +18,9 @@ use anyhow::Context;
 use clap::error::ErrorKind;
 use clap::{CommandFactory, Parser, Subcommand};
 
+use library_cmd::LibraryArgs;
+#[cfg(test)]
+use library_cmd::LibraryCommand;
 use play::{PlayArgs, play};
 
 #[derive(Debug, Parser)]
@@ -29,6 +39,8 @@ enum Sub {
     /// MIDI controller tools
     #[command(subcommand)]
     Midi(MidiCommand),
+    /// The music library: folders, tracks, analysis, playlists and beatgrids
+    Library(LibraryArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -99,6 +111,7 @@ fn main() -> ExitCode {
             }
             play(&args)
         }
+        Sub::Library(args) => library_cmd::run(&args),
         Sub::Midi(MidiCommand::Ports) => midi_cmd::ports(),
         Sub::Midi(MidiCommand::Monitor { port, controller }) => match controller {
             Some(controller) => midi_cmd::monitor_controller(&controller),
@@ -279,7 +292,7 @@ mod tests {
             "--deck4",
             "d.mp3",
         ]);
-        assert_eq!(args.track, PathBuf::from("a.mp3"));
+        assert_eq!(args.track, Some(PathBuf::from("a.mp3")));
         assert_eq!(args.cue_track, Some(PathBuf::from("b.mp3")));
         assert_eq!(args.controller.as_deref(), Some("ddj-sb3"));
         assert_eq!(args.deck3, Some(PathBuf::from("c.mp3")));
@@ -392,5 +405,219 @@ mod tests {
             }
             _ => panic!("expected midi capture"),
         }
+    }
+
+    fn library(args: &[&str]) -> LibraryArgs {
+        let mut full = vec!["dj-software", "library"];
+        full.extend_from_slice(args);
+        match parse(&full).unwrap().command {
+            Sub::Library(library) => library,
+            _ => panic!("expected library"),
+        }
+    }
+
+    #[test]
+    fn parses_library_list_with_filters() {
+        let args = library(&[
+            "list",
+            "--folder",
+            "/music",
+            "--search",
+            "daft",
+            "--sort",
+            "bpm",
+            "--limit",
+            "20",
+            "--library-db",
+            "/tmp/lib.sqlite3",
+        ]);
+        assert_eq!(args.library_db, Some(PathBuf::from("/tmp/lib.sqlite3")));
+        match args.command {
+            LibraryCommand::List(list) => {
+                assert_eq!(list.folder, Some(PathBuf::from("/music")));
+                assert_eq!(list.playlist, None);
+                assert_eq!(list.search.as_deref(), Some("daft"));
+                assert_eq!(list.sort, Some(library_cmd::SortArg::Bpm));
+                assert_eq!(list.limit, 20);
+            }
+            other => panic!("expected list, got {other:?}"),
+        }
+        match library(&["list", "--playlist", "Peak time"]).command {
+            LibraryCommand::List(list) => {
+                assert_eq!(list.playlist.as_deref(), Some("Peak time"));
+                assert_eq!(list.limit, 100);
+                assert_eq!(list.sort, None);
+            }
+            other => panic!("expected list, got {other:?}"),
+        }
+        assert!(
+            parse(&[
+                "dj-software",
+                "library",
+                "list",
+                "--playlist",
+                "a",
+                "--folder",
+                "/m"
+            ])
+            .is_err()
+        );
+        assert!(parse(&["dj-software", "library", "list", "--sort", "color"]).is_err());
+    }
+
+    #[test]
+    fn parses_grid_shift_ms() {
+        match library(&["grid", "12", "shift", "-5.5"]).command {
+            LibraryCommand::Grid { track, action } => {
+                assert_eq!(track, 12);
+                assert_eq!(action, library_cmd::GridAction::Shift { ms: -5.5 });
+            }
+            other => panic!("expected grid, got {other:?}"),
+        }
+        for (words, expected) in [
+            (vec!["grid", "3", "show"], library_cmd::GridAction::Show),
+            (
+                vec!["grid", "3", "bpm", "127.5"],
+                library_cmd::GridAction::Bpm { bpm: 127.5 },
+            ),
+            (vec!["grid", "3", "halve"], library_cmd::GridAction::Halve),
+            (vec!["grid", "3", "double"], library_cmd::GridAction::Double),
+            (vec!["grid", "3", "lock"], library_cmd::GridAction::Lock),
+            (vec!["grid", "3", "unlock"], library_cmd::GridAction::Unlock),
+        ] {
+            match library(&words).command {
+                LibraryCommand::Grid { action, .. } => assert_eq!(action, expected),
+                other => panic!("expected grid, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn parses_every_library_subcommand() {
+        assert!(matches!(
+            library(&["add-folder", "/music"]).command,
+            LibraryCommand::AddFolder { dir } if dir == Path::new("/music")
+        ));
+        assert!(matches!(
+            library(&["remove-folder", "/music"]).command,
+            LibraryCommand::RemoveFolder { .. }
+        ));
+        assert!(matches!(library(&["scan"]).command, LibraryCommand::Scan));
+        match library(&["analyze", "--track", "1", "2", "--force"]).command {
+            LibraryCommand::Analyze { all, tracks, force } => {
+                assert!(!all);
+                assert_eq!(tracks, [1, 2]);
+                assert!(force);
+            }
+            other => panic!("expected analyze, got {other:?}"),
+        }
+        assert!(matches!(
+            library(&["analyze", "--all"]).command,
+            LibraryCommand::Analyze {
+                all: true,
+                force: false,
+                ..
+            }
+        ));
+        assert!(parse(&["dj-software", "library", "analyze", "--all", "--track", "1"]).is_err());
+        match library(&["set", "bpm-range", "70", "140"]).command {
+            LibraryCommand::Set(library_cmd::SetCommand::BpmRange { min, max }) => {
+                assert_eq!((min, max), (70.0, 140.0));
+            }
+            other => panic!("expected set bpm-range, got {other:?}"),
+        }
+        match library(&["set", "key-notation", "open-key"]).command {
+            LibraryCommand::Set(library_cmd::SetCommand::KeyNotation { notation }) => {
+                assert_eq!(notation, library_cmd::NotationArg::OpenKey);
+            }
+            other => panic!("expected set key-notation, got {other:?}"),
+        }
+        assert!(parse(&["dj-software", "library", "set", "key-notation", "solfege"]).is_err());
+        use library_cmd::PlaylistCommand as P;
+        let playlist = |words: &[&str]| {
+            let mut all = vec!["playlist"];
+            all.extend_from_slice(words);
+            match library(&all).command {
+                LibraryCommand::Playlist(p) => p,
+                other => panic!("expected playlist, got {other:?}"),
+            }
+        };
+        assert_eq!(
+            playlist(&["create", "Peak"]),
+            P::Create {
+                name: "Peak".into()
+            }
+        );
+        assert_eq!(
+            playlist(&["rename", "Peak", "Peak time"]),
+            P::Rename {
+                name: "Peak".into(),
+                new_name: "Peak time".into()
+            }
+        );
+        assert_eq!(
+            playlist(&["delete", "Peak"]),
+            P::Delete {
+                name: "Peak".into()
+            }
+        );
+        assert_eq!(
+            playlist(&["add", "Peak", "4", "5", "--at", "2"]),
+            P::Add {
+                name: "Peak".into(),
+                tracks: vec![4, 5],
+                at: Some(2)
+            }
+        );
+        assert_eq!(
+            playlist(&["remove", "Peak", "3"]),
+            P::Remove {
+                name: "Peak".into(),
+                position: 3
+            }
+        );
+        assert_eq!(
+            playlist(&["move", "Peak", "3", "1"]),
+            P::Move {
+                name: "Peak".into(),
+                from: 3,
+                to: 1
+            }
+        );
+        assert_eq!(playlist(&["list"]), P::List { name: None });
+        assert_eq!(
+            playlist(&["list", "Peak"]),
+            P::List {
+                name: Some("Peak".into())
+            }
+        );
+        assert!(parse(&["dj-software", "library", "playlist", "add", "Peak"]).is_err());
+    }
+
+    #[test]
+    fn parses_play_library_mode() {
+        let args = play_args(&[
+            "dj-software",
+            "play",
+            "--library",
+            "--controller",
+            "ddj-sb3",
+        ]);
+        assert!(args.library);
+        assert_eq!(args.track, None);
+        // Without --library a track is required.
+        assert!(parse(&["dj-software", "play", "--controller", "ddj-sb3"]).is_err());
+        // Library mode needs a controller to play anything.
+        assert!(parse(&["dj-software", "play", "--library"]).is_err());
+        let with_db = play_args(&[
+            "dj-software",
+            "play",
+            "--library",
+            "--controller",
+            "ddj-sb3",
+            "--library-db",
+            "/tmp/l.sqlite3",
+        ]);
+        assert_eq!(with_db.library_db, Some(PathBuf::from("/tmp/l.sqlite3")));
     }
 }

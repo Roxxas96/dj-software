@@ -501,6 +501,21 @@ fn read_job(
 }
 
 impl Reader {
+    /// The ids of the tracks whose file is present and that have no analysis by
+    /// [`ANALYZER_VERSION`] yet, in id order; with `include_current`, every present track.
+    ///
+    /// # Errors
+    ///
+    /// Any database error.
+    pub fn track_ids_to_analyze(&self, include_current: bool) -> Result<Vec<i64>, LibraryError> {
+        let mut stmt = self.connection().prepare_cached(
+            "SELECT t.id FROM tracks t LEFT JOIN analysis a ON a.track_id = t.id \
+             WHERE t.missing = 0 AND (?1 OR a.analyzer_version IS NOT ?2) ORDER BY t.id",
+        )?;
+        let rows = stmt.query_map((include_current, ANALYZER_VERSION), |r| r.get(0))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
     /// Track `track_id`'s stored analysis, if it has been analyzed (and not cleared since).
     ///
     /// # Errors

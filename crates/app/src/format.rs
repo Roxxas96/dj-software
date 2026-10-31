@@ -1,0 +1,160 @@
+//! How library tracks, keys and beatgrids are shown, shared by `library` and `play
+//! --library`.
+
+use analysis::{Key, KeyNotation};
+use library::{Beatgrid, TrackRow};
+
+/// The `key_notation` setting value for each notation.
+pub fn notation_setting(notation: KeyNotation) -> &'static str {
+    match notation {
+        KeyNotation::Camelot => "camelot",
+        KeyNotation::Standard => "standard",
+        KeyNotation::OpenKey => "open_key",
+    }
+}
+
+/// The notation a `key_notation` setting names (Camelot when unset or unknown).
+pub fn notation_from_setting(value: Option<&str>) -> KeyNotation {
+    match value {
+        Some("standard") => KeyNotation::Standard,
+        Some("open_key" | "open-key") => KeyNotation::OpenKey,
+        _ => KeyNotation::Camelot,
+    }
+}
+
+/// A stored key (0..=23) in `notation`, or empty when unknown.
+pub fn key_text(key: Option<u8>, notation: KeyNotation) -> String {
+    key.and_then(Key::new)
+        .map(|k| k.to_notation(notation))
+        .unwrap_or_default()
+}
+
+/// "Artist – Title", or just the title without an artist.
+pub fn track_name(row: &TrackRow) -> String {
+    let title = row.title.as_deref().unwrap_or("(untitled)");
+    match row.artist.as_deref().filter(|a| !a.is_empty()) {
+        Some(artist) => format!("{artist} – {title}"),
+        None => title.to_owned(),
+    }
+}
+
+/// A BPM with two decimals, such as "128.00".
+pub fn bpm_text(bpm: f64) -> String {
+    format!("{bpm:.2}")
+}
+
+/// A track's length as "m:ss" (or "h:mm:ss"), or empty when unknown.
+pub fn length_text(row: &TrackRow) -> String {
+    match (row.duration_frames, row.sample_rate) {
+        (Some(frames), Some(rate)) if rate > 0 => duration_text(frames / u64::from(rate)),
+        _ => String::new(),
+    }
+}
+
+fn duration_text(seconds: u64) -> String {
+    let (h, m, s) = (seconds / 3600, seconds / 60 % 60, seconds % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
+}
+
+/// Whether a track is long enough (over 30 minutes) to be a DJ mix, whose tempo drifts
+/// away from one constant beatgrid.
+pub fn is_long_mix(row: &TrackRow) -> bool {
+    match (row.duration_frames, row.sample_rate) {
+        (Some(frames), Some(rate)) if rate > 0 => frames / u64::from(rate) > 30 * 60,
+        _ => false,
+    }
+}
+
+/// A beatgrid as "128.00 BPM, first beat at 0.250 s, locked". `sample_rate` turns the
+/// first beat into seconds; without it the frame is shown.
+pub fn grid_text(grid: &Beatgrid, sample_rate: Option<u32>) -> String {
+    let bpm = grid
+        .bpm
+        .map_or_else(|| "no BPM".to_owned(), |b| format!("{} BPM", bpm_text(b)));
+    let first = match (grid.first_beat_frames, sample_rate) {
+        (Some(frames), Some(rate)) if rate > 0 => {
+            format!(", first beat at {:.3} s", frames / f64::from(rate))
+        }
+        (Some(frames), _) => format!(", first beat at frame {frames:.0}"),
+        (None, _) => String::new(),
+    };
+    let lock = if grid.grid_locked {
+        "locked"
+    } else {
+        "unlocked"
+    };
+    format!("{bpm}{first}, {lock}")
+}
+
+/// Cuts `text` to at most `max` characters, ending with "…" when cut.
+pub fn truncate(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_owned();
+    }
+    let mut out: String = text.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row() -> TrackRow {
+        TrackRow {
+            id: 1,
+            title: Some("Title".into()),
+            artist: Some("Artist".into()),
+            bpm: Some(128.0),
+            key: Some(21),
+            duration_frames: Some(44_100 * 200),
+            sample_rate: Some(44_100),
+            has_cues: false,
+            missing: false,
+        }
+    }
+
+    #[test]
+    fn formats_tracks_keys_and_grids() {
+        assert_eq!(track_name(&row()), "Artist – Title");
+        let untagged = TrackRow {
+            artist: None,
+            ..row()
+        };
+        assert_eq!(track_name(&untagged), "Title");
+        assert_eq!(length_text(&row()), "3:20");
+        assert_eq!(key_text(Some(21), KeyNotation::Camelot), "8A");
+        assert_eq!(key_text(Some(21), KeyNotation::Standard), "Am");
+        assert_eq!(key_text(Some(21), KeyNotation::OpenKey), "1m");
+        assert_eq!(key_text(None, KeyNotation::Camelot), "");
+        for n in [
+            KeyNotation::Camelot,
+            KeyNotation::Standard,
+            KeyNotation::OpenKey,
+        ] {
+            assert_eq!(notation_from_setting(Some(notation_setting(n))), n);
+        }
+        assert_eq!(notation_from_setting(None), KeyNotation::Camelot);
+        let grid = Beatgrid {
+            bpm: Some(128.0),
+            first_beat_frames: Some(11_025.0),
+            grid_locked: true,
+        };
+        assert_eq!(
+            grid_text(&grid, Some(44_100)),
+            "128.00 BPM, first beat at 0.250 s, locked"
+        );
+        let mix = TrackRow {
+            duration_frames: Some(44_100 * 3600),
+            ..row()
+        };
+        assert!(is_long_mix(&mix) && !is_long_mix(&row()));
+        assert_eq!(length_text(&mix), "1:00:00");
+        assert_eq!(truncate("abcdef", 4), "abc…");
+        assert_eq!(truncate("abc", 4), "abc");
+    }
+}
