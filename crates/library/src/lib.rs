@@ -9,6 +9,7 @@
 mod backup;
 mod db;
 pub mod fingerprint;
+mod playlists;
 mod scan;
 pub mod schema;
 pub mod tags;
@@ -16,6 +17,7 @@ mod watch;
 mod writer;
 
 pub use db::{Library, Reader};
+pub use playlists::{PlaylistSummary, TrackFilter, TrackRow, TrackSort, TrackSortKey};
 pub use scan::{
     EXTENSIONS, ScanProgress, ScanReport, TrackFile, add_folder, remove_folder, scan_folder,
 };
@@ -46,6 +48,10 @@ pub enum LibraryError {
     NonUtf8Path(std::path::PathBuf),
     #[error("watching library folders failed: {0}")]
     Watch(#[from] notify::Error),
+    #[error("playlist {0} does not exist")]
+    NoSuchPlaylist(i64),
+    #[error("position {position} is out of range (the playlist has {len} entries)")]
+    PositionOutOfRange { position: usize, len: usize },
     #[error("the library writer has shut down")]
     WriterGone,
     #[error("the library writer panicked while applying a change; it was rolled back")]
