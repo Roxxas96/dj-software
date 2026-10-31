@@ -43,7 +43,8 @@ pub struct PlayArgs {
     pub headphones: Option<[usize; 2]>,
     /// Drive the decks with a MIDI controller: a built-in mapping name (e.g. `ddj-sb3`) or a
     /// mapping file. Every track then loads paused, `--cue-track` only loads deck 2 (no
-    /// fader or PFL presets: the controller sets them), and only Ctrl-C quits
+    /// fader or PFL presets: the controller sets them), only Ctrl-C quits, and Enter
+    /// reconnects the controller if it stops responding
     #[arg(long, value_name = "NAME|PATH")]
     pub controller: Option<String>,
     /// Track to load (paused) on deck 3
@@ -218,11 +219,11 @@ pub fn play(args: &PlayArgs) -> anyhow::Result<()> {
     }
 
     println!("Playing on {}", pending.device_name());
-    let stream = pending.start(renderer).context("starting audio output")?;
+    let mut stream = pending.start(renderer).context("starting audio output")?;
 
     match mapping {
-        Some(mapping) => control_loop(mapping, &mut controller, &stream, &interrupted),
-        None => playback_loop(deck(1)?, &mut controller, &stream, &interrupted),
+        Some(mapping) => control_loop(mapping, &mut controller, &mut stream, &interrupted),
+        None => playback_loop(deck(1)?, &mut controller, &mut stream, &interrupted),
     }
 }
 
@@ -230,7 +231,7 @@ pub fn play(args: &PlayArgs) -> anyhow::Result<()> {
 fn playback_loop(
     deck1: DeckId,
     controller: &mut EngineController,
-    stream: &OutputStream,
+    stream: &mut OutputStream,
     interrupted: &AtomicBool,
 ) -> anyhow::Result<()> {
     let began = Instant::now();
@@ -248,7 +249,9 @@ fn playback_loop(
             println!();
             return Err(anyhow!("deck 1 did not start playing"));
         }
-        report_stream_errors(stream, &mut reported_errors);
+        if let Some(warning) = stream_warning(stream, &mut reported_errors) {
+            eprintln!("\n{warning}");
+        }
         let _ = write!(stdout, "\r{}", deck_line(deck1, &snapshot));
         let _ = stdout.flush();
         std::thread::sleep(TICK);
@@ -257,20 +260,70 @@ fn playback_loop(
     Ok(())
 }
 
-fn report_stream_errors(stream: &OutputStream, reported: &mut u64) {
+/// A warning for the errors the audio stream reported since the last call, with their
+/// messages, or `None` if there are none. `reported` is the count already warned about.
+fn stream_warning(stream: &mut OutputStream, reported: &mut u64) -> Option<String> {
+    // Messages first: an error is counted before its message is queued, so the count read
+    // after covers every message taken.
+    let messages = stream.take_errors();
     let errors = stream.errors();
-    if errors > *reported {
-        *reported = errors;
-        eprintln!("\nwarning: the audio stream reported {errors} error(s); playback may glitch");
+    if errors <= *reported && messages.is_empty() {
+        return None;
     }
+    *reported = errors;
+    Some(stream_warning_text(errors, &messages))
+}
+
+fn stream_warning_text(errors: u64, messages: &[String]) -> String {
+    let mut text =
+        format!("warning: the audio stream reported {errors} error(s); playback may glitch");
+    for message in messages {
+        text.push_str("\n  audio error: ");
+        text.push_str(message);
+    }
+    text
+}
+
+/// What to print after a forced controller reconnect, `why` saying what caused it.
+fn reconnect_message(change: PresenceChange, why: &str) -> String {
+    match change {
+        PresenceChange::Back => format!("controller reconnected {why}"),
+        PresenceChange::Lost => {
+            format!("controller lost {why}; waiting for it to come back")
+        }
+        PresenceChange::None => format!("controller still not found {why}; waiting for it"),
+    }
+}
+
+/// Sends `()` for every line typed on stdin, from a helper thread so the control loop
+/// never blocks on the terminal. Stops at end of input.
+fn spawn_enter_reader() -> Receiver<()> {
+    let (tx, rx) = channel();
+    std::thread::spawn(move || {
+        let stdin = std::io::stdin();
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match stdin.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) if tx.send(()).is_err() => break,
+                Ok(_) => {}
+            }
+        }
+    });
+    rx
 }
 
 /// With a controller: apply its MIDI, drive its LEDs and follow it being unplugged, until
 /// Ctrl-C. A finished track does not quit: the DJ may start it again.
+///
+/// The controller's ports are dropped and reopened when the audio stream reports an error
+/// (on the DDJ-SB3 audio and MIDI share one USB link, and a dropout shorter than the
+/// presence poll can leave the MIDI connection dead) and when Enter is pressed.
 fn control_loop(
     mapping: controller::mapping::Mapping,
     engine: &mut EngineController,
-    stream: &OutputStream,
+    stream: &mut OutputStream,
     interrupted: &AtomicBool,
 ) -> anyhow::Result<()> {
     let name = mapping.controller.name.clone();
@@ -278,16 +331,18 @@ fn control_loop(
     let mut connection = Connection::new(&mapping, tx).context("opening the controller")?;
     let mut runtime = Runtime::new(mapping);
     let printer = Printer::spawn();
+    let enter = spawn_enter_reader();
+    const KEYS: &str = "press Enter to reconnect the controller, Ctrl-C to quit";
 
     // `[[init]]` is applied on the first attach only; later ones keep the values set.
     let mut attached_once = false;
     match connection.port_names() {
         Some((input, _)) => {
-            printer.event(format!("{name} connected on {input} (Ctrl-C to quit)"));
+            printer.event(format!("{name} connected on {input} ({KEYS})"));
             runtime.attach(engine, &mut connection);
             attached_once = true;
         }
-        None => printer.event(format!("{name} not found; waiting for it (Ctrl-C to quit)")),
+        None => printer.event(format!("{name} not found; waiting for it ({KEYS})")),
     }
 
     let mut batch: Vec<TimedMidi> = Vec::new();
@@ -331,12 +386,26 @@ fn control_loop(
             }
         }
 
+        let mut reconnect_why = None;
+        if enter.try_iter().count() > 0 {
+            reconnect_why = Some("on request");
+        }
+
         if last_status.is_none_or(|last| now.duration_since(last) >= TICK) {
             last_status = Some(now);
             engine.collect_garbage();
-            report_stream_errors(stream, &mut reported_errors);
+            if let Some(warning) = stream_warning(stream, &mut reported_errors) {
+                printer.event(warning);
+                reconnect_why = Some("after an audio/USB hiccup");
+            }
             let snapshots = DeckId::ALL.map(|id| (id, engine.deck(id)));
             printer.status(decks_line(&snapshots));
+        }
+
+        if let Some(why) = reconnect_why {
+            let change = runtime.force_reconnect(engine, &mut connection);
+            attached_once |= change == PresenceChange::Back;
+            printer.event(reconnect_message(change, why));
         }
     }
     printer.finish();
@@ -432,6 +501,26 @@ mod tests {
             source: RoutingError::Overlap { index: 0 },
         };
         assert!(describe_audio_error(&overlap).contains("output channel 1 is routed"));
+    }
+
+    #[test]
+    fn stream_warning_lists_messages() {
+        assert_eq!(
+            stream_warning_text(1, &[]),
+            "warning: the audio stream reported 1 error(s); playback may glitch"
+        );
+        let text = stream_warning_text(2, &["device gone".to_owned(), "busy".to_owned()]);
+        assert!(text.ends_with("\n  audio error: device gone\n  audio error: busy"));
+    }
+
+    #[test]
+    fn reconnect_messages() {
+        assert_eq!(
+            reconnect_message(PresenceChange::Back, "after an audio/USB hiccup"),
+            "controller reconnected after an audio/USB hiccup"
+        );
+        assert!(reconnect_message(PresenceChange::Lost, "on request").contains("waiting"));
+        assert!(reconnect_message(PresenceChange::None, "on request").contains("not found"));
     }
 
     #[test]
