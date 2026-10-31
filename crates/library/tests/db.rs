@@ -1,6 +1,7 @@
 //! Library database: schema, migrations, startup backups and the writer thread.
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use library::{LibraryError, RawStatement, WriteOp, WriteOutcome};
 use rusqlite::{Connection, types::Value};
@@ -37,12 +38,36 @@ fn insert_setting(key: &str, value: &str) -> WriteOp {
 }
 
 fn backups(path: &Path) -> Vec<PathBuf> {
-    let mut files: Vec<PathBuf> = std::fs::read_dir(path.parent().unwrap().join("backups"))
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .collect();
+    let Ok(entries) = std::fs::read_dir(path.parent().unwrap().join("backups")) else {
+        return Vec::new();
+    };
+    let mut files: Vec<PathBuf> = entries.map(|e| e.unwrap().path()).collect();
     files.sort();
     files
+}
+
+/// The backup with the latest modification time.
+fn newest_backup(path: &Path) -> PathBuf {
+    backups(path)
+        .into_iter()
+        .max_by_key(|f| std::fs::metadata(f).unwrap().modified().unwrap())
+        .unwrap()
+}
+
+/// Makes every existing backup look an hour old, so the next open takes a new one.
+fn age_backups(path: &Path) {
+    for f in backups(path) {
+        std::fs::File::options()
+            .write(true)
+            .open(&f)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(3600))
+            .unwrap();
+    }
+}
+
+fn backup_count(path: &Path) -> usize {
+    backups(path).len()
 }
 
 #[test]
@@ -70,7 +95,7 @@ fn open_creates_schema_v1() {
         .unwrap();
     assert_eq!(journal, "wal");
     // A brand-new library has nothing to back up.
-    assert!(!path.parent().unwrap().join("backups").exists() || backups(&path).is_empty());
+    assert_eq!(backup_count(&path), 0);
 }
 
 #[test]
@@ -79,6 +104,7 @@ fn open_backs_up_existing_db_and_keeps_ten() {
     let path = db_path(&dir);
     // Open k (1-based) backs up a file holding k - 1 settings rows.
     for k in 1..=12 {
+        age_backups(&path);
         let lib = library::Library::open(&path).unwrap();
         lib.writer()
             .submit_wait(insert_setting(&format!("k{k}"), "v"))
@@ -126,6 +152,9 @@ fn failed_migration_leaves_previous_version() {
             .submit_wait(insert_setting("keep", "me"))
             .unwrap();
     }
+    // A recent backup exists, which would normally make the next open skip its backup.
+    drop(library::Library::open(&path).unwrap());
+    assert_eq!(backup_count(&path), 1);
     let broken: &[&str] = &[
         library::schema::MIGRATIONS[0],
         "CREATE TABLE half_done(a); INSERT INTO no_such_table VALUES (1);",
@@ -146,6 +175,156 @@ fn failed_migration_leaves_previous_version() {
         })
         .unwrap();
     assert_eq!(value, "me");
+
+    // The pending migration forced a backup, taken before the migration ran.
+    assert_eq!(backup_count(&path), 2);
+    let backup = Connection::open(newest_backup(&path)).unwrap();
+    assert_eq!(user_version(&backup), 1);
+    assert!(!table_exists(&backup, "half_done"));
+    assert_eq!(count(&backup, "settings"), 1);
+}
+
+#[test]
+fn second_open_within_ten_minutes_makes_no_backup() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = db_path(&dir);
+    drop(library::Library::open(&path).unwrap());
+    assert_eq!(backup_count(&path), 0, "nothing to back up yet");
+    drop(library::Library::open(&path).unwrap());
+    assert_eq!(backup_count(&path), 1);
+    for _ in 0..5 {
+        drop(library::Library::open(&path).unwrap());
+    }
+    assert_eq!(
+        backup_count(&path),
+        1,
+        "recent backup: opens must not rotate"
+    );
+    age_backups(&path);
+    drop(library::Library::open(&path).unwrap());
+    assert_eq!(
+        backup_count(&path),
+        2,
+        "older than ten minutes: back up again"
+    );
+}
+
+#[test]
+fn pending_migration_forces_a_backup_of_the_old_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = db_path(&dir);
+    {
+        let lib = library::Library::open(&path).unwrap();
+        lib.writer().submit_wait(insert_setting("a", "1")).unwrap();
+    }
+    drop(library::Library::open(&path).unwrap());
+    assert_eq!(backup_count(&path), 1);
+
+    let v2: &[&str] = &[library::schema::MIGRATIONS[0], "CREATE TABLE extra(a);"];
+    let lib = library::Library::open_with_migrations(&path, v2).unwrap();
+    assert_eq!(backup_count(&path), 2);
+    let backup = Connection::open(newest_backup(&path)).unwrap();
+    assert_eq!(user_version(&backup), 1);
+    assert!(!table_exists(&backup, "extra"));
+    assert_eq!(count(&backup, "settings"), 1);
+    assert_eq!(user_version(lib.reader().unwrap().connection()), 2);
+}
+
+#[test]
+fn backup_succeeds_while_another_connection_is_writing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = db_path(&dir);
+    drop(library::Library::open(&path).unwrap());
+    let other = Connection::open(&path).unwrap();
+    other
+        .execute_batch("BEGIN IMMEDIATE; INSERT INTO settings VALUES ('pending', 'x');")
+        .unwrap();
+    // The open takes a backup and starts while the other write transaction is open.
+    let lib = library::Library::open(&path).unwrap();
+    assert_eq!(backup_count(&path), 1);
+    let backup = Connection::open(newest_backup(&path)).unwrap();
+    assert_eq!(
+        count(&backup, "settings"),
+        0,
+        "uncommitted data is not in the backup"
+    );
+    other.execute_batch("COMMIT").unwrap();
+    assert_eq!(count(lib.reader().unwrap().connection(), "settings"), 1);
+}
+
+#[test]
+fn failed_submit_is_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib = library::Library::open(&db_path(&dir)).unwrap();
+    let writer = lib.writer();
+    let bad = WriteOp::Raw(vec![RawStatement {
+        sql: "INSERT INTO no_such_table VALUES (1)".into(),
+        params: vec![],
+    }]);
+    writer.submit(bad.clone()).unwrap();
+    writer.submit(insert_setting("ok", "1")).unwrap();
+    // Waited ops report their own error and are not added to the failure list.
+    assert!(writer.submit_wait(bad.clone()).is_err());
+
+    assert_eq!(writer.failed_write_count(), 1);
+    assert_eq!(lib.failed_write_count(), 1);
+    let failed = lib.take_failed_writes();
+    assert_eq!(failed.len(), 1);
+    assert_eq!(failed[0].op, bad);
+    assert!(
+        matches!(failed[0].error, LibraryError::Sqlite(_)),
+        "{:?}",
+        failed[0].error
+    );
+    // Taken: the list is empty, the counter keeps counting.
+    assert!(writer.take_failed_writes().is_empty());
+    assert_eq!(writer.failed_write_count(), 1);
+
+    // A panicking op queued without waiting is reported too.
+    writer
+        .submit(WriteOp::PanicAfter {
+            statements: vec![],
+            after: 0,
+        })
+        .unwrap();
+    writer.submit_wait(insert_setting("ok2", "1")).unwrap();
+    let failed = writer.take_failed_writes();
+    assert_eq!(failed.len(), 1);
+    assert!(matches!(failed[0].error, LibraryError::WriterPanicked));
+    assert_eq!(writer.failed_write_count(), 2);
+}
+
+#[test]
+fn submits_racing_shutdown_are_applied_or_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = db_path(&dir);
+    let lib = library::Library::open(&path).unwrap();
+    let workers: Vec<_> = (0..4)
+        .map(|t| {
+            let writer = lib.writer();
+            std::thread::spawn(move || {
+                let mut accepted = 0_i64;
+                for i in 0.. {
+                    match writer.submit(insert_setting(&format!("t{t}-{i}"), "v")) {
+                        Ok(()) => accepted += 1,
+                        Err(LibraryError::WriterGone) => break,
+                        Err(e) => panic!("{e:?}"),
+                    }
+                }
+                accepted
+            })
+        })
+        .collect();
+    std::thread::sleep(Duration::from_millis(50));
+    drop(lib);
+    let accepted: i64 = workers.into_iter().map(|w| w.join().unwrap()).sum();
+    assert!(accepted > 0);
+    let conn = Connection::open(&path).unwrap();
+    assert_eq!(
+        count(&conn, "settings"),
+        accepted,
+        "an accepted submit was lost"
+    );
 }
 
 #[test]

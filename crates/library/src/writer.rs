@@ -3,10 +3,14 @@
 //! Every change to the library is a [`WriteOp`] sent over a bounded channel to one thread
 //! that owns the only read-write connection. Each op runs in its own transaction: it is
 //! committed whole or rolled back whole, including when applying it panics. Ops are
-//! applied in the order they were queued.
+//! applied in the order they were queued. Failures of ops queued without waiting are kept
+//! for the app to report and retry.
 
+use std::collections::VecDeque;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 use std::thread::JoinHandle;
 
 use rusqlite::types::Value;
@@ -59,17 +63,23 @@ pub enum WriteOutcome {
     },
 }
 
+/// How many unreported failures [`Writer::take_failed_writes`] holds; beyond this the
+/// oldest are dropped (the counter still counts them).
+pub(crate) const FAILED_CAPACITY: usize = 1024;
+
+/// An op queued with [`Writer::submit`] that could not be applied. It was rolled back;
+/// the app should tell the user and may resubmit `op`.
+#[derive(Debug)]
+pub struct FailedWrite {
+    pub op: WriteOp,
+    pub error: LibraryError,
+}
+
 type Reply = mpsc::Sender<Result<WriteOutcome, LibraryError>>;
 
 enum Message {
     Op { op: WriteOp, reply: Option<Reply> },
     Shutdown,
-}
-
-/// A cloneable handle to the writer thread.
-#[derive(Debug, Clone)]
-pub struct Writer {
-    tx: SyncSender<Message>,
 }
 
 impl std::fmt::Debug for Message {
@@ -81,49 +91,121 @@ impl std::fmt::Debug for Message {
     }
 }
 
+/// State shared by every handle and the writer thread.
+#[derive(Debug, Default)]
+struct Shared {
+    /// Set once shutdown begins. Senders hold the read lock while sending, so once the
+    /// flag is set no op can land in the queue behind `Shutdown` and be lost.
+    closed: RwLock<bool>,
+    failed_count: AtomicU64,
+    failed: Mutex<VecDeque<FailedWrite>>,
+}
+
+/// A cloneable handle to the writer thread.
+#[derive(Debug, Clone)]
+pub struct Writer {
+    tx: SyncSender<Message>,
+    shared: Arc<Shared>,
+}
+
 impl Writer {
     /// Queues `op` and returns as soon as it is queued (blocking only while the queue is
-    /// full). A failure while applying it later is not reported to the caller; use
-    /// [`Writer::submit_wait`] when the outcome matters.
+    /// full, never dropping it). If applying it later fails, it is rolled back and
+    /// reported through [`Writer::take_failed_writes`] and
+    /// [`Writer::failed_write_count`]; use [`Writer::submit_wait`] to get the outcome
+    /// directly.
+    ///
+    /// # Errors
+    ///
+    /// [`LibraryError::WriterGone`] once the library has been closed.
     pub fn submit(&self, op: WriteOp) -> Result<(), LibraryError> {
-        self.tx
-            .send(Message::Op { op, reply: None })
-            .map_err(|_| LibraryError::WriterGone)
+        self.send(Message::Op { op, reply: None })
     }
 
     /// Queues `op` and waits until it has been committed (or rolled back on error).
+    ///
+    /// # Errors
+    ///
+    /// The op's own error (it was rolled back), or [`LibraryError::WriterGone`] once the
+    /// library has been closed.
     pub fn submit_wait(&self, op: WriteOp) -> Result<WriteOutcome, LibraryError> {
         let (reply, result) = mpsc::channel();
-        self.tx
-            .send(Message::Op {
-                op,
-                reply: Some(reply),
-            })
-            .map_err(|_| LibraryError::WriterGone)?;
+        self.send(Message::Op {
+            op,
+            reply: Some(reply),
+        })?;
         result.recv().map_err(|_| LibraryError::WriterGone)?
     }
 
-    /// Asks the thread to stop once every op queued before this call is applied.
+    /// Takes the ops queued with [`Writer::submit`] that failed since the last call,
+    /// oldest first (at most the latest 1024).
+    #[must_use]
+    pub fn take_failed_writes(&self) -> Vec<FailedWrite> {
+        lock(&self.shared.failed).drain(..).collect()
+    }
+
+    /// How many ops queued with [`Writer::submit`] have failed since the library opened.
+    #[must_use]
+    pub fn failed_write_count(&self) -> u64 {
+        self.shared.failed_count.load(Ordering::Relaxed)
+    }
+
+    fn send(&self, message: Message) -> Result<(), LibraryError> {
+        let closed = self
+            .shared
+            .closed
+            .read()
+            .unwrap_or_else(PoisonError::into_inner);
+        if *closed {
+            return Err(LibraryError::WriterGone);
+        }
+        self.tx.send(message).map_err(|_| LibraryError::WriterGone)
+    }
+
+    /// Closes the queue: every op already queued is applied, later sends get
+    /// [`LibraryError::WriterGone`], then the thread stops.
     pub(crate) fn shutdown(&self) {
+        *self
+            .shared
+            .closed
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = true;
         let _ = self.tx.send(Message::Shutdown);
     }
+}
+
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Starts the writer thread on `conn`, which must already be migrated.
 pub(crate) fn spawn(conn: Connection) -> Result<(Writer, JoinHandle<()>), LibraryError> {
     let (tx, rx) = mpsc::sync_channel(QUEUE_CAPACITY);
+    let shared = Arc::new(Shared::default());
+    let thread_shared = Arc::clone(&shared);
     let handle = std::thread::Builder::new()
         .name("library-writer".into())
-        .spawn(move || run(conn, &rx))?;
-    Ok((Writer { tx }, handle))
+        .spawn(move || run(conn, &rx, &thread_shared))?;
+    Ok((Writer { tx, shared }, handle))
 }
 
-fn run(mut conn: Connection, rx: &Receiver<Message>) {
+fn run(mut conn: Connection, rx: &Receiver<Message>, shared: &Shared) {
     while let Ok(Message::Op { op, reply }) = rx.recv() {
         let result = apply_guarded(&mut conn, &op);
-        if let Some(reply) = reply {
-            // The waiter may have gone away; the op is committed regardless.
-            let _ = reply.send(result);
+        match (reply, result) {
+            // The waiter may have gone away; the outcome stands regardless.
+            (Some(reply), result) => {
+                let _ = reply.send(result);
+            }
+            (None, Ok(_)) => {}
+            (None, Err(error)) => {
+                shared.failed_count.fetch_add(1, Ordering::Relaxed);
+                let mut failed = lock(&shared.failed);
+                if failed.len() >= FAILED_CAPACITY {
+                    failed.pop_front();
+                }
+                failed.push_back(FailedWrite { op, error });
+            }
         }
     }
 }

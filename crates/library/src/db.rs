@@ -38,7 +38,9 @@ impl Reader {
 
 impl Library {
     /// Opens (creating if needed) the library at `path`, in this order: create the parent
-    /// directories, back up the existing file (keeping the newest 10), open it in WAL mode
+    /// directories, back up the existing file (always when a migration is pending,
+    /// otherwise unless a backup under 10 minutes old exists; the newest 10 are kept),
+    /// open it in WAL mode
     /// with foreign keys on, migrate it to the latest schema in one transaction, and start
     /// the writer thread.
     ///
@@ -64,7 +66,7 @@ impl Library {
             std::fs::create_dir_all(dir)?;
         }
         if path.exists() {
-            backup::backup_and_prune(path)?;
+            backup::backup_if_needed(path, migrations.len())?;
         }
         let mut conn = Connection::open(path)?;
         configure_writer(&conn)?;
@@ -95,6 +97,19 @@ impl Library {
     #[must_use]
     pub fn writer(&self) -> Writer {
         self.writer.clone()
+    }
+
+    /// Takes the ops queued with [`Writer::submit`] that failed since the last call; see
+    /// [`Writer::take_failed_writes`].
+    #[must_use]
+    pub fn take_failed_writes(&self) -> Vec<crate::FailedWrite> {
+        self.writer.take_failed_writes()
+    }
+
+    /// How many ops queued with [`Writer::submit`] have failed since the library opened.
+    #[must_use]
+    pub fn failed_write_count(&self) -> u64 {
+        self.writer.failed_write_count()
     }
 
     /// The database file.
