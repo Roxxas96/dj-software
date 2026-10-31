@@ -66,6 +66,12 @@ fn render_does_not_allocate() {
         DeckCommand::Pause,
         DeckCommand::CueRelease,
         DeckCommand::Play,
+        DeckCommand::SetCue(1234.0),
+        DeckCommand::SetCue(f64::NAN),
+        DeckCommand::CuePress,
+        DeckCommand::SetCue(-5.0),
+        DeckCommand::CueRelease,
+        DeckCommand::Play,
     ] {
         c.send(Command::Deck(decks[0], cmd)).unwrap();
         render_blocks(10);
