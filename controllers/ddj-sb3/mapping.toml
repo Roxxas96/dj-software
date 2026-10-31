@@ -66,7 +66,7 @@ action = "deck.tempo_range_next"
 side = "left"
 
 # TEMPO: the capture reached 0 with the slider pulled fully toward the player, which is
-# the "+" (faster) end, so the value is inverted. Confirmed by hands-on check (Task 10).
+# the "+" (faster) end, so the value is inverted. Pending confirmation in the owner's hands-on check.
 [[input]]
 midi = { channel = 1, cc14 = [0x00, 0x20] }
 action = "deck.tempo"
