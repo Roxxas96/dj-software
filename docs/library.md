@@ -28,7 +28,10 @@ The default database is `library.sqlite3` in the per-user data directory:
 
 Every change to cues, grids, playlists and settings is written to the database at once
 (there is no "save on quit"). When the library is opened, the existing database is first
-copied to `backups/library-<UTC yyyymmdd-hhmmss>.sqlite3` next to it, and only the 10
+checked with SQLite's `PRAGMA quick_check`. If the check fails, the library is not opened
+at all: the app stops with an error naming the database file and the `backups` folder,
+and the damaged file is not copied into the backups (so it cannot push a good backup
+out). Restore a backup as described below. Then the database is copied to `backups/library-<UTC yyyymmdd-hhmmss>.sqlite3` next to it, and only the 10
 newest backups are kept. The copy is skipped when the newest backup is less than 10
 minutes old (so a series of short commands does not push the real backups out), unless a
 schema migration is pending: then a backup is always taken first. A migration runs in a
@@ -54,13 +57,25 @@ cues are kept. While `play --library` runs, the folders are also watched (see be
   not by its path or file bytes. Changing tags, renaming or moving a file does not change
   it, so the track keeps its id, cues, grid and analysis.
 - **Moved or renamed files:** a new path whose fingerprint matches a track whose old file
-  no longer exists is relinked (same track). It only counts when the track's old folder
-  exists: with an unplugged drive, tracks are not relinked from it.
+  no longer exists is relinked (same track, cues kept), under these rules:
+  - the track's old folder must exist: with an unplugged drive, tracks are not relinked
+    from it;
+  - since the fingerprint covers only the first 3 seconds, the durations must also agree,
+    within 1 second or 1 % (whichever is larger), when both are known;
+  - if several missing tracks still fit (say, a clean and a dirty edit with the same
+    intro, moved together), the one with the same file name is chosen;
+  - if that still leaves more than one, or none of them has the same name, the file is
+    added as a new track and the old tracks stay `missing` with their cues, rather than
+    risk giving a file another song's cues.
 - **Deleted files** are flagged `missing`, never deleted, so their cues survive. If the
   file comes back, the track is found again.
 - **Changed files:** when a file's size or modification time changes, its tags and
-  fingerprint are read again. If the audio itself changed, the old analysis (BPM, grid,
-  key, waveform) is deleted, since it no longer describes the file. Cues are kept.
+  fingerprint are read again and the track is queued for analysis again (its analysis
+  is kept until then; a locked grid is never replaced). This also covers a file that was
+  scanned while still being copied: once the copy completes, its size changes and it is
+  analyzed again whole. If the audio itself changed (a different fingerprint), the old
+  waveform, key, BPM and grid are deleted, since they no longer describe the file; a
+  locked grid is kept. Cues are kept.
 - Files that cannot be read or decoded are listed as skipped, with the reason, and left
   out. A registered folder that is not found (an unplugged drive) is skipped with a note.
 
@@ -70,19 +85,25 @@ ignored 3 non-audio file(s)`.
 ### Watching
 
 With `play --library`, the registered folders are watched. A path must stay quiet for
-2 seconds before it is looked at, so a file that is still being copied is not read half
-written. Removals flag tracks missing and a rename relinks the track. If the operating
+2 seconds before it is looked at. A slow copy can still pause longer than that and be
+read half written: it is added as a track, and its analysis, which then covers only part
+of the audio, is stored as out of date (with a warning). When the copy completes, the
+watcher sees the file change and the track is analyzed again. Removals flag tracks missing and a rename relinks the track. If the operating
 system's watcher fails (for example, too many watches on Linux), the app prints
 "library watching degraded" and rescans the affected folders every 10 minutes instead.
 New tracks found this way are analyzed in the background.
 
 ## Analysis
 
-`library analyze` analyzes the tracks that are not analyzed yet. `--all` is every track
-(up-to-date ones are skipped), `--track ID...` only those tracks, and `--force` analyzes
-again even if the track is up to date (a locked grid is kept). Analysis runs on a pool of
-worker threads (one fewer than the CPU cores, at least one) and is also redone for tracks
-analyzed by an older version of the algorithms.
+`library analyze` analyzes the tracks that are not analyzed yet (or whose analysis is
+out of date). `--track ID...` analyzes only those tracks. `--force` analyzes again even
+tracks that are up to date (a locked grid is kept): `library analyze --force` redoes
+every track. `--all` changes nothing on its own (up-to-date tracks are still skipped);
+it is kept as an alias of the default. Analysis runs on a pool of worker threads (one
+fewer than the CPU cores, at least one) and is also redone for tracks analyzed by an
+older version of the algorithms, and for tracks whose audio ended early (a truncated or
+still-copying file). In `play --library`, analysis uses a single worker while any deck
+is playing, and all of them again once every deck is paused or stopped.
 
 What it produces:
 
@@ -102,8 +123,8 @@ dj-software library set bpm-range 90 180
 
 The maximum must be at least twice the minimum, within 30 to 480. Ranges whose minimum is
 below about 70 BPM print a warning, because half-time tracks (dubstep) then read at half
-tempo. A new range applies to new analyses; run `library analyze --all --force` to redo
-the others.
+tempo. A new range applies to new analyses; run `library analyze --force` to redo the
+others.
 
 ### Key notation
 
@@ -118,11 +139,12 @@ changes how keys are shown; the stored key is the same.
 
 ### Known limits
 
-- **There is no confidence value.** The detectors always answer: a key and a grid are
-  also given for percussion-only tracks, noise or speech. Treat them as a starting point.
-- **Tempo errors:** besides halved and doubled tempos (fix with `halve` or `double`),
-  tracks with triplet hi-hats can come out at a 3:4 ratio of the real tempo. Set the
-  BPM by hand or tap it.
+- **There is no confidence value.** The beatgrid detector gives nothing for silence and
+  for tracks under 10 seconds, and the key detector nothing for silence. Otherwise they
+  answer whatever the audio is: a key and a grid are also given for percussion-only
+  tracks, noise or speech. Treat them as a starting point.
+- **Tempo errors:** the most common are halved and doubled tempos (fix with `halve` or
+  `double`). Other wrong tempos are possible; set the BPM by hand or tap it.
 - **One constant grid per track.** Tracks that change tempo, and long DJ mixes (the list
   shows a note for tracks over 30 minutes), do not fit one grid. Beat positions drift
   away from the audio over time.
@@ -153,7 +175,9 @@ Edits and their rules:
   latest 8 taps. A gap of more than 2 seconds between taps starts a new sequence.
 - **Lock/unlock:** toggles the lock without changing the grid.
 
-The track needs a BPM first (analyze it, or set one with `library grid <ID> bpm`).
+Shift, set downbeat, halve and double need a BPM first (analyze the track, or set one
+with `library grid <ID> bpm` or by tapping). A tap sequence of fewer than 4 taps changes
+nothing.
 
 ```sh
 dj-software library grid 12 show          # BPM, first beat, lock state
@@ -198,7 +222,8 @@ dj-software play --library --controller ddj-sb3 --device "DDJ-SB3" --master 3,4
 
 `--library` needs `--controller`. The track argument is optional. In this mode:
 
-- The BROWSE knob scrolls, pressing it switches between the tree and the track list, and
+- The BROWSE knob scrolls, pressing it switches between the tree (Playlists, then
+  Folders, then All tracks) and the track list, and
   LOAD (left or right) loads the selected track onto the deck that side currently shows,
   decks 3 and 4 included. See [the DDJ-SB3 page](../controllers/ddj-sb3/README.md).
 - A browser line is printed: `▸ <path>  <n>/<count>  Artist – Title  <BPM>  <key>  •`
@@ -208,7 +233,10 @@ dj-software play --library --controller ddj-sb3 --device "DDJ-SB3" --master 3,4
   restored when you load it again. A load onto a playing deck prints
   "warning: deck N was playing".
 - Tracks not analyzed yet are analyzed in the background; failures and warnings are
-  printed.
+  printed. A track the watcher sees change is analyzed again. While any deck plays,
+  analysis runs on one worker thread only.
+- A cue point that could not be saved is retried once a second later (if it is still the
+  latest for that track); a warning is printed if the retry fails too.
 - Problems are printed as warnings and do not stop playback: a library change that could
   not be saved, a library worker that stopped, degraded folder watching.
 
