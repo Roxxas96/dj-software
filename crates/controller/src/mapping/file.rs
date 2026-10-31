@@ -64,7 +64,7 @@ pub enum ValueKind {
     Button,
     /// A position in `[0, 1]`.
     Absolute,
-    /// Two's complement steps: 1..=63 forward, 65..=127 backward.
+    /// Two's complement steps: 1..=63 forward, 64..=127 backward (64 is -64).
     RelativeTwos,
     /// Steps offset by 64: 65 is +1, 63 is -1.
     RelativeOffset,

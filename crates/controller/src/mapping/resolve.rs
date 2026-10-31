@@ -338,7 +338,7 @@ fn relative(kind: ValueKind, raw: Raw) -> i32 {
 }
 
 /// The signed steps a relative control sent as `value`: two's complement (1..=63 forward,
-/// 65..=127 backward) or offset by 64. Non-relative kinds decode to 0.
+/// 64..=127 backward, 64 being -64) or offset by 64. Non-relative kinds decode to 0.
 pub fn decode_relative(kind: ValueKind, value: u8) -> i32 {
     let v = i32::from(value);
     match kind {
