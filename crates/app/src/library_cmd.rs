@@ -63,7 +63,8 @@ pub enum LibraryCommand {
     /// Detect BPM, beatgrid, key and waveform. Without --all or --track, analyzes every
     /// track not analyzed yet
     Analyze {
-        /// Every track (those already analyzed are skipped unless --force)
+        /// Same as the default (up-to-date tracks are skipped); use --force to redo
+        /// every track
         #[arg(long, conflicts_with = "tracks")]
         all: bool,
         /// Only these track ids
@@ -134,7 +135,7 @@ pub enum SetCommand {
     /// doubled or halved until it fits: with 90-180, 85 BPM reads as 170 and 185 as
     /// 92.5. The range must span an octave (MAX >= 2 x MIN) within 30-480. Ranges below
     /// ~70 BPM let half-time tracks (dubstep) read as half tempo. Applies to new
-    /// analyses; run `library analyze --all --force` to redo analyzed tracks
+    /// analyses; run `library analyze --force` to redo analyzed tracks
     BpmRange { min: f64, max: f64 },
     /// How keys are shown: camelot (8A), standard (Am) or open-key (1m)
     KeyNotation {
@@ -535,7 +536,7 @@ fn set_setting(lib: &Library, set: &SetCommand) -> anyhow::Result<()> {
             let value = format_bpm_range(range);
             let message = format!(
                 "BPM range set to {value}; it applies to new analyses \
-                 (`library analyze --all --force` redoes analyzed tracks)"
+                 (`library analyze --force` redoes analyzed tracks)"
             );
             (BPM_RANGE, value, message)
         }

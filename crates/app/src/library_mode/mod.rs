@@ -8,7 +8,7 @@
 mod cue_sync;
 mod worker;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -20,8 +20,8 @@ use analysis::KeyNotation;
 use anyhow::Context;
 use engine::{Command, DeckCommand, DeckId, DeckSnapshot, EngineController};
 use library::{
-    Analyzer, BrowserView, FailedWrite, GridEdit, KEY_NOTATION, Library, TrackRow, WatchHealth,
-    Watcher, WriteOp, Writer, default_threads,
+    Analyzer, BrowserView, FailedWrite, GridEdit, KEY_NOTATION, Library, PendingTrack, TrackRow,
+    WatchHealth, Watcher, WriteOp, Writer, default_threads,
 };
 
 use crate::console::ConsoleCommand;
@@ -35,6 +35,12 @@ use worker::{Event, Job};
 const POLL_EVERY: Duration = Duration::from_secs(1);
 /// How many analysis failures or watcher problems are printed per check.
 const REPORTS_SHOWN: usize = 5;
+/// How many analysis workers may run while a deck is playing, so analysis cannot starve
+/// the audio.
+const WORKERS_WHILE_PLAYING: usize = 1;
+
+/// A file's size and mtime as last scanned: when it changes, the track is analyzed again.
+type FileStamp = (Option<i64>, Option<i64>);
 
 /// The library track on a deck.
 struct DeckTrack {
@@ -46,9 +52,19 @@ pub struct LibraryMode {
     lib: Arc<Library>,
     writer: Writer,
     analyzer: Option<Analyzer>,
-    /// Tracks queued for analysis since the start (each once: a track that fails is not
-    /// retried until the next session or `library analyze`).
-    enqueued: HashSet<i64>,
+    /// Tracks queued for analysis since the start, with their file as it was then. A
+    /// track is queued again only when its file changed since (say, a copy that was
+    /// still in progress completed); one that fails on the same file is not retried
+    /// until the next session or `library analyze`.
+    enqueued: HashMap<i64, FileStamp>,
+    /// How many analysis jobs were queued since the start.
+    queued_total: usize,
+    /// Analysis is held to [`WORKERS_WHILE_PLAYING`] because a deck is playing.
+    throttled: bool,
+    /// The last cue point saved for each track this session.
+    latest_cues: HashMap<i64, f64>,
+    /// Cue writes already retried once, as (track, frames bits).
+    retried_cues: HashSet<(i64, u64)>,
     /// The watcher scanned something: look for tracks to analyze at the next refresh.
     find_new_tracks: bool,
     last_done: usize,
@@ -79,7 +95,7 @@ impl LibraryMode {
         let reader = lib.reader()?;
         let notation = notation_from_setting(reader.setting(KEY_NOTATION)?.as_deref());
 
-        let pending = reader.track_ids_to_analyze(false)?;
+        let pending = reader.tracks_to_analyze()?;
         // Started even with nothing to do: the watcher may find new tracks.
         let analyzer = Analyzer::start(&lib, default_threads()).context("starting the analyzer")?;
         if !pending.is_empty() {
@@ -106,7 +122,11 @@ impl LibraryMode {
             writer: lib.writer(),
             lib,
             analyzer: Some(analyzer),
-            enqueued: HashSet::new(),
+            enqueued: HashMap::new(),
+            queued_total: 0,
+            throttled: false,
+            latest_cues: HashMap::new(),
+            retried_cues: HashSet::new(),
             find_new_tracks: false,
             last_done: 0,
             watcher,
@@ -130,15 +150,33 @@ impl LibraryMode {
         Ok(mode)
     }
 
-    /// Queues for analysis the tracks of `ids` not queued yet this session.
-    fn enqueue_new(&mut self, ids: &[i64]) {
-        let new: Vec<i64> = ids
+    /// Queues for analysis the tracks of `tracks` not queued yet this session, or whose
+    /// file changed since they were.
+    fn enqueue_new(&mut self, tracks: &[PendingTrack]) {
+        let new: Vec<i64> = tracks
             .iter()
-            .copied()
-            .filter(|id| self.enqueued.insert(*id))
+            .filter(|t| self.enqueued.insert(t.id, (t.size, t.mtime)) != Some((t.size, t.mtime)))
+            .map(|t| t.id)
             .collect();
         if let (Some(analyzer), false) = (&self.analyzer, new.is_empty()) {
+            self.queued_total += new.len();
             analyzer.enqueue(&new, false);
+        }
+    }
+
+    /// Holds analysis to [`WORKERS_WHILE_PLAYING`] while a deck plays, and lets every
+    /// worker run again once all decks are paused or stopped.
+    fn set_playing(&mut self, playing: bool) {
+        if playing == self.throttled {
+            return;
+        }
+        self.throttled = playing;
+        if let Some(analyzer) = &self.analyzer {
+            analyzer.set_max_active(if playing {
+                WORKERS_WHILE_PLAYING
+            } else {
+                usize::MAX
+            });
         }
     }
 
@@ -206,8 +244,8 @@ impl LibraryMode {
     }
 
     /// The worker job for a grid edit on `deck`, or why it is refused: no library track,
-    /// the track still loading (the playhead would be the previous track's), or an
-    /// unknown sample rate (the shift is converted with the track's own rate).
+    /// or the track still loading (the playhead would be the previous track's). A shift
+    /// is converted to frames at the decoded track's rate.
     fn grid_job(
         &self,
         deck: DeckId,
@@ -225,12 +263,7 @@ impl LibraryMode {
                 "Deck {n}: the track is still loading; edit its beatgrid in a moment"
             ));
         }
-        let Some(rate) = track.row.sample_rate else {
-            return Err(format!(
-                "Deck {n}: the track's sample rate is unknown; rescan it before editing its \
-                 beatgrid"
-            ));
-        };
+        let rate = track.cue.rate();
         let playhead = engine.deck(deck).position_frames;
         Ok(Job::Grid {
             deck,
@@ -252,6 +285,7 @@ impl LibraryMode {
             self.on_event(event, engine, printer);
         }
         self.sync_cues(engine, printer);
+        self.set_playing(DeckId::ALL.into_iter().any(|d| engine.deck(d).playing));
         if now.duration_since(self.last_poll) >= POLL_EVERY {
             self.last_poll = now;
             self.report_failed_writes(printer);
@@ -296,7 +330,7 @@ impl LibraryMode {
                     printer.event(format!(
                         "Deck {} grid: {}",
                         deck.index() + 1,
-                        grid_text(&grid, t.row.sample_rate)
+                        grid_text(&grid, Some(t.cue.rate()))
                     ));
                 }
                 self.refresh_wanted = true;
@@ -377,14 +411,27 @@ impl LibraryMode {
                         safe(e)
                     ));
                 }
+                self.latest_cues.insert(track.row.id, frames);
+                let id = track.row.id;
+                self.retried_cues.retain(|(t, _)| *t != id);
                 self.refresh_wanted |= !track.row.has_cues;
                 track.row.has_cues = true;
             }
         }
     }
 
-    fn report_failed_writes(&self, printer: &Printer) {
+    /// Reports the writes that failed. A failed cue write that is still the track's
+    /// latest cue point is retried once first, silently; it is reported if the retry
+    /// fails too.
+    fn report_failed_writes(&mut self, printer: &Printer) {
         for failed in self.lib.take_failed_writes() {
+            if let WriteOp::SetCue { track, frames } = failed.op
+                && self.latest_cues.get(&track) == Some(&frames)
+                && self.retried_cues.insert((track, frames.to_bits()))
+                && self.writer.submit(failed.op.clone()).is_ok()
+            {
+                continue;
+            }
             printer.event(self.failed_write_text(&failed));
         }
     }
@@ -418,7 +465,7 @@ impl LibraryMode {
         };
         let p = analyzer.progress();
         let finished = p.done + p.skipped + p.failed_count;
-        let total = self.enqueued.len();
+        let total = self.queued_total;
         let status = (p.queued > 0).then(|| format!("analyzing {}/{total}", finished.min(total)));
         if status != self.analysis_status {
             self.analysis_status = status;
@@ -523,6 +570,9 @@ impl LibraryMode {
                 printer.event(text);
             }
         }
+        self.report_failed_writes(printer);
+        // A cue write retried just now: wait for it, and report it if it failed again.
+        let _ = self.writer.submit_wait(WriteOp::Batch(Vec::new()));
         self.report_failed_writes(printer);
     }
 }
@@ -760,17 +810,139 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+        // The decoded rate is used even when the tags give none (or another one).
         mode.decks[0].as_mut().unwrap().row.sample_rate = None;
-        assert!(refused(&mode).contains("sample rate is unknown"));
+        match mode.grid_job(deck, shift, &engine).unwrap() {
+            Job::Grid { edit, .. } => assert_eq!(edit, GridEdit::Shift { frames: 480.0 }),
+            other => panic!("{other:?}"),
+        }
+        mode.decks[0].as_mut().unwrap().row.sample_rate = Some(44_100);
+        match mode.grid_job(deck, shift, &engine).unwrap() {
+            Job::Grid { edit, .. } => assert_eq!(edit, GridEdit::Shift { frames: 480.0 }),
+            other => panic!("{other:?}"),
+        }
         drop(printer);
+    }
+
+    fn pending(id: i64, size: i64) -> PendingTrack {
+        PendingTrack {
+            id,
+            size: Some(size),
+            mtime: Some(1),
+        }
     }
 
     #[test]
     fn new_tracks_are_queued_once() {
         let (_dir, mut mode, mut engine, printer) = mode();
-        mode.on_event(Event::NewTracks(vec![1, 2]), &mut engine, &printer);
-        mode.on_event(Event::NewTracks(vec![2, 3]), &mut engine, &printer);
-        assert_eq!(mode.enqueued.len(), 3);
+        let tracks =
+            |ids: &[i64]| Event::NewTracks(ids.iter().map(|&id| pending(id, 10)).collect());
+        mode.on_event(tracks(&[1, 2]), &mut engine, &printer);
+        mode.on_event(tracks(&[2, 3]), &mut engine, &printer);
+        assert_eq!((mode.enqueued.len(), mode.queued_total), (3, 3));
+        mode.shutdown(&mut engine, &printer);
+        printer.finish();
+    }
+
+    #[test]
+    fn a_track_whose_file_changed_is_queued_again() {
+        let (_dir, mut mode, mut engine, printer) = mode();
+        mode.on_event(
+            Event::NewTracks(vec![pending(1, 10)]),
+            &mut engine,
+            &printer,
+        );
+        // Still out of date, same file (say, its analysis failed): not retried.
+        mode.on_event(
+            Event::NewTracks(vec![pending(1, 10)]),
+            &mut engine,
+            &printer,
+        );
+        assert_eq!(mode.queued_total, 1);
+        // The watcher rescanned it after a change (a copy completed): queued again.
+        mode.on_event(
+            Event::NewTracks(vec![pending(1, 20)]),
+            &mut engine,
+            &printer,
+        );
+        assert_eq!(mode.queued_total, 2);
+        mode.shutdown(&mut engine, &printer);
+        printer.finish();
+    }
+
+    #[test]
+    fn analysis_is_held_to_one_worker_while_a_deck_plays() {
+        let (_dir, mut mode, mut engine, printer) = mode();
+        let limit = |mode: &LibraryMode| mode.analyzer.as_ref().unwrap().max_active();
+        assert_eq!(limit(&mode), usize::MAX);
+        mode.set_playing(true);
+        assert_eq!(limit(&mode), WORKERS_WHILE_PLAYING);
+        mode.set_playing(true);
+        assert_eq!(limit(&mode), WORKERS_WHILE_PLAYING);
+        mode.set_playing(false);
+        assert_eq!(limit(&mode), usize::MAX);
+        mode.shutdown(&mut engine, &printer);
+        printer.finish();
+    }
+
+    /// Waits until every write queued so far has been applied (or has failed).
+    fn flush(mode: &LibraryMode) {
+        mode.writer.submit_wait(WriteOp::Batch(Vec::new())).unwrap();
+    }
+
+    #[test]
+    fn a_failed_cue_write_is_retried_once_if_still_the_latest() {
+        let (_dir, mut mode, mut engine, printer) = mode();
+        // Track 7 does not exist yet: the write fails.
+        mode.latest_cues.insert(7, 500.0);
+        mode.writer
+            .submit(WriteOp::SetCue {
+                track: 7,
+                frames: 500.0,
+            })
+            .unwrap();
+        flush(&mode);
+        assert_eq!(mode.lib.failed_write_count(), 1);
+        mode.report_failed_writes(&printer);
+        flush(&mode);
+        assert_eq!(mode.lib.failed_write_count(), 2, "retried once");
+        mode.report_failed_writes(&printer);
+        flush(&mode);
+        assert_eq!(mode.lib.failed_write_count(), 2, "and only once");
+
+        // A superseded value is not retried.
+        mode.latest_cues.insert(7, 900.0);
+        mode.writer
+            .submit(WriteOp::SetCue {
+                track: 7,
+                frames: 600.0,
+            })
+            .unwrap();
+        flush(&mode);
+        mode.report_failed_writes(&printer);
+        flush(&mode);
+        assert_eq!(mode.lib.failed_write_count(), 3);
+
+        // A retry that succeeds stores the cue.
+        mode.writer
+            .submit(WriteOp::SetCue {
+                track: 7,
+                frames: 900.0,
+            })
+            .unwrap();
+        flush(&mode);
+        mode.writer
+            .submit_wait(WriteOp::Raw(vec![library::RawStatement {
+                sql: "INSERT INTO tracks(id, path, fingerprint, added_at) \
+                      VALUES (7, '/m/7.wav', x'00', 0)"
+                    .into(),
+                params: vec![],
+            }]))
+            .unwrap();
+        mode.report_failed_writes(&printer);
+        flush(&mode);
+        assert_eq!(mode.lib.failed_write_count(), 4);
+        assert_eq!(mode.lib.cue(7).unwrap(), Some(900.0));
         mode.shutdown(&mut engine, &printer);
         printer.finish();
     }
