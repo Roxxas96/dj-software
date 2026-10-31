@@ -700,3 +700,64 @@ side = "left"
     // Nothing is left over for the next batch.
     assert!(rig.batch(&[fader(40)]).requests.is_empty());
 }
+
+#[test]
+fn relative_steps_are_summed_per_run() {
+    use actions::{AppRequest, BrowserRequest};
+    let map = format!(
+        "{MAP}{}",
+        r#"
+[[input]]
+midi = { cc = 0x40, channel = 7 }
+action = "browser.scroll"
+value = "relative_twos"
+
+[[input]]
+midi = { note = 0x41, channel = 7 }
+action = "browser.toggle_focus"
+"#
+    );
+    let mut rig = Rig::new();
+    rig.runtime = Runtime::new(parse_mapping("test.toml", &map).unwrap());
+    rig.runtime.attach(&mut rig.engine, &mut rig.out);
+    let knob = |value| cc(6, 0x40, value);
+    let scroll = |steps| AppRequest::Browser(BrowserRequest::Scroll(steps));
+
+    let stats = rig.batch(&[
+        // +1 +1 +1 -1, with a fader move in between that does not end the run.
+        knob(1),
+        knob(1),
+        fader(10),
+        knob(1),
+        knob(127),
+        // A press ends the run; its release too.
+        on(6, 0x41),
+        off(6, 0x41),
+        knob(2),
+        knob(1),
+    ]);
+    assert_eq!(
+        stats.requests,
+        [
+            scroll(2),
+            AppRequest::Browser(BrowserRequest::ToggleFocus),
+            scroll(3)
+        ]
+    );
+    // Three knob messages folded into the first scroll and one into the last.
+    assert_eq!(stats.coalesced, 4);
+    // The fader, two scrolls and the press.
+    assert_eq!(stats.applied, 4);
+    assert_eq!(rig.runtime.state().deck(d(0)).fader, 10.0 / 127.0);
+    assert_eq!(rig.runtime.last_resolved().len(), 9);
+
+    // Steps that cancel out ask for nothing.
+    let stats = rig.batch(&[knob(1), knob(127)]);
+    assert!(stats.requests.is_empty(), "{:?}", stats.requests);
+    assert_eq!(stats.coalesced, 1);
+
+    // Each batch is its own run.
+    let stats = rig.batch(&[knob(127)]);
+    assert_eq!(stats.requests, [scroll(-1)]);
+    assert_eq!(stats.coalesced, 0);
+}

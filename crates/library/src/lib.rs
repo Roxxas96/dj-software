@@ -7,6 +7,7 @@
 //! committed or not there at all.
 
 mod backup;
+mod browser;
 mod cues;
 mod db;
 pub mod fingerprint;
@@ -20,6 +21,7 @@ pub mod tags;
 mod watch;
 mod writer;
 
+pub use browser::{BROWSER_PAGE_ROWS, Browser, BrowserRequest, BrowserView, Focus};
 pub use db::{Library, Reader};
 pub use grid::{
     Beatgrid, GridEdit, GridError, MAX_GRID_BPM, MIN_GRID_BPM, MIN_TAPS, TAP_RESET_MICROS,

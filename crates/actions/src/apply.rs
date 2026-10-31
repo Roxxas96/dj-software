@@ -3,7 +3,8 @@ use engine::{
 };
 
 use crate::{
-    Action, ActionKind, AppRequest, ControlState, GridEditRequest, Input, Side, ValueTarget,
+    Action, ActionKind, AppRequest, BrowserRequest, ControlState, GridEditRequest, Input, Side,
+    ValueTarget,
 };
 
 /// What [`apply`] did.
@@ -67,6 +68,17 @@ pub fn apply(
         (Action::GridDouble(d), Input::Press) => return grid(d, GridEditRequest::Double),
         (Action::GridTap(d), Input::Press) => return grid(d, GridEditRequest::Tap { at_micros }),
         (Action::GridLockToggle(d), Input::Press) => return grid(d, GridEditRequest::ToggleLock),
+
+        // The browser and loading tracks need the library: the app performs them too.
+        (Action::BrowserScroll, Input::Relative(steps)) => {
+            return ApplyResult::Request(AppRequest::Browser(BrowserRequest::Scroll(steps)));
+        }
+        (Action::BrowserToggleFocus, Input::Press) => {
+            return ApplyResult::Request(AppRequest::Browser(BrowserRequest::ToggleFocus));
+        }
+        (Action::LoadSelected(deck), Input::Press) => {
+            return ApplyResult::Request(AppRequest::LoadSelected { deck });
+        }
 
         (Action::PlayPause(d), Input::Press) => (deck(d, DeckCommand::TogglePlay), Update::None),
         (Action::Cue(d), Input::Press) => (deck(d, DeckCommand::CuePress), Update::None),

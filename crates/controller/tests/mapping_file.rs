@@ -272,6 +272,38 @@ fn error_relative_value_not_accepted() {
 }
 
 #[test]
+fn relative_values_drive_browser_scroll_only() {
+    for (value, kind) in [
+        ("relative_twos", ValueKind::RelativeTwos),
+        ("relative_offset", ValueKind::RelativeOffset),
+    ] {
+        let text = format!(
+            "[controller]\nname = \"X\"\nport = \"X\"\n\n[[input]]\n\
+             midi = {{ cc = 0x40, channel = 7 }}\naction = \"browser.scroll\"\nvalue = \"{value}\"\n"
+        );
+        let mapping = parse_mapping("ok.toml", &text).unwrap();
+        let binding = &mapping.inputs[0];
+        assert_eq!(binding.kind, ActionKind::BrowserScroll);
+        assert_eq!(binding.target, Target::Global);
+        assert_eq!(binding.value, kind);
+        assert!(!binding.soft_takeover);
+    }
+    // The knob's push is a button, and `browser.scroll` takes no button or absolute values.
+    let err = input_error("midi = { cc = 0x40, channel = 7 }\naction = \"browser.scroll\"");
+    assert!(
+        err.contains("action `browser.scroll` doesn't accept absolute values"),
+        "{err}"
+    );
+    let err = input_error(
+        "midi = { cc = 0x40, channel = 7 }\naction = \"browser.toggle_focus\"\nvalue = \"relative_twos\"",
+    );
+    assert!(
+        err.contains("action `browser.toggle_focus` doesn't accept relative values"),
+        "{err}"
+    );
+}
+
+#[test]
 fn error_button_on_absolute_action() {
     let err = input_error("midi = { note = 1, channel = 1 }\naction = \"channel.fader\"\ndeck = 1");
     assert!(

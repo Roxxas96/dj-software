@@ -113,10 +113,13 @@ pub enum ActionKind {
     HeadphoneMasterToggle,
     DeckToggle,
     Shift,
+    BrowserScroll,
+    BrowserToggleFocus,
+    LoadSelected,
 }
 
 impl ActionKind {
-    pub const ALL: [ActionKind; 26] = [
+    pub const ALL: [ActionKind; 29] = [
         ActionKind::PlayPause,
         ActionKind::Cue,
         ActionKind::Tempo,
@@ -143,6 +146,9 @@ impl ActionKind {
         ActionKind::HeadphoneMasterToggle,
         ActionKind::DeckToggle,
         ActionKind::Shift,
+        ActionKind::BrowserScroll,
+        ActionKind::BrowserToggleFocus,
+        ActionKind::LoadSelected,
     ];
 
     /// The stable id used in mapping files.
@@ -174,6 +180,9 @@ impl ActionKind {
             ActionKind::HeadphoneMasterToggle => "master.headphone_master_toggle",
             ActionKind::DeckToggle => "side.deck_toggle",
             ActionKind::Shift => "modifier.shift",
+            ActionKind::BrowserScroll => "browser.scroll",
+            ActionKind::BrowserToggleFocus => "browser.toggle_focus",
+            ActionKind::LoadSelected => "deck.load_selected",
         }
     }
 
@@ -202,19 +211,22 @@ impl ActionKind {
             | ActionKind::EqLow
             | ActionKind::Filter
             | ActionKind::Fader
-            | ActionKind::PflToggle => Scope::Deck,
+            | ActionKind::PflToggle
+            | ActionKind::LoadSelected => Scope::Deck,
             ActionKind::Crossfader
             | ActionKind::MasterLevel
             | ActionKind::HeadphoneLevel
             | ActionKind::HeadphoneMix
-            | ActionKind::HeadphoneMasterToggle => Scope::Global,
+            | ActionKind::HeadphoneMasterToggle
+            | ActionKind::BrowserScroll
+            | ActionKind::BrowserToggleFocus => Scope::Global,
             ActionKind::DeckToggle | ActionKind::Shift => Scope::Side,
         }
     }
 
     /// Whether this action accepts inputs of `kind`. This is the one table of what each
-    /// action takes: absolute actions take positions, every other action takes button
-    /// presses, and no action takes relative steps yet.
+    /// action takes: absolute actions take positions, `browser.scroll` takes relative
+    /// steps, and every other action takes button presses.
     pub fn accepts(self, kind: InputKind) -> bool {
         let absolute = matches!(
             self,
@@ -230,10 +242,11 @@ impl ActionKind {
                 | ActionKind::HeadphoneLevel
                 | ActionKind::HeadphoneMix
         );
+        let relative = self == ActionKind::BrowserScroll;
         match kind {
-            InputKind::Button => !absolute,
+            InputKind::Button => !absolute && !relative,
             InputKind::Absolute => absolute,
-            InputKind::Relative => false,
+            InputKind::Relative => relative,
         }
     }
 
@@ -277,6 +290,9 @@ pub enum Action {
     HeadphoneMasterToggle,
     DeckToggle(Side),
     Shift(Side),
+    BrowserScroll,
+    BrowserToggleFocus,
+    LoadSelected(DeckId),
 }
 
 impl Action {
@@ -310,6 +326,9 @@ impl Action {
             (K::HeadphoneMasterToggle, Target::Global) => Action::HeadphoneMasterToggle,
             (K::DeckToggle, Target::Side(s)) => Action::DeckToggle(s),
             (K::Shift, Target::Side(s)) => Action::Shift(s),
+            (K::BrowserScroll, Target::Global) => Action::BrowserScroll,
+            (K::BrowserToggleFocus, Target::Global) => Action::BrowserToggleFocus,
+            (K::LoadSelected, Target::Deck(d)) => Action::LoadSelected(d),
             _ => return None,
         })
     }
@@ -352,6 +371,9 @@ impl Action {
             Action::HeadphoneMasterToggle => ActionKind::HeadphoneMasterToggle,
             Action::DeckToggle(_) => ActionKind::DeckToggle,
             Action::Shift(_) => ActionKind::Shift,
+            Action::BrowserScroll => ActionKind::BrowserScroll,
+            Action::BrowserToggleFocus => ActionKind::BrowserToggleFocus,
+            Action::LoadSelected(_) => ActionKind::LoadSelected,
         }
     }
 
@@ -375,12 +397,15 @@ impl Action {
             | Action::EqLow(d)
             | Action::Filter(d)
             | Action::Fader(d)
-            | Action::PflToggle(d) => Target::Deck(d),
+            | Action::PflToggle(d)
+            | Action::LoadSelected(d) => Target::Deck(d),
             Action::Crossfader
             | Action::MasterLevel
             | Action::HeadphoneLevel
             | Action::HeadphoneMix
-            | Action::HeadphoneMasterToggle => Target::Global,
+            | Action::HeadphoneMasterToggle
+            | Action::BrowserScroll
+            | Action::BrowserToggleFocus => Target::Global,
             Action::DeckToggle(s) | Action::Shift(s) => Target::Side(s),
         }
     }

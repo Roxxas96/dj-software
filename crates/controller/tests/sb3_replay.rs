@@ -132,6 +132,7 @@ impl Rig {
             total.applied += stats.applied;
             total.coalesced += stats.coalesced;
             total.queue_full += stats.queue_full;
+            total.requests.extend(stats.requests);
         }
         (actions, total)
     }
@@ -320,6 +321,13 @@ fn table() -> Vec<(&'static str, Layer, Action)> {
         // Mixer, global.
         ("crossfader", Main, Action::Crossfader),
         ("headphone_master", Main, Action::HeadphoneMasterToggle),
+        // Browser.
+        ("browse.rotate", Main, Action::BrowserScroll),
+        ("browse.press", Main, Action::BrowserToggleFocus),
+        ("load.left", Main, Action::LoadSelected(d(1))),
+        ("load.right", Main, Action::LoadSelected(d(2))),
+        ("load.left", Alt(l), Action::LoadSelected(d(3))),
+        ("load.right", Alt(r), Action::LoadSelected(d(4))),
     ]
 }
 
@@ -582,4 +590,46 @@ fn master_and_headphone_knobs_are_left_to_the_sb3() {
         assert!(actions.is_empty(), "`{id}` is unbound: {actions:?}");
     }
     assert_eq!(rig.runtime.state().master_level, 1.0);
+}
+
+#[test]
+fn browse_scrolls_and_load_requests_side_deck() {
+    use actions::{AppRequest, BrowserRequest};
+    let mut rig = Rig::attached();
+    // The capture's BROWSE knob sent 1 turned clockwise (down the list) and 127 turned
+    // counter-clockwise: its minimum and maximum.
+    let rotate = rig.control("browse.rotate").messages[0];
+    assert_eq!((rotate.status, rotate.data1), (0xB6, 0x40));
+    let knob = |value| cc(rotate.status & 0x0F, rotate.data1, value);
+    let (down, up) = (knob(rotate.min), knob(rotate.max));
+
+    // A burst of clicks in one batch is one scroll of their sum.
+    let (actions, stats) = rig.batch(&[down, down, down, up]);
+    assert_eq!(actions, [Action::BrowserScroll; 4]);
+    assert_eq!(
+        stats.requests,
+        [AppRequest::Browser(BrowserRequest::Scroll(2))]
+    );
+    let (_, stats) = rig.batch(&[up]);
+    assert_eq!(
+        stats.requests,
+        [AppRequest::Browser(BrowserRequest::Scroll(-1))]
+    );
+
+    // Pushing the knob switches between the tree and the list.
+    let stats = rig.replay("browse.press").1;
+    assert_eq!(
+        stats.requests,
+        [AppRequest::Browser(BrowserRequest::ToggleFocus)]
+    );
+
+    let load = |deck| AppRequest::LoadSelected { deck };
+    assert_eq!(rig.replay("load.left").1.requests, [load(d(1))]);
+    assert_eq!(rig.replay("load.right").1.requests, [load(d(2))]);
+    // After the left DECK switch, LOAD left loads onto deck 3; the right side stays on 2.
+    rig.press("deck1.deck_select");
+    assert_eq!(rig.replay("load.left").1.requests, [load(d(3))]);
+    assert_eq!(rig.replay("load.right").1.requests, [load(d(2))]);
+    // Loading is the app's job: no deck changed here.
+    assert_eq!(rig.runtime.state().side(Side::Left).active_deck, d(3));
 }

@@ -80,14 +80,14 @@ It is not applied again after a reconnect, so values you set meanwhile are kept.
 | `action` | An action id. Required. |
 | `deck` | 1-4: always this deck. |
 | `side` | `"left"` or `"right"`: whatever deck that side shows now (see [Layers](#layers-and-deck-switching)). Use `deck` or `side`, never both. |
-| `shift` | `true` or `false`: only fire while SHIFT of the binding's side is held, or not held. For master actions, any side's SHIFT counts. |
+| `shift` | `true` or `false`: only fire while SHIFT of the binding's side is held, or not held. For master and browser actions, any side's SHIFT counts. |
 | `active_deck` | 1-4: only fire while the binding's side shows this deck. Must be a deck on the binding's side. |
 | `value` | How to read the message: `"button"`, `"absolute"`, `"relative_twos"` or `"relative_offset"`. |
 | `invert` | `true` flips an absolute value (`1 - v`) or negates relative steps. Default `false`. |
 | `soft_takeover` | `false` turns [soft takeover](#soft-takeover) off for an absolute binding. Default `true`. |
 
-Which of `deck` and `side` an action takes is in its row of the action table. Master actions
-take neither. `side.deck_toggle` and `modifier.shift` need `side`. Deck actions take `deck` or
+Which of `deck` and `side` an action takes is in its row of the action table. Master and
+browser actions take neither. `side.deck_toggle` and `modifier.shift` need `side`. Deck actions take `deck` or
 `side`.
 
 All bindings that match a message and whose conditions hold fire, in file order. A message
@@ -115,9 +115,8 @@ Exactly one of these, plus `channel` (1-16):
 
 If you leave `value` out, notes are `button` and everything else is `absolute`.
 
-The action decides which kinds it accepts (the "Takes" column below). No action accepts
-relative steps yet; the kinds are there for jog wheels and encoders in later versions, and
-a binding that uses them with today's actions fails to load.
+The action decides which kinds it accepts (the "Takes" column below). Only `browser.scroll`
+accepts relative steps for now; a relative binding to any other action fails to load.
 
 #### Soft takeover
 
@@ -166,7 +165,8 @@ back after being unplugged, every LED is sent again.
 ## Actions
 
 Ids are what you write in `action = "..."`. "Target" is what the binding needs:
-`deck` (a deck, or a side to follow the deck it shows), `side`, or nothing (master).
+`deck` (a deck, or a side to follow the deck it shows), `side`, or nothing (master and
+browser actions).
 
 | Id | Target | Takes | What it does |
 |---|---|---|---|
@@ -182,6 +182,7 @@ Ids are what you write in `action = "..."`. "Target" is what the binding needs:
 | `deck.grid_double` | deck | button | Press to double the BPM, keeping the beat nearest the playhead. |
 | `deck.grid_tap` | deck | button | Tap tempo: from the fourth tap on, the BPM follows the mean interval of the taps. A pause of more than 2 s starts over. |
 | `deck.grid_lock_toggle` | deck | button | Press to lock or unlock the beatgrid. A locked grid is kept when the track is analyzed again. |
+| `deck.load_selected` | deck | button | Press to load the track selected in the library browser onto the deck. |
 | `channel.trim` | deck | absolute | Channel gain (TRIM). |
 | `channel.eq_high` | deck | absolute | High EQ. |
 | `channel.eq_mid` | deck | absolute | Mid EQ. |
@@ -196,6 +197,11 @@ Ids are what you write in `action = "..."`. "Target" is what the binding needs:
 | `master.headphone_master_toggle` | none | button | Press to flip the headphone mix between all cue and all master. |
 | `side.deck_toggle` | side | button | Press to make the side show its other deck (left: 1 and 3, right: 2 and 4). |
 | `modifier.shift` | side | button | Press and release track whether SHIFT is held on that side. |
+| `browser.scroll` | none | relative | Move the cursor of the focused browser pane by the steps sent (positive is down). It stops at the first and last rows. |
+| `browser.toggle_focus` | none | button | Press to switch the browser between the tree (playlists, folders, all tracks) and the track list. |
+
+Relative steps that arrive together (a fast turn of an encoder) are added up and applied as one
+move; a button press or release in between keeps the steps on each side of it apart.
 
 Only "absolute" actions can be used in `[[init]]`. `soft_takeover` has an effect only on absolute bindings, and `invert` flips absolute values (or negates relative steps).
 Button actions ignore releases, except `deck.cue` and `modifier.shift`.
