@@ -163,3 +163,45 @@ fn load_during_preview_resets() {
     assert!(!s.playing);
     assert_eq!(s.position_frames, 0.0);
 }
+
+#[test]
+fn set_cue_sets_cue_without_moving() {
+    let (mut c, mut r, id) = setup();
+    step(&mut c, &mut r, id, DeckCommand::Seek(1000.0));
+    step(&mut c, &mut r, id, DeckCommand::SetCue(500.0));
+    let s = c.deck(id);
+    assert_eq!(s.cue_frames, 500.0);
+    assert_eq!(s.position_frames, 1000.0);
+    assert!(!s.playing);
+}
+
+#[test]
+fn set_cue_clamps_and_ignores_nan() {
+    let (mut c, mut r, id) = setup();
+    step(&mut c, &mut r, id, DeckCommand::SetCue(300.0));
+    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        step(&mut c, &mut r, id, DeckCommand::SetCue(bad));
+        assert_eq!(c.deck(id).cue_frames, 300.0);
+    }
+    step(&mut c, &mut r, id, DeckCommand::SetCue(-10.0));
+    assert_eq!(c.deck(id).cue_frames, 0.0);
+    step(&mut c, &mut r, id, DeckCommand::SetCue(1e12));
+    assert_eq!(c.deck(id).cue_frames, 100_000.0);
+}
+
+#[test]
+fn set_cue_while_previewing_returns_to_new_cue_on_release() {
+    let (mut c, mut r, id) = setup();
+    step(&mut c, &mut r, id, DeckCommand::Seek(500.0));
+    step(&mut c, &mut r, id, DeckCommand::CuePress);
+    step(&mut c, &mut r, id, DeckCommand::CuePress);
+    render(&mut r, 10);
+    step(&mut c, &mut r, id, DeckCommand::SetCue(2000.0));
+    assert!(c.deck(id).previewing);
+    assert!(c.deck(id).playing);
+    step(&mut c, &mut r, id, DeckCommand::CueRelease);
+    let s = c.deck(id);
+    assert_eq!(s.cue_frames, 2000.0);
+    assert_eq!(s.position_frames, 2000.0);
+    assert!(!s.playing);
+}

@@ -25,6 +25,13 @@ pub enum DeckCommand {
     SetTempoRange(TempoRange),
     /// Moves the playhead, in track frames, clamped to `[0, frames]`.
     Seek(f64),
+    /// Sets the cue point, in track frames, clamped to `[0, frames]`, without moving the
+    /// playhead or changing the play state. Non-finite values are ignored. Used to restore
+    /// a remembered cue after loading a track.
+    ///
+    /// While the cue is held (previewing) this still updates the stored cue point, and
+    /// `CueRelease` returns to the cue point as stored at release time.
+    SetCue(f64),
 }
 
 /// How far the tempo slider reaches either side of the original tempo.

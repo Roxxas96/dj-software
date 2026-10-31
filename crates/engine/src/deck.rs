@@ -68,7 +68,10 @@ impl Deck {
             DeckCommand::Seek(frames) if frames.is_finite() => {
                 self.position = frames.clamp(0.0, self.frames() as f64);
             }
-            DeckCommand::SetTempoSlider(_) | DeckCommand::Seek(_) => {}
+            DeckCommand::SetCue(frames) if frames.is_finite() => {
+                self.cue = frames.clamp(0.0, self.frames() as f64);
+            }
+            DeckCommand::SetTempoSlider(_) | DeckCommand::Seek(_) | DeckCommand::SetCue(_) => {}
         }
         None
     }
