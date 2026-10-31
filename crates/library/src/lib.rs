@@ -12,7 +12,7 @@ pub mod schema;
 mod writer;
 
 pub use db::{Library, Reader};
-pub use writer::{RawStatement, WriteOp, WriteOutcome, Writer};
+pub use writer::{FailedWrite, RawStatement, WriteOp, WriteOutcome, Writer};
 
 /// Everything that can go wrong opening or writing the library.
 #[derive(Debug, thiserror::Error)]

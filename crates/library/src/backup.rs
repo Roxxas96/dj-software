@@ -2,10 +2,15 @@
 //! copied with SQLite's online backup API to
 //! `<dir>/backups/library-<UTC yyyymmdd-hhmmss>.sqlite3`, and only the newest
 //! [`KEEP`] backups are kept.
+//!
+//! A backup is always taken when a migration is pending. Otherwise it is skipped when a
+//! backup less than [`MIN_INTERVAL`] old already exists, so frequent short-lived opens
+//! (CLI commands) cannot rotate the real backups away.
 
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use rusqlite::backup::{Backup, StepResult};
 use rusqlite::{Connection, MAIN_DB, OpenFlags};
 
 use crate::LibraryError;
@@ -13,19 +18,28 @@ use crate::LibraryError;
 /// How many backups survive pruning.
 pub(crate) const KEEP: usize = 10;
 
+/// Without a pending migration, no new backup is taken if one is younger than this.
+pub(crate) const MIN_INTERVAL: Duration = Duration::from_secs(10 * 60);
+
+/// How long the copy waits for a writer elsewhere to release its lock before giving up.
+const LOCK_WAIT: Duration = Duration::from_secs(10);
+
+/// `.partial` files older than this are leftovers of an interrupted backup.
+const STALE_PARTIAL: Duration = Duration::from_secs(10 * 60);
+
 const PREFIX: &str = "library-";
 const SUFFIX: &str = ".sqlite3";
+const PARTIAL_SUFFIX: &str = ".sqlite3.partial";
 
-/// Backs up `db` (which must exist) into `<db dir>/backups/`, then prunes old backups.
-/// Returns the new backup's path.
-pub(crate) fn backup_and_prune(db: &Path) -> Result<PathBuf, LibraryError> {
+/// Backs up `db` (which must exist) into `<db dir>/backups/` when the policy calls for it
+/// (see the module docs), then prunes old backups. `latest` is the schema version this
+/// build migrates to. Returns the new backup's path, or `None` when it was skipped.
+pub(crate) fn backup_if_needed(db: &Path, latest: usize) -> Result<Option<PathBuf>, LibraryError> {
     let dir = db
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .join("backups");
     std::fs::create_dir_all(&dir)?;
-    let stamp = utc_stamp(SystemTime::now());
-    let target = unique_name(&dir, &stamp);
 
     // Read-write without create: a read-only open of a WAL database can fail when the
     // shared-memory file is absent, and nothing here writes to the source.
@@ -34,16 +48,64 @@ pub(crate) fn backup_and_prune(db: &Path) -> Result<PathBuf, LibraryError> {
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .map_err(LibraryError::Backup)?;
+    src.busy_timeout(LOCK_WAIT).map_err(LibraryError::Backup)?;
+    let version: i64 = src
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .map_err(LibraryError::Backup)?;
+    let migration_pending = usize::try_from(version).is_ok_and(|v| v < latest);
+    if !migration_pending && has_recent_backup(&dir, SystemTime::now()) {
+        return Ok(None);
+    }
+
+    let target = unique_name(&dir, &utc_stamp(SystemTime::now()));
     // Copy to a temporary name first so an interrupted backup never looks like a real one.
     let partial = target.with_extension("sqlite3.partial");
     let _ = std::fs::remove_file(&partial);
-    src.backup(MAIN_DB, &partial, None::<fn(rusqlite::backup::Progress)>)
-        .map_err(LibraryError::Backup)?;
+    copy(&src, &partial).map_err(LibraryError::Backup)?;
     drop(src);
     std::fs::rename(&partial, &target)?;
 
-    prune(&dir, KEEP)?;
-    Ok(target)
+    prune(&dir, KEEP, &target);
+    Ok(Some(target))
+}
+
+/// Copies the whole database in one step (a consistent snapshot), retrying while another
+/// connection holds a conflicting lock, for up to [`LOCK_WAIT`].
+fn copy(src: &Connection, dst_path: &Path) -> rusqlite::Result<()> {
+    let mut dst = Connection::open(dst_path)?;
+    let backup = Backup::new_with_names(src, MAIN_DB, &mut dst, MAIN_DB)?;
+    let deadline = Instant::now() + LOCK_WAIT;
+    loop {
+        match backup.step(-1)? {
+            StepResult::Done => return Ok(()),
+            StepResult::More => {}
+            // Busy, Locked (and any future transient result): wait for the lock holder.
+            _ if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
+            _ => {
+                return Err(rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+                    Some("the library stayed locked during the backup".into()),
+                ));
+            }
+        }
+    }
+}
+
+/// Whether `dir` holds a backup written less than [`MIN_INTERVAL`] before `now`. A
+/// modification time in the future (clock skew) does not count as recent.
+fn has_recent_backup(dir: &Path, now: SystemTime) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        entry.file_name().to_str().and_then(backup_key).is_some()
+            && entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|modified| now.duration_since(modified).ok())
+                .is_some_and(|age| age < MIN_INTERVAL)
+    })
 }
 
 /// `library-<stamp>.sqlite3`, or `library-<stamp>-<n>.sqlite3` when that name is taken
@@ -76,22 +138,45 @@ fn backup_key(name: &str) -> Option<(String, u32)> {
     valid.then(|| (stamp.to_owned(), counter))
 }
 
-/// Deletes all but the newest `keep` backups in `dir`. Files that are not backups are
-/// left alone.
-fn prune(dir: &Path, keep: usize) -> Result<(), LibraryError> {
+/// Best effort: keeps `newest` (the backup just taken, whatever its timestamp says) plus
+/// the newest `keep - 1` other backups, deletes the rest, and removes stale `.partial`
+/// files. Unrelated files are left alone and per-file errors are ignored: the new backup
+/// is already safely in place.
+fn prune(dir: &Path, keep: usize, newest: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let now = SystemTime::now();
     let mut found: Vec<((String, u32), PathBuf)> = Vec::new();
-    for entry in std::fs::read_dir(dir)? {
-        let entry = entry?;
-        if let Some(key) = entry.file_name().to_str().and_then(backup_key) {
-            found.push((key, entry.path()));
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if is_stale_partial(&name, &entry, now) {
+            let _ = std::fs::remove_file(&path);
+        } else if path != newest
+            && let Some(key) = backup_key(&name)
+        {
+            found.push((key, path));
         }
     }
     found.sort();
-    let excess = found.len().saturating_sub(keep);
+    let excess = found.len().saturating_sub(keep.saturating_sub(1));
     for (_, path) in found.into_iter().take(excess) {
-        std::fs::remove_file(path)?;
+        let _ = std::fs::remove_file(path);
     }
-    Ok(())
+}
+
+fn is_stale_partial(name: &str, entry: &std::fs::DirEntry, now: SystemTime) -> bool {
+    name.starts_with(PREFIX)
+        && name.ends_with(PARTIAL_SUFFIX)
+        && entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age >= STALE_PARTIAL)
 }
 
 /// `yyyymmdd-hhmmss` in UTC.
@@ -156,6 +241,24 @@ mod tests {
         }
     }
 
+    fn names_in(dir: &Path) -> Vec<String> {
+        let mut left: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
+        left
+    }
+
+    fn age(path: &Path, by: Duration) {
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(SystemTime::now() - by)
+            .unwrap();
+    }
+
     #[test]
     fn prune_keeps_newest_and_ignores_other_files() {
         let dir = tempfile::tempdir().unwrap();
@@ -169,19 +272,77 @@ mod tests {
         for n in names {
             std::fs::write(dir.path().join(n), b"").unwrap();
         }
-        prune(dir.path(), 2).unwrap();
-        let mut left: Vec<String> = std::fs::read_dir(dir.path())
-            .unwrap()
-            .map(|e| e.unwrap().file_name().into_string().unwrap())
-            .collect();
-        left.sort();
+        let newest = dir.path().join("library-20260102-000000.sqlite3");
+        prune(dir.path(), 2, &newest);
         assert_eq!(
-            left,
+            names_in(dir.path()),
             [
                 "keep-me.txt",
                 "library-20260101-000000-2.sqlite3",
                 "library-20260102-000000.sqlite3"
             ]
         );
+    }
+
+    #[test]
+    fn prune_never_deletes_the_backup_just_taken() {
+        // The clock went backwards: the new backup has the oldest timestamp of all.
+        let dir = tempfile::tempdir().unwrap();
+        for day in 10..=21 {
+            std::fs::write(
+                dir.path()
+                    .join(format!("library-209901{day}-000000.sqlite3")),
+                b"",
+            )
+            .unwrap();
+        }
+        let newest = dir.path().join("library-20200101-000000.sqlite3");
+        std::fs::write(&newest, b"").unwrap();
+        prune(dir.path(), 10, &newest);
+        let left = names_in(dir.path());
+        assert_eq!(left.len(), 10, "{left:?}");
+        assert!(newest.exists());
+        // The other nine kept are the newest of the rest.
+        assert_eq!(left[1], "library-20990113-000000.sqlite3");
+    }
+
+    #[test]
+    fn prune_removes_stale_partials_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let stale = dir.path().join("library-20260101-000000.sqlite3.partial");
+        let fresh = dir.path().join("library-20260102-000000.sqlite3.partial");
+        let other = dir.path().join("other.partial");
+        for p in [&stale, &fresh, &other] {
+            std::fs::write(p, b"").unwrap();
+        }
+        age(&stale, Duration::from_secs(3600));
+        age(&other, Duration::from_secs(3600));
+        prune(dir.path(), 10, &dir.path().join("none"));
+        assert!(!stale.exists());
+        assert!(fresh.exists());
+        assert!(other.exists());
+    }
+
+    #[test]
+    fn recent_backup_detection() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = SystemTime::now();
+        assert!(!has_recent_backup(dir.path(), now));
+        let b = dir.path().join("library-20260101-000000.sqlite3");
+        std::fs::write(&b, b"").unwrap();
+        assert!(has_recent_backup(dir.path(), now + Duration::from_secs(1)));
+        age(&b, MIN_INTERVAL + Duration::from_secs(1));
+        assert!(!has_recent_backup(dir.path(), SystemTime::now()));
+        // A backup from the future (clock skew) is not "recent".
+        age(&b, Duration::ZERO);
+        assert!(!has_recent_backup(
+            dir.path(),
+            now - Duration::from_secs(3600)
+        ));
+        // Unrelated files do not count.
+        let junk = dir.path().join("notes.txt");
+        std::fs::write(&junk, b"").unwrap();
+        age(&b, MIN_INTERVAL * 2);
+        assert!(!has_recent_backup(dir.path(), SystemTime::now()));
     }
 }
