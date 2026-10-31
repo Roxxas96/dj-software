@@ -41,7 +41,9 @@ dependencies = [
 name = "analysis"
 version = "0.0.0"
 dependencies = [
+ "decode",
  "engine",
+ "rustfft",
  "thiserror 2.0.21",
 ]
 

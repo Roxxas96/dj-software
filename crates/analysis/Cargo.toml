@@ -12,4 +12,8 @@ workspace = true
 
 [dependencies]
 engine = { path = "../engine" }
+rustfft.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+decode = { path = "../decode" }
