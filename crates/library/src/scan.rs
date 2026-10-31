@@ -13,7 +13,7 @@ use rusqlite::{Connection, OptionalExtension};
 use walkdir::WalkDir;
 
 use crate::tags::{self, TrackTags};
-use crate::{Library, LibraryError, WriteOp, fingerprint};
+use crate::{Library, LibraryError, WriteOp, Writer, fingerprint};
 
 /// File extensions the scanner picks up, compared case-insensitively.
 pub const EXTENSIONS: &[&str] = &["mp3", "wav", "aif", "aiff", "flac", "m4a", "aac", "ogg"];
@@ -105,25 +105,26 @@ pub fn scan_folder(
     root: &Path,
     progress: &mut dyn FnMut(ScanProgress),
 ) -> Result<ScanReport, LibraryError> {
-    let root = normalize_path(root)?;
-    let root_prefix = dir_prefix(&root)?;
     let reader = lib.reader()?;
-    let folders = {
-        let mut stmt = reader.connection().prepare("SELECT path FROM folders")?;
-        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-        rows.map(|r| r.map(|f| (f, None)))
-            .collect::<Result<_, _>>()?
-    };
-    let mut scan = Scan {
-        lib,
-        conn: reader.connection(),
-        root_prefix,
-        folders,
-        pending: Vec::new(),
-        touched: HashSet::new(),
-        seen: HashSet::new(),
-        report: ScanReport::default(),
-    };
+    scan_folder_with(&lib.writer(), reader.connection(), root, None, progress)
+}
+
+/// [`scan_folder`] on a writer handle and a read connection, for threads that do not
+/// hold the [`Library`] itself. `relink_root`, when given, is the folder that moved files
+/// may come from (a watched root holding the scanned subfolder); missing tracks are still
+/// only flagged under `root`.
+pub(crate) fn scan_folder_with(
+    writer: &Writer,
+    conn: &Connection,
+    root: &Path,
+    relink_root: Option<&Path>,
+    progress: &mut dyn FnMut(ScanProgress),
+) -> Result<ScanReport, LibraryError> {
+    let root = normalize_path(root)?;
+    let mut scan = Scan::new(writer, conn, dir_prefix(&root)?)?;
+    if let Some(relink_root) = relink_root {
+        scan.relink_prefix = dir_prefix(relink_root)?;
+    }
     let mut scanned = 0;
     let walk = WalkDir::new(&root)
         .follow_links(true)
@@ -187,6 +188,79 @@ pub fn scan_folder(
     Ok(scan.report)
 }
 
+/// Brings the library in line with one path under `root`, as [`scan_folder`] does for a
+/// whole folder, using the same per-file logic. `path` need not be canonical, nor exist:
+///
+/// - an audio file is added, updated or relinked (a renamed file keeps its track id);
+/// - a path that is gone flags the track at it, and every track under it if it was a
+///   folder, as missing (nothing is deleted);
+/// - a folder is scanned whole when `dirs` is true, else left alone;
+/// - hidden entries and other files are ignored.
+pub(crate) fn scan_path(
+    writer: &Writer,
+    conn: &Connection,
+    root: &Path,
+    path: &Path,
+    dirs: bool,
+) -> Result<ScanReport, LibraryError> {
+    let root = normalize_path(root)?;
+    let path = resolve_path(path)?;
+    let hidden = path
+        .strip_prefix(&root)
+        .is_ok_and(|rel| rel.components().any(|c| is_hidden(c.as_os_str())));
+    if hidden {
+        return Ok(ScanReport::default());
+    }
+    match fs::metadata(&path) {
+        Ok(meta) if meta.is_dir() => {
+            if dirs {
+                scan_folder_with(writer, conn, &path, Some(&root), &mut |_| {})
+            } else {
+                Ok(ScanReport::default())
+            }
+        }
+        Ok(meta) => {
+            let mut scan = Scan::new(writer, conn, dir_prefix(&root)?)?;
+            if !is_supported(&path) {
+                scan.report.ignored += 1;
+                return Ok(scan.report);
+            }
+            let text = utf8(&path)?;
+            match scan.file(&path, text, &meta) {
+                Ok(()) => {}
+                Err(FileError::Skip(reason)) => scan.report.skipped.push((path.clone(), reason)),
+                Err(FileError::Library(err)) => return Err(err),
+            }
+            scan.flush()?;
+            Ok(scan.report)
+        }
+        Err(_) if is_gone(&path) => {
+            let mut scan = Scan::new(writer, conn, dir_prefix(&path)?)?;
+            scan.flag_exact(utf8(&path)?)?;
+            scan.flag_missing()?;
+            Ok(scan.report)
+        }
+        Err(err) => Ok(ScanReport {
+            skipped: vec![(path, err.to_string())],
+            ..ScanReport::default()
+        }),
+    }
+}
+
+/// [`normalize_path`] for a path that may be gone: the nearest existing ancestor is
+/// normalized and the rest appended.
+pub(crate) fn resolve_path(path: &Path) -> std::io::Result<PathBuf> {
+    match normalize_path(path) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            match (path.parent(), path.file_name()) {
+                (Some(parent), Some(name)) => Ok(resolve_path(parent)?.join(name)),
+                _ => Err(err),
+            }
+        }
+        other => other,
+    }
+}
+
 /// Adds `path` (resolved to its canonical form) to the library folders. Only the
 /// `folders` table changes; scan it with [`scan_folder`].
 ///
@@ -237,10 +311,13 @@ struct Known {
 }
 
 struct Scan<'a> {
-    lib: &'a Library,
+    writer: &'a Writer,
     conn: &'a Connection,
     /// The canonical root followed by a separator.
     root_prefix: String,
+    /// Where tracks not under any registered folder may be relinked from: the root, or
+    /// the watched folder around it.
+    relink_prefix: String,
     /// Registered library folders, with whether each exists once checked.
     folders: Vec<(String, Option<bool>)>,
     /// Canonical paths of every audio file reached by this scan.
@@ -250,6 +327,46 @@ struct Scan<'a> {
     /// Tracks updated or relinked by this scan, which no other file may relink.
     touched: HashSet<i64>,
     report: ScanReport,
+}
+
+impl<'a> Scan<'a> {
+    fn new(
+        writer: &'a Writer,
+        conn: &'a Connection,
+        root_prefix: String,
+    ) -> Result<Self, rusqlite::Error> {
+        let folders = {
+            let mut stmt = conn.prepare("SELECT path FROM folders")?;
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+            rows.map(|r| r.map(|f| (f, None)))
+                .collect::<Result<_, _>>()?
+        };
+        Ok(Self {
+            writer,
+            conn,
+            relink_prefix: root_prefix.clone(),
+            root_prefix,
+            folders,
+            pending: Vec::new(),
+            touched: HashSet::new(),
+            seen: HashSet::new(),
+            report: ScanReport::default(),
+        })
+    }
+
+    /// Flags the track stored at exactly `path`, if its file is gone.
+    fn flag_exact(&mut self, path: &str) -> Result<(), LibraryError> {
+        let id: Option<i64> = self
+            .conn
+            .prepare_cached("SELECT id FROM tracks WHERE path = ?1 AND missing = 0")?
+            .query_row([path], |r| r.get(0))
+            .optional()?;
+        if let Some(id) = id {
+            self.writer.submit_wait(WriteOp::MarkMissing(vec![id]))?;
+            self.report.missing += 1;
+        }
+        Ok(())
+    }
 }
 
 impl Scan<'_> {
@@ -359,7 +476,7 @@ impl Scan<'_> {
             Some((folder, present)) => {
                 *present.get_or_insert_with(|| matches!(Path::new(folder).try_exists(), Ok(true)))
             }
-            None => path.starts_with(&self.root_prefix),
+            None => path.starts_with(&self.relink_prefix),
         }
     }
 
@@ -372,7 +489,7 @@ impl Scan<'_> {
         }
         let pending = std::mem::take(&mut self.pending);
         let batch = WriteOp::Batch(pending.iter().map(|(_, op, _)| op.clone()).collect());
-        let writer = self.lib.writer();
+        let writer = self.writer;
         match writer.submit_wait(batch) {
             Ok(_) => {
                 for (_, _, change) in &pending {
@@ -428,7 +545,7 @@ impl Scan<'_> {
                 }
             }
         }
-        let writer = self.lib.writer();
+        let writer = self.writer;
         for ids in gone.chunks(MISSING_BATCH_SIZE) {
             writer.submit_wait(WriteOp::MarkMissing(ids.to_vec()))?;
             self.report.missing += ids.len();

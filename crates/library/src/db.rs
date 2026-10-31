@@ -85,8 +85,14 @@ impl Library {
     ///
     /// Fails if the database file cannot be opened.
     pub fn reader(&self) -> Result<Reader, LibraryError> {
+        Self::reader_at(&self.path)
+    }
+
+    /// [`Library::reader`] from the database path, for threads that do not hold the
+    /// library.
+    pub(crate) fn reader_at(path: &Path) -> Result<Reader, LibraryError> {
         let conn = Connection::open_with_flags(
-            &self.path,
+            path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
         conn.busy_timeout(BUSY_TIMEOUT)?;
