@@ -44,6 +44,8 @@ pub enum WriteOp {
     /// its `missing` flag, keeping its id and so its cues. Used both when a known file
     /// changed and to relink a moved file.
     UpdateTrack { id: i64, file: Box<TrackFile> },
+    /// Deletes a track's analysis, which no longer matches its audio. Cues are kept.
+    ClearAnalysis(i64),
     /// Flags these tracks' files as missing. Tracks are never deleted by a scan.
     MarkMissing(Vec<i64>),
     /// Adds a library folder (no-op if already there). Only the `folders` table changes.
@@ -311,6 +313,10 @@ fn apply(tx: &Transaction<'_>, op: &WriteOp) -> Result<WriteOutcome, LibraryErro
             if changed == 0 {
                 return Err(LibraryError::Sqlite(rusqlite::Error::QueryReturnedNoRows));
             }
+            Ok(WriteOutcome::Done)
+        }
+        WriteOp::ClearAnalysis(id) => {
+            tx.execute("DELETE FROM analysis WHERE track_id = ?1", [id])?;
             Ok(WriteOutcome::Done)
         }
         WriteOp::MarkMissing(ids) => {
