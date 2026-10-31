@@ -1,7 +1,7 @@
 #[path = "support/synth.rs"]
 mod synth;
 
-use analysis::{Beatgrid, BpmRange, detect_beatgrid};
+use analysis::{Beatgrid, BpmRange, detect_beatgrid, detect_key};
 
 const SR: u32 = 44_100;
 const SECS: f32 = 30.0;
@@ -189,14 +189,15 @@ fn analyze_real_files_from_env() {
         match decode::decode_file(&p) {
             Ok(d) => {
                 let sr = f64::from(d.track.sample_rate());
+                let key = detect_key(&d.track).map_or("-", |k| k.camelot());
                 match detect_beatgrid(&d.track, BpmRange::default()) {
                     Some(g) => println!(
-                        "{} {:.2} {:.3} -",
+                        "{} {:.2} {:.3} {key}",
                         p.display(),
                         g.bpm,
                         g.first_beat_frames / sr
                     ),
-                    None => println!("{} - - -", p.display()),
+                    None => println!("{} - - {key}", p.display()),
                 }
             }
             Err(e) => println!("{} error: {e}", p.display()),
