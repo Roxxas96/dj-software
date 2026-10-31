@@ -126,6 +126,34 @@ impl Runtime {
         self.tick(clock::now_micros(), engine, out);
     }
 
+    /// Recovers a controller link that may have died without its port disappearing (a USB
+    /// dropout shorter than the presence poll can leave the ports open but silent): the
+    /// controller is handled as gone, `connection` drops and reopens its ports, and if they
+    /// came back it is handled as back, like [`on_reconnect`](Self::on_reconnect) (or like
+    /// [`attach`](Self::attach) if it never attached).
+    ///
+    /// Returns what [`Reconnect::force_reconnect`] reported. On anything but
+    /// [`PresenceChange::Back`] the controller stays detached until presence polling finds
+    /// it again.
+    pub fn force_reconnect<C: Reconnect>(
+        &mut self,
+        engine: &mut EngineController,
+        connection: &mut C,
+    ) -> PresenceChange {
+        if self.attached {
+            self.on_disconnect(engine);
+        }
+        let change = connection.force_reconnect();
+        if change == PresenceChange::Back {
+            if self.attached_once {
+                self.on_reconnect(engine, connection);
+            } else {
+                self.attach(engine, connection);
+            }
+        }
+        change
+    }
+
     /// Resolves and applies `msgs` in order. Ignored while the controller is not attached.
     ///
     /// Each resolved action is applied before the next message is resolved, as the
@@ -255,6 +283,15 @@ pub enum PresenceChange {
     Back,
 }
 
+/// A controller link that can be dropped and reopened on demand, for
+/// [`Runtime::force_reconnect`].
+pub trait Reconnect: MidiOut {
+    /// Drops the ports (if open) and reopens them. Reports [`PresenceChange::Back`] when
+    /// they reopened, [`PresenceChange::Lost`] when they were open but could not be
+    /// reopened, and [`PresenceChange::None`] when they were closed and still are.
+    fn force_reconnect(&mut self) -> PresenceChange;
+}
+
 /// The controller's input and output ports, found by the mapping's `port` substring, and
 /// reopened when the controller is plugged back in.
 pub struct Connection {
@@ -326,6 +363,26 @@ impl Connection {
             }
             _ => PresenceChange::None,
         }
+    }
+}
+
+impl Reconnect for Connection {
+    /// Drops both ports, then reopens them. If reopening fails, the connection stays closed
+    /// and [`poll_presence`](Connection::poll_presence) reopens it once the port is listed.
+    fn force_reconnect(&mut self) -> PresenceChange {
+        let was_connected = self.ports.take().is_some();
+        match self.open() {
+            Ok(()) => PresenceChange::Back,
+            Err(_) if was_connected => PresenceChange::Lost,
+            Err(_) => PresenceChange::None,
+        }
+    }
+}
+
+impl Connection {
+    /// Drops and reopens both ports; see [`Reconnect::force_reconnect`].
+    pub fn force_reconnect(&mut self) -> PresenceChange {
+        Reconnect::force_reconnect(self)
     }
 }
 
