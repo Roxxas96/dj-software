@@ -152,6 +152,12 @@ impl Resolver {
                             resolved.push((stale, Input::Release));
                         }
                         Input::Press
+                    } else if let Some(held) = self.take_held_partner(&binding) {
+                        // This binding is not held, but its hold partner on the same side
+                        // is (SHIFT went down during the hold, maybe after a deck switch):
+                        // the release ends that hold on the deck that got the press.
+                        resolved.push((held, Input::Release));
+                        continue;
                     } else {
                         Input::Release
                     }
@@ -200,6 +206,21 @@ impl Resolver {
         }
         self.sources.extend(driven);
         resolved
+    }
+
+    /// Removes and returns the held press, on `binding`'s side, whose action kind is the
+    /// [hold partner](actions::ActionKind::hold_partner) of `binding`'s kind (the lowest binding
+    /// index if several are held).
+    fn take_held_partner(&mut self, binding: &InputBinding) -> Option<Action> {
+        let partner = binding.kind.hold_partner()?;
+        let side = binding.side();
+        let i = self
+            .held
+            .iter()
+            .filter(|&(&j, action)| action.kind() == partner && self.bindings[j].side() == side)
+            .map(|(&j, _)| j)
+            .min()?;
+        self.held.remove(&i)
     }
 
     /// Arms takeover for decks that became active on their side since the last message.

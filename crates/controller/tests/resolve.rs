@@ -1,7 +1,7 @@
 use actions::{Action, ActionKind, ControlState, Input, Side, apply};
 use controller::MidiMessage;
 use controller::mapping::{Resolved, Resolver, ValueKind, decode_relative, parse_mapping};
-use engine::{DeckId, EngineConfig, EngineController, EngineRenderer, engine};
+use engine::{DeckId, EngineConfig, EngineController, EngineRenderer, HotcueSlot, engine};
 
 /// A resolver over a mapping, with the control state and engine it drives. Every resolved
 /// action is applied before the next message, as the runtime does.
@@ -544,28 +544,107 @@ action = "deck.jog_release"
 side = "left"
 "#
     ));
-    // The touch begins on note 54 and ends on its sibling note 103 (SHIFT went down).
+    // The touch begins on note 54 and ends on its sibling note 103 (SHIFT went down),
+    // which ends the held touch and clears it.
     rig.send(on(0, 54));
     assert_eq!(
         rig.send(off(0, 103)),
-        vec![(Action::JogRelease(d(0)), Input::Release)]
+        vec![(Action::JogTouch(d(0)), Input::Release)]
     );
     rig.send(on(0, 114));
     rig.send(off(0, 114));
-    // The next touch, on deck 3, is the one its release ends (deck 1's touch already
-    // ended; releasing it again changes nothing).
+    // The next touch, on deck 3, is the one its release ends.
     assert_eq!(
         rig.send(on(0, 54)),
-        vec![
-            (Action::JogTouch(d(0)), Input::Release),
-            (Action::JogTouch(d(2)), Input::Press)
-        ]
+        vec![(Action::JogTouch(d(2)), Input::Press)]
     );
     assert_eq!(
         rig.send(off(0, 54)),
         vec![(Action::JogTouch(d(2)), Input::Release)]
     );
     assert!(!rig.engine.deck(d(2)).jog_touched);
+}
+
+#[test]
+fn release_on_a_partner_binding_ends_the_hold_on_the_held_deck() {
+    let mut rig = Rig::new(&format!(
+        r#"{LEFT_SIDE}
+[[input]]
+midi = {{ note = 54, channel = 1 }}
+action = "deck.jog_touch"
+side = "left"
+
+[[input]]
+midi = {{ note = 103, channel = 1 }}
+action = "deck.jog_release"
+side = "left"
+
+[[input]]
+midi = {{ note = 0, channel = 8 }}
+action = "deck.hotcue_1"
+side = "left"
+
+[[input]]
+midi = {{ note = 9, channel = 8 }}
+action = "deck.hotcue_delete_2"
+side = "left"
+
+[[input]]
+midi = {{ note = 8, channel = 8 }}
+action = "deck.hotcue_delete_1"
+side = "left"
+
+[[input]]
+midi = {{ note = 12, channel = 1 }}
+action = "deck.cue"
+side = "left"
+
+[[input]]
+midi = {{ note = 72, channel = 1 }}
+action = "deck.return_to_start"
+side = "left"
+"#
+    ));
+    // Deck 1 holds the jog, pad 1 and CUE; DECK switches the side to deck 3.
+    rig.send(on(0, 54));
+    rig.send(on(7, 0));
+    rig.send(on(0, 12));
+    rig.send(on(0, 114));
+    rig.send(off(0, 114));
+    assert_eq!(rig.state.side(Side::Left).active_deck, d(2));
+    // A release on a binding whose action is no partner of a held one (slot 2 is not
+    // held) resolves on the side's deck, as before.
+    assert_eq!(
+        rig.send(off(7, 9)),
+        vec![(
+            Action::HotcueDelete(d(2), HotcueSlot::new(2).unwrap()),
+            Input::Release
+        )]
+    );
+    // Each partner release ends deck 1's hold and clears it.
+    let slot1 = HotcueSlot::new(1).unwrap();
+    assert_eq!(
+        rig.send(off(0, 103)),
+        vec![(Action::JogTouch(d(0)), Input::Release)]
+    );
+    assert_eq!(
+        rig.send(off(7, 8)),
+        vec![(Action::Hotcue(d(0), slot1), Input::Release)]
+    );
+    assert_eq!(
+        rig.send(off(0, 72)),
+        vec![(Action::Cue(d(0)), Input::Release)]
+    );
+    // Nothing is held any more: the next releases resolve on deck 3.
+    assert_eq!(
+        rig.send(off(0, 54)),
+        vec![(Action::JogTouch(d(2)), Input::Release)]
+    );
+    assert_eq!(
+        rig.send(off(0, 103)),
+        vec![(Action::JogRelease(d(2)), Input::Release)]
+    );
+    assert!(rig.resolver.release_all_held().is_empty());
 }
 
 #[test]
