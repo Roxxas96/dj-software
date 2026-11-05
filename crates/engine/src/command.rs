@@ -91,7 +91,7 @@ pub enum DeckCommand {
     /// if the deck is playing.
     JogTouch(bool),
     /// The jog wheel turned by `turns` (negative is backwards). Scratches while the top is
-    /// held in vinyl mode, otherwise nudges a playing deck or moves a paused one. Non-finite
+    /// held in vinyl mode, otherwise bends the speed of a playing deck (a nudge that fades in 0.1 s) or moves a paused one. Non-finite
     /// values are ignored.
     Jog {
         turns: f64,

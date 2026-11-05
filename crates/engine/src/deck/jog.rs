@@ -7,11 +7,13 @@ use crate::JogSurface;
 
 /// Track seconds per platter turn while scratching or moving a paused deck (33⅓ rpm).
 pub(super) const PLATTER_SECONDS_PER_TURN: f64 = 1.8;
-/// Track seconds a nudge turn shifts a playing deck by.
-pub(super) const NUDGE_SECONDS_PER_TURN: f64 = 0.5;
-/// Largest extra motion from a pending nudge per output frame, as a fraction of the deck's
-/// normal speed.
-pub(super) const NUDGE_MAX_BEND: f64 = 0.25;
+/// Speed bend a nudge turn adds to a playing deck, as a fraction of its normal speed.
+pub(super) const NUDGE_RATE_PER_TURN: f64 = 2.0;
+/// Largest speed bend, up or down, as a fraction of the deck's normal speed. Keeps the speed
+/// at 0.5 times normal or more, so a nudge never reverses the deck.
+pub(super) const NUDGE_MAX_BEND: f64 = 0.5;
+/// Time constant with which the speed bend fades back to normal speed.
+pub(super) const NUDGE_DECAY_SECONDS: f64 = 0.1;
 /// Track seconds per turn of a search (SHIFT + jog).
 pub(super) const SEARCH_SECONDS_PER_TURN: f64 = 10.0;
 /// Time constant with which the playhead follows the platter while scratching.
@@ -58,10 +60,9 @@ impl Deck {
             // The hand is on the platter: a ring move neither nudges nor seeks.
             Some(_) => {}
             _ if self.playing => {
-                // Kept within a track length so huge moves never overflow and poison the
-                // playhead.
-                self.nudge =
-                    (self.nudge + turns * NUDGE_SECONDS_PER_TURN * track_rate).clamp(-end, end);
+                // Clamped, so huge moves stay finite and never stall or reverse the deck.
+                self.bend = (self.bend + turns * NUDGE_RATE_PER_TURN)
+                    .clamp(-NUDGE_MAX_BEND, NUDGE_MAX_BEND);
             }
             _ => self.jump_by(turns * PLATTER_SECONDS_PER_TURN * track_rate),
         }
