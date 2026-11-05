@@ -26,6 +26,8 @@ pub struct ControllerInfo {
     pub name: String,
     /// Substring matched against both input and output port names.
     pub port: String,
+    /// Steps the jog wheel sends per platter turn; jog bindings need it.
+    pub jog_steps_per_turn: Option<u16>,
 }
 
 /// An absolute action set to `value` when the controller attaches.
@@ -129,16 +131,42 @@ pub fn parse_mapping(name: &str, text: &str) -> Result<Mapping, MappingError> {
         message,
     };
     let raw: RawFile = toml::from_str(text).map_err(|e| error(e.to_string()))?;
+    let jog_steps_per_turn = raw
+        .controller
+        .jog_steps_per_turn
+        .map(|steps| match u16::try_from(steps) {
+            Ok(steps @ 1..=MAX_JOG_STEPS_PER_TURN) => Ok(steps),
+            _ => Err(error(format!(
+                "jog_steps_per_turn {steps} is outside 1-{MAX_JOG_STEPS_PER_TURN}"
+            ))),
+        })
+        .transpose()?;
+    let inputs = each(raw.input, "input", input_binding).map_err(error)?;
+    let uses_jog = inputs.iter().any(|binding| {
+        matches!(
+            binding.kind,
+            ActionKind::JogTop | ActionKind::JogRing | ActionKind::JogSearch
+        )
+    });
+    if uses_jog && jog_steps_per_turn.is_none() {
+        return Err(error(
+            "jog_steps_per_turn is required by jog bindings".to_owned(),
+        ));
+    }
     Ok(Mapping {
         controller: ControllerInfo {
             name: raw.controller.name,
             port: raw.controller.port,
+            jog_steps_per_turn,
         },
         init: each(raw.init, "init", init_action).map_err(error)?,
-        inputs: each(raw.input, "input", input_binding).map_err(error)?,
+        inputs,
         outputs: each(raw.output, "output", output_binding).map_err(error)?,
     })
 }
+
+/// The largest accepted `jog_steps_per_turn`.
+const MAX_JOG_STEPS_PER_TURN: u16 = 10_000;
 
 /// Reads and validates every raw binding of one array, prefixing errors with `what[N]`.
 fn each<R, T>(
@@ -179,6 +207,7 @@ struct RawFile {
 struct RawController {
     name: String,
     port: String,
+    jog_steps_per_turn: Option<i64>,
 }
 
 /// A TOML number: `value = 1` and `value = 1.0` both work.
