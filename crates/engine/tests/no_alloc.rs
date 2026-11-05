@@ -190,6 +190,41 @@ fn render_does_not_allocate() {
         render_blocks(2);
     }
 
+    // Phase sync between two playing decks, and a pending one resolved on play.
+    c.send(Command::Deck(decks[1], DeckCommand::Play)).unwrap();
+    c.send(Command::Deck(decks[0], DeckCommand::Play)).unwrap();
+    for cmd in [
+        Command::Deck(
+            decks[1],
+            DeckCommand::SetGrid(Grid::from_bpm(126.0, 0.0, 44_100)),
+        ),
+        Command::PhaseSync {
+            deck: decks[1],
+            master: decks[0],
+            beat_ratio: 1.0,
+        },
+        Command::PhaseSync {
+            deck: decks[1],
+            master: decks[0],
+            beat_ratio: 0.5,
+        },
+        Command::PhaseSync {
+            deck: decks[1],
+            master: decks[0],
+            beat_ratio: 2.0,
+        },
+        Command::Deck(decks[1], DeckCommand::Pause),
+        Command::PhaseSync {
+            deck: decks[1],
+            master: decks[0],
+            beat_ratio: 1.0,
+        },
+        Command::Deck(decks[1], DeckCommand::Play),
+    ] {
+        c.send(cmd).unwrap();
+        render_blocks(5);
+    }
+
     // The replaced track went back to the controller, which frees it outside the guard.
     c.collect_garbage();
     assert_eq!(Arc::strong_count(&old), 1);

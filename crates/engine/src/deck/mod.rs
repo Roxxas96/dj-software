@@ -4,7 +4,7 @@ mod hotcue;
 mod jog;
 mod looping;
 
-use crate::{DeckCommand, DeckSnapshot, Grid, HOTCUES, TempoRange, TrackBuffer};
+use crate::{DeckCommand, DeckId, DeckSnapshot, Grid, HOTCUES, TempoRange, TrackBuffer};
 
 /// Transport state of one deck. Owned by the renderer.
 #[derive(Debug)]
@@ -36,6 +36,8 @@ pub(crate) struct Deck {
     scratch: Option<f64>,
     /// Track frames of nudge not yet applied.
     nudge: f64,
+    /// A phase sync waiting for this deck to play: the master and the beat ratio.
+    pending_sync: Option<(DeckId, f64)>,
 }
 
 impl Default for Deck {
@@ -59,6 +61,7 @@ impl Default for Deck {
             jog_touched: false,
             scratch: None,
             nudge: 0.0,
+            pending_sync: None,
         }
     }
 }
@@ -101,13 +104,20 @@ impl Deck {
             DeckCommand::Seek(frames) if frames.is_finite() => {
                 self.position = frames.clamp(0.0, self.frames() as f64);
                 self.exit_loop_if_outside(self.position);
+                self.pending_sync = None;
             }
             DeckCommand::SetCue(frames) if frames.is_finite() => {
                 self.cue = frames.clamp(0.0, self.frames() as f64);
             }
-            DeckCommand::SetGrid(None) => self.grid = None,
+            DeckCommand::SetGrid(None) => {
+                self.grid = None;
+                self.pending_sync = None;
+            }
             // A grid without a usable period would break every beat calculation: ignore it.
-            DeckCommand::SetGrid(Some(grid)) if grid.is_valid() => self.grid = Some(grid),
+            DeckCommand::SetGrid(Some(grid)) if grid.is_valid() => {
+                self.grid = Some(grid);
+                self.pending_sync = None;
+            }
             DeckCommand::HotcuePress(slot) => self.hotcue_press(slot),
             DeckCommand::HotcueRelease(slot) => self.hotcue_release(slot),
             DeckCommand::HotcueDelete(slot) => self.hotcue_set(slot, None),
@@ -150,6 +160,7 @@ impl Deck {
         self.jog_touched = false;
         self.scratch = None;
         self.nudge = 0.0;
+        self.pending_sync = None;
     }
 
     fn play(&mut self) {
@@ -207,6 +218,59 @@ impl Deck {
             self.playing = false;
         }
         self.play_latched = false;
+    }
+
+    /// The grid and playhead of a loaded, playing deck with a grid: what other decks sync to.
+    pub(crate) fn phase_source(&self) -> Option<(Grid, f64)> {
+        if self.track.is_some() && self.playing {
+            self.grid.map(|grid| (grid, self.position))
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn is_playing(&self) -> bool {
+        self.playing
+    }
+
+    pub(crate) fn pending_sync(&self) -> Option<(DeckId, f64)> {
+        self.pending_sync
+    }
+
+    pub(crate) fn drop_pending_sync(&mut self) {
+        self.pending_sync = None;
+    }
+
+    /// Starts a phase sync to a master at `master_beats` (its beat position times `ratio`).
+    /// A playing deck aligns now, a paused one remembers `master` and `ratio` until it plays.
+    /// Does nothing without a loaded track and a grid.
+    pub(crate) fn phase_sync(&mut self, master: DeckId, ratio: f64, master_beats: f64) {
+        if self.track.is_none() || self.grid.is_none() {
+            return;
+        }
+        if self.playing {
+            self.pending_sync = None;
+            self.align_phase(master_beats);
+        } else {
+            self.pending_sync = Some((master, ratio));
+        }
+    }
+
+    /// Moves the playhead by at most half a beat so that its beat position has the same
+    /// fraction as `target_beats`. A move that lands outside the active loop exits the loop,
+    /// like any deliberate jump.
+    pub(crate) fn align_phase(&mut self, target_beats: f64) {
+        let Some(grid) = self.grid else {
+            return;
+        };
+        let diff = target_beats - grid.beats_at(self.position);
+        let beats = diff - diff.round();
+        if !beats.is_finite() {
+            return;
+        }
+        self.position =
+            (self.position + beats * grid.beat_period_frames).clamp(0.0, self.frames() as f64);
+        self.exit_loop_if_outside(self.position);
     }
 
     fn frames(&self) -> usize {
