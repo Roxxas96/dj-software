@@ -18,6 +18,14 @@ Each plan that adds or changes a crate updates this page. The full design is in
   only values that changed). None of this runs on the audio thread. It also notices when the
   controller is unplugged or plugged back in (polled once a second): audio keeps playing, held
   buttons are released, and on return soft takeover is armed and every LED is sent again.
+- **Deck snapshots:** the audio thread publishes each deck's state (position, cue, hotcues,
+  grid, loop, vinyl, jog) for the control thread and UI seqlock-style: a per-deck sequence
+  number goes odd before the fields are stored and even after, and readers retry until they
+  see the same even number before and after. The writer never waits and nothing allocates.
+  `EngineController::deck_consistent` returns a snapshot only when it was read that way, and
+  the library mode saves cues and hotcues only from such snapshots, so a torn read
+  can never write one track's cues onto another. A per-deck `load_seq` counts loads, so the
+  app can tell when a `Load` has been applied.
 - **Loader/analysis workers:** decode tracks into memory ahead of playback (no streaming from
   disk on the audio thread), and run BPM/key/waveform analysis in the background.
   In library mode (`play --library`) the control loop never waits on the database or a
@@ -48,5 +56,24 @@ Each plan that adds or changes a crate updates this page. The full design is in
 | `analysis` | Offline track analysis written for this project: three-band waveform, tempo and constant beatgrid, and musical key with Camelot, standard and Open Key notation. Pure functions on decoded audio; no database. |
 | `library` | The SQLite library: schema and migrations, startup backups, folder scans and the watcher, fingerprints, tags, cues, playlists, beatgrid edits, the writer thread and the analyzer pool that stores `analysis` results. See [library.md](library.md). |
 | `open-jockey` (`crates/app`) | The application binary. A command-line player and MIDI tools (`devices`, `play`, `library` and `midi` with `ports`, `monitor`, `capture` and `led-scan`) that wire the other crates together. |
+
+## Track memory, grids and sync
+
+A track's remembered state (`TrackMemory`: the cue point, up to eight hotcues and the
+beatgrid) travels with the `Load` command, and the engine applies it on the audio thread
+when the track starts, clamped to the track length. The beatgrid lives in the engine as
+well as in the library, so the audio thread can use it for loops (`AutoLoop` snaps to the
+beat before the playhead and sizes the loop in beats) and beat sync. The library mode
+(`MemorySync` in `crates/app`) watches the deck snapshots after a load and writes any
+change of cue, hotcues or grid back to the library; grid edits go the other way as
+`SetGrid`.
+
+SYNC is planned in `actions` (`deck.sync`): it picks the playing deck to follow, computes
+the tempo slider and range that match its BPM (also at half or double time), and sends
+the tempo commands plus one `PhaseSync` command. The engine then moves the playhead by at
+most half a beat so the beats line up, at once for a playing deck, or at the first block
+where a paused deck plays. The jog wheels are engine commands as well (`JogTouch`, `Jog`,
+`JogSearch`): scratching, nudging and search run on the audio thread, and the control side
+only turns controller steps into platter turns using the mapping's `jog_steps_per_turn`.
 
 Controllers are documented in [`controllers/`](controllers/): the [mapping reference](controllers/mapping-reference.md) and [adding a controller](controllers/adding-a-controller.md).

@@ -56,7 +56,7 @@ written in decimal or hex (`note = 0x0B`).
 |---|---|
 | `name` | Display name. |
 | `port` | Text matched against the names of the MIDI input and output ports. Any port whose name contains it is used. |
-| `jog_steps_per_turn` | Optional, 1 to 10000. How many relative steps the jog wheel sends for one full turn of the platter. Required when any binding uses `deck.jog_top`, `deck.jog_ring` or `deck.jog_search`; the default of 720 only applies to mappings with no jog bindings. |
+| `jog_steps_per_turn` | Optional, 1 to 10000. How many relative steps the jog wheel sends for one full turn of the platter. Required whenever a binding uses `deck.jog_top`, `deck.jog_ring` or `deck.jog_search`: a mapping with such a binding and no key fails to load. |
 
 `name` and `port` are required.
 
@@ -185,14 +185,14 @@ browser actions).
 | `deck.grid_tap` | deck | button | Tap tempo: from the fourth tap on, the BPM follows the mean interval of the taps. A pause of more than 2 s starts over. |
 | `deck.grid_lock_toggle` | deck | button | Press to lock or unlock the beatgrid. A locked grid is kept when the track is analyzed again. |
 | `deck.load_selected` | deck | button | Press to load the track selected in the library browser onto the deck. |
-| `deck.hotcue_1` | deck | button | Hotcue pad 1. Press on an empty pad: set it at the playhead. Press on a set pad: jump to it (leaving any loop it lies outside of); while paused, hold to preview from there, and release to stop the preview and return to the pad. |
-| `deck.hotcue_2` | deck | button | Hotcue pad 2. Press on an empty pad: set it at the playhead. Press on a set pad: jump to it (leaving any loop it lies outside of); while paused, hold to preview from there, and release to stop the preview and return to the pad. |
-| `deck.hotcue_3` | deck | button | Hotcue pad 3. Press on an empty pad: set it at the playhead. Press on a set pad: jump to it (leaving any loop it lies outside of); while paused, hold to preview from there, and release to stop the preview and return to the pad. |
-| `deck.hotcue_4` | deck | button | Hotcue pad 4. Press on an empty pad: set it at the playhead. Press on a set pad: jump to it (leaving any loop it lies outside of); while paused, hold to preview from there, and release to stop the preview and return to the pad. |
-| `deck.hotcue_5` | deck | button | Hotcue pad 5. Press on an empty pad: set it at the playhead. Press on a set pad: jump to it (leaving any loop it lies outside of); while paused, hold to preview from there, and release to stop the preview and return to the pad. |
-| `deck.hotcue_6` | deck | button | Hotcue pad 6. Press on an empty pad: set it at the playhead. Press on a set pad: jump to it (leaving any loop it lies outside of); while paused, hold to preview from there, and release to stop the preview and return to the pad. |
-| `deck.hotcue_7` | deck | button | Hotcue pad 7. Press on an empty pad: set it at the playhead. Press on a set pad: jump to it (leaving any loop it lies outside of); while paused, hold to preview from there, and release to stop the preview and return to the pad. |
-| `deck.hotcue_8` | deck | button | Hotcue pad 8. Press on an empty pad: set it at the playhead. Press on a set pad: jump to it (leaving any loop it lies outside of); while paused, hold to preview from there, and release to stop the preview and return to the pad. |
+| `deck.hotcue_1` | deck | button | Hotcue pad 1. Press on an empty pad: set it at the playhead. Press on a set pad: jump to it, which switches an active loop off when the pad lies outside that loop; while paused, hold to preview from there, and release to stop the preview and return to the pad. |
+| `deck.hotcue_2` | deck | button | Hotcue pad 2. Press on an empty pad: set it at the playhead. Press on a set pad: jump to it, which switches an active loop off when the pad lies outside that loop; while paused, hold to preview from there, and release to stop the preview and return to the pad. |
+| `deck.hotcue_3` | deck | button | Hotcue pad 3. Press on an empty pad: set it at the playhead. Press on a set pad: jump to it, which switches an active loop off when the pad lies outside that loop; while paused, hold to preview from there, and release to stop the preview and return to the pad. |
+| `deck.hotcue_4` | deck | button | Hotcue pad 4. Press on an empty pad: set it at the playhead. Press on a set pad: jump to it, which switches an active loop off when the pad lies outside that loop; while paused, hold to preview from there, and release to stop the preview and return to the pad. |
+| `deck.hotcue_5` | deck | button | Hotcue pad 5. Press on an empty pad: set it at the playhead. Press on a set pad: jump to it, which switches an active loop off when the pad lies outside that loop; while paused, hold to preview from there, and release to stop the preview and return to the pad. |
+| `deck.hotcue_6` | deck | button | Hotcue pad 6. Press on an empty pad: set it at the playhead. Press on a set pad: jump to it, which switches an active loop off when the pad lies outside that loop; while paused, hold to preview from there, and release to stop the preview and return to the pad. |
+| `deck.hotcue_7` | deck | button | Hotcue pad 7. Press on an empty pad: set it at the playhead. Press on a set pad: jump to it, which switches an active loop off when the pad lies outside that loop; while paused, hold to preview from there, and release to stop the preview and return to the pad. |
+| `deck.hotcue_8` | deck | button | Hotcue pad 8. Press on an empty pad: set it at the playhead. Press on a set pad: jump to it, which switches an active loop off when the pad lies outside that loop; while paused, hold to preview from there, and release to stop the preview and return to the pad. |
 | `deck.hotcue_delete_1` | deck | button | Press to clear hotcue pad 1. |
 | `deck.hotcue_delete_2` | deck | button | Press to clear hotcue pad 2. |
 | `deck.hotcue_delete_3` | deck | button | Press to clear hotcue pad 3. |
@@ -201,13 +201,13 @@ browser actions).
 | `deck.hotcue_delete_6` | deck | button | Press to clear hotcue pad 6. |
 | `deck.hotcue_delete_7` | deck | button | Press to clear hotcue pad 7. |
 | `deck.hotcue_delete_8` | deck | button | Press to clear hotcue pad 8. |
-| `deck.loop_in` | deck | button | Press to start a manual loop at the playhead. This clears the previous loop-out. |
+| `deck.loop_in` | deck | button | Press to start a manual loop at the playhead. This clears the previous loop-out and switches an active loop off. |
 | `deck.loop_out` | deck | button | Press to end the loop at the playhead and switch it on, wrapping the playhead from the end back to the start. Does nothing without a loop-in before the playhead. |
-| `deck.auto_loop` | deck | button | Press to switch on a loop of the current length (4 beats at first) starting at the beat before the playhead, which needs a beatgrid. Press again to switch the loop off. |
+| `deck.auto_loop` | deck | button | Press to switch on a loop of the current length (4 beats at first) starting at the beat before the playhead, which needs a beatgrid. With a loop active (a manual one too), it switches the loop off instead, with or without a grid. |
 | `deck.loop_halve` | deck | button | Press to halve the loop length (down to 1/32 beat). An active loop shrinks to half its current length, keeping its start. |
 | `deck.loop_double` | deck | button | Press to double the loop length (up to 64 beats). An active loop grows to twice its current length, keeping its start. |
 | `deck.reloop_exit` | deck | button | Press while a loop is on to leave it. Press while it is off to jump to its start and switch it on again. |
-| `deck.sync` | deck | button | Beat sync. The engine does not support it yet, so the action does nothing for now. |
+| `deck.sync` | deck | button | Beat sync: matches the deck's tempo to a playing deck (the active deck of the other side first, otherwise the lowest-numbered one) and aligns the beats, by half or double time when that fits the deck's tempo better. It widens the tempo range when needed, and the tempo slider must be picked up again afterwards (soft takeover). On a paused deck the alignment happens when it starts playing. Needs a beatgrid on both decks; otherwise it does nothing. |
 | `deck.vinyl_toggle` | deck | button | Press to turn vinyl mode on or off for the deck. In vinyl mode, touching the jog wheel top scratches. |
 | `deck.jog_touch` | deck | button | Press and release track whether a hand is on the top of the jog wheel. |
 | `deck.jog_top` | deck | relative | The top of the jog wheel. While touched in vinyl mode it scratches: the playhead follows the platter, and a held record is silent. Otherwise it nudges the tempo of a playing deck, or moves the playhead of a paused one (one platter turn is 1.8 s of track). |
