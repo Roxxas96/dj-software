@@ -183,6 +183,34 @@ browser actions).
 | `deck.grid_tap` | deck | button | Tap tempo: from the fourth tap on, the BPM follows the mean interval of the taps. A pause of more than 2 s starts over. |
 | `deck.grid_lock_toggle` | deck | button | Press to lock or unlock the beatgrid. A locked grid is kept when the track is analyzed again. |
 | `deck.load_selected` | deck | button | Press to load the track selected in the library browser onto the deck. |
+| `deck.hotcue_1` | deck | button | Hotcue pad 1. Press on an empty pad: set it at the playhead. Press on a set pad: jump to it (leaving any loop it lies outside of); while paused, hold to preview from there, and release to stop the preview and return to the pad. |
+| `deck.hotcue_2` | deck | button | Hotcue pad 2. Press on an empty pad: set it at the playhead. Press on a set pad: jump to it (leaving any loop it lies outside of); while paused, hold to preview from there, and release to stop the preview and return to the pad. |
+| `deck.hotcue_3` | deck | button | Hotcue pad 3. Press on an empty pad: set it at the playhead. Press on a set pad: jump to it (leaving any loop it lies outside of); while paused, hold to preview from there, and release to stop the preview and return to the pad. |
+| `deck.hotcue_4` | deck | button | Hotcue pad 4. Press on an empty pad: set it at the playhead. Press on a set pad: jump to it (leaving any loop it lies outside of); while paused, hold to preview from there, and release to stop the preview and return to the pad. |
+| `deck.hotcue_5` | deck | button | Hotcue pad 5. Press on an empty pad: set it at the playhead. Press on a set pad: jump to it (leaving any loop it lies outside of); while paused, hold to preview from there, and release to stop the preview and return to the pad. |
+| `deck.hotcue_6` | deck | button | Hotcue pad 6. Press on an empty pad: set it at the playhead. Press on a set pad: jump to it (leaving any loop it lies outside of); while paused, hold to preview from there, and release to stop the preview and return to the pad. |
+| `deck.hotcue_7` | deck | button | Hotcue pad 7. Press on an empty pad: set it at the playhead. Press on a set pad: jump to it (leaving any loop it lies outside of); while paused, hold to preview from there, and release to stop the preview and return to the pad. |
+| `deck.hotcue_8` | deck | button | Hotcue pad 8. Press on an empty pad: set it at the playhead. Press on a set pad: jump to it (leaving any loop it lies outside of); while paused, hold to preview from there, and release to stop the preview and return to the pad. |
+| `deck.hotcue_delete_1` | deck | button | Press to clear hotcue pad 1. |
+| `deck.hotcue_delete_2` | deck | button | Press to clear hotcue pad 2. |
+| `deck.hotcue_delete_3` | deck | button | Press to clear hotcue pad 3. |
+| `deck.hotcue_delete_4` | deck | button | Press to clear hotcue pad 4. |
+| `deck.hotcue_delete_5` | deck | button | Press to clear hotcue pad 5. |
+| `deck.hotcue_delete_6` | deck | button | Press to clear hotcue pad 6. |
+| `deck.hotcue_delete_7` | deck | button | Press to clear hotcue pad 7. |
+| `deck.hotcue_delete_8` | deck | button | Press to clear hotcue pad 8. |
+| `deck.loop_in` | deck | button | Press to start a manual loop at the playhead. This clears the previous loop-out. |
+| `deck.loop_out` | deck | button | Press to end the loop at the playhead and switch it on, wrapping the playhead from the end back to the start. Does nothing without a loop-in before the playhead. |
+| `deck.auto_loop` | deck | button | Press to switch on a loop of the current length (4 beats at first) starting at the beat before the playhead, which needs a beatgrid. Press again to switch the loop off. |
+| `deck.loop_halve` | deck | button | Press to halve the loop length (down to 1/32 beat). An active loop shrinks to half its current length, keeping its start. |
+| `deck.loop_double` | deck | button | Press to double the loop length (up to 64 beats). An active loop grows to twice its current length, keeping its start. |
+| `deck.reloop_exit` | deck | button | Press while a loop is on to leave it. Press while it is off to jump to its start and switch it on again. |
+| `deck.sync` | deck | button | Beat sync. The engine does not support it yet, so the action does nothing for now. |
+| `deck.vinyl_toggle` | deck | button | Press to turn vinyl mode on or off for the deck. In vinyl mode, touching the jog wheel top scratches. |
+| `deck.jog_touch` | deck | button | Press and release track whether a hand is on the top of the jog wheel. |
+| `deck.jog_top` | deck | relative | The top of the jog wheel. While touched in vinyl mode it scratches: the playhead follows the platter, and a held record is silent. Otherwise it nudges the tempo of a playing deck, or moves the playhead of a paused one (one platter turn is 1.8 s of track). |
+| `deck.jog_ring` | deck | relative | The outer ring of the jog wheel. It nudges a playing deck and moves a paused one's playhead, like the top without vinyl mode, and is ignored while the deck is scratching. |
+| `deck.jog_search` | deck | relative | Search: moves the playhead 10 s of track per platter turn, leaving a loop it lands outside of. |
 | `channel.trim` | deck | absolute | Channel gain (TRIM). |
 | `channel.eq_high` | deck | absolute | High EQ. |
 | `channel.eq_mid` | deck | absolute | Mid EQ. |
@@ -204,7 +232,9 @@ Relative steps that arrive together (a fast turn of an encoder) are added up and
 move; a button press or release in between keeps the steps on each side of it apart.
 
 Only "absolute" actions can be used in `[[init]]`. `soft_takeover` has an effect only on absolute bindings, and `invert` flips absolute values (or negates relative steps).
-Button actions ignore releases, except `deck.cue` and `modifier.shift`.
+Button actions ignore releases, except `deck.cue`, `deck.hotcue_1` to `deck.hotcue_8`, `deck.jog_touch` and `modifier.shift`.
+
+Jog wheel actions turn the steps a wheel sends into platter turns using a steps-per-turn setting (720 by default).
 
 The `deck.grid_*` actions edit the loaded track's beatgrid in the library. Every grid edit
 except `deck.grid_lock_toggle` also locks the grid, so analyzing the track again never undoes

@@ -1,4 +1,4 @@
-use engine::DeckId;
+use engine::{DeckId, HotcueSlot};
 
 /// One half of the controller. Decks 1 and 3 sit on the left, decks 2 and 4 on the right.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -116,40 +116,107 @@ pub enum ActionKind {
     BrowserScroll,
     BrowserToggleFocus,
     LoadSelected,
+    /// A hotcue pad: sets, jumps to or previews the slot.
+    Hotcue(HotcueSlot),
+    HotcueDelete(HotcueSlot),
+    LoopIn,
+    LoopOut,
+    AutoLoop,
+    LoopHalve,
+    LoopDouble,
+    ReloopExit,
+    Sync,
+    VinylToggle,
+    JogTouch,
+    JogTop,
+    JogRing,
+    JogSearch,
 }
 
+/// Ids of [`ActionKind::Hotcue`], by slot index.
+const HOTCUE_IDS: [&str; 8] = [
+    "deck.hotcue_1",
+    "deck.hotcue_2",
+    "deck.hotcue_3",
+    "deck.hotcue_4",
+    "deck.hotcue_5",
+    "deck.hotcue_6",
+    "deck.hotcue_7",
+    "deck.hotcue_8",
+];
+
+/// Ids of [`ActionKind::HotcueDelete`], by slot index.
+const HOTCUE_DELETE_IDS: [&str; 8] = [
+    "deck.hotcue_delete_1",
+    "deck.hotcue_delete_2",
+    "deck.hotcue_delete_3",
+    "deck.hotcue_delete_4",
+    "deck.hotcue_delete_5",
+    "deck.hotcue_delete_6",
+    "deck.hotcue_delete_7",
+    "deck.hotcue_delete_8",
+];
+
 impl ActionKind {
-    pub const ALL: [ActionKind; 29] = [
-        ActionKind::PlayPause,
-        ActionKind::Cue,
-        ActionKind::Tempo,
-        ActionKind::TempoRangeNext,
-        ActionKind::ReturnToStart,
-        ActionKind::GridShiftBack,
-        ActionKind::GridShiftForward,
-        ActionKind::GridSetDownbeat,
-        ActionKind::GridHalve,
-        ActionKind::GridDouble,
-        ActionKind::GridTap,
-        ActionKind::GridLockToggle,
-        ActionKind::Trim,
-        ActionKind::EqHigh,
-        ActionKind::EqMid,
-        ActionKind::EqLow,
-        ActionKind::Filter,
-        ActionKind::Fader,
-        ActionKind::PflToggle,
-        ActionKind::Crossfader,
-        ActionKind::MasterLevel,
-        ActionKind::HeadphoneLevel,
-        ActionKind::HeadphoneMix,
-        ActionKind::HeadphoneMasterToggle,
-        ActionKind::DeckToggle,
-        ActionKind::Shift,
-        ActionKind::BrowserScroll,
-        ActionKind::BrowserToggleFocus,
-        ActionKind::LoadSelected,
-    ];
+    /// Every kind: both hotcue families once per slot.
+    pub const ALL: [ActionKind; 57] = {
+        let mut all = [ActionKind::PlayPause; 57];
+        let fixed = [
+            ActionKind::PlayPause,
+            ActionKind::Cue,
+            ActionKind::Tempo,
+            ActionKind::TempoRangeNext,
+            ActionKind::ReturnToStart,
+            ActionKind::GridShiftBack,
+            ActionKind::GridShiftForward,
+            ActionKind::GridSetDownbeat,
+            ActionKind::GridHalve,
+            ActionKind::GridDouble,
+            ActionKind::GridTap,
+            ActionKind::GridLockToggle,
+            ActionKind::Trim,
+            ActionKind::EqHigh,
+            ActionKind::EqMid,
+            ActionKind::EqLow,
+            ActionKind::Filter,
+            ActionKind::Fader,
+            ActionKind::PflToggle,
+            ActionKind::Crossfader,
+            ActionKind::MasterLevel,
+            ActionKind::HeadphoneLevel,
+            ActionKind::HeadphoneMix,
+            ActionKind::HeadphoneMasterToggle,
+            ActionKind::DeckToggle,
+            ActionKind::Shift,
+            ActionKind::BrowserScroll,
+            ActionKind::BrowserToggleFocus,
+            ActionKind::LoadSelected,
+            ActionKind::LoopIn,
+            ActionKind::LoopOut,
+            ActionKind::AutoLoop,
+            ActionKind::LoopHalve,
+            ActionKind::LoopDouble,
+            ActionKind::ReloopExit,
+            ActionKind::Sync,
+            ActionKind::VinylToggle,
+            ActionKind::JogTouch,
+            ActionKind::JogTop,
+            ActionKind::JogRing,
+            ActionKind::JogSearch,
+        ];
+        let mut i = 0;
+        while i < fixed.len() {
+            all[i] = fixed[i];
+            i += 1;
+        }
+        let mut slot = 0;
+        while slot < HotcueSlot::ALL.len() {
+            all[fixed.len() + slot] = ActionKind::Hotcue(HotcueSlot::ALL[slot]);
+            all[fixed.len() + 8 + slot] = ActionKind::HotcueDelete(HotcueSlot::ALL[slot]);
+            slot += 1;
+        }
+        all
+    };
 
     /// The stable id used in mapping files.
     pub fn id(self) -> &'static str {
@@ -183,6 +250,20 @@ impl ActionKind {
             ActionKind::BrowserScroll => "browser.scroll",
             ActionKind::BrowserToggleFocus => "browser.toggle_focus",
             ActionKind::LoadSelected => "deck.load_selected",
+            ActionKind::Hotcue(slot) => HOTCUE_IDS[slot.index()],
+            ActionKind::HotcueDelete(slot) => HOTCUE_DELETE_IDS[slot.index()],
+            ActionKind::LoopIn => "deck.loop_in",
+            ActionKind::LoopOut => "deck.loop_out",
+            ActionKind::AutoLoop => "deck.auto_loop",
+            ActionKind::LoopHalve => "deck.loop_halve",
+            ActionKind::LoopDouble => "deck.loop_double",
+            ActionKind::ReloopExit => "deck.reloop_exit",
+            ActionKind::Sync => "deck.sync",
+            ActionKind::VinylToggle => "deck.vinyl_toggle",
+            ActionKind::JogTouch => "deck.jog_touch",
+            ActionKind::JogTop => "deck.jog_top",
+            ActionKind::JogRing => "deck.jog_ring",
+            ActionKind::JogSearch => "deck.jog_search",
         }
     }
 
@@ -212,6 +293,20 @@ impl ActionKind {
             | ActionKind::Filter
             | ActionKind::Fader
             | ActionKind::PflToggle
+            | ActionKind::LoopIn
+            | ActionKind::LoopOut
+            | ActionKind::AutoLoop
+            | ActionKind::LoopHalve
+            | ActionKind::LoopDouble
+            | ActionKind::ReloopExit
+            | ActionKind::Sync
+            | ActionKind::VinylToggle
+            | ActionKind::JogTouch
+            | ActionKind::JogTop
+            | ActionKind::JogRing
+            | ActionKind::JogSearch
+            | ActionKind::Hotcue(_)
+            | ActionKind::HotcueDelete(_)
             | ActionKind::LoadSelected => Scope::Deck,
             ActionKind::Crossfader
             | ActionKind::MasterLevel
@@ -225,8 +320,8 @@ impl ActionKind {
     }
 
     /// Whether this action accepts inputs of `kind`. This is the one table of what each
-    /// action takes: absolute actions take positions, `browser.scroll` takes relative
-    /// steps, and every other action takes button presses.
+    /// action takes: absolute actions take positions, `browser.scroll` and the jog wheel
+    /// actions take relative steps, and every other action takes button presses.
     pub fn accepts(self, kind: InputKind) -> bool {
         let absolute = matches!(
             self,
@@ -242,7 +337,13 @@ impl ActionKind {
                 | ActionKind::HeadphoneLevel
                 | ActionKind::HeadphoneMix
         );
-        let relative = self == ActionKind::BrowserScroll;
+        let relative = matches!(
+            self,
+            ActionKind::BrowserScroll
+                | ActionKind::JogTop
+                | ActionKind::JogRing
+                | ActionKind::JogSearch
+        );
         match kind {
             InputKind::Button => !absolute && !relative,
             InputKind::Absolute => absolute,
@@ -257,7 +358,10 @@ impl ActionKind {
 
     /// Whether this action reacts to [`Input::Release`] as well as [`Input::Press`].
     pub fn takes_release(self) -> bool {
-        matches!(self, ActionKind::Cue | ActionKind::Shift)
+        matches!(
+            self,
+            ActionKind::Cue | ActionKind::Shift | ActionKind::Hotcue(_) | ActionKind::JogTouch
+        )
     }
 }
 
@@ -293,6 +397,20 @@ pub enum Action {
     BrowserScroll,
     BrowserToggleFocus,
     LoadSelected(DeckId),
+    Hotcue(DeckId, HotcueSlot),
+    HotcueDelete(DeckId, HotcueSlot),
+    LoopIn(DeckId),
+    LoopOut(DeckId),
+    AutoLoop(DeckId),
+    LoopHalve(DeckId),
+    LoopDouble(DeckId),
+    ReloopExit(DeckId),
+    Sync(DeckId),
+    VinylToggle(DeckId),
+    JogTouch(DeckId),
+    JogTop(DeckId),
+    JogRing(DeckId),
+    JogSearch(DeckId),
 }
 
 impl Action {
@@ -329,6 +447,20 @@ impl Action {
             (K::BrowserScroll, Target::Global) => Action::BrowserScroll,
             (K::BrowserToggleFocus, Target::Global) => Action::BrowserToggleFocus,
             (K::LoadSelected, Target::Deck(d)) => Action::LoadSelected(d),
+            (K::Hotcue(slot), Target::Deck(d)) => Action::Hotcue(d, slot),
+            (K::HotcueDelete(slot), Target::Deck(d)) => Action::HotcueDelete(d, slot),
+            (K::LoopIn, Target::Deck(d)) => Action::LoopIn(d),
+            (K::LoopOut, Target::Deck(d)) => Action::LoopOut(d),
+            (K::AutoLoop, Target::Deck(d)) => Action::AutoLoop(d),
+            (K::LoopHalve, Target::Deck(d)) => Action::LoopHalve(d),
+            (K::LoopDouble, Target::Deck(d)) => Action::LoopDouble(d),
+            (K::ReloopExit, Target::Deck(d)) => Action::ReloopExit(d),
+            (K::Sync, Target::Deck(d)) => Action::Sync(d),
+            (K::VinylToggle, Target::Deck(d)) => Action::VinylToggle(d),
+            (K::JogTouch, Target::Deck(d)) => Action::JogTouch(d),
+            (K::JogTop, Target::Deck(d)) => Action::JogTop(d),
+            (K::JogRing, Target::Deck(d)) => Action::JogRing(d),
+            (K::JogSearch, Target::Deck(d)) => Action::JogSearch(d),
             _ => return None,
         })
     }
@@ -374,6 +506,20 @@ impl Action {
             Action::BrowserScroll => ActionKind::BrowserScroll,
             Action::BrowserToggleFocus => ActionKind::BrowserToggleFocus,
             Action::LoadSelected(_) => ActionKind::LoadSelected,
+            Action::Hotcue(_, slot) => ActionKind::Hotcue(*slot),
+            Action::HotcueDelete(_, slot) => ActionKind::HotcueDelete(*slot),
+            Action::LoopIn(_) => ActionKind::LoopIn,
+            Action::LoopOut(_) => ActionKind::LoopOut,
+            Action::AutoLoop(_) => ActionKind::AutoLoop,
+            Action::LoopHalve(_) => ActionKind::LoopHalve,
+            Action::LoopDouble(_) => ActionKind::LoopDouble,
+            Action::ReloopExit(_) => ActionKind::ReloopExit,
+            Action::Sync(_) => ActionKind::Sync,
+            Action::VinylToggle(_) => ActionKind::VinylToggle,
+            Action::JogTouch(_) => ActionKind::JogTouch,
+            Action::JogTop(_) => ActionKind::JogTop,
+            Action::JogRing(_) => ActionKind::JogRing,
+            Action::JogSearch(_) => ActionKind::JogSearch,
         }
     }
 
@@ -398,7 +544,21 @@ impl Action {
             | Action::Filter(d)
             | Action::Fader(d)
             | Action::PflToggle(d)
-            | Action::LoadSelected(d) => Target::Deck(d),
+            | Action::LoadSelected(d)
+            | Action::Hotcue(d, _)
+            | Action::HotcueDelete(d, _)
+            | Action::LoopIn(d)
+            | Action::LoopOut(d)
+            | Action::AutoLoop(d)
+            | Action::LoopHalve(d)
+            | Action::LoopDouble(d)
+            | Action::ReloopExit(d)
+            | Action::Sync(d)
+            | Action::VinylToggle(d)
+            | Action::JogTouch(d)
+            | Action::JogTop(d)
+            | Action::JogRing(d)
+            | Action::JogSearch(d) => Target::Deck(d),
             Action::Crossfader
             | Action::MasterLevel
             | Action::HeadphoneLevel

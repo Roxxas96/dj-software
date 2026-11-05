@@ -2,11 +2,12 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use actions::{
-    Action, ActionKind, ApplyResult, ControlState, Input, Led, Side, StateKey, Target, apply, led,
+    Action, ActionKind, ApplyResult, ControlState, Input, InputKind, Led, Side, StateKey, Target,
+    apply, led,
 };
 use engine::{
-    DeckId, DeckSnapshot, EngineConfig, EngineController, EngineRenderer, TempoRange, TrackBuffer,
-    engine,
+    DeckId, DeckSnapshot, EngineConfig, EngineController, EngineRenderer, HotcueSlot, TempoRange,
+    TrackBuffer, engine,
 };
 
 const SR: u32 = 44_100;
@@ -111,6 +112,34 @@ fn ids_round_trip_for_every_action() {
         "browser.scroll",
         "browser.toggle_focus",
         "deck.load_selected",
+        "deck.hotcue_1",
+        "deck.hotcue_2",
+        "deck.hotcue_3",
+        "deck.hotcue_4",
+        "deck.hotcue_5",
+        "deck.hotcue_6",
+        "deck.hotcue_7",
+        "deck.hotcue_8",
+        "deck.hotcue_delete_1",
+        "deck.hotcue_delete_2",
+        "deck.hotcue_delete_3",
+        "deck.hotcue_delete_4",
+        "deck.hotcue_delete_5",
+        "deck.hotcue_delete_6",
+        "deck.hotcue_delete_7",
+        "deck.hotcue_delete_8",
+        "deck.loop_in",
+        "deck.loop_out",
+        "deck.auto_loop",
+        "deck.loop_halve",
+        "deck.loop_double",
+        "deck.reloop_exit",
+        "deck.sync",
+        "deck.vinyl_toggle",
+        "deck.jog_touch",
+        "deck.jog_top",
+        "deck.jog_ring",
+        "deck.jog_search",
     ];
     let ids: HashSet<_> = ActionKind::ALL.iter().map(|k| k.id()).collect();
     assert_eq!(ids, expected.into_iter().collect::<HashSet<_>>());
@@ -139,7 +168,24 @@ fn ids_round_trip_for_every_action() {
         .into_iter()
         .filter(|k| k.takes_release())
         .collect();
-    assert_eq!(with_release, [ActionKind::Cue, ActionKind::Shift]);
+    assert_eq!(ActionKind::ALL.len(), 57);
+    let hotcue = |n| ActionKind::Hotcue(HotcueSlot::new(n).unwrap());
+    let mut expected_release = vec![ActionKind::Cue, ActionKind::Shift];
+    expected_release.extend((1..=8).map(hotcue));
+    expected_release.push(ActionKind::JogTouch);
+    assert_eq!(
+        with_release.iter().collect::<HashSet<_>>(),
+        expected_release.iter().collect::<HashSet<_>>()
+    );
+    assert_eq!(with_release.len(), 11);
+    for kind in [
+        ActionKind::JogTop,
+        ActionKind::JogRing,
+        ActionKind::JogSearch,
+    ] {
+        assert!(kind.accepts(InputKind::Relative));
+        assert!(!kind.accepts(InputKind::Button));
+    }
     assert_eq!(Action::from_id("deck.nope"), None);
     assert_eq!(Action::from_id(""), None);
 }
@@ -560,6 +606,10 @@ fn any_action(kind: ActionKind) -> Action {
 fn accepts_matches_what_apply_does() {
     use actions::InputKind;
     for kind in ActionKind::ALL {
+        // `deck.sync` takes buttons but does nothing until the engine supports it.
+        if kind == ActionKind::Sync {
+            continue;
+        }
         for input in [Input::Press, Input::Absolute(0.25), Input::Relative(1)] {
             let mut rig = Rig::new();
             let result = rig.apply(any_action(kind), input);
@@ -569,10 +619,16 @@ fn accepts_matches_what_apply_does() {
                 "{kind:?} {input:?} -> {result:?}"
             );
         }
-        // `browser.scroll` is the only action that takes relative steps.
+        // `browser.scroll` and the jog wheel actions are the ones that take relative steps.
         assert_eq!(
             kind.accepts(InputKind::Relative),
-            kind == ActionKind::BrowserScroll,
+            matches!(
+                kind,
+                ActionKind::BrowserScroll
+                    | ActionKind::JogTop
+                    | ActionKind::JogRing
+                    | ActionKind::JogSearch
+            ),
             "{kind:?}"
         );
         assert_eq!(kind.is_absolute(), kind.accepts(InputKind::Absolute));
@@ -708,4 +764,150 @@ fn docs_list_every_action_id() {
             key.id()
         );
     }
+}
+
+#[test]
+fn hotcue_ids_outside_1_to_8_are_unknown() {
+    assert_eq!(ActionKind::from_id("deck.hotcue_0"), None);
+    assert_eq!(ActionKind::from_id("deck.hotcue_9"), None);
+    assert_eq!(ActionKind::from_id("deck.hotcue_delete_0"), None);
+    assert_eq!(ActionKind::from_id("deck.hotcue_delete_9"), None);
+    let three = ActionKind::from_id("deck.hotcue_3").unwrap();
+    assert_eq!(three, ActionKind::Hotcue(HotcueSlot::new(3).unwrap()));
+}
+
+fn slot(n: u8) -> HotcueSlot {
+    HotcueSlot::new(n).unwrap()
+}
+
+#[test]
+fn hotcue_actions_send_slot_commands() {
+    let mut rig = Rig::new();
+    for n in [1, 8] {
+        let pad = Action::new(ActionKind::Hotcue(slot(n)), Target::Deck(d(0))).unwrap();
+        rig.render(1000);
+        let at = rig.c.deck(d(0)).position_frames;
+        // Press on an empty pad sets it at the playhead; release is sent too.
+        assert_eq!(rig.apply(pad, Input::Press), ApplyResult::Sent(1));
+        assert_eq!(rig.c.deck(d(0)).hotcues[slot(n).index()], Some(at));
+        assert_eq!(rig.apply(pad, Input::Release), ApplyResult::Sent(1));
+    }
+    let snap = rig.c.deck(d(0));
+    assert!(snap.hotcues[0].is_some() && snap.hotcues[7].is_some());
+    assert!(snap.hotcues[1..7].iter().all(Option::is_none));
+
+    let delete = Action::new(ActionKind::HotcueDelete(slot(8)), Target::Deck(d(0))).unwrap();
+    assert_eq!(rig.apply(delete, Input::Press), ApplyResult::Sent(1));
+    let snap = rig.c.deck(d(0));
+    assert!(snap.hotcues[0].is_some());
+    assert_eq!(snap.hotcues[7], None);
+    assert_eq!(rig.apply(delete, Input::Release), ApplyResult::Ignored);
+}
+
+#[test]
+fn loop_actions_send_commands() {
+    let mut rig = Rig::new();
+    let act = |kind| deck_action(kind, 0);
+    assert_eq!(
+        rig.apply(act(ActionKind::LoopIn), Input::Press),
+        ApplyResult::Sent(1)
+    );
+    let start = rig.c.deck(d(0)).position_frames;
+    assert_eq!(rig.c.deck(d(0)).loop_in, Some(start));
+    rig.apply(act(ActionKind::PlayPause), Input::Press);
+    rig.render(4000);
+    assert_eq!(
+        rig.apply(act(ActionKind::LoopOut), Input::Press),
+        ApplyResult::Sent(1)
+    );
+    let snap = rig.c.deck(d(0));
+    assert!(snap.loop_active);
+    let length = snap.loop_out.unwrap() - start;
+
+    assert_eq!(
+        rig.apply(act(ActionKind::LoopHalve), Input::Press),
+        ApplyResult::Sent(1)
+    );
+    let halved = rig.c.deck(d(0)).loop_out.unwrap() - start;
+    assert!((halved - length / 2.0).abs() < 1.0, "{halved} vs {length}");
+    assert_eq!(
+        rig.apply(act(ActionKind::LoopDouble), Input::Press),
+        ApplyResult::Sent(1)
+    );
+    let doubled = rig.c.deck(d(0)).loop_out.unwrap() - start;
+    assert!((doubled - length).abs() < 1.0);
+
+    assert_eq!(
+        rig.apply(act(ActionKind::ReloopExit), Input::Press),
+        ApplyResult::Sent(1)
+    );
+    assert!(!rig.c.deck(d(0)).loop_active);
+    rig.apply(act(ActionKind::ReloopExit), Input::Press);
+    assert!(rig.c.deck(d(0)).loop_active);
+
+    // No grid: an auto loop has nothing to size from, but the command is still sent.
+    assert_eq!(
+        rig.apply(act(ActionKind::AutoLoop), Input::Press),
+        ApplyResult::Sent(1)
+    );
+    assert_eq!(
+        rig.apply(act(ActionKind::LoopIn), Input::Release),
+        ApplyResult::Ignored
+    );
+}
+
+#[test]
+fn vinyl_toggle_reads_the_snapshot() {
+    let mut rig = Rig::new();
+    let vinyl = deck_action(ActionKind::VinylToggle, 0);
+    let was = rig.c.deck(d(0)).vinyl;
+    assert_eq!(rig.apply(vinyl, Input::Press), ApplyResult::Sent(1));
+    assert_eq!(rig.c.deck(d(0)).vinyl, !was);
+    assert_eq!(rig.apply(vinyl, Input::Press), ApplyResult::Sent(1));
+    assert_eq!(rig.c.deck(d(0)).vinyl, was);
+}
+
+#[test]
+fn jog_touch_follows_press_and_release() {
+    let mut rig = Rig::new();
+    let touch = deck_action(ActionKind::JogTouch, 0);
+    assert_eq!(rig.apply(touch, Input::Press), ApplyResult::Sent(1));
+    assert!(rig.c.deck(d(0)).jog_touched);
+    assert_eq!(rig.apply(touch, Input::Release), ApplyResult::Sent(1));
+    assert!(!rig.c.deck(d(0)).jog_touched);
+}
+
+#[test]
+fn jog_steps_become_turns() {
+    // A paused deck moves 1.8 s of track per turn, search 10 s.
+    let one_turn = 1.8 * f64::from(SR);
+    let moved = |kind, steps, per_turn: Option<u16>| {
+        let mut rig = Rig::new();
+        if let Some(per_turn) = per_turn {
+            rig.state.jog_steps_per_turn = per_turn;
+        }
+        assert_eq!(
+            rig.apply(deck_action(kind, 0), Input::Relative(steps)),
+            ApplyResult::Sent(1)
+        );
+        rig.c.deck(d(0)).position_frames
+    };
+    assert_eq!(ControlState::default().jog_steps_per_turn, 720);
+    for kind in [ActionKind::JogTop, ActionKind::JogRing] {
+        assert!((moved(kind, 720, None) - one_turn).abs() < 1.0);
+        assert!((moved(kind, 360, Some(360)) - one_turn).abs() < 1.0);
+        assert!((moved(kind, 360, None) - one_turn / 2.0).abs() < 1.0);
+    }
+    // 72 steps is a tenth of a turn: 1 s of search.
+    assert!((moved(ActionKind::JogSearch, 72, None) - f64::from(SR)).abs() < 1.0);
+    assert!((moved(ActionKind::JogSearch, 36, Some(360)) - f64::from(SR)).abs() < 1.0);
+}
+
+#[test]
+fn sync_is_ignored_until_the_engine_supports_it() {
+    let mut rig = Rig::new();
+    assert_eq!(
+        rig.apply(deck_action(ActionKind::Sync, 0), Input::Press),
+        ApplyResult::Ignored
+    );
 }

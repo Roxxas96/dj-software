@@ -57,7 +57,13 @@ pub struct ControlState {
     pub headphone_mix: f32,
     /// The headphones hear the master rather than the cue bus.
     pub headphone_master: bool,
+    /// Jog wheel steps that make one turn of the platter. The controller runtime sets it
+    /// from the mapping.
+    pub jog_steps_per_turn: u16,
 }
+
+/// The default [`ControlState::jog_steps_per_turn`].
+const DEFAULT_JOG_STEPS_PER_TURN: u16 = 720;
 
 impl Default for ControlState {
     /// The engine's defaults; the sides show decks 1 and 2 with SHIFT released.
@@ -73,6 +79,7 @@ impl Default for ControlState {
             headphone_level: 0.8,
             headphone_mix: 0.0,
             headphone_master: false,
+            jog_steps_per_turn: DEFAULT_JOG_STEPS_PER_TURN,
         }
     }
 }

@@ -1,5 +1,6 @@
 use engine::{
-    ChannelCommand, Command, DeckCommand, DeckId, EngineController, MasterCommand, TempoRange,
+    ChannelCommand, Command, DeckCommand, DeckId, EngineController, JogSurface, MasterCommand,
+    TempoRange,
 };
 
 use crate::{
@@ -83,6 +84,45 @@ pub fn apply(
         (Action::PlayPause(d), Input::Press) => (deck(d, DeckCommand::TogglePlay), Update::None),
         (Action::Cue(d), Input::Press) => (deck(d, DeckCommand::CuePress), Update::None),
         (Action::Cue(d), Input::Release) => (deck(d, DeckCommand::CueRelease), Update::None),
+        (Action::Hotcue(d, slot), Input::Press) => {
+            (deck(d, DeckCommand::HotcuePress(slot)), Update::None)
+        }
+        (Action::Hotcue(d, slot), Input::Release) => {
+            (deck(d, DeckCommand::HotcueRelease(slot)), Update::None)
+        }
+        (Action::HotcueDelete(d, slot), Input::Press) => {
+            (deck(d, DeckCommand::HotcueDelete(slot)), Update::None)
+        }
+        (Action::LoopIn(d), Input::Press) => (deck(d, DeckCommand::LoopIn), Update::None),
+        (Action::LoopOut(d), Input::Press) => (deck(d, DeckCommand::LoopOut), Update::None),
+        (Action::AutoLoop(d), Input::Press) => (deck(d, DeckCommand::AutoLoop), Update::None),
+        (Action::LoopHalve(d), Input::Press) => (deck(d, DeckCommand::LoopHalve), Update::None),
+        (Action::LoopDouble(d), Input::Press) => (deck(d, DeckCommand::LoopDouble), Update::None),
+        (Action::ReloopExit(d), Input::Press) => (deck(d, DeckCommand::ReloopExit), Update::None),
+        (Action::VinylToggle(d), Input::Press) => {
+            let vinyl = !engine.deck(d).vinyl;
+            (deck(d, DeckCommand::SetVinyl(vinyl)), Update::None)
+        }
+        (Action::JogTouch(d), Input::Press | Input::Release) => (
+            deck(d, DeckCommand::JogTouch(input == Input::Press)),
+            Update::None,
+        ),
+        (Action::JogTop(d), Input::Relative(steps)) => {
+            let turns = turns(state, steps);
+            let surface = JogSurface::Top;
+            (deck(d, DeckCommand::Jog { turns, surface }), Update::None)
+        }
+        (Action::JogRing(d), Input::Relative(steps)) => {
+            let turns = turns(state, steps);
+            let surface = JogSurface::Ring;
+            (deck(d, DeckCommand::Jog { turns, surface }), Update::None)
+        }
+        (Action::JogSearch(d), Input::Relative(steps)) => {
+            let turns = turns(state, steps);
+            (deck(d, DeckCommand::JogSearch { turns }), Update::None)
+        }
+        // Beat sync is not in the engine yet.
+        (Action::Sync(_), _) => return ApplyResult::Ignored,
         (Action::TempoRangeNext(d), Input::Press) => {
             let next = next_range(state.deck(d).tempo_range);
             (
@@ -147,6 +187,11 @@ fn shift_by(state: &ControlState, deck: DeckId, direction: i32) -> GridEditReque
     GridEditRequest::Shift {
         millis: direction * step,
     }
+}
+
+/// `steps` jog wheel steps as turns of the platter.
+fn turns(state: &ControlState, steps: i32) -> f64 {
+    f64::from(steps) / f64::from(state.jog_steps_per_turn.max(1))
 }
 
 fn deck(id: DeckId, cmd: DeckCommand) -> Command {
