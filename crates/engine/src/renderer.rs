@@ -65,6 +65,7 @@ impl EngineRenderer {
         let chunk = self.config.max_block_frames * 2;
         let mut meters = Meters::default();
         for (master, headphones) in master.chunks_mut(chunk).zip(headphones.chunks_mut(chunk)) {
+            self.resolve_pending_syncs();
             let inputs = self.mixer.inputs(master.len());
             for (deck, input) in self.decks.iter_mut().zip(inputs) {
                 deck.render_add(input, self.config.sample_rate);
@@ -82,9 +83,62 @@ impl EngineRenderer {
                 if let Some(old) = self.decks[id.index()].apply(cmd) {
                     self.discard(old);
                 }
+                self.drop_syncs_to_stopped_master(id);
             }
+            Command::PhaseSync {
+                deck,
+                master,
+                beat_ratio,
+            } => self.phase_sync(deck, master, beat_ratio),
             Command::Channel(id, cmd) => self.mixer.apply_channel(id, cmd),
             Command::Master(cmd) => self.mixer.apply_master(cmd),
+        }
+    }
+
+    fn phase_sync(&mut self, deck: DeckId, master: DeckId, beat_ratio: f64) {
+        if deck == master || !beat_ratio.is_finite() || beat_ratio <= 0.0 {
+            return;
+        }
+        let Some((grid, position)) = self.decks[master.index()].phase_source() else {
+            return;
+        };
+        self.decks[deck.index()].phase_sync(
+            master,
+            beat_ratio,
+            grid.beats_at(position) * beat_ratio,
+        );
+    }
+
+    /// Drops the pending syncs that follow `master` once it is no longer playing. Checked
+    /// after each command so a stop followed by a play in the same batch still counts.
+    fn drop_syncs_to_stopped_master(&mut self, master: DeckId) {
+        if self.decks[master.index()].phase_source().is_some() {
+            return;
+        }
+        for deck in &mut self.decks {
+            if deck.pending_sync().is_some_and(|(id, _)| id == master) {
+                deck.drop_pending_sync();
+            }
+        }
+    }
+
+    /// Before a chunk renders: aligns the decks that started playing with a pending sync
+    /// against their master's position now, and drops the syncs whose master cannot be
+    /// followed any more.
+    fn resolve_pending_syncs(&mut self) {
+        for id in DeckId::ALL {
+            let Some((master, ratio)) = self.decks[id.index()].pending_sync() else {
+                continue;
+            };
+            let Some((grid, position)) = self.decks[master.index()].phase_source() else {
+                self.decks[id.index()].drop_pending_sync();
+                continue;
+            };
+            let deck = &mut self.decks[id.index()];
+            if deck.is_playing() {
+                deck.drop_pending_sync();
+                deck.align_phase(grid.beats_at(position) * ratio);
+            }
         }
     }
 

@@ -8,6 +8,20 @@ pub enum Command {
     Deck(DeckId, DeckCommand),
     Channel(DeckId, ChannelCommand),
     Master(MasterCommand),
+    /// Aligns `deck`'s beat phase to `master`'s: moves the playhead by the smallest amount, at
+    /// most half a beat, so that the fraction of its beat position equals the fraction of the
+    /// master's beat position times `beat_ratio` (the deck's beats per master beat: 1, 2 or
+    /// 0.5). Needs both grids, both decks loaded, the master playing and `deck != master`.
+    ///
+    /// A paused deck remembers the request and aligns in the first block where it plays,
+    /// against the master's position then. That pending alignment is dropped by `Load`,
+    /// `Seek`, a hotcue jump, `SetGrid` and when the master stops. A `beat_ratio` that is not
+    /// finite and positive does nothing.
+    PhaseSync {
+        deck: DeckId,
+        master: DeckId,
+        beat_ratio: f64,
+    },
 }
 
 #[derive(Debug, Clone)]
