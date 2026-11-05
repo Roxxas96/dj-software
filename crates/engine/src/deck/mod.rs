@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 mod hotcue;
+mod looping;
 
 use crate::{DeckCommand, DeckSnapshot, Grid, HOTCUES, TempoRange, TrackBuffer};
 
@@ -21,6 +22,11 @@ pub(crate) struct Deck {
     tempo_range: TempoRange,
     hotcues: [Option<f64>; HOTCUES],
     grid: Option<Grid>,
+    loop_in: Option<f64>,
+    loop_out: Option<f64>,
+    loop_active: bool,
+    /// Length in beats of the next auto loop.
+    loop_beats: f64,
 }
 
 impl Default for Deck {
@@ -36,6 +42,10 @@ impl Default for Deck {
             tempo_range: TempoRange::default(),
             hotcues: [None; HOTCUES],
             grid: None,
+            loop_in: None,
+            loop_out: None,
+            loop_active: false,
+            loop_beats: looping::DEFAULT_LOOP_BEATS,
         }
     }
 }
@@ -91,6 +101,12 @@ impl Deck {
             DeckCommand::SetHotcue(slot, Some(frames)) if frames.is_finite() => {
                 self.hotcue_set(slot, Some(frames));
             }
+            DeckCommand::LoopIn => self.loop_in_press(),
+            DeckCommand::LoopOut => self.loop_out_press(),
+            DeckCommand::AutoLoop => self.auto_loop(),
+            DeckCommand::LoopHalve => self.loop_resize(0.5),
+            DeckCommand::LoopDouble => self.loop_resize(2.0),
+            DeckCommand::ReloopExit => self.reloop_exit(),
             DeckCommand::SetTempoSlider(_)
             | DeckCommand::Seek(_)
             | DeckCommand::SetCue(_)
@@ -108,6 +124,9 @@ impl Deck {
         self.cue = 0.0;
         self.hotcues = [None; HOTCUES];
         self.grid = None;
+        self.loop_in = None;
+        self.loop_out = None;
+        self.loop_active = false;
     }
 
     fn play(&mut self) {
@@ -189,7 +208,10 @@ impl Deck {
         let rate =
             self.tempo_ratio() * f64::from(track.sample_rate()) / f64::from(output_sample_rate);
 
+        let bounds = self.active_loop();
+
         for frame in out.as_chunks_mut::<2>().0 {
+            self.position = looping::wrap_position(self.position, bounds, rate);
             if self.position >= end {
                 self.position = end;
                 self.pause();
@@ -219,11 +241,11 @@ impl Deck {
             previewing: self.preview.is_some(),
             grid: self.grid,
             hotcues: self.hotcues,
-            // Filled in by the loop and jog behavior.
-            loop_in: None,
-            loop_out: None,
-            loop_active: false,
-            loop_beats: 4.0,
+            loop_in: self.loop_in,
+            loop_out: self.loop_out,
+            loop_active: self.loop_active,
+            loop_beats: self.loop_beats,
+            // Filled in by the jog behavior.
             vinyl: true,
             jog_touched: false,
         }
