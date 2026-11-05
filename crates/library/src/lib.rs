@@ -87,6 +87,8 @@ pub enum LibraryError {
     NoSuchTrack(i64),
     #[error("{0} is not a valid cue point: it must be finite and not negative")]
     InvalidCue(f64),
+    #[error("{0} is not a hotcue slot: slots are 1 to 8")]
+    InvalidHotcueSlot(u8),
     #[error("position {position} is out of range (the playlist has {len} entries)")]
     PositionOutOfRange { position: usize, len: usize },
     #[error("track {0}'s audio changed while it was being analyzed; analyze it again")]
