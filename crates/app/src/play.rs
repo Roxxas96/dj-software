@@ -63,6 +63,7 @@ pub struct PlayArgs {
     pub deck4: Option<PathBuf>,
     /// Library mode: browse and load library tracks from the controller (or the
     /// console's `load`), analyze new tracks in the background and remember cue points
+    /// and hotcues
     #[arg(long, requires = "controller")]
     pub library: bool,
     /// Library database file for --library (default: library.sqlite3 in the per-user
@@ -155,16 +156,33 @@ fn format_time(seconds: f64) -> String {
     format!("{:02}:{:02}", total / 60, total % 60)
 }
 
+/// A deck's time, then `loop N` while it loops and `vinyl off` when its jog only nudges.
 pub(crate) fn deck_line(deck: DeckId, snapshot: &DeckSnapshot) -> String {
     let rate = f64::from(snapshot.track_sample_rate.max(1));
     let duration = snapshot.duration_frames as f64 / rate;
     let position = (snapshot.position_frames / rate).min(duration);
-    format!(
+    let mut line = format!(
         "Deck {}  {} / {}",
         deck.index() + 1,
         format_time(position),
         format_time(duration)
-    )
+    );
+    if snapshot.loop_active {
+        line.push_str(&format!("  loop {}", loop_text(snapshot.loop_beats)));
+    }
+    if !snapshot.vinyl {
+        line.push_str("  vinyl off");
+    }
+    line
+}
+
+/// A loop length in beats: `4`, or `1/4` for a loop shorter than a beat.
+fn loop_text(beats: f64) -> String {
+    if beats >= 1.0 {
+        format!("{}", beats.round())
+    } else {
+        format!("1/{}", (1.0 / beats).round())
+    }
 }
 
 /// The status line with a controller: every loaded deck, playing ones marked with `>`.
@@ -668,6 +686,54 @@ mod tests {
         );
         assert!(reconnect_message(PresenceChange::Lost, "on request").contains("waiting"));
         assert!(reconnect_message(PresenceChange::None, "on request").contains("not found"));
+    }
+
+    #[test]
+    fn deck_line_shows_the_loop_and_vinyl_off() {
+        let deck = DeckId::new(0).unwrap();
+        let snapshot = DeckSnapshot {
+            loaded: true,
+            position_frames: 44_100.0 * 65.0,
+            duration_frames: 44_100 * 200,
+            track_sample_rate: 44_100,
+            ..DeckSnapshot::default()
+        };
+        let looping = |beats| DeckSnapshot {
+            loop_active: true,
+            loop_beats: beats,
+            ..snapshot
+        };
+        assert_eq!(
+            deck_line(deck, &looping(4.0)),
+            "Deck 1  01:05 / 03:20  loop 4"
+        );
+        assert_eq!(
+            deck_line(deck, &looping(64.0)),
+            "Deck 1  01:05 / 03:20  loop 64"
+        );
+        assert_eq!(
+            deck_line(deck, &looping(0.25)),
+            "Deck 1  01:05 / 03:20  loop 1/4"
+        );
+        assert_eq!(
+            deck_line(deck, &looping(1.0 / 32.0)),
+            "Deck 1  01:05 / 03:20  loop 1/32"
+        );
+        // A set loop that is not active is not shown.
+        let inactive = DeckSnapshot {
+            loop_in: Some(0.0),
+            loop_out: Some(100.0),
+            ..snapshot
+        };
+        assert_eq!(deck_line(deck, &inactive), "Deck 1  01:05 / 03:20");
+        let vinyl_off = DeckSnapshot {
+            vinyl: false,
+            ..looping(2.0)
+        };
+        assert_eq!(
+            deck_line(deck, &vinyl_off),
+            "Deck 1  01:05 / 03:20  loop 2  vinyl off"
+        );
     }
 
     #[test]
