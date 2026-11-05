@@ -74,12 +74,14 @@ pub struct Beatgrid {
 
 /// Applies `edit` to track `track`'s grid inside `tx`. A [`GridEdit::Tap`] here only makes
 /// sure the analysis row exists ([`Library::edit_grid`] has already turned a tap that
-/// gives a BPM into [`GridEdit::SetBpm`]).
+/// gives a BPM into [`GridEdit::SetBpm`]). Beat periods use `decoded_rate` (the decoded
+/// track's rate) when given, else the rate from the track's tags.
 pub(crate) fn apply(
     tx: &Transaction<'_>,
     track: i64,
     edit: GridEdit,
     playhead_frames: Option<f64>,
+    decoded_rate: Option<u32>,
 ) -> Result<WriteOutcome, LibraryError> {
     let row: Option<(Option<u32>, Option<Beatgrid>)> = tx
         .query_row(
@@ -97,7 +99,7 @@ pub(crate) fn apply(
             },
         )
         .optional()?;
-    let Some((sample_rate, current)) = row else {
+    let Some((tag_rate, current)) = row else {
         return Err(LibraryError::NoSuchTrack(track));
     };
     let exists = current.is_some();
@@ -106,6 +108,7 @@ pub(crate) fn apply(
         first_beat_frames: None,
         grid_locked: false,
     });
+    let sample_rate = decoded_rate.filter(|&r| r > 0).or(tag_rate);
     let new = edited(current, sample_rate, edit, playhead_frames)?;
     if exists && new == current {
         return Ok(WriteOutcome::Grid(new));
@@ -294,6 +297,22 @@ impl Library {
         edit: GridEdit,
         playhead_frames: Option<f64>,
     ) -> Result<Beatgrid, LibraryError> {
+        self.edit_grid_at_rate(track, edit, playhead_frames, None)
+    }
+
+    /// [`Library::edit_grid`] with the decoded track's `sample_rate`, used for beat
+    /// periods instead of the rate from the tags (which is the fallback when `None`).
+    ///
+    /// # Errors
+    ///
+    /// As [`Library::edit_grid`]; the sample rate is unknown only when neither is known.
+    pub fn edit_grid_at_rate(
+        &self,
+        track: i64,
+        edit: GridEdit,
+        playhead_frames: Option<f64>,
+        sample_rate: Option<u32>,
+    ) -> Result<Beatgrid, LibraryError> {
         let edit = match edit {
             GridEdit::Tap { at_micros } => self
                 .taps
@@ -305,6 +324,7 @@ impl Library {
             track,
             edit,
             playhead_frames,
+            sample_rate,
         })? {
             WriteOutcome::Grid(grid) => Ok(grid),
             // `EditGrid` always reports its grid.

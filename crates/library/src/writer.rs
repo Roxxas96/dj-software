@@ -59,7 +59,10 @@ pub enum WriteOp {
     /// `first_beat_frames` are kept and the ones given here are ignored. Fails with
     /// [`LibraryError::TrackChanged`] when the track's fingerprint is no longer
     /// `fingerprint` (its audio changed while it was being analyzed) and with
-    /// [`LibraryError::NoSuchTrack`] when the track is gone, storing nothing.
+    /// [`LibraryError::NoSuchTrack`] when the track is gone, storing nothing. When the
+    /// fingerprint matches but the file's size or mtime is no longer
+    /// [`StoreAnalysis::file`] (it changed after its audio was read, say a copy that
+    /// completed), the analysis is stored with analyzer version 0, to be redone.
     StoreAnalysis(Box<StoreAnalysis>),
     /// Applies a manual edit to track `track`'s beatgrid, reading the current grid in the
     /// same transaction (see [`crate::GridEdit`] for what each edit does). Creates the
@@ -67,11 +70,13 @@ pub enum WriteOp {
     /// is refused and [`LibraryError::NoSuchTrack`] when the track is gone, changing
     /// nothing. Reports the resulting grid as [`WriteOutcome::Grid`]. A [`GridEdit::Tap`]
     /// here only creates the row: tap tempo keeps its taps in the [`crate::Library`], so
-    /// use [`crate::Library::edit_grid`] for taps.
+    /// use [`crate::Library::edit_grid`] for taps. `sample_rate` is the decoded track's
+    /// rate when known; it is preferred over the rate read from the tags.
     EditGrid {
         track: i64,
         edit: GridEdit,
         playhead_frames: Option<f64>,
+        sample_rate: Option<u32>,
     },
     /// Stores `frames` (at the track's native sample rate) as track `track`'s cue point,
     /// replacing any previous one. Fails with [`LibraryError::InvalidCue`] when `frames` is
@@ -123,12 +128,21 @@ pub enum WriteOp {
     },
 }
 
+/// A track file's size and modification time as stored by the last scan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileStamp {
+    pub size: Option<i64>,
+    pub mtime: Option<i64>,
+}
+
 /// The payload of [`WriteOp::StoreAnalysis`].
 #[derive(Clone, PartialEq)]
 pub struct StoreAnalysis {
     pub track_id: i64,
     /// The track's fingerprint when its audio was read.
     pub fingerprint: Vec<u8>,
+    /// The track's size and mtime when its audio was read; `None` skips that check.
+    pub file: Option<FileStamp>,
     pub analyzer_version: u32,
     pub bpm: Option<f64>,
     pub first_beat_frames: Option<f64>,
@@ -144,6 +158,7 @@ impl std::fmt::Debug for StoreAnalysis {
         f.debug_struct("StoreAnalysis")
             .field("track_id", &self.track_id)
             .field("fingerprint_len", &self.fingerprint.len())
+            .field("file", &self.file)
             .field("analyzer_version", &self.analyzer_version)
             .field("bpm", &self.bpm)
             .field("first_beat_frames", &self.first_beat_frames)
@@ -433,7 +448,8 @@ fn apply(tx: &Transaction<'_>, op: &WriteOp) -> Result<WriteOutcome, LibraryErro
             track,
             edit,
             playhead_frames,
-        } => grid::apply(tx, *track, *edit, *playhead_frames),
+            sample_rate,
+        } => grid::apply(tx, *track, *edit, *playhead_frames, *sample_rate),
         WriteOp::SetCue { track, frames } => {
             cues::set(tx, *track, *frames)?;
             Ok(WriteOutcome::Done)
@@ -480,18 +496,31 @@ fn apply(tx: &Transaction<'_>, op: &WriteOp) -> Result<WriteOutcome, LibraryErro
 }
 
 fn store_analysis(tx: &Transaction<'_>, a: &StoreAnalysis) -> Result<(), LibraryError> {
-    let fingerprint: Option<Vec<u8>> = tx
+    let stored: Option<(Vec<u8>, FileStamp)> = tx
         .query_row(
-            "SELECT fingerprint FROM tracks WHERE id = ?1",
+            "SELECT fingerprint, size, mtime FROM tracks WHERE id = ?1",
             [a.track_id],
-            |r| r.get(0),
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    FileStamp {
+                        size: r.get(1)?,
+                        mtime: r.get(2)?,
+                    },
+                ))
+            },
         )
         .optional()?;
-    match fingerprint {
+    let version = match stored {
         None => return Err(LibraryError::NoSuchTrack(a.track_id)),
-        Some(f) if f != a.fingerprint => return Err(LibraryError::TrackChanged(a.track_id)),
-        Some(_) => {}
-    }
+        Some((f, _)) if f != a.fingerprint => {
+            return Err(LibraryError::TrackChanged(a.track_id));
+        }
+        // Same first seconds, but the file changed since it was read: keep this
+        // analysis for now and redo it.
+        Some((_, stamp)) if a.file.is_some_and(|read| read != stamp) => 0,
+        Some(_) => a.analyzer_version,
+    };
     tx.execute(
         "INSERT INTO analysis(track_id, analyzer_version, bpm, first_beat_frames, \
                               grid_locked, key, waveform, analyzed_at) \
@@ -506,7 +535,7 @@ fn store_analysis(tx: &Transaction<'_>, a: &StoreAnalysis) -> Result<(), Library
              analyzed_at = excluded.analyzed_at",
         rusqlite::params![
             a.track_id,
-            a.analyzer_version,
+            version,
             a.bpm,
             a.first_beat_frames,
             a.key,
