@@ -128,6 +128,10 @@ pub enum ActionKind {
     Sync,
     VinylToggle,
     JogTouch,
+    /// Ends a jog touch without ever starting one: both press and release let go. Bound
+    /// to the touch note a controller sends with SHIFT held, so a SHIFT search stays
+    /// audible while a touch begun without SHIFT still ends.
+    JogRelease,
     JogTop,
     JogRing,
     JogSearch,
@@ -159,8 +163,8 @@ const HOTCUE_DELETE_IDS: [&str; 8] = [
 
 impl ActionKind {
     /// Every kind: both hotcue families once per slot.
-    pub const ALL: [ActionKind; 57] = {
-        let mut all = [ActionKind::PlayPause; 57];
+    pub const ALL: [ActionKind; 58] = {
+        let mut all = [ActionKind::PlayPause; 58];
         let fixed = [
             ActionKind::PlayPause,
             ActionKind::Cue,
@@ -200,6 +204,7 @@ impl ActionKind {
             ActionKind::Sync,
             ActionKind::VinylToggle,
             ActionKind::JogTouch,
+            ActionKind::JogRelease,
             ActionKind::JogTop,
             ActionKind::JogRing,
             ActionKind::JogSearch,
@@ -261,6 +266,7 @@ impl ActionKind {
             ActionKind::Sync => "deck.sync",
             ActionKind::VinylToggle => "deck.vinyl_toggle",
             ActionKind::JogTouch => "deck.jog_touch",
+            ActionKind::JogRelease => "deck.jog_release",
             ActionKind::JogTop => "deck.jog_top",
             ActionKind::JogRing => "deck.jog_ring",
             ActionKind::JogSearch => "deck.jog_search",
@@ -302,6 +308,7 @@ impl ActionKind {
             | ActionKind::Sync
             | ActionKind::VinylToggle
             | ActionKind::JogTouch
+            | ActionKind::JogRelease
             | ActionKind::JogTop
             | ActionKind::JogRing
             | ActionKind::JogSearch
@@ -356,11 +363,21 @@ impl ActionKind {
         self.accepts(InputKind::Absolute)
     }
 
-    /// Whether this action reacts to [`Input::Release`] as well as [`Input::Press`].
+    /// Whether this action reacts to [`Input::Release`] as well as [`Input::Press`]. The
+    /// releases of `deck.hotcue_delete_N` and `deck.return_to_start` end the hold of their
+    /// unshifted siblings (`deck.hotcue_N`, `deck.cue`), since a controller that sends a
+    /// different note with SHIFT held sends the note-off there when SHIFT goes down
+    /// during the hold.
     pub fn takes_release(self) -> bool {
         matches!(
             self,
-            ActionKind::Cue | ActionKind::Shift | ActionKind::Hotcue(_) | ActionKind::JogTouch
+            ActionKind::Cue
+                | ActionKind::Shift
+                | ActionKind::ReturnToStart
+                | ActionKind::HotcueDelete(_)
+                | ActionKind::Hotcue(_)
+                | ActionKind::JogTouch
+                | ActionKind::JogRelease
         )
     }
 }
@@ -408,6 +425,7 @@ pub enum Action {
     Sync(DeckId),
     VinylToggle(DeckId),
     JogTouch(DeckId),
+    JogRelease(DeckId),
     JogTop(DeckId),
     JogRing(DeckId),
     JogSearch(DeckId),
@@ -458,6 +476,7 @@ impl Action {
             (K::Sync, Target::Deck(d)) => Action::Sync(d),
             (K::VinylToggle, Target::Deck(d)) => Action::VinylToggle(d),
             (K::JogTouch, Target::Deck(d)) => Action::JogTouch(d),
+            (K::JogRelease, Target::Deck(d)) => Action::JogRelease(d),
             (K::JogTop, Target::Deck(d)) => Action::JogTop(d),
             (K::JogRing, Target::Deck(d)) => Action::JogRing(d),
             (K::JogSearch, Target::Deck(d)) => Action::JogSearch(d),
@@ -517,6 +536,7 @@ impl Action {
             Action::Sync(_) => ActionKind::Sync,
             Action::VinylToggle(_) => ActionKind::VinylToggle,
             Action::JogTouch(_) => ActionKind::JogTouch,
+            Action::JogRelease(_) => ActionKind::JogRelease,
             Action::JogTop(_) => ActionKind::JogTop,
             Action::JogRing(_) => ActionKind::JogRing,
             Action::JogSearch(_) => ActionKind::JogSearch,
@@ -556,6 +576,7 @@ impl Action {
             | Action::Sync(d)
             | Action::VinylToggle(d)
             | Action::JogTouch(d)
+            | Action::JogRelease(d)
             | Action::JogTop(d)
             | Action::JogRing(d)
             | Action::JogSearch(d) => Target::Deck(d),

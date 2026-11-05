@@ -1042,14 +1042,14 @@ fn shift_jog_searches() {
     let back = rig.engine.deck(d(1)).position_frames;
     assert!((back - at).abs() < 1_000.0, "back at {back}");
 
-    // The touch SHIFT turns into note 0x67 still reaches the jog touch, so a touch that
-    // ends with SHIFT held pairs with the one that started without it.
+    // The touch SHIFT turns into note 0x67 still ends the jog touch, so a touch that ends
+    // with SHIFT held pairs with the one that started without it.
     rig.button("deck1.jog_touch", 127);
     assert!(rig.engine.deck(d(1)).jog_touched);
     let range = rig.control("deck1.jog_top.shift").messages[0];
     assert_eq!(range.data1, 0x67);
     let (actions, _) = rig.batch(&[note(range.status & 0x0F, range.data1, 0)]);
-    assert_eq!(actions, [Action::JogTouch(d(1))]);
+    assert_eq!(actions, [Action::JogRelease(d(1))]);
     assert!(!rig.engine.deck(d(1)).jog_touched);
 
     // Searching also works while playing.
@@ -1057,4 +1057,86 @@ fn shift_jog_searches() {
     let before = rig.engine.deck(d(1)).position_frames;
     rig.jog("deck1.jog_top.shift", 0x1F, 72, true);
     assert!(rig.engine.deck(d(1)).position_frames > before + 40_000.0);
+}
+
+#[test]
+fn shift_touch_search_keeps_a_playing_deck_playing() {
+    let mut rig = Rig::attached();
+    rig.press("deck1.play");
+    assert!(
+        rig.engine.deck(d(1)).vinyl,
+        "vinyl mode is on, so a touch would scratch"
+    );
+    let shift_touch = rig.control("deck1.jog_top.shift").messages[0];
+    let (channel, touch) = (shift_touch.status & 0x0F, shift_touch.data1);
+
+    // SHIFT held, then the hand on the top (note 0x67): no scratch hold starts.
+    rig.button("deck1.shift", 127);
+    let (actions, _) = rig.batch(&[note(channel, touch, 127)]);
+    assert_eq!(actions, [Action::JogRelease(d(1))]);
+    let snap = rig.engine.deck(d(1));
+    assert!(!snap.jog_touched && snap.playing);
+
+    // Search turns move the playhead, and the deck keeps playing between them.
+    let before = rig.engine.deck(d(1)).position_frames;
+    let actions = rig.jog("deck1.jog_top.shift", 0x1F, 72, true);
+    assert_eq!(actions, [Action::JogSearch(d(1)); 72]);
+    let searched = rig.engine.deck(d(1)).position_frames;
+    assert!(
+        searched > before + 40_000.0,
+        "searched {before} -> {searched}"
+    );
+    for _ in 0..4 {
+        rig.render();
+    }
+    let after = rig.engine.deck(d(1)).position_frames;
+    assert!(
+        after >= searched + 4.0 * BLOCK as f64 - 1.0,
+        "still playing: {searched} -> {after}"
+    );
+
+    // Letting go (still SHIFT) and releasing SHIFT leave it playing.
+    let (actions, _) = rig.batch(&[note(channel, touch, 0)]);
+    assert_eq!(actions, [Action::JogRelease(d(1))]);
+    rig.button("deck1.shift", 0);
+    let snap = rig.engine.deck(d(1));
+    assert!(!snap.jog_touched && snap.playing);
+}
+
+#[test]
+fn shift_during_a_held_pad_or_cue_still_ends_the_preview() {
+    let mut rig = Rig::attached();
+    rig.deck_command(1, DeckCommand::SetHotcue(slot(1), Some(10_000.0)));
+
+    // Paused, pad 1 held previews; SHIFT goes down and the note-off arrives on the shifted
+    // note (0x08).
+    rig.pad("deck1.pads_hot_cue", 0, 127);
+    assert!(rig.engine.deck(d(1)).previewing);
+    rig.button("deck1.shift", 127);
+    let shifted = rig.control("deck1.pads_hot_cue.shift").messages[0];
+    assert_eq!(shifted.data1, 0x08);
+    let released = rig.pad("deck1.pads_hot_cue.shift", 0, 0);
+    assert_eq!(released, [Action::HotcueDelete(d(1), slot(1))]);
+    let snap = rig.engine.deck(d(1));
+    assert!(!snap.previewing && !snap.playing, "preview ended");
+    assert_eq!(snap.position_frames, 10_000.0, "back at the hotcue");
+    assert_eq!(
+        snap.hotcues[0],
+        Some(10_000.0),
+        "the release deletes nothing"
+    );
+    rig.button("deck1.shift", 0);
+
+    // The same for CUE (0x0C), whose note with SHIFT held is 0x48.
+    rig.button("deck1.cue", 127);
+    rig.button("deck1.cue", 0);
+    rig.button("deck1.cue", 127);
+    assert!(rig.engine.deck(d(1)).previewing, "held CUE previews");
+    rig.button("deck1.shift", 127);
+    let released = rig.button("deck1.cue.shift", 0);
+    assert_eq!(released, [Action::ReturnToStart(d(1))]);
+    let snap = rig.engine.deck(d(1));
+    assert!(!snap.previewing && !snap.playing, "CUE preview ended");
+    assert_eq!(snap.position_frames, 10_000.0, "back at the cue point");
+    rig.button("deck1.shift", 0);
 }

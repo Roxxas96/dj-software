@@ -94,6 +94,11 @@ pub fn apply(
         (Action::HotcueDelete(d, slot), Input::Press) => {
             (deck(d, DeckCommand::HotcueDelete(slot)), Update::None)
         }
+        // A shifted note's release ends its unshifted sibling's hold: SHIFT went down while
+        // the pad or CUE was held, so the note-off arrives on the shifted note.
+        (Action::HotcueDelete(d, slot), Input::Release) => {
+            (deck(d, DeckCommand::HotcueRelease(slot)), Update::None)
+        }
         (Action::LoopIn(d), Input::Press) => (deck(d, DeckCommand::LoopIn), Update::None),
         (Action::LoopOut(d), Input::Press) => (deck(d, DeckCommand::LoopOut), Update::None),
         (Action::AutoLoop(d), Input::Press) => (deck(d, DeckCommand::AutoLoop), Update::None),
@@ -108,6 +113,9 @@ pub fn apply(
             deck(d, DeckCommand::JogTouch(input == Input::Press)),
             Update::None,
         ),
+        (Action::JogRelease(d), Input::Press | Input::Release) => {
+            (deck(d, DeckCommand::JogTouch(false)), Update::None)
+        }
         (Action::JogTop(d), Input::Relative(steps)) => {
             let turns = turns(state, steps);
             let surface = JogSurface::Top;
@@ -131,6 +139,9 @@ pub fn apply(
             )
         }
         (Action::ReturnToStart(d), Input::Press) => (deck(d, DeckCommand::Seek(0.0)), Update::None),
+        (Action::ReturnToStart(d), Input::Release) => {
+            (deck(d, DeckCommand::CueRelease), Update::None)
+        }
         (Action::PflToggle(d), Input::Press) => {
             let on = !state.deck(d).pfl;
             (

@@ -137,6 +137,7 @@ fn ids_round_trip_for_every_action() {
         "deck.sync",
         "deck.vinyl_toggle",
         "deck.jog_touch",
+        "deck.jog_release",
         "deck.jog_top",
         "deck.jog_ring",
         "deck.jog_search",
@@ -168,16 +169,22 @@ fn ids_round_trip_for_every_action() {
         .into_iter()
         .filter(|k| k.takes_release())
         .collect();
-    assert_eq!(ActionKind::ALL.len(), 57);
+    assert_eq!(ActionKind::ALL.len(), 58);
     let hotcue = |n| ActionKind::Hotcue(HotcueSlot::new(n).unwrap());
-    let mut expected_release = vec![ActionKind::Cue, ActionKind::Shift];
+    let hotcue_delete = |n| ActionKind::HotcueDelete(HotcueSlot::new(n).unwrap());
+    let mut expected_release = vec![
+        ActionKind::Cue,
+        ActionKind::Shift,
+        ActionKind::ReturnToStart,
+    ];
     expected_release.extend((1..=8).map(hotcue));
-    expected_release.push(ActionKind::JogTouch);
+    expected_release.extend((1..=8).map(hotcue_delete));
+    expected_release.extend([ActionKind::JogTouch, ActionKind::JogRelease]);
     assert_eq!(
         with_release.iter().collect::<HashSet<_>>(),
         expected_release.iter().collect::<HashSet<_>>()
     );
-    assert_eq!(with_release.len(), 11);
+    assert_eq!(with_release.len(), 21);
     for kind in [
         ActionKind::JogTop,
         ActionKind::JogRing,
@@ -800,7 +807,70 @@ fn hotcue_actions_send_slot_commands() {
     let snap = rig.c.deck(d(0));
     assert!(snap.hotcues[0].is_some());
     assert_eq!(snap.hotcues[7], None);
-    assert_eq!(rig.apply(delete, Input::Release), ApplyResult::Ignored);
+    // Its release ends a preview of the slot (see `shifted_releases_end_the_unshifted_hold`).
+    assert_eq!(rig.apply(delete, Input::Release), ApplyResult::Sent(1));
+}
+
+#[test]
+fn shifted_releases_end_the_unshifted_hold() {
+    // SHIFT pressed during a held pad: the note-off arrives on the shifted note, which is
+    // bound to the delete action. Its release ends the pad's preview.
+    let mut rig = Rig::new();
+    let pad = Action::new(ActionKind::Hotcue(slot(1)), Target::Deck(d(0))).unwrap();
+    let delete = Action::new(ActionKind::HotcueDelete(slot(1)), Target::Deck(d(0))).unwrap();
+    rig.c
+        .send(engine::Command::Deck(
+            d(0),
+            engine::DeckCommand::SetHotcue(slot(1), Some(5_000.0)),
+        ))
+        .unwrap();
+    rig.render(1);
+    assert_eq!(rig.apply(pad, Input::Press), ApplyResult::Sent(1));
+    assert!(rig.c.deck(d(0)).previewing);
+    assert_eq!(rig.apply(delete, Input::Release), ApplyResult::Sent(1));
+    let snap = rig.c.deck(d(0));
+    assert!(!snap.previewing && !snap.playing, "pad preview ended");
+    assert_eq!(snap.position_frames, 5_000.0);
+    assert_eq!(
+        snap.hotcues[0],
+        Some(5_000.0),
+        "the release deletes nothing"
+    );
+
+    // The same for CUE, whose shifted note is bound to return-to-start.
+    let cue = deck_action(ActionKind::Cue, 0);
+    let back = deck_action(ActionKind::ReturnToStart, 0);
+    // Paused away from the cue point, a first press moves the cue point here.
+    rig.apply(cue, Input::Press);
+    rig.apply(cue, Input::Release);
+    assert_eq!(rig.apply(cue, Input::Press), ApplyResult::Sent(1));
+    assert!(rig.c.deck(d(0)).previewing);
+    assert_eq!(rig.apply(back, Input::Release), ApplyResult::Sent(1));
+    let snap = rig.c.deck(d(0));
+    assert!(!snap.previewing && !snap.playing, "CUE preview ended");
+    assert_eq!(
+        snap.position_frames, 5_000.0,
+        "back at the cue point, not the start"
+    );
+
+    // With nothing held the releases change nothing.
+    let before = rig.c.deck(d(0));
+    assert_eq!(rig.apply(delete, Input::Release), ApplyResult::Sent(1));
+    assert_eq!(rig.apply(back, Input::Release), ApplyResult::Sent(1));
+    assert_eq!(rig.c.deck(d(0)), before);
+}
+
+#[test]
+fn takes_release_matches_what_apply_does() {
+    for kind in ActionKind::ALL {
+        let mut rig = Rig::new();
+        let result = rig.apply(any_action(kind), Input::Release);
+        assert_eq!(
+            kind.takes_release(),
+            result != ApplyResult::Ignored,
+            "{kind:?} -> {result:?}"
+        );
+    }
 }
 
 #[test]
@@ -874,6 +944,23 @@ fn jog_touch_follows_press_and_release() {
     assert!(rig.c.deck(d(0)).jog_touched);
     assert_eq!(rig.apply(touch, Input::Release), ApplyResult::Sent(1));
     assert!(!rig.c.deck(d(0)).jog_touched);
+}
+
+#[test]
+fn jog_release_only_releases() {
+    let mut rig = Rig::new();
+    let touch = deck_action(ActionKind::JogTouch, 0);
+    let release = deck_action(ActionKind::JogRelease, 0);
+    // Its press never touches: a touch begun with SHIFT starts no scratch hold.
+    assert_eq!(rig.apply(release, Input::Press), ApplyResult::Sent(1));
+    assert!(!rig.c.deck(d(0)).jog_touched);
+    // Both its press and its release end a touch begun without SHIFT.
+    for input in [Input::Press, Input::Release] {
+        rig.apply(touch, Input::Press);
+        assert!(rig.c.deck(d(0)).jog_touched);
+        assert_eq!(rig.apply(release, input), ApplyResult::Sent(1));
+        assert!(!rig.c.deck(d(0)).jog_touched, "{input:?}");
+    }
 }
 
 #[test]
