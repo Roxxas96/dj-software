@@ -105,7 +105,7 @@ On 2026-11-05 the owner checked the deck controls with their SB3 on macOS:
 - SYNC works: tempo, beat alignment, slider pickup, and sync on a paused deck followed by
   PLAY.
 - The outer-ring nudge lagged by about 1 s when starting and stopping. It was changed from
-  a displacement to a speed bend that fades in 0.1 s. To re-check.
+  a displacement to a speed bend that fades out within about half a second. To re-check.
 
 ## LEDs
 
