@@ -43,6 +43,8 @@ pub enum Job {
         track: i64,
         edit: GridEdit,
         playhead: Option<f64>,
+        /// The decoded track's sample rate, for beat periods.
+        sample_rate: Option<u32>,
     },
 }
 
@@ -187,7 +189,8 @@ fn run(lib: &Library, jobs: &Receiver<Job>, events: &Sender<Event>, decode: Deco
                 track,
                 edit,
                 playhead,
-            } => match lib.edit_grid(track, edit, playhead) {
+                sample_rate,
+            } => match lib.edit_grid_at_rate(track, edit, playhead, sample_rate) {
                 Ok(grid) => {
                     let _ = events.send(Event::Grid { deck, track, grid });
                 }

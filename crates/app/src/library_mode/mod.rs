@@ -270,6 +270,7 @@ impl LibraryMode {
             track: track.row.id,
             edit: grid_edit(edit, rate, playhead),
             playhead: Some(playhead),
+            sample_rate: Some(rate),
         })
     }
 
@@ -804,9 +805,15 @@ mod tests {
         cue.step(&snap);
         mode.decks[0].as_mut().unwrap().cue = cue;
         match mode.grid_job(deck, shift, &engine).unwrap() {
-            Job::Grid { track, edit, .. } => {
+            Job::Grid {
+                track,
+                edit,
+                sample_rate,
+                ..
+            } => {
                 assert_eq!(track, 7);
                 assert_eq!(edit, GridEdit::Shift { frames: 480.0 });
+                assert_eq!(sample_rate, Some(48_000));
             }
             other => panic!("{other:?}"),
         }
