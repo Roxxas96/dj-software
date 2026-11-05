@@ -9,19 +9,20 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread::JoinHandle;
 
-use engine::{DeckId, TrackBuffer};
+use engine::{DeckId, HOTCUES, TrackBuffer, TrackMemory};
 use library::{
     Beatgrid, Browser, BrowserRequest, BrowserView, GridEdit, Library, PendingTrack, Reader,
     TrackRow,
 };
 
+use super::memory_sync::engine_grid;
 use crate::format::safe;
 
 /// Work for the library worker.
 #[derive(Debug)]
 pub enum Job {
     Browse(BrowserRequest),
-    /// Reread the browser, and the rows of the tracks on the decks; with
+    /// Reread the browser, and the rows and beatgrids of the tracks on the decks; with
     /// `find_new_tracks`, also report the tracks that need analysis (the watcher found
     /// some).
     Refresh {
@@ -60,9 +61,11 @@ pub enum Event {
         track: i64,
         grid: Beatgrid,
     },
+    /// A deck's track as the library has it now.
     Track {
         deck: DeckId,
         row: TrackRow,
+        grid: Option<Beatgrid>,
     },
     /// Tracks that need analysis.
     NewTracks(Vec<PendingTrack>),
@@ -75,8 +78,8 @@ pub struct Loaded {
     pub seq: u64,
     pub row: TrackRow,
     pub buffer: Arc<TrackBuffer>,
-    /// The remembered cue point.
-    pub cue: Option<f64>,
+    /// The remembered cue point, hotcues and beatgrid (at the decoded rate).
+    pub memory: TrackMemory,
 }
 
 struct LoadJob {
@@ -85,6 +88,8 @@ struct LoadJob {
     row: TrackRow,
     path: PathBuf,
     cue: Option<f64>,
+    hotcues: [Option<f64>; HOTCUES],
+    grid: Option<Beatgrid>,
 }
 
 /// Starts the worker (and its loader). It stops when the returned sender is dropped.
@@ -166,10 +171,11 @@ fn run(lib: &Library, jobs: &Receiver<Job>, events: &Sender<Event>, decode: Deco
                     }
                 }
                 for (deck, id) in decks {
-                    if let Ok(Some(details)) = reader.track(id) {
+                    if let (Ok(Some(details)), Ok(grid)) = (reader.track(id), reader.beatgrid(id)) {
                         let _ = events.send(Event::Track {
                             deck,
                             row: details.row,
+                            grid,
                         });
                     }
                 }
@@ -230,28 +236,38 @@ fn request_load(
             safe(details.path.display())
         ));
     }
-    let cue = match reader.cue(track) {
-        Ok(cue) => cue,
-        Err(e) => {
-            say(format!(
-                "warning: could not read the cue point of track {track}: {}",
-                safe(e)
-            ));
-            None
-        }
-    };
+    // A track whose memory cannot be read still loads, without it.
     let job = LoadJob {
         deck,
         seq,
         row: details.row,
         path: details.path,
-        cue,
+        cue: read_or_warn(reader.cue(track), "cue point", track, say).flatten(),
+        hotcues: read_or_warn(reader.hotcues(track), "hotcues", track, say).unwrap_or_default(),
+        grid: read_or_warn(reader.beatgrid(track), "beatgrid", track, say).flatten(),
     };
     if loader.send(job).is_err() {
         say(format!(
             "Deck {n}: cannot load track {track}: the loader stopped"
         ));
     }
+}
+
+/// The value read, or `None` after saying why it could not be read.
+fn read_or_warn<T>(
+    result: Result<T, library::LibraryError>,
+    what: &str,
+    track: i64,
+    say: &dyn Fn(String),
+) -> Option<T> {
+    result
+        .inspect_err(|e| {
+            say(format!(
+                "warning: could not read the {what} of track {track}: {}",
+                safe(e)
+            ));
+        })
+        .ok()
 }
 
 /// Decodes queued tracks; of several queued for one deck only the latest is decoded.
@@ -284,12 +300,18 @@ fn load_one(job: LoadJob, events: &Sender<Event>, decode: DecodeFn) {
                     safe(job.path.display())
                 )));
             }
+            // Grid periods at the decoded rate, which is what the deck plays.
+            let memory = TrackMemory {
+                cue: job.cue.unwrap_or(0.0),
+                hotcues: job.hotcues,
+                grid: engine_grid(job.grid.as_ref(), decoded.track.sample_rate()),
+            };
             let _ = events.send(Event::Loaded(Box::new(Loaded {
                 deck: job.deck,
                 seq: job.seq,
                 row: job.row,
                 buffer: Arc::new(decoded.track),
-                cue: job.cue,
+                memory,
             })));
         }
         Err(e) => {
@@ -399,15 +421,25 @@ mod tests {
     }
 
     #[test]
-    fn loads_a_track_with_its_cue() {
+    fn loads_a_track_with_its_memory() {
         let s = setup(&["ok.wav"]);
         let id = ids(&s.lib)[0];
-        s.lib
-            .writer()
+        let writer = s.lib.writer();
+        writer
             .submit_wait(WriteOp::SetCue {
                 track: id,
                 frames: 1234.0,
             })
+            .unwrap();
+        writer
+            .submit_wait(WriteOp::SetHotcue {
+                track: id,
+                slot: 3,
+                frames: 900.0,
+            })
+            .unwrap();
+        s.lib
+            .edit_grid(id, library::GridEdit::SetBpm(120.0), None)
             .unwrap();
         let (tx, events) = channel();
         let (jobs, _worker) = spawn(Arc::clone(&s.lib), tx).unwrap();
@@ -422,7 +454,16 @@ mod tests {
             _ => None,
         });
         assert_eq!((loaded.deck, loaded.seq, loaded.row.id), (deck(1), 7, id));
-        assert_eq!(loaded.cue, Some(1234.0));
+        assert_eq!(loaded.memory.cue, 1234.0);
+        let mut hotcues = [None; HOTCUES];
+        hotcues[2] = Some(900.0);
+        assert_eq!(loaded.memory.hotcues, hotcues);
+        let rate = loaded.buffer.sample_rate();
+        assert_eq!(
+            loaded.memory.grid,
+            engine::Grid::from_bpm(120.0, 0.0, rate),
+            "the grid at the decoded rate"
+        );
         assert!(loaded.buffer.frames() > 0);
     }
 

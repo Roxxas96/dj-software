@@ -1,11 +1,12 @@
-//! `play --library`: the browser line, loading library tracks, beatgrid edits, cue
-//! write-through, background analysis and folder watching, driven from the control loop.
+//! `play --library`: the browser line, loading library tracks with their cue point,
+//! hotcues and beatgrid, beatgrid edits, cue and hotcue write-through, background analysis
+//! and folder watching, driven from the control loop.
 //!
 //! The control loop never waits on the database or a decode: browser moves, lookups and
 //! grid edits run on the library worker, decoding on its loader thread
-//! ([`worker`]); cue points are written with the non-blocking `Writer::submit`.
+//! ([`worker`]); cue points and hotcues are written with the non-blocking `Writer::submit`.
 
-mod cue_sync;
+mod memory_sync;
 mod worker;
 
 use std::collections::{HashMap, HashSet};
@@ -18,7 +19,7 @@ use std::time::{Duration, Instant};
 use actions::{AppRequest, GridEditRequest};
 use analysis::KeyNotation;
 use anyhow::Context;
-use engine::{Command, DeckCommand, DeckId, DeckSnapshot, EngineController};
+use engine::{Command, DeckCommand, DeckId, DeckSnapshot, EngineController, Grid};
 use library::{
     Analyzer, BrowserView, FailedWrite, GridEdit, KEY_NOTATION, Library, PendingTrack, TrackRow,
     WatchHealth, Watcher, WriteOp, Writer, default_threads,
@@ -27,7 +28,7 @@ use library::{
 use crate::console::ConsoleCommand;
 use crate::format::{bpm_text, grid_text, key_text, notation_from_setting, safe, track_name};
 use crate::printer::Printer;
-use cue_sync::{CueAction, CueSync};
+use memory_sync::{MemoryAction, MemorySync, engine_grid};
 use worker::{Event, Job};
 
 /// How often failed writes, analysis and the watcher are checked, and the most often the
@@ -45,7 +46,9 @@ type FileStamp = (Option<i64>, Option<i64>);
 /// The library track on a deck.
 struct DeckTrack {
     row: TrackRow,
-    cue: CueSync,
+    memory: MemorySync,
+    /// The grid last sent to the deck (with the `Load` or a `SetGrid`).
+    grid: Option<Grid>,
 }
 
 pub struct LibraryMode {
@@ -258,12 +261,12 @@ impl LibraryMode {
                 "Deck {n}: load a library track to edit its beatgrid"
             ));
         };
-        if !track.cue.load_applied() {
+        if !track.memory.load_applied() {
             return Err(format!(
                 "Deck {n}: the track is still loading; edit its beatgrid in a moment"
             ));
         }
-        let rate = track.cue.rate();
+        let rate = track.memory.rate();
         let playhead = engine.deck(deck).position_frames;
         Ok(Job::Grid {
             deck,
@@ -280,7 +283,7 @@ impl LibraryMode {
     }
 
     /// Called on every control-loop round: applies the worker's results, keeps cue points
-    /// in step and, every second, reports failed writes, analysis and watcher news.
+    /// and hotcues in step and, every second, reports failed writes, analysis and watcher news.
     pub fn poll(&mut self, now: Instant, engine: &mut EngineController, printer: &Printer) {
         while let Ok(event) = self.events.try_recv() {
             self.on_event(event, engine, printer);
@@ -324,28 +327,72 @@ impl LibraryMode {
             Event::Loaded(loaded) => self.load(*loaded, engine, printer),
             Event::Grid { deck, track, grid } => {
                 if let Some(t) = self.decks[deck.index()]
-                    .as_mut()
+                    .as_ref()
                     .filter(|t| t.row.id == track)
                 {
-                    t.row.bpm = grid.bpm;
                     printer.event(format!(
                         "Deck {} grid: {}",
                         deck.index() + 1,
-                        grid_text(&grid, Some(t.cue.rate()))
+                        grid_text(&grid, Some(t.memory.rate()))
                     ));
                 }
+                for t in self
+                    .decks
+                    .iter_mut()
+                    .flatten()
+                    .filter(|t| t.row.id == track)
+                {
+                    t.row.bpm = grid.bpm;
+                }
+                self.sync_grid(track, Some(&grid), engine);
                 self.refresh_wanted = true;
             }
             Event::NewTracks(ids) => self.enqueue_new(&ids),
-            Event::Track { deck, row } => {
-                if let Some(t) = self.decks[deck.index()]
-                    .as_mut()
-                    .filter(|t| t.row.id == row.id)
-                {
+            Event::Track { deck, row, grid } => {
+                let id = row.id;
+                if let Some(t) = self.decks[deck.index()].as_mut().filter(|t| t.row.id == id) {
                     t.row = row;
                     self.dirty = true;
+                    // Say, an analysis that finished after the track was loaded.
+                    self.sync_grid(id, grid.as_ref(), engine);
                 }
             }
+        }
+    }
+
+    /// Sends `grid` (the library's grid for `track`) to every deck holding the track,
+    /// unless they all have it already (a `SetGrid` drops a pending phase sync). If the
+    /// engine queue is full, a refresh is asked for, which sends it again.
+    fn sync_grid(
+        &mut self,
+        track: i64,
+        grid: Option<&library::Beatgrid>,
+        engine: &mut EngineController,
+    ) {
+        let holding = || self.decks.iter().flatten().filter(|t| t.row.id == track);
+        // Every deck holding the track decoded the same file, at the same rate.
+        let Some(rate) = holding().next().map(|t| t.memory.rate()) else {
+            return;
+        };
+        let grid = engine_grid(grid, rate);
+        if holding().all(|t| t.grid == grid) {
+            return;
+        }
+        let loaded = self.decks.each_ref().map(|t| t.as_ref().map(|t| t.row.id));
+        if engine
+            .send_all(&grid_commands(track, grid, &loaded))
+            .is_err()
+        {
+            self.refresh_wanted = true;
+            return;
+        }
+        for t in self
+            .decks
+            .iter_mut()
+            .flatten()
+            .filter(|t| t.row.id == track)
+        {
+            t.grid = grid;
         }
     }
 
@@ -355,7 +402,7 @@ impl LibraryMode {
         if loaded.seq != self.load_seq[deck.index()] {
             return; // A later load for this deck was asked for.
         }
-        // Save the outgoing track's last cue change first.
+        // Save the outgoing track's last cue and hotcue changes first.
         self.sync_deck(deck, engine, printer);
         if engine.deck(deck).playing {
             printer.event(format!("warning: deck {n} was playing"));
@@ -367,7 +414,7 @@ impl LibraryMode {
                 deck,
                 DeckCommand::Load {
                     track: loaded.buffer,
-                    memory: engine::TrackMemory::default(),
+                    memory: loaded.memory,
                 },
             ))
             .is_err()
@@ -381,7 +428,8 @@ impl LibraryMode {
         printer.event(format!("Deck {n} ◂ {}", track_name(&loaded.row)));
         self.decks[deck.index()] = Some(DeckTrack {
             row: loaded.row,
-            cue: CueSync::new(frames, rate, loaded.cue),
+            memory: MemorySync::new(frames, rate, loaded.memory),
+            grid: loaded.memory.clamped(frames).grid,
         });
         self.dirty = true;
     }
@@ -396,33 +444,49 @@ impl LibraryMode {
         let Some(track) = self.decks[deck.index()].as_mut() else {
             return;
         };
-        match track.cue.step(&engine.deck(deck)) {
-            CueAction::Nothing => {}
-            CueAction::Restore(cue) => {
-                if engine
-                    .send(Command::Deck(deck, DeckCommand::SetCue(cue)))
-                    .is_err()
-                {
-                    track.cue.restore_failed();
+        for action in track.memory.step(&engine.deck(deck)) {
+            let id = track.row.id;
+            let (op, what) = match action {
+                MemoryAction::SaveCue(frames) => {
+                    self.latest_cues.insert(id, frames);
+                    self.retried_cues.retain(|(t, _)| *t != id);
+                    (
+                        WriteOp::SetCue { track: id, frames },
+                        "save the cue point".to_owned(),
+                    )
                 }
+                MemoryAction::SaveHotcue(slot, frames) => (
+                    WriteOp::SetHotcue {
+                        track: id,
+                        slot: slot.number(),
+                        frames,
+                    },
+                    format!("save hotcue {}", slot.number()),
+                ),
+                MemoryAction::DeleteHotcue(slot) => (
+                    WriteOp::DeleteHotcue {
+                        track: id,
+                        slot: slot.number(),
+                    },
+                    format!("delete hotcue {}", slot.number()),
+                ),
+            };
+            if let Err(e) = self.writer.submit(op) {
+                printer.event(format!(
+                    "warning: could not {what} for {}: {}",
+                    track_name(&track.row),
+                    safe(e)
+                ));
             }
-            CueAction::Save(frames) => {
-                let op = WriteOp::SetCue {
-                    track: track.row.id,
-                    frames,
-                };
-                if let Err(e) = self.writer.submit(op) {
-                    printer.event(format!(
-                        "warning: could not save the cue point for {}: {}",
-                        track_name(&track.row),
-                        safe(e)
-                    ));
+            // The browser's `•`: a cue above 0 or any hotcue. A cue moved to 0 or a deleted
+            // hotcue may leave none, so the row is reread.
+            match action {
+                MemoryAction::SaveCue(frames) if frames <= 0.0 => self.refresh_wanted = true,
+                MemoryAction::DeleteHotcue(_) => self.refresh_wanted = true,
+                _ => {
+                    self.refresh_wanted |= !track.row.has_cues;
+                    track.row.has_cues = true;
                 }
-                self.latest_cues.insert(track.row.id, frames);
-                let id = track.row.id;
-                self.retried_cues.retain(|(t, _)| *t != id);
-                self.refresh_wanted |= !track.row.has_cues;
-                track.row.has_cues = true;
             }
         }
     }
@@ -446,6 +510,9 @@ impl LibraryMode {
     fn failed_write_text(&self, failed: &FailedWrite) -> String {
         let (what, track) = match &failed.op {
             WriteOp::SetCue { track, .. } => ("the cue point", Some(*track)),
+            WriteOp::SetHotcue { track, .. } | WriteOp::DeleteHotcue { track, .. } => {
+                ("a hotcue", Some(*track))
+            }
             WriteOp::EditGrid { track, .. } => ("the beatgrid", Some(*track)),
             WriteOp::StoreAnalysis(a) => ("the analysis", Some(a.track_id)),
             _ => ("a library change", None),
@@ -559,7 +626,7 @@ impl LibraryMode {
         lines
     }
 
-    /// Saves the last cue changes, stops analysis, watching and the worker, waits for
+    /// Saves the last cue and hotcue changes, stops analysis, watching and the worker, waits for
     /// queued writes, and reports any that failed.
     pub fn shutdown(mut self, engine: &mut EngineController, printer: &Printer) {
         self.sync_cues(engine, printer);
@@ -582,6 +649,16 @@ impl LibraryMode {
         let _ = self.writer.submit_wait(WriteOp::Batch(Vec::new()));
         self.report_failed_writes(printer);
     }
+}
+
+/// `SetGrid(grid)` for every deck whose loaded library track (`loaded`, by deck index) is
+/// `track`.
+fn grid_commands(track: i64, grid: Option<Grid>, loaded: &[Option<i64>; 4]) -> Vec<Command> {
+    DeckId::ALL
+        .into_iter()
+        .filter(|d| loaded[d.index()] == Some(track))
+        .map(|d| Command::Deck(d, DeckCommand::SetGrid(grid)))
+        .collect()
 }
 
 /// A grid edit as the library takes it: the shift in frames at the track's rate, and the
@@ -722,6 +799,28 @@ mod tests {
     }
 
     #[test]
+    fn grid_commands_target_every_deck_holding_the_track() {
+        // `Command` holds track buffers, so it has no `PartialEq`: compare what matters.
+        fn targets(commands: Vec<Command>) -> Vec<(usize, Option<Grid>)> {
+            commands
+                .into_iter()
+                .map(|c| match c {
+                    Command::Deck(deck, DeckCommand::SetGrid(grid)) => (deck.index(), grid),
+                    other => panic!("{other:?}"),
+                })
+                .collect()
+        }
+        let grid = Grid::from_bpm(120.0, 0.0, 44_100);
+        let loaded = [Some(7), Some(8), Some(7), None];
+        assert_eq!(
+            targets(grid_commands(7, grid, &loaded)),
+            [(0, grid), (2, grid)]
+        );
+        assert_eq!(targets(grid_commands(8, None, &loaded)), [(1, None)]);
+        assert_eq!(targets(grid_commands(9, grid, &loaded)), []);
+    }
+
+    #[test]
     fn grid_requests_get_the_rate_and_playhead() {
         assert_eq!(
             grid_edit(GridEditRequest::Shift { millis: -5 }, 48_000, 0.0),
@@ -757,7 +856,7 @@ mod tests {
             seq,
             row: row(),
             buffer: Arc::new(engine::TrackBuffer::new(44_100, vec![0.0; 2 * 4410]).unwrap()),
-            cue: None,
+            memory: engine::TrackMemory::default(),
         }
     }
 
@@ -779,19 +878,76 @@ mod tests {
     }
 
     #[test]
+    fn a_new_library_grid_reaches_every_deck_holding_the_track() {
+        let (_dir, mut mode, mut engine, printer) = mode();
+        for n in [0, 2] {
+            let deck = DeckId::new(n).unwrap();
+            let seq = mode.next_seq(deck);
+            mode.load(
+                worker::Loaded {
+                    deck,
+                    seq,
+                    ..loaded(0)
+                },
+                &mut engine,
+                &printer,
+            );
+        }
+        let grids = |mode: &LibraryMode| mode.decks.each_ref().map(|t| t.as_ref().map(|t| t.grid));
+        assert_eq!(grids(&mode), [Some(None), None, Some(None), None]);
+        // A finished analysis: the refresh reports the track with its new grid.
+        let analyzed = library::Beatgrid {
+            bpm: Some(120.0),
+            first_beat_frames: Some(0.0),
+            grid_locked: false,
+        };
+        mode.on_event(
+            Event::Track {
+                deck: DeckId::new(2).unwrap(),
+                row: row(),
+                grid: Some(analyzed),
+            },
+            &mut engine,
+            &printer,
+        );
+        let grid = Grid::from_bpm(120.0, 0.0, 44_100);
+        assert_eq!(grids(&mode), [Some(grid), None, Some(grid), None]);
+        // A grid edit.
+        let edited = library::Beatgrid {
+            bpm: Some(125.0),
+            ..analyzed
+        };
+        mode.on_event(
+            Event::Grid {
+                deck: DeckId::new(0).unwrap(),
+                track: 7,
+                grid: edited,
+            },
+            &mut engine,
+            &printer,
+        );
+        let grid = Grid::from_bpm(125.0, 0.0, 44_100);
+        assert_eq!(grids(&mode), [Some(grid), None, Some(grid), None]);
+        assert_eq!(mode.decks[2].as_ref().unwrap().row.bpm, Some(125.0));
+        mode.shutdown(&mut engine, &printer);
+        printer.finish();
+    }
+
+    #[test]
     fn grid_edits_wait_for_the_load_and_use_the_track_rate() {
         let (_dir, mut mode, engine, printer) = mode();
         let deck = DeckId::new(0).unwrap();
         let shift = GridEditRequest::Shift { millis: 10 };
         let refused = |mode: &LibraryMode| mode.grid_job(deck, shift, &engine).unwrap_err();
         assert!(refused(&mode).contains("load a library track"));
-        let mut cue = CueSync::new(4410, 48_000, None);
+        let mut memory = MemorySync::new(4410, 48_000, engine::TrackMemory::default());
         mode.decks[0] = Some(DeckTrack {
             row: TrackRow {
                 sample_rate: Some(48_000),
                 ..row()
             },
-            cue,
+            memory,
+            grid: None,
         });
         assert!(
             refused(&mode).contains("still loading"),
@@ -810,8 +966,8 @@ mod tests {
             previewing: false,
             ..DeckSnapshot::default()
         };
-        cue.step(&snap);
-        mode.decks[0].as_mut().unwrap().cue = cue;
+        memory.step(&snap);
+        mode.decks[0].as_mut().unwrap().memory = memory;
         match mode.grid_job(deck, shift, &engine).unwrap() {
             Job::Grid {
                 track,
