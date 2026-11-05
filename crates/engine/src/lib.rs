@@ -15,7 +15,9 @@ mod renderer;
 mod shared;
 mod track;
 
-pub use command::{ChannelCommand, Command, DeckCommand, MasterCommand, TempoRange, XfaderAssign};
+pub use command::{
+    ChannelCommand, Command, DeckCommand, JogSurface, MasterCommand, TempoRange, XfaderAssign,
+};
 pub use controller::{CommandQueueFull, EngineController};
 pub use ids::DeckId;
 pub use memory::{Grid, HOTCUES, HotcueSlot, TrackMemory};

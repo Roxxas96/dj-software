@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 mod hotcue;
+mod jog;
 mod looping;
 
 use crate::{DeckCommand, DeckSnapshot, Grid, HOTCUES, TempoRange, TrackBuffer};
@@ -27,6 +28,14 @@ pub(crate) struct Deck {
     loop_active: bool,
     /// Length in beats of the next auto loop.
     loop_beats: f64,
+    /// Touching the jog wheel's top scratches. Kept across loads.
+    vinyl: bool,
+    jog_touched: bool,
+    /// While scratching, the track frames left between the playhead and the platter's
+    /// position (the scratch target).
+    scratch: Option<f64>,
+    /// Track frames of nudge not yet applied.
+    nudge: f64,
 }
 
 impl Default for Deck {
@@ -46,6 +55,10 @@ impl Default for Deck {
             loop_out: None,
             loop_active: false,
             loop_beats: looping::DEFAULT_LOOP_BEATS,
+            vinyl: true,
+            jog_touched: false,
+            scratch: None,
+            nudge: 0.0,
         }
     }
 }
@@ -108,11 +121,17 @@ impl Deck {
             DeckCommand::LoopHalve => self.loop_resize(0.5),
             DeckCommand::LoopDouble => self.loop_resize(2.0),
             DeckCommand::ReloopExit => self.reloop_exit(),
+            DeckCommand::SetVinyl(on) => self.set_vinyl(on),
+            DeckCommand::JogTouch(touched) => self.jog_touch(touched),
+            DeckCommand::Jog { turns, surface } if turns.is_finite() => self.jog(turns, surface),
+            DeckCommand::JogSearch { turns } if turns.is_finite() => self.jog_search(turns),
             DeckCommand::SetTempoSlider(_)
             | DeckCommand::Seek(_)
             | DeckCommand::SetCue(_)
             | DeckCommand::SetGrid(_)
-            | DeckCommand::SetHotcue(..) => {}
+            | DeckCommand::SetHotcue(..)
+            | DeckCommand::Jog { .. }
+            | DeckCommand::JogSearch { .. } => {}
         }
         None
     }
@@ -128,6 +147,9 @@ impl Deck {
         self.loop_in = None;
         self.loop_out = None;
         self.loop_active = false;
+        self.jog_touched = false;
+        self.scratch = None;
+        self.nudge = 0.0;
     }
 
     fn play(&mut self) {
@@ -143,6 +165,8 @@ impl Deck {
         self.playing = false;
         self.preview = None;
         self.play_latched = false;
+        // A nudge only makes sense against the motion it was given for.
+        self.nudge = 0.0;
     }
 
     fn at_cue(&self) -> bool {
@@ -199,6 +223,24 @@ impl Deck {
         let Some(track) = self.track.as_deref() else {
             return;
         };
+        let end = track.frames() as f64;
+        let frames = out.as_chunks_mut::<2>().0;
+
+        if let Some(mut pending) = self.scratch {
+            // Only the platter moves the record, playing or paused; it never wraps a loop
+            // and holds at the ends instead of pausing.
+            let lag = jog::SCRATCH_LAG_SECONDS * f64::from(output_sample_rate);
+            for frame in frames {
+                add_frame(frame, track, self.position);
+                let speed = (pending / lag).clamp(-jog::SCRATCH_MAX_SPEED, jog::SCRATCH_MAX_SPEED);
+                let next = (self.position + speed).clamp(0.0, end);
+                pending -= next - self.position;
+                self.position = next;
+            }
+            self.scratch = Some(pending);
+            return;
+        }
+
         if !self.playing {
             return;
         }
@@ -206,29 +248,23 @@ impl Deck {
         if self.tempo_ratio() <= 0.0 {
             return;
         }
-        let frames = track.frames();
-        let end = frames as f64;
         let rate =
             self.tempo_ratio() * f64::from(track.sample_rate()) / f64::from(output_sample_rate);
-
+        let max_bend = jog::NUDGE_MAX_BEND * rate;
         let bounds = self.active_loop();
 
-        for frame in out.as_chunks_mut::<2>().0 {
-            self.position = looping::wrap_position(self.position, bounds, rate);
+        for frame in frames {
+            let bend = self.nudge.clamp(-max_bend, max_bend);
+            let step = rate + bend;
+            self.position = looping::wrap_position(self.position, bounds, step);
             if self.position >= end {
                 self.position = end;
                 self.pause();
                 return;
             }
-            let index = self.position as usize;
-            let frac = (self.position - index as f64) as f32;
-            let a = track.frame(index);
-            // At the last frame there is nothing to interpolate towards; frac is then
-            // weighted against the same frame.
-            let b = track.frame((index + 1).min(frames - 1));
-            frame[0] += a[0] + (b[0] - a[0]) * frac;
-            frame[1] += a[1] + (b[1] - a[1]) * frac;
-            self.position += rate;
+            add_frame(frame, track, self.position);
+            self.nudge -= bend;
+            self.position += step;
         }
     }
 
@@ -248,17 +284,30 @@ impl Deck {
             loop_out: self.loop_out,
             loop_active: self.loop_active,
             loop_beats: self.loop_beats,
-            // Filled in by the jog behavior.
-            vinyl: true,
-            jog_touched: false,
+            vinyl: self.vinyl,
+            jog_touched: self.jog_touched,
         }
     }
+}
+
+/// Adds the track's sound at `position` (in `[0, frames]`) to `frame`, interpolating
+/// linearly between the frames around it.
+fn add_frame(frame: &mut [f32; 2], track: &TrackBuffer, position: f64) {
+    let last = track.frames() - 1;
+    let index = (position as usize).min(last);
+    let frac = (position - index as f64) as f32;
+    let a = track.frame(index);
+    // At the last frame there is nothing to interpolate towards; frac is then weighted
+    // against the same frame.
+    let b = track.frame((index + 1).min(last));
+    frame[0] += a[0] + (b[0] - a[0]) * frac;
+    frame[1] += a[1] + (b[1] - a[1]) * frac;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Grid, TrackMemory};
+    use crate::{Grid, JogSurface, TrackMemory};
 
     const SR: u32 = 44_100;
 
@@ -409,5 +458,25 @@ mod tests {
         deck.render_add(&mut out, SR);
         assert!(out.iter().all(|s| (low..=high).contains(s)));
         assert!((start..end).contains(&deck.position));
+    }
+
+    #[test]
+    fn scratch_backwards_renders_reversed_samples() {
+        let track = ramp_track(40_000);
+        let mut deck = playing_deck(&track);
+        let _ = deck.apply(DeckCommand::Seek(20_000.0));
+        let _ = deck.apply(DeckCommand::JogTouch(true));
+        let _ = deck.apply(DeckCommand::Jog {
+            turns: -0.1,
+            surface: JogSurface::Top,
+        });
+        let mut out = vec![0.0; 2 * 1024];
+        deck.render_add(&mut out, SR);
+        let frames = out.as_chunks::<2>().0;
+        assert_eq!(frames[0], track.frame(20_000));
+        assert!(frames.windows(2).all(|w| w[1][0] < w[0][0]));
+        // The first frames move at the full scratch speed, interpolated at whole frames.
+        assert_eq!(frames[1], track.frame(19_992));
+        assert!(deck.position < 20_000.0 - 1023.0 * 2.0);
     }
 }
