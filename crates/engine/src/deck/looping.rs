@@ -1,0 +1,107 @@
+//! Loop behavior of a deck.
+
+use super::Deck;
+
+/// Length in beats of an auto loop until it is halved or doubled.
+pub(super) const DEFAULT_LOOP_BEATS: f64 = 4.0;
+/// Shortest loop length in beats.
+pub(super) const MIN_LOOP_BEATS: f64 = 1.0 / 32.0;
+/// Longest loop length in beats.
+pub(super) const MAX_LOOP_BEATS: f64 = 64.0;
+/// Shortest loop in track frames, so wrapping never divides by zero.
+const MIN_LOOP_FRAMES: f64 = 1.0;
+
+impl Deck {
+    pub(super) fn loop_in_press(&mut self) {
+        if self.track.is_none() {
+            return;
+        }
+        self.loop_in = Some(self.position);
+        self.loop_out = None;
+        self.loop_active = false;
+    }
+
+    pub(super) fn loop_out_press(&mut self) {
+        if self.track.is_none() {
+            return;
+        }
+        if let Some(start) = self.loop_in
+            && self.position - start >= MIN_LOOP_FRAMES
+        {
+            self.loop_out = Some(self.position);
+            self.loop_active = true;
+        }
+    }
+
+    pub(super) fn auto_loop(&mut self) {
+        if self.loop_active {
+            self.loop_active = false;
+            return;
+        }
+        let Some(grid) = self.grid else {
+            return;
+        };
+        if self.track.is_none() {
+            return;
+        }
+        let beat = grid.beats_at(self.position).floor();
+        let start = (grid.first_beat_frames + beat * grid.beat_period_frames).max(0.0);
+        self.loop_in = Some(start);
+        self.loop_out =
+            Some(start + (self.loop_beats * grid.beat_period_frames).max(MIN_LOOP_FRAMES));
+        self.loop_active = true;
+    }
+
+    /// Scales the loop length in beats by `factor` (clamped) and resizes an active loop.
+    pub(super) fn loop_resize(&mut self, factor: f64) {
+        self.loop_beats = (self.loop_beats * factor).clamp(MIN_LOOP_BEATS, MAX_LOOP_BEATS);
+        if !self.loop_active {
+            return;
+        }
+        let (Some(start), Some(end)) = (self.loop_in, self.loop_out) else {
+            return;
+        };
+        let length = match self.grid {
+            Some(grid) => self.loop_beats * grid.beat_period_frames,
+            None => (end - start) * factor,
+        };
+        self.loop_out = Some(start + length.max(MIN_LOOP_FRAMES));
+    }
+
+    pub(super) fn reloop_exit(&mut self) {
+        if self.loop_active {
+            self.loop_active = false;
+        } else if let (Some(start), Some(_)) = (self.loop_in, self.loop_out) {
+            self.position = start;
+            self.loop_active = true;
+        }
+    }
+
+    /// A jump to `point` outside the active loop leaves the loop.
+    pub(super) fn exit_loop_if_outside(&mut self, point: f64) {
+        if let (true, Some(start), Some(end)) = (self.loop_active, self.loop_in, self.loop_out)
+            && !(start..end).contains(&point)
+        {
+            self.loop_active = false;
+        }
+    }
+
+    /// The loop bounds while a loop is active.
+    pub(super) fn active_loop(&self) -> Option<(f64, f64)> {
+        match (self.loop_active, self.loop_in, self.loop_out) {
+            (true, Some(start), Some(end)) => Some((start, end)),
+            _ => None,
+        }
+    }
+}
+
+/// Wraps a playhead that reached loop-out back into the loop. `step` is the playhead's
+/// motion per frame; moving backwards never wraps.
+pub(super) fn wrap_position(position: f64, bounds: Option<(f64, f64)>, step: f64) -> f64 {
+    match bounds {
+        Some((start, end)) if step > 0.0 && position >= end => {
+            start + (position - start) % (end - start)
+        }
+        _ => position,
+    }
+}

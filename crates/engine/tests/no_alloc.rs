@@ -121,6 +121,21 @@ fn render_does_not_allocate() {
         DeckCommand::HotcueDelete(slot(2)),
         DeckCommand::SetHotcue(slot(1), None),
         DeckCommand::Play,
+        DeckCommand::SetGrid(Grid::from_bpm(128.0, 300.0, 44_100)),
+        DeckCommand::AutoLoop,
+        DeckCommand::LoopHalve,
+        DeckCommand::LoopHalve,
+        DeckCommand::LoopDouble,
+        DeckCommand::AutoLoop,
+        DeckCommand::LoopIn,
+        DeckCommand::LoopOut,
+        DeckCommand::Seek(20_000.0),
+        DeckCommand::LoopIn,
+        DeckCommand::Seek(20_100.0),
+        DeckCommand::LoopOut,
+        DeckCommand::ReloopExit,
+        DeckCommand::ReloopExit,
+        DeckCommand::ReloopExit,
     ] {
         c.send(Command::Deck(decks[0], cmd)).unwrap();
         render_blocks(10);

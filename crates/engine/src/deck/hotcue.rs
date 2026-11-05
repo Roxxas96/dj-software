@@ -20,6 +20,7 @@ impl Deck {
             return;
         };
         self.position = point;
+        self.exit_loop_if_outside(point);
         if self.preview.is_some() {
             // Another button is held: this one takes over the preview.
             self.preview = Some(PreviewSource::Hotcue(slot));

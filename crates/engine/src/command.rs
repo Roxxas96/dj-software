@@ -51,6 +51,21 @@ pub enum DeckCommand {
     /// playhead or changing the play state. A non-finite position is ignored. Used to restore
     /// remembered hotcues; `None` behaves like [`DeckCommand::HotcueDelete`].
     SetHotcue(HotcueSlot, Option<f64>),
+    /// Sets the loop-in point at the playhead, clears loop-out and deactivates the loop.
+    LoopIn,
+    /// With a loop-in before the playhead, sets loop-out at the playhead and activates the
+    /// loop. Otherwise does nothing.
+    LoopOut,
+    /// Exits an active loop and keeps playing. Otherwise, with a grid, loops the last beat
+    /// at or before the playhead for the current loop length in beats; without a grid it
+    /// does nothing.
+    AutoLoop,
+    /// Halves the loop length in beats (at least 1/32); an active loop is resized to match.
+    LoopHalve,
+    /// Doubles the loop length in beats (at most 64); an active loop is resized to match.
+    LoopDouble,
+    /// Exits an active loop. Otherwise, with both points set, jumps to loop-in and loops.
+    ReloopExit,
 }
 
 /// How far the tempo slider reaches either side of the original tempo.
