@@ -606,12 +606,11 @@ fn any_action(kind: ActionKind) -> Action {
 fn accepts_matches_what_apply_does() {
     use actions::InputKind;
     for kind in ActionKind::ALL {
-        // `deck.sync` takes buttons but does nothing until the engine supports it.
-        if kind == ActionKind::Sync {
-            continue;
-        }
         for input in [Input::Press, Input::Absolute(0.25), Input::Relative(1)] {
             let mut rig = Rig::new();
+            // `deck.sync` needs a playing deck to follow.
+            rig.load_grid(2, 128.0, false);
+            rig.load_grid(1, 125.0, true);
             let result = rig.apply(any_action(kind), input);
             assert_eq!(
                 kind.accepts(input.kind()),
@@ -903,11 +902,133 @@ fn jog_steps_become_turns() {
     assert!((moved(ActionKind::JogSearch, 36, Some(360)) - f64::from(SR)).abs() < 1.0);
 }
 
+impl Rig {
+    /// Loads a constant track with a grid at `bpm` on `deck` (replacing any track there) and
+    /// starts it when `playing`.
+    fn load_grid(&mut self, deck: usize, bpm: f64, playing: bool) {
+        let track = Arc::new(TrackBuffer::new(SR, vec![0.5; 200_000 * 2]).unwrap());
+        let memory = engine::TrackMemory {
+            grid: engine::Grid::from_bpm(bpm, 0.0, SR),
+            ..Default::default()
+        };
+        self.c
+            .send(engine::Command::Deck(
+                d(deck),
+                engine::DeckCommand::Load { track, memory },
+            ))
+            .unwrap();
+        if playing {
+            self.toggle_play(deck);
+        }
+        self.render(1);
+    }
+
+    fn toggle_play(&mut self, deck: usize) {
+        self.c
+            .send(engine::Command::Deck(
+                d(deck),
+                engine::DeckCommand::TogglePlay,
+            ))
+            .unwrap();
+        self.render(1);
+    }
+
+    fn sync(&mut self, deck: usize) -> ApplyResult {
+        self.apply(deck_action(ActionKind::Sync, deck), Input::Press)
+    }
+
+    fn ratio(&self, deck: usize) -> f64 {
+        self.c.deck(d(deck)).tempo_ratio
+    }
+}
+
 #[test]
-fn sync_is_ignored_until_the_engine_supports_it() {
+fn sync_matches_the_other_sides_playing_deck() {
     let mut rig = Rig::new();
-    assert_eq!(
-        rig.apply(deck_action(ActionKind::Sync, 0), Input::Press),
-        ApplyResult::Ignored
-    );
+    rig.load_grid(0, 128.0, false);
+    rig.load_grid(1, 125.0, true);
+    assert_eq!(rig.state.deck(d(0)).tempo_range, TempoRange::Ten);
+    assert_eq!(rig.sync(0), ApplyResult::Sent(2));
+    assert!((rig.ratio(0) - 125.0 / 128.0).abs() < 1e-6);
+    let slider = 0.5 + (125.0 / 128.0 - 1.0) / 0.2;
+    assert!((f64::from(rig.state.deck(d(0)).tempo) - slider).abs() < 1e-6);
+    assert_eq!(rig.state.deck(d(0)).tempo_range, TempoRange::Ten);
+}
+
+#[test]
+fn sync_prefers_the_other_sides_active_deck() {
+    let mut rig = Rig::new();
+    rig.load_grid(0, 128.0, false);
+    rig.load_grid(1, 125.0, true);
+    rig.load_grid(3, 120.0, true);
+    // Deck 2 (index 1) is the lowest, but the right side's active deck wins.
+    rig.state.side_mut(Side::Right).active_deck = d(3);
+    assert_eq!(rig.sync(0), ApplyResult::Sent(2));
+    assert!((rig.ratio(0) - 120.0 / 128.0).abs() < 1e-6);
+}
+
+#[test]
+fn sync_falls_back_to_the_lowest_deck() {
+    let mut rig = Rig::new();
+    rig.load_grid(0, 128.0, false);
+    rig.load_grid(2, 126.0, true);
+    rig.load_grid(3, 120.0, true);
+    // The right side's active deck (index 1) is empty: the lowest playing deck follows.
+    assert_eq!(rig.sync(0), ApplyResult::Sent(2));
+    assert!((rig.ratio(0) - 126.0 / 128.0).abs() < 1e-6);
+}
+
+#[test]
+fn sync_picks_half_time() {
+    let mut rig = Rig::new();
+    rig.load_grid(0, 87.0, false);
+    rig.load_grid(1, 174.0, true);
+    assert_eq!(rig.sync(0), ApplyResult::Sent(2));
+    assert!((rig.ratio(0) - 1.0).abs() < 1e-6);
+    assert!((rig.state.deck(d(0)).tempo - 0.5).abs() < 1e-6);
+}
+
+#[test]
+fn sync_widens_the_range_when_needed() {
+    let mut rig = Rig::new();
+    rig.load_grid(0, 100.0, false);
+    rig.load_grid(1, 114.0, true);
+    assert_eq!(rig.sync(0), ApplyResult::Sent(3));
+    assert_eq!(rig.state.deck(d(0)).tempo_range, TempoRange::Sixteen);
+    assert!((rig.ratio(0) - 1.14).abs() < 1e-6);
+    assert!((f64::from(rig.state.deck(d(0)).tempo) - (0.5 + 0.14 / 0.32)).abs() < 1e-6);
+}
+
+#[test]
+fn sync_without_a_master_or_grid_is_ignored() {
+    let mut rig = Rig::new();
+    rig.load_grid(0, 128.0, false);
+    // No other deck at all, then a stopped one.
+    assert_eq!(rig.sync(0), ApplyResult::Ignored);
+    rig.load_grid(1, 125.0, false);
+    assert_eq!(rig.sync(0), ApplyResult::Ignored);
+    // A playing master, but no grid on deck 3 itself.
+    rig.toggle_play(1);
+    rig.load_grid(2, 120.0, false);
+    assert_eq!(rig.sync(3), ApplyResult::Ignored);
+    // Out of reach: more than 100 %.
+    rig.load_grid(2, 30.0, false);
+    assert_eq!(rig.sync(2), ApplyResult::Ignored);
+    assert_eq!(rig.state.deck(d(2)).tempo, 0.5);
+}
+
+#[test]
+fn sync_updates_control_state_tempo() {
+    let mut rig = Rig::new();
+    rig.load_grid(0, 128.0, false);
+    rig.load_grid(1, 122.0, true);
+    assert_eq!(rig.state.deck(d(0)).tempo, 0.5);
+    rig.sync(0);
+    let tempo = rig.state.deck(d(0)).tempo;
+    assert!((f64::from(tempo) - (0.5 + (122.0 / 128.0 - 1.0) / 0.2)).abs() < 1e-6);
+    // Moving the slider there by hand ends in the same state and tempo.
+    let mut other = Rig::new();
+    other.load_grid(0, 128.0, false);
+    other.apply(deck_action(ActionKind::Tempo, 0), Input::Absolute(tempo));
+    assert_eq!(other.ratio(0), rig.ratio(0));
 }

@@ -3,6 +3,7 @@ use engine::{
     TempoRange,
 };
 
+use crate::sync::plan_sync;
 use crate::{
     Action, ActionKind, AppRequest, BrowserRequest, ControlState, GridEditRequest, Input, Side,
     ValueTarget,
@@ -121,8 +122,7 @@ pub fn apply(
             let turns = turns(state, steps);
             (deck(d, DeckCommand::JogSearch { turns }), Update::None)
         }
-        // Beat sync is not in the engine yet.
-        (Action::Sync(_), _) => return ApplyResult::Ignored,
+        (Action::Sync(d), Input::Press) => return sync(d, state, engine),
         (Action::TempoRangeNext(d), Input::Press) => {
             let next = next_range(state.deck(d).tempo_range);
             (
@@ -170,6 +170,34 @@ pub fn apply(
         Update::Pfl(d, on) => state.deck_mut(d).pfl = on,
     }
     ApplyResult::Sent(1)
+}
+
+/// Matches `deck`'s tempo to the playing deck it follows and aligns the beats. The state is
+/// recorded like a moved slider and a pressed range button, so soft takeover arms.
+fn sync(deck: DeckId, state: &mut ControlState, engine: &mut EngineController) -> ApplyResult {
+    let snaps = DeckId::ALL.map(|id| engine.deck(id));
+    let Some(plan) = plan_sync(deck, state, &snaps) else {
+        return ApplyResult::Ignored;
+    };
+    let mut commands = Vec::with_capacity(3);
+    let range_changed = plan.range != state.deck(deck).tempo_range;
+    if range_changed {
+        commands.push(self::deck(deck, DeckCommand::SetTempoRange(plan.range)));
+    }
+    commands.push(self::deck(deck, DeckCommand::SetTempoSlider(plan.slider)));
+    commands.push(Command::PhaseSync {
+        deck,
+        master: plan.master,
+        beat_ratio: plan.beat_ratio,
+    });
+    if engine.send_all(&commands).is_err() {
+        return ApplyResult::QueueFull;
+    }
+    if range_changed {
+        state.deck_mut(deck).tempo_range = plan.range;
+    }
+    set_value(state, (ActionKind::Tempo, Some(deck)), plan.slider);
+    ApplyResult::Sent(commands.len() as u8)
 }
 
 fn grid(deck: DeckId, edit: GridEditRequest) -> ApplyResult {
