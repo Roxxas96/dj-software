@@ -5,8 +5,8 @@ use std::sync::Arc;
 use assert_no_alloc::{AllocDisabler, assert_no_alloc};
 use common::ramp_track;
 use engine::{
-    ChannelCommand, Command, DeckCommand, DeckId, EngineConfig, Grid, HotcueSlot, MasterCommand,
-    TrackMemory, XfaderAssign, engine,
+    ChannelCommand, Command, DeckCommand, DeckId, EngineConfig, Grid, HotcueSlot, JogSurface,
+    MasterCommand, TrackMemory, XfaderAssign, engine,
 };
 
 #[global_allocator]
@@ -136,6 +136,28 @@ fn render_does_not_allocate() {
         DeckCommand::ReloopExit,
         DeckCommand::ReloopExit,
         DeckCommand::ReloopExit,
+        DeckCommand::JogTouch(true),
+        DeckCommand::Jog {
+            turns: 0.2,
+            surface: JogSurface::Top,
+        },
+        DeckCommand::Jog {
+            turns: -0.4,
+            surface: JogSurface::Top,
+        },
+        DeckCommand::JogTouch(false),
+        DeckCommand::Jog {
+            turns: 0.1,
+            surface: JogSurface::Ring,
+        },
+        DeckCommand::Jog {
+            turns: f64::NAN,
+            surface: JogSurface::Ring,
+        },
+        DeckCommand::JogSearch { turns: 0.1 },
+        DeckCommand::JogSearch { turns: -0.05 },
+        DeckCommand::SetVinyl(false),
+        DeckCommand::SetVinyl(true),
     ] {
         c.send(Command::Deck(decks[0], cmd)).unwrap();
         render_blocks(10);

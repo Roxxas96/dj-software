@@ -69,6 +69,34 @@ pub enum DeckCommand {
     LoopDouble,
     /// Exits an active loop. Otherwise, with both points set, jumps to loop-in and loops.
     ReloopExit,
+    /// Turns vinyl mode on or off: with it on, touching the jog wheel's top scratches. On
+    /// for a new deck and kept across loads.
+    SetVinyl(bool),
+    /// Jog wheel top touched or released. With vinyl on, a touch holds the record: normal
+    /// motion stops and the deck follows the platter until release, which resumes playback
+    /// if the deck is playing.
+    JogTouch(bool),
+    /// The jog wheel turned by `turns` (negative is backwards). Scratches while the top is
+    /// held in vinyl mode, otherwise nudges a playing deck or moves a paused one. Non-finite
+    /// values are ignored.
+    Jog {
+        turns: f64,
+        surface: JogSurface,
+    },
+    /// The jog wheel turned with SHIFT: moves the playhead quickly, playing or paused.
+    /// Non-finite values are ignored.
+    JogSearch {
+        turns: f64,
+    },
+}
+
+/// Which part of the jog wheel turned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JogSurface {
+    /// The touch-sensitive top platter.
+    Top,
+    /// The outer ring.
+    Ring,
 }
 
 /// How far the tempo slider reaches either side of the original tempo.
