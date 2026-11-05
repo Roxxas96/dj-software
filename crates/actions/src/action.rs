@@ -380,6 +380,20 @@ impl ActionKind {
                 | ActionKind::JogRelease
         )
     }
+
+    /// The hold whose release this kind's release ends, when the two sit on one physical
+    /// control: a controller that sends a different note with SHIFT held sends the
+    /// note-off there when SHIFT goes down during the hold. `deck.jog_release` ends
+    /// `deck.jog_touch`, `deck.hotcue_delete_N` ends `deck.hotcue_N` (same slot) and
+    /// `deck.return_to_start` ends `deck.cue`. Other kinds have no partner.
+    pub fn hold_partner(self) -> Option<ActionKind> {
+        match self {
+            ActionKind::JogRelease => Some(ActionKind::JogTouch),
+            ActionKind::HotcueDelete(slot) => Some(ActionKind::Hotcue(slot)),
+            ActionKind::ReturnToStart => Some(ActionKind::Cue),
+            _ => None,
+        }
+    }
 }
 
 /// An action bound to its target. Only valid kind/target pairs can be built.
