@@ -34,8 +34,8 @@ pub(crate) struct Deck {
     /// While scratching, the track frames left between the playhead and the platter's
     /// position (the scratch target).
     scratch: Option<f64>,
-    /// Track frames of nudge not yet applied.
-    nudge: f64,
+    /// Nudge speed bend, as a fraction of normal speed; fades to 0 while playing.
+    bend: f64,
     /// A phase sync waiting for this deck to play: the master and the beat ratio.
     pending_sync: Option<(DeckId, f64)>,
     /// How many `Load`s were applied.
@@ -62,7 +62,7 @@ impl Default for Deck {
             vinyl: true,
             jog_touched: false,
             scratch: None,
-            nudge: 0.0,
+            bend: 0.0,
             pending_sync: None,
             load_seq: 0,
         }
@@ -163,7 +163,7 @@ impl Deck {
         self.loop_active = false;
         self.jog_touched = false;
         self.scratch = None;
-        self.nudge = 0.0;
+        self.bend = 0.0;
         self.pending_sync = None;
     }
 
@@ -180,8 +180,8 @@ impl Deck {
         self.playing = false;
         self.preview = None;
         self.play_latched = false;
-        // A nudge only makes sense against the motion it was given for.
-        self.nudge = 0.0;
+        // A bend only makes sense against the motion it was given for.
+        self.bend = 0.0;
     }
 
     fn at_cue(&self) -> bool {
@@ -327,12 +327,11 @@ impl Deck {
         }
         let rate =
             self.tempo_ratio() * f64::from(track.sample_rate()) / f64::from(output_sample_rate);
-        let max_bend = jog::NUDGE_MAX_BEND * rate;
+        let decay = (-1.0 / (jog::NUDGE_DECAY_SECONDS * f64::from(output_sample_rate))).exp();
         let bounds = self.active_loop();
 
         for frame in frames {
-            let bend = self.nudge.clamp(-max_bend, max_bend);
-            let step = rate + bend;
+            let step = rate * (1.0 + self.bend);
             self.position = looping::wrap_position(self.position, bounds, step);
             if self.position >= end {
                 self.position = end;
@@ -340,7 +339,7 @@ impl Deck {
                 return;
             }
             add_frame(frame, track, self.position);
-            self.nudge -= bend;
+            self.bend *= decay;
             self.position += step;
         }
     }

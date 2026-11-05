@@ -128,29 +128,48 @@ fn vinyl_off_top_nudges() {
     let s = c.deck(id);
     assert!(!s.vinyl && s.jog_touched);
     let start = s.position_frames;
-    step(&mut c, &mut r, id, top(0.25));
-    render(&mut r, SR as usize);
-    let expected = start + 1.0 + SR as f64 + 0.125 * SR as f64;
-    let pos = position(&c, id);
-    assert!((pos - expected).abs() < 1e-5, "{pos} vs {expected}");
+    step(&mut c, &mut r, id, top(0.05));
+    // The top nudges like the ring: the first frame moves 10 % faster.
+    assert!((position(&c, id) - start - 1.1).abs() < 1e-9);
 }
 
 #[test]
-fn nudge_shifts_by_the_turn_then_returns_to_tempo() {
+fn nudge_speeds_up_immediately() {
     let (mut c, mut r, id) = setup();
-    step(&mut c, &mut r, id, DeckCommand::SetTempoSlider(0.75));
     step(&mut c, &mut r, id, DeckCommand::Play);
-    let ratio = c.deck(id).tempo_ratio;
-    assert!((ratio - 1.05).abs() < 1e-9);
     let start = position(&c, id);
-    step(&mut c, &mut r, id, ring(0.25));
-    render(&mut r, SR as usize);
-    let expected = start + (1.0 + SR as f64) * ratio + 0.125 * SR as f64;
-    let pos = position(&c, id);
-    assert!((pos - expected).abs() < 1e-5, "{pos} vs {expected}");
+    // 0.05 turn bends the speed by 0.05 * 2 = 10 %, from the very first frame.
+    step(&mut c, &mut r, id, ring(0.05));
+    let moved = position(&c, id) - start;
+    assert!((moved - 1.1).abs() < 1e-9, "{moved}");
+}
+
+#[test]
+fn nudge_fades_within_a_few_tenths_of_a_second() {
+    let (mut c, mut r, id) = setup();
+    step(&mut c, &mut r, id, DeckCommand::Play);
+    step(&mut c, &mut r, id, ring(0.05));
+    render(&mut r, SR as usize / 2);
+    let before = position(&c, id);
     render(&mut r, 1000);
-    let speed = (position(&c, id) - pos) / 1000.0;
-    assert!((speed - ratio).abs() < 1e-8, "{speed}");
+    let speed = (position(&c, id) - before) / 1000.0;
+    assert!((speed - 1.0).abs() < 0.01, "{speed}");
+}
+
+#[test]
+fn nudge_bend_is_clamped() {
+    let (mut c, mut r, id) = setup();
+    step(&mut c, &mut r, id, DeckCommand::Play);
+    let start = position(&c, id);
+    step(&mut c, &mut r, id, ring(1e6));
+    let fast = position(&c, id) - start;
+    assert!((fast - 1.5).abs() < 1e-9, "{fast}");
+    // Let it fade, then bend backwards: still moving forward at half speed at most.
+    render(&mut r, SR as usize);
+    let start = position(&c, id);
+    step(&mut c, &mut r, id, ring(-1e6));
+    let slow = position(&c, id) - start;
+    assert!((slow - 0.5).abs() < 1e-9, "{slow}");
 }
 
 #[test]
@@ -237,18 +256,6 @@ fn scratch_inside_loop_does_not_wrap() {
     assert!((s.position_frames - (start + 0.25 * PLATTER_FRAMES)).abs() <= 1.0);
     assert!(s.position_frames > 88_200.0);
     assert!(s.loop_active);
-}
-
-#[test]
-fn nudge_bend_is_capped_per_frame() {
-    let (mut c, mut r, id) = setup();
-    step(&mut c, &mut r, id, DeckCommand::Play);
-    let start = position(&c, id);
-    // One turn is 22_050 frames of nudge, far more than the 4001 frames below can apply.
-    step(&mut c, &mut r, id, ring(1.0));
-    render(&mut r, 4000);
-    let extra = position(&c, id) - start - 4001.0;
-    assert_eq!(extra, 4001.0 * 0.25);
 }
 
 #[test]
