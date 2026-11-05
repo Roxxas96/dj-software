@@ -14,7 +14,9 @@
 # left, 2/4 on the right), starting on decks 1 and 2.
 #
 # SHIFT: the SB3 sends different notes for shifted buttons (CUE 0x0C, SHIFT+CUE 0x48),
-# so shifted functions bind to the shifted note and need no `shift` condition.
+# so shifted functions bind to the shifted note and need no `shift` condition. When SHIFT
+# goes down while a button is held, its note-off arrives on the shifted note: the shifted
+# CUE and pad actions (return to start, hotcue delete) end the hold on release.
 
 [controller]
 name = "Pioneer DDJ-SB3"
@@ -311,10 +313,11 @@ midi = { channel = 1, note = 0x36 }
 action = "deck.jog_touch"
 side = "left"
 
-# SHIFT + jog touch: a touch that starts or ends with SHIFT held still pairs
+# SHIFT + jog touch: only lets go, so a touch begun with SHIFT held (a search) never
+# holds the record, and a touch begun without SHIFT still ends when SHIFT goes down first
 [[input]]
 midi = { channel = 1, note = 0x67 }
-action = "deck.jog_touch"
+action = "deck.jog_release"
 side = "left"
 
 # Jog top
@@ -476,10 +479,11 @@ midi = { channel = 2, note = 0x36 }
 action = "deck.jog_touch"
 side = "right"
 
-# SHIFT + jog touch: a touch that starts or ends with SHIFT held still pairs
+# SHIFT + jog touch: only lets go, so a touch begun with SHIFT held (a search) never
+# holds the record, and a touch begun without SHIFT still ends when SHIFT goes down first
 [[input]]
 midi = { channel = 2, note = 0x67 }
-action = "deck.jog_touch"
+action = "deck.jog_release"
 side = "right"
 
 # Jog top

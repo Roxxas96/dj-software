@@ -176,7 +176,7 @@ browser actions).
 | `deck.cue` | deck | button | Press while playing: jump back to the cue point and pause. Press while paused away from the cue point: set the cue point here. Hold while paused at the cue point: preview from there (release returns and stops). |
 | `deck.tempo` | deck | absolute | The tempo slider: 0.5 is the original tempo. Which end is faster depends on the controller, so use `invert` to match the slider's printed direction. |
 | `deck.tempo_range_next` | deck | button | Press to go to the next tempo range: 6 %, 10 %, 16 %, 100 %, then back to 6 %. |
-| `deck.return_to_start` | deck | button | Press to jump to the start of the track. |
+| `deck.return_to_start` | deck | button | Press to jump to the start of the track. Release ends a CUE preview. |
 | `deck.grid_shift_back` | deck | button | Press to move the beatgrid 5 ms earlier, or 1 ms with SHIFT held on the binding's side. |
 | `deck.grid_shift_forward` | deck | button | Press to move the beatgrid 5 ms later, or 1 ms with SHIFT held on the binding's side. |
 | `deck.grid_set_downbeat` | deck | button | Press to move the beatgrid so a beat falls exactly at the playhead. |
@@ -193,14 +193,14 @@ browser actions).
 | `deck.hotcue_6` | deck | button | Hotcue pad 6. Press on an empty pad: set it at the playhead. Press on a set pad: jump to it, which switches an active loop off when the pad lies outside that loop; while paused, hold to preview from there, and release to stop the preview and return to the pad. |
 | `deck.hotcue_7` | deck | button | Hotcue pad 7. Press on an empty pad: set it at the playhead. Press on a set pad: jump to it, which switches an active loop off when the pad lies outside that loop; while paused, hold to preview from there, and release to stop the preview and return to the pad. |
 | `deck.hotcue_8` | deck | button | Hotcue pad 8. Press on an empty pad: set it at the playhead. Press on a set pad: jump to it, which switches an active loop off when the pad lies outside that loop; while paused, hold to preview from there, and release to stop the preview and return to the pad. |
-| `deck.hotcue_delete_1` | deck | button | Press to clear hotcue pad 1. |
-| `deck.hotcue_delete_2` | deck | button | Press to clear hotcue pad 2. |
-| `deck.hotcue_delete_3` | deck | button | Press to clear hotcue pad 3. |
-| `deck.hotcue_delete_4` | deck | button | Press to clear hotcue pad 4. |
-| `deck.hotcue_delete_5` | deck | button | Press to clear hotcue pad 5. |
-| `deck.hotcue_delete_6` | deck | button | Press to clear hotcue pad 6. |
-| `deck.hotcue_delete_7` | deck | button | Press to clear hotcue pad 7. |
-| `deck.hotcue_delete_8` | deck | button | Press to clear hotcue pad 8. |
+| `deck.hotcue_delete_1` | deck | button | Press to clear hotcue pad 1. Release ends a preview of pad 1. |
+| `deck.hotcue_delete_2` | deck | button | Press to clear hotcue pad 2. Release ends a preview of pad 2. |
+| `deck.hotcue_delete_3` | deck | button | Press to clear hotcue pad 3. Release ends a preview of pad 3. |
+| `deck.hotcue_delete_4` | deck | button | Press to clear hotcue pad 4. Release ends a preview of pad 4. |
+| `deck.hotcue_delete_5` | deck | button | Press to clear hotcue pad 5. Release ends a preview of pad 5. |
+| `deck.hotcue_delete_6` | deck | button | Press to clear hotcue pad 6. Release ends a preview of pad 6. |
+| `deck.hotcue_delete_7` | deck | button | Press to clear hotcue pad 7. Release ends a preview of pad 7. |
+| `deck.hotcue_delete_8` | deck | button | Press to clear hotcue pad 8. Release ends a preview of pad 8. |
 | `deck.loop_in` | deck | button | Press to start a manual loop at the playhead. This clears the previous loop-out and switches an active loop off. |
 | `deck.loop_out` | deck | button | Press to end the loop at the playhead and switch it on, wrapping the playhead from the end back to the start. Does nothing without a loop-in before the playhead. |
 | `deck.auto_loop` | deck | button | Press to switch on a loop of the current length (4 beats at first) starting at the beat before the playhead, which needs a beatgrid. With a loop active (a manual one too), it switches the loop off instead, with or without a grid. |
@@ -210,6 +210,7 @@ browser actions).
 | `deck.sync` | deck | button | Beat sync: matches the deck's tempo to a playing deck (the active deck of the other side first, otherwise the lowest-numbered one) and aligns the beats, by half or double time when that fits the deck's tempo better. It widens the tempo range when needed, and the tempo slider must be picked up again afterwards (soft takeover). On a paused deck the alignment happens when it starts playing. Needs a beatgrid on both decks; otherwise it does nothing. |
 | `deck.vinyl_toggle` | deck | button | Press to turn vinyl mode on or off for the deck. In vinyl mode, touching the jog wheel top scratches. |
 | `deck.jog_touch` | deck | button | Press and release track whether a hand is on the top of the jog wheel. |
+| `deck.jog_release` | deck | button | Press and release both mark the top of the jog wheel as let go, so a touch never starts from it. For the touch a controller sends with SHIFT held: a SHIFT search keeps playing instead of holding the record, and a touch begun without SHIFT still ends. |
 | `deck.jog_top` | deck | relative | The top of the jog wheel. While touched in vinyl mode it scratches: the playhead follows the platter, and a held record is silent. Otherwise it nudges the tempo of a playing deck, or moves the playhead of a paused one (one platter turn is 1.8 s of track). |
 | `deck.jog_ring` | deck | relative | The outer ring of the jog wheel. It nudges a playing deck and moves a paused one's playhead, like the top without vinyl mode, and is ignored while the deck is scratching. |
 | `deck.jog_search` | deck | relative | Search: moves the playhead 10 s of track per platter turn, leaving a loop it lands outside of. |
@@ -234,7 +235,7 @@ Relative steps that arrive together (a fast turn of an encoder) are added up and
 move; a button press or release in between keeps the steps on each side of it apart.
 
 Only "absolute" actions can be used in `[[init]]`. `soft_takeover` has an effect only on absolute bindings, and `invert` flips absolute values (or negates relative steps).
-Button actions ignore releases, except `deck.cue`, `deck.hotcue_1` to `deck.hotcue_8`, `deck.jog_touch` and `modifier.shift`.
+Button actions ignore releases, except `deck.cue`, `deck.hotcue_1` to `deck.hotcue_8`, `deck.jog_touch`, `deck.jog_release` and `modifier.shift`, and `deck.return_to_start` and `deck.hotcue_delete_1` to `deck.hotcue_delete_8`, whose release ends a CUE or pad hold of the same deck (`deck.return_to_start` a CUE preview, `deck.hotcue_delete_N` a preview of pad N). A controller that sends a different note with SHIFT held sends the release there when SHIFT goes down during the hold, so binding the shifted note to these actions keeps that hold from sticking.
 
 Jog wheel actions turn the steps a wheel sends into platter turns using the `jog_steps_per_turn` key of `[controller]`, which jog bindings (`deck.jog_top`, `deck.jog_ring`, `deck.jog_search`) require: a mapping that binds one without it fails to load.
 
