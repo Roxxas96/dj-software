@@ -87,6 +87,7 @@ impl Deck {
             DeckCommand::SetTempoRange(range) => self.tempo_range = range,
             DeckCommand::Seek(frames) if frames.is_finite() => {
                 self.position = frames.clamp(0.0, self.frames() as f64);
+                self.exit_loop_if_outside(self.position);
             }
             DeckCommand::SetCue(frames) if frames.is_finite() => {
                 self.cue = frames.clamp(0.0, self.frames() as f64);
@@ -155,6 +156,7 @@ impl Deck {
         if self.playing {
             if self.preview.is_none() {
                 self.position = self.cue;
+                self.exit_loop_if_outside(self.cue);
                 self.playing = false;
             }
         } else if self.at_cue() {
@@ -177,6 +179,7 @@ impl Deck {
         self.preview = None;
         if !self.play_latched {
             self.position = point;
+            self.exit_loop_if_outside(point);
             self.playing = false;
         }
         self.play_latched = false;
@@ -255,7 +258,7 @@ impl Deck {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::TrackMemory;
+    use crate::{Grid, TrackMemory};
 
     const SR: u32 = 44_100;
 
@@ -343,5 +346,68 @@ mod tests {
         assert!(out[200..].iter().all(|&s| s == 0.0));
         assert!(!deck.playing);
         assert_eq!(deck.position, 100.0);
+    }
+
+    /// Loads `track` with an optional grid and plays from `position`.
+    fn deck_at(track: &Arc<TrackBuffer>, grid: Option<Grid>, position: f64) -> Deck {
+        let mut deck = Deck::default();
+        let memory = TrackMemory {
+            grid,
+            ..TrackMemory::default()
+        };
+        assert!(
+            deck.apply(DeckCommand::Load {
+                track: Arc::clone(track),
+                memory,
+            })
+            .is_none()
+        );
+        let _ = deck.apply(DeckCommand::Seek(position));
+        let _ = deck.apply(DeckCommand::Play);
+        deck
+    }
+
+    #[test]
+    fn loop_wraps_sample_exactly() {
+        let track = ramp_track(4096);
+        let mut deck = deck_at(&track, None, 1000.0);
+        let _ = deck.apply(DeckCommand::LoopIn);
+        let _ = deck.apply(DeckCommand::Seek(1500.0));
+        let _ = deck.apply(DeckCommand::LoopOut);
+        let _ = deck.apply(DeckCommand::Seek(1400.0));
+        assert!(deck.loop_active);
+        let mut out = vec![0.0; 2 * 700];
+        deck.render_add(&mut out, SR);
+        for (i, frame) in out.as_chunks::<2>().0.iter().enumerate() {
+            // The playhead reaches loop-out after 100 frames and continues from loop-in.
+            let index = 1400 + i;
+            let index = if index >= 1500 {
+                1000 + (index - 1000) % 500
+            } else {
+                index
+            };
+            assert_eq!(*frame, track.frame(index), "frame {i}");
+        }
+        assert_eq!(out[200..202], track.frame(1000));
+    }
+
+    #[test]
+    fn tiny_loop_stays_inside() {
+        let track = ramp_track(40_000);
+        let grid = Grid::from_bpm(180.0, 0.0, SR);
+        let mut deck = deck_at(&track, grid, 20_000.0);
+        for _ in 0..7 {
+            let _ = deck.apply(DeckCommand::LoopHalve);
+        }
+        let _ = deck.apply(DeckCommand::AutoLoop);
+        let (start, end) = (deck.loop_in.unwrap(), deck.loop_out.unwrap());
+        assert_eq!(start, 14_700.0);
+        assert!((end - start - 14_700.0 / 32.0).abs() < 1e-9);
+        let low = track.frame(start as usize)[0];
+        let high = track.frame(end.ceil() as usize)[0];
+        let mut out = vec![0.0; 2 * 8192];
+        deck.render_add(&mut out, SR);
+        assert!(out.iter().all(|s| (low..=high).contains(s)));
+        assert!((start..end).contains(&deck.position));
     }
 }

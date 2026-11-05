@@ -44,7 +44,7 @@ impl Deck {
         if self.track.is_none() {
             return;
         }
-        let beat = grid.beats_at(self.position).floor();
+        let beat = (grid.beats_at(self.position) + 1e-6).floor();
         let start = (grid.first_beat_frames + beat * grid.beat_period_frames).max(0.0);
         self.loop_in = Some(start);
         self.loop_out =
@@ -52,7 +52,8 @@ impl Deck {
         self.loop_active = true;
     }
 
-    /// Scales the loop length in beats by `factor` (clamped) and resizes an active loop.
+    /// Scales the loop length in beats by `factor` (clamped) and the length of an active loop
+    /// by the same factor, grid or not.
     pub(super) fn loop_resize(&mut self, factor: f64) {
         self.loop_beats = (self.loop_beats * factor).clamp(MIN_LOOP_BEATS, MAX_LOOP_BEATS);
         if !self.loop_active {
@@ -61,11 +62,7 @@ impl Deck {
         let (Some(start), Some(end)) = (self.loop_in, self.loop_out) else {
             return;
         };
-        let length = match self.grid {
-            Some(grid) => self.loop_beats * grid.beat_period_frames,
-            None => (end - start) * factor,
-        };
-        self.loop_out = Some(start + length.max(MIN_LOOP_FRAMES));
+        self.loop_out = Some(start + ((end - start) * factor).max(MIN_LOOP_FRAMES));
     }
 
     pub(super) fn reloop_exit(&mut self) {
@@ -86,10 +83,14 @@ impl Deck {
         }
     }
 
-    /// The loop bounds while a loop is active.
+    /// The wrap bounds while a loop is active: loop-out is cut at the track end, so a loop
+    /// overhanging the end wraps there.
     pub(super) fn active_loop(&self) -> Option<(f64, f64)> {
         match (self.loop_active, self.loop_in, self.loop_out) {
-            (true, Some(start), Some(end)) => Some((start, end)),
+            (true, Some(start), Some(end)) => {
+                let end = end.min(self.frames() as f64);
+                (end > start).then_some((start, end))
+            }
             _ => None,
         }
     }
@@ -103,5 +104,20 @@ pub(super) fn wrap_position(position: f64, bounds: Option<(f64, f64)>, step: f64
             start + (position - start) % (end - start)
         }
         _ => position,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wrap_position;
+
+    #[test]
+    fn wraps_forward_only() {
+        let bounds = Some((100.0, 200.0));
+        assert_eq!(wrap_position(250.0, bounds, 1.0), 150.0);
+        assert_eq!(wrap_position(200.0, bounds, 1.0), 100.0);
+        assert_eq!(wrap_position(250.0, bounds, 0.0), 250.0);
+        assert_eq!(wrap_position(250.0, bounds, -1.0), 250.0);
+        assert_eq!(wrap_position(150.0, None, 1.0), 150.0);
     }
 }
