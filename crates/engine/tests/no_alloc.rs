@@ -29,7 +29,10 @@ fn render_does_not_allocate() {
             ramp_track(48_000, 200_000)
         };
         for cmd in [
-            DeckCommand::Load(track),
+            DeckCommand::Load {
+                track,
+                memory: engine::TrackMemory::default(),
+            },
             DeckCommand::Play,
             DeckCommand::SetTempoSlider(0.7),
         ] {
@@ -52,8 +55,14 @@ fn render_does_not_allocate() {
     };
 
     render_blocks(50);
-    c.send(Command::Deck(decks[0], DeckCommand::Load(replacement)))
-        .unwrap();
+    c.send(Command::Deck(
+        decks[0],
+        DeckCommand::Load {
+            track: replacement,
+            memory: engine::TrackMemory::default(),
+        },
+    ))
+    .unwrap();
     c.send(Command::Deck(decks[0], DeckCommand::Play)).unwrap();
     render_blocks(10);
     for cmd in [

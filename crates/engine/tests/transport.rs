@@ -5,8 +5,9 @@ use std::sync::Arc;
 use approx::{assert_abs_diff_eq, assert_relative_eq};
 use common::{SETTLE_FRAMES, SETTLED_EPSILON, constant_track, ramp_track, render};
 use engine::{
-    ChannelCommand, Command, DeckCommand, DeckId, EngineConfig, EngineController, EngineRenderer,
-    MasterCommand, TempoRange, TrackBuffer, TrackError, XfaderAssign, engine,
+    ChannelCommand, Command, CommandQueueFull, DeckCommand, DeckId, EngineConfig, EngineController,
+    EngineRenderer, Grid, HOTCUES, HotcueSlot, MasterCommand, TempoRange, TrackBuffer, TrackError,
+    TrackMemory, XfaderAssign, engine,
 };
 
 const SR: u32 = 44_100;
@@ -57,7 +58,14 @@ fn silent_when_nothing_loaded() {
 #[test]
 fn loaded_but_paused_is_silent() {
     let (mut c, mut r) = setup(SR);
-    send(&mut c, deck(0), DeckCommand::Load(ramp_track(SR, 4096)));
+    send(
+        &mut c,
+        deck(0),
+        DeckCommand::Load {
+            track: ramp_track(SR, 4096),
+            memory: engine::TrackMemory::default(),
+        },
+    );
     let (master, headphones) = render(&mut r, 2048);
     assert_silent(&master);
     assert_silent(&headphones);
@@ -73,7 +81,14 @@ fn play_outputs_track_at_unity() {
     // Left and right differ, so a channel swap or mono sum would fail.
     let samples = [0.3, -0.2].repeat(2 * SETTLE_FRAMES);
     let track = Arc::new(TrackBuffer::new(SR, samples).unwrap());
-    send(&mut c, deck(0), DeckCommand::Load(track));
+    send(
+        &mut c,
+        deck(0),
+        DeckCommand::Load {
+            track,
+            memory: engine::TrackMemory::default(),
+        },
+    );
     send(&mut c, deck(0), DeckCommand::SetTempoSlider(0.5));
     send(&mut c, deck(0), DeckCommand::Play);
     let (_, headphones) = render(&mut r, SETTLE_FRAMES);
@@ -97,7 +112,10 @@ fn resamples_track_rate_to_output_rate() {
     send(
         &mut c,
         deck(0),
-        DeckCommand::Load(ramp_track(48_000, 96_000)),
+        DeckCommand::Load {
+            track: ramp_track(48_000, 96_000),
+            memory: engine::TrackMemory::default(),
+        },
     );
     send(&mut c, deck(0), DeckCommand::Play);
     render(&mut r, 44_100);
@@ -107,7 +125,14 @@ fn resamples_track_rate_to_output_rate() {
 #[test]
 fn tempo_slider_scales_rate() {
     let (mut c, mut r) = setup(SR);
-    send(&mut c, deck(0), DeckCommand::Load(ramp_track(SR, 4096)));
+    send(
+        &mut c,
+        deck(0),
+        DeckCommand::Load {
+            track: ramp_track(SR, 4096),
+            memory: engine::TrackMemory::default(),
+        },
+    );
     send(
         &mut c,
         deck(0),
@@ -124,7 +149,14 @@ fn tempo_slider_scales_rate() {
 #[test]
 fn tempo_slider_minus_hundred_stops_advancing() {
     let (mut c, mut r) = setup(SR);
-    send(&mut c, deck(0), DeckCommand::Load(ramp_track(SR, 4096)));
+    send(
+        &mut c,
+        deck(0),
+        DeckCommand::Load {
+            track: ramp_track(SR, 4096),
+            memory: engine::TrackMemory::default(),
+        },
+    );
     send(&mut c, deck(0), DeckCommand::Seek(100.0));
     send(
         &mut c,
@@ -146,7 +178,14 @@ fn tempo_slider_minus_hundred_stops_advancing() {
 fn interpolates_between_frames() {
     let (mut c, mut r) = setup(SR);
     let track = ramp_track(SR, 4096);
-    send(&mut c, deck(0), DeckCommand::Load(track.clone()));
+    send(
+        &mut c,
+        deck(0),
+        DeckCommand::Load {
+            track: track.clone(),
+            memory: engine::TrackMemory::default(),
+        },
+    );
     send(
         &mut c,
         deck(0),
@@ -170,7 +209,10 @@ fn stops_at_end_of_track() {
     send(
         &mut c,
         deck(0),
-        DeckCommand::Load(constant_track(SR, 100, 0.5)),
+        DeckCommand::Load {
+            track: constant_track(SR, 100, 0.5),
+            memory: engine::TrackMemory::default(),
+        },
     );
     send(&mut c, deck(0), DeckCommand::Play);
     let (master, _) = render(&mut r, 200);
@@ -190,7 +232,14 @@ fn stops_at_end_of_track() {
 fn empty_track_renders_silence() {
     let (mut c, mut r) = setup(SR);
     let empty = Arc::new(TrackBuffer::new(SR, vec![]).unwrap());
-    send(&mut c, deck(0), DeckCommand::Load(empty));
+    send(
+        &mut c,
+        deck(0),
+        DeckCommand::Load {
+            track: empty,
+            memory: engine::TrackMemory::default(),
+        },
+    );
     send(&mut c, deck(0), DeckCommand::Play);
     let (master, headphones) = render(&mut r, 1024);
     assert_silent(&master);
@@ -201,7 +250,14 @@ fn empty_track_renders_silence() {
 #[test]
 fn toggle_play_and_pause() {
     let (mut c, mut r) = setup(SR);
-    send(&mut c, deck(0), DeckCommand::Load(ramp_track(SR, 4096)));
+    send(
+        &mut c,
+        deck(0),
+        DeckCommand::Load {
+            track: ramp_track(SR, 4096),
+            memory: engine::TrackMemory::default(),
+        },
+    );
 
     send(&mut c, deck(0), DeckCommand::TogglePlay);
     render(&mut r, 100);
@@ -227,7 +283,14 @@ fn toggle_play_and_pause() {
 #[test]
 fn seek_clamps_to_track() {
     let (mut c, mut r) = setup(SR);
-    send(&mut c, deck(0), DeckCommand::Load(ramp_track(SR, 4096)));
+    send(
+        &mut c,
+        deck(0),
+        DeckCommand::Load {
+            track: ramp_track(SR, 4096),
+            memory: engine::TrackMemory::default(),
+        },
+    );
 
     send(&mut c, deck(0), DeckCommand::Seek(-5.0));
     render(&mut r, 1);
@@ -241,7 +304,14 @@ fn seek_clamps_to_track() {
 #[test]
 fn seek_nan_is_ignored() {
     let (mut c, mut r) = setup(SR);
-    send(&mut c, deck(0), DeckCommand::Load(ramp_track(SR, 4096)));
+    send(
+        &mut c,
+        deck(0),
+        DeckCommand::Load {
+            track: ramp_track(SR, 4096),
+            memory: engine::TrackMemory::default(),
+        },
+    );
     send(&mut c, deck(0), DeckCommand::Seek(500.0));
     render(&mut r, 1);
     send(&mut c, deck(0), DeckCommand::Seek(f64::NAN));
@@ -265,11 +335,25 @@ fn tempo_slider_nan_is_ignored() {
 fn load_replaces_track_and_old_one_is_returned_as_garbage() {
     let (mut c, mut r) = setup(SR);
     let old = ramp_track(SR, 4096);
-    send(&mut c, deck(0), DeckCommand::Load(old.clone()));
+    send(
+        &mut c,
+        deck(0),
+        DeckCommand::Load {
+            track: old.clone(),
+            memory: engine::TrackMemory::default(),
+        },
+    );
     render(&mut r, 1);
     assert_eq!(Arc::strong_count(&old), 2);
 
-    send(&mut c, deck(0), DeckCommand::Load(ramp_track(SR, 2048)));
+    send(
+        &mut c,
+        deck(0),
+        DeckCommand::Load {
+            track: ramp_track(SR, 2048),
+            memory: engine::TrackMemory::default(),
+        },
+    );
     render(&mut r, 1);
     assert_eq!(Arc::strong_count(&old), 2);
     assert_eq!(c.deck(deck(0)).duration_frames, 2048);
@@ -285,7 +369,10 @@ fn four_decks_sum_into_master() {
         send(
             &mut c,
             id,
-            DeckCommand::Load(constant_track(SR, 2 * SETTLE_FRAMES, 0.25)),
+            DeckCommand::Load {
+                track: constant_track(SR, 2 * SETTLE_FRAMES, 0.25),
+                memory: engine::TrackMemory::default(),
+            },
         );
         send(&mut c, id, DeckCommand::Play);
     }
@@ -322,15 +409,156 @@ fn non_finite_track_samples_are_silenced() {
     samples[11] = f32::INFINITY;
     samples[20] = f32::NEG_INFINITY;
     let bad = std::sync::Arc::new(engine::TrackBuffer::new(SR, samples).unwrap());
-    send(&mut c, deck(0), DeckCommand::Load(bad));
+    send(
+        &mut c,
+        deck(0),
+        DeckCommand::Load {
+            track: bad,
+            memory: engine::TrackMemory::default(),
+        },
+    );
     send(&mut c, deck(0), DeckCommand::Play);
     let (master, headphones) = render(&mut r, 2000);
     assert!(master.iter().chain(&headphones).all(|s| s.is_finite()));
 
-    send(&mut c, deck(0), DeckCommand::Load(ramp_track(SR, 100_000)));
+    send(
+        &mut c,
+        deck(0),
+        DeckCommand::Load {
+            track: ramp_track(SR, 100_000),
+            memory: engine::TrackMemory::default(),
+        },
+    );
     send(&mut c, deck(0), DeckCommand::Play);
     render(&mut r, SETTLE_FRAMES);
     let (master, _) = render(&mut r, 512);
     assert!(master.iter().all(|s| s.is_finite()));
     assert!(master.iter().any(|&s| s.abs() > 0.01));
+}
+
+fn grid_120_bpm() -> Grid {
+    Grid::from_bpm(120.0, 1000.0, SR).unwrap()
+}
+
+#[test]
+fn load_applies_track_memory() {
+    let (mut c, mut r) = setup(SR);
+    let mut hotcues = [None; HOTCUES];
+    hotcues[HotcueSlot::new(3).unwrap().index()] = Some(900.0);
+    let memory = TrackMemory {
+        cue: 500.0,
+        hotcues,
+        grid: Some(grid_120_bpm()),
+    };
+    send(
+        &mut c,
+        deck(0),
+        DeckCommand::Load {
+            track: ramp_track(SR, 4096),
+            memory,
+        },
+    );
+    render(&mut r, 64);
+    let s = c.deck(deck(0));
+    assert_eq!(s.cue_frames, 500.0);
+    assert_eq!(s.hotcues[2], Some(900.0));
+    assert_eq!(s.grid.unwrap().beat_period_frames, 22_050.0);
+    assert!(!s.playing);
+    assert_eq!(s.position_frames, 0.0);
+}
+
+#[test]
+fn load_clamps_memory_like_clamped() {
+    let (mut c, mut r) = setup(SR);
+    let memory = TrackMemory {
+        cue: 5000.0,
+        hotcues: [
+            Some(-5.0),
+            Some(f64::NAN),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ],
+        grid: None,
+    };
+    send(
+        &mut c,
+        deck(0),
+        DeckCommand::Load {
+            track: ramp_track(SR, 1000),
+            memory,
+        },
+    );
+    render(&mut r, 64);
+    let s = c.deck(deck(0));
+    let expected = memory.clamped(1000);
+    assert_eq!(expected.cue, 1000.0);
+    assert_eq!(expected.hotcues[..2], [Some(0.0), None]);
+    assert_eq!(s.cue_frames, expected.cue);
+    assert_eq!(s.hotcues, expected.hotcues);
+}
+
+#[test]
+fn set_grid_replaces_and_clears() {
+    let (mut c, mut r) = setup(SR);
+    send(
+        &mut c,
+        deck(0),
+        DeckCommand::Load {
+            track: ramp_track(SR, 4096),
+            memory: TrackMemory::default(),
+        },
+    );
+    let g = grid_120_bpm();
+    send(&mut c, deck(0), DeckCommand::SetGrid(Some(g)));
+    render(&mut r, 64);
+    assert_eq!(c.deck(deck(0)).grid, Some(g));
+
+    let zero = Grid {
+        beat_period_frames: 0.0,
+        first_beat_frames: 0.0,
+    };
+    send(&mut c, deck(0), DeckCommand::SetGrid(Some(zero)));
+    render(&mut r, 64);
+    assert_eq!(c.deck(deck(0)).grid, Some(g), "an invalid grid is ignored");
+
+    send(&mut c, deck(0), DeckCommand::SetGrid(None));
+    render(&mut r, 64);
+    assert_eq!(c.deck(deck(0)).grid, None);
+}
+
+#[test]
+fn send_all_is_all_or_nothing() {
+    let (mut c, mut r) = engine(EngineConfig {
+        sample_rate: SR,
+        max_block_frames: 512,
+    });
+    let cmd = Command::Master(MasterCommand::MasterLevel(1.0));
+    for _ in 0..254 {
+        c.send(cmd.clone()).unwrap();
+    }
+    let three = [cmd.clone(), cmd.clone(), cmd];
+    assert_eq!(c.send_all(&three), Err(CommandQueueFull));
+    render(&mut r, 1);
+    assert_eq!(c.send_all(&three), Ok(()));
+    // Nothing was queued by the failed call: the queue holds exactly the 3 now.
+    render(&mut r, 1);
+    for _ in 0..256 {
+        c.send(Command::Master(MasterCommand::MasterLevel(1.0)))
+            .unwrap();
+    }
+}
+
+#[test]
+fn grid_from_bpm_validates() {
+    for bpm in [0.0, -120.0, f64::NAN, f64::INFINITY] {
+        assert_eq!(Grid::from_bpm(bpm, 0.0, SR), None);
+    }
+    assert_eq!(Grid::from_bpm(120.0, f64::NAN, SR), None);
+    assert_eq!(Grid::from_bpm(120.0, 0.0, 0), None);
+    let g = grid_120_bpm();
+    assert_eq!(g.beats_at(1000.0 + 2.0 * 22_050.0), 2.0);
 }

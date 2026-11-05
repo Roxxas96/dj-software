@@ -211,7 +211,13 @@ mod tests {
             Command::Channel(id, ChannelCommand::Pfl(true)),
             Command::Master(MasterCommand::MasterLevel(1.0)),
             Command::Master(MasterCommand::HeadphoneLevel(1.0)),
-            Command::Deck(id, DeckCommand::Load(track)),
+            Command::Deck(
+                id,
+                DeckCommand::Load {
+                    track,
+                    memory: engine::TrackMemory::default(),
+                },
+            ),
             Command::Deck(id, DeckCommand::Play),
         ] {
             c.send(cmd).unwrap();

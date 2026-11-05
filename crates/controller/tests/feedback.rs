@@ -74,6 +74,7 @@ fn snap(loaded: bool, playing: bool, position: f64, cue: f64) -> DeckSnapshot {
         tempo_ratio: 1.0,
         cue_frames: cue,
         previewing: false,
+        ..DeckSnapshot::default()
     }
 }
 
@@ -227,8 +228,14 @@ fn play_and_cue_leds_follow_engine() {
         |c: &engine::EngineController| [c.deck(d(0)), c.deck(d(1)), c.deck(d(2)), c.deck(d(3))];
 
     let track = Arc::new(TrackBuffer::new(SR, vec![0.5; 200_000 * 2]).unwrap());
-    c.send(Command::Deck(d(0), DeckCommand::Load(track)))
-        .unwrap();
+    c.send(Command::Deck(
+        d(0),
+        DeckCommand::Load {
+            track,
+            memory: engine::TrackMemory::default(),
+        },
+    ))
+    .unwrap();
     render(&mut r, 1);
 
     // Loaded, paused at the cue point: play blinks (lit at t=0), cue is solid.

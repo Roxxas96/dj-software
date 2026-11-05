@@ -329,7 +329,13 @@ fn disconnect_releases_held_presses() {
     let mut rig = Rig::attached();
     let track = Arc::new(TrackBuffer::new(44_100, vec![0.5; 200_000 * 2]).unwrap());
     rig.engine
-        .send(Command::Deck(d(0), DeckCommand::Load(track)))
+        .send(Command::Deck(
+            d(0),
+            DeckCommand::Load {
+                track,
+                memory: engine::TrackMemory::default(),
+            },
+        ))
         .unwrap();
     rig.render();
 

@@ -67,7 +67,13 @@ impl Rig {
         for deck in DeckId::ALL {
             let track = Arc::new(TrackBuffer::new(SAMPLE_RATE, vec![0.1; 441_000 * 2]).unwrap());
             engine
-                .send(Command::Deck(deck, DeckCommand::Load(track)))
+                .send(Command::Deck(
+                    deck,
+                    DeckCommand::Load {
+                        track,
+                        memory: engine::TrackMemory::default(),
+                    },
+                ))
                 .unwrap();
         }
         let mut rig = Self {

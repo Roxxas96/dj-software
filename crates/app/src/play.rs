@@ -215,7 +215,13 @@ pub fn play(args: &PlayArgs) -> anyhow::Result<()> {
     if let Some(track) = track {
         send(
             &mut controller,
-            Command::Deck(deck(1)?, DeckCommand::Load(track)),
+            Command::Deck(
+                deck(1)?,
+                DeckCommand::Load {
+                    track,
+                    memory: engine::TrackMemory::default(),
+                },
+            ),
         )?;
         if mapping.is_none() {
             send(&mut controller, Command::Deck(deck(1)?, DeckCommand::Play))?;
@@ -225,7 +231,13 @@ pub fn play(args: &PlayArgs) -> anyhow::Result<()> {
         let deck2 = deck(2)?;
         send(
             &mut controller,
-            Command::Deck(deck2, DeckCommand::Load(cue)),
+            Command::Deck(
+                deck2,
+                DeckCommand::Load {
+                    track: cue,
+                    memory: engine::TrackMemory::default(),
+                },
+            ),
         )?;
         // With a controller, its faders, PFL buttons and PLAY take over.
         if mapping.is_none() {
@@ -244,7 +256,13 @@ pub fn play(args: &PlayArgs) -> anyhow::Result<()> {
         if let Some(track) = track {
             send(
                 &mut controller,
-                Command::Deck(deck(n)?, DeckCommand::Load(track)),
+                Command::Deck(
+                    deck(n)?,
+                    DeckCommand::Load {
+                        track,
+                        memory: engine::TrackMemory::default(),
+                    },
+                ),
             )?;
         }
     }
@@ -663,6 +681,7 @@ mod tests {
             tempo_ratio: 1.0,
             cue_frames: 0.0,
             previewing: false,
+            ..DeckSnapshot::default()
         };
         assert_eq!(
             deck_line(DeckId::new(0).unwrap(), &snapshot),

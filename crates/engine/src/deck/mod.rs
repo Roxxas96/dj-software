@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{DeckCommand, DeckSnapshot, TempoRange, TrackBuffer};
+use crate::{DeckCommand, DeckSnapshot, Grid, HOTCUES, TempoRange, TrackBuffer};
 
 /// Transport state of one deck. Owned by the renderer.
 #[derive(Debug)]
@@ -17,6 +17,8 @@ pub(crate) struct Deck {
     play_latched: bool,
     tempo_slider: f32,
     tempo_range: TempoRange,
+    hotcues: [Option<f64>; HOTCUES],
+    grid: Option<Grid>,
 }
 
 impl Default for Deck {
@@ -30,6 +32,8 @@ impl Default for Deck {
             play_latched: false,
             tempo_slider: 0.5,
             tempo_range: TempoRange::default(),
+            hotcues: [None; HOTCUES],
+            grid: None,
         }
     }
 }
@@ -40,8 +44,12 @@ impl Deck {
     #[must_use]
     pub(crate) fn apply(&mut self, cmd: DeckCommand) -> Option<Arc<TrackBuffer>> {
         match cmd {
-            DeckCommand::Load(track) => {
+            DeckCommand::Load { track, memory } => {
                 self.reset_transport();
+                let memory = memory.clamped(track.frames());
+                self.cue = memory.cue;
+                self.hotcues = memory.hotcues;
+                self.grid = memory.grid;
                 return self.track.replace(track);
             }
             DeckCommand::Unload => {
@@ -71,7 +79,17 @@ impl Deck {
             DeckCommand::SetCue(frames) if frames.is_finite() => {
                 self.cue = frames.clamp(0.0, self.frames() as f64);
             }
-            DeckCommand::SetTempoSlider(_) | DeckCommand::Seek(_) | DeckCommand::SetCue(_) => {}
+            DeckCommand::SetGrid(None) => self.grid = None,
+            // A grid without a usable period would break every beat calculation: ignore it.
+            DeckCommand::SetGrid(Some(grid))
+                if grid.beat_period_frames.is_finite() && grid.beat_period_frames > 0.0 =>
+            {
+                self.grid = Some(grid);
+            }
+            DeckCommand::SetTempoSlider(_)
+            | DeckCommand::Seek(_)
+            | DeckCommand::SetCue(_)
+            | DeckCommand::SetGrid(_) => {}
         }
         None
     }
@@ -82,6 +100,8 @@ impl Deck {
         self.play_latched = false;
         self.position = 0.0;
         self.cue = 0.0;
+        self.hotcues = [None; HOTCUES];
+        self.grid = None;
     }
 
     fn play(&mut self) {
@@ -187,6 +207,15 @@ impl Deck {
             tempo_ratio: self.tempo_ratio(),
             cue_frames: self.cue,
             previewing: self.preview,
+            grid: self.grid,
+            hotcues: self.hotcues,
+            // Filled in by the loop and jog behavior.
+            loop_in: None,
+            loop_out: None,
+            loop_active: false,
+            loop_beats: 4.0,
+            vinyl: true,
+            jog_touched: false,
         }
     }
 }
@@ -194,6 +223,7 @@ impl Deck {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TrackMemory;
 
     const SR: u32 = 44_100;
 
@@ -210,7 +240,13 @@ mod tests {
 
     fn playing_deck(track: &Arc<TrackBuffer>) -> Deck {
         let mut deck = Deck::default();
-        assert!(deck.apply(DeckCommand::Load(Arc::clone(track))).is_none());
+        assert!(
+            deck.apply(DeckCommand::Load {
+                track: Arc::clone(track),
+                memory: TrackMemory::default(),
+            })
+            .is_none()
+        );
         let _ = deck.apply(DeckCommand::Play);
         deck
     }

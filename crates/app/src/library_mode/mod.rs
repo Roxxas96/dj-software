@@ -363,7 +363,13 @@ impl LibraryMode {
         let frames = loaded.buffer.frames();
         let rate = loaded.buffer.sample_rate();
         if engine
-            .send(Command::Deck(deck, DeckCommand::Load(loaded.buffer)))
+            .send(Command::Deck(
+                deck,
+                DeckCommand::Load {
+                    track: loaded.buffer,
+                    memory: engine::TrackMemory::default(),
+                },
+            ))
             .is_err()
         {
             printer.event(format!(
@@ -701,6 +707,7 @@ mod tests {
             tempo_ratio: 1.05,
             cue_frames: 0.0,
             previewing: false,
+            ..DeckSnapshot::default()
         };
         let deck = DeckId::new(2).unwrap();
         assert_eq!(
@@ -801,6 +808,7 @@ mod tests {
             tempo_ratio: 1.0,
             cue_frames: 0.0,
             previewing: false,
+            ..DeckSnapshot::default()
         };
         cue.step(&snap);
         mode.decks[0].as_mut().unwrap().cue = cue;

@@ -64,7 +64,14 @@ fn setup(track: Arc<TrackBuffer>, cmds: &[ChannelCommand]) -> (EngineController,
         channel(&mut c, cmd);
     }
     let id = DeckId::new(0).unwrap();
-    c.send(Command::Deck(id, DeckCommand::Load(track))).unwrap();
+    c.send(Command::Deck(
+        id,
+        DeckCommand::Load {
+            track,
+            memory: engine::TrackMemory::default(),
+        },
+    ))
+    .unwrap();
     c.send(Command::Deck(id, DeckCommand::Play)).unwrap();
     (c, r)
 }

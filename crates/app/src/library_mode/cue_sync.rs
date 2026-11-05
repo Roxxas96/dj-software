@@ -131,6 +131,7 @@ mod tests {
             tempo_ratio: 1.0,
             cue_frames: cue,
             previewing: false,
+            ..DeckSnapshot::default()
         }
     }
 
