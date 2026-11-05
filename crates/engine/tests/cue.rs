@@ -13,7 +13,14 @@ fn setup() -> (EngineController, EngineRenderer, DeckId) {
         max_block_frames: 512,
     });
     let id = DeckId::new(0).unwrap();
-    send(&mut c, id, DeckCommand::Load(ramp_track(SR, 100_000)));
+    send(
+        &mut c,
+        id,
+        DeckCommand::Load {
+            track: ramp_track(SR, 100_000),
+            memory: engine::TrackMemory::default(),
+        },
+    );
     (c, r, id)
 }
 
@@ -97,7 +104,15 @@ fn load_resets_cue_to_zero() {
     step(&mut c, &mut r, id, DeckCommand::Seek(500.0));
     step(&mut c, &mut r, id, DeckCommand::CuePress);
     assert_eq!(c.deck(id).cue_frames, 500.0);
-    step(&mut c, &mut r, id, DeckCommand::Load(ramp_track(SR, 1000)));
+    step(
+        &mut c,
+        &mut r,
+        id,
+        DeckCommand::Load {
+            track: ramp_track(SR, 1000),
+            memory: engine::TrackMemory::default(),
+        },
+    );
     assert_eq!(c.deck(id).cue_frames, 0.0);
 }
 
@@ -150,7 +165,10 @@ fn load_during_preview_resets() {
         &mut c,
         &mut r,
         id,
-        DeckCommand::Load(common::ramp_track(SR, 50_000)),
+        DeckCommand::Load {
+            track: common::ramp_track(SR, 50_000),
+            memory: engine::TrackMemory::default(),
+        },
     );
     let s = c.deck(id);
     assert!(!s.playing);

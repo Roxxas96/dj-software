@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{DeckId, TrackBuffer};
+use crate::{DeckId, Grid, TrackBuffer, TrackMemory};
 
 /// A message from the controller to the audio thread.
 #[derive(Debug, Clone)]
@@ -12,8 +12,12 @@ pub enum Command {
 
 #[derive(Debug, Clone)]
 pub enum DeckCommand {
-    /// Loads a track, paused at frame 0. The tempo slider keeps its position.
-    Load(Arc<TrackBuffer>),
+    /// Loads a track, paused at frame 0, then applies `memory.clamped(track.frames())`.
+    /// The tempo slider keeps its position.
+    Load {
+        track: Arc<TrackBuffer>,
+        memory: TrackMemory,
+    },
     Unload,
     Play,
     Pause,
@@ -32,6 +36,9 @@ pub enum DeckCommand {
     /// While the cue is held (previewing) this still updates the stored cue point, and
     /// `CueRelease` returns to the cue point as stored at release time.
     SetCue(f64),
+    /// Replaces the beatgrid; `None` clears it. A grid whose period is not finite and
+    /// positive is ignored.
+    SetGrid(Option<Grid>),
 }
 
 /// How far the tempo slider reaches either side of the original tempo.

@@ -38,7 +38,10 @@ fn play(c: &mut EngineController, index: usize) {
     let id = deck(index);
     c.send(Command::Deck(
         id,
-        DeckCommand::Load(constant_track(SR, 100_000, SIGNAL)),
+        DeckCommand::Load {
+            track: constant_track(SR, 100_000, SIGNAL),
+            memory: engine::TrackMemory::default(),
+        },
     ))
     .unwrap();
     c.send(Command::Deck(id, DeckCommand::Play)).unwrap();
@@ -157,7 +160,10 @@ fn master_output_is_clamped() {
         channel(&mut c, index, ChannelCommand::Pfl(true));
         c.send(Command::Deck(
             deck(index),
-            DeckCommand::Load(constant_track(SR, 100_000, 0.9)),
+            DeckCommand::Load {
+                track: constant_track(SR, 100_000, 0.9),
+                memory: engine::TrackMemory::default(),
+            },
         ))
         .unwrap();
         c.send(Command::Deck(deck(index), DeckCommand::Play))

@@ -39,6 +39,21 @@ impl EngineController {
         self.commands.push(cmd).map_err(|_| CommandQueueFull)
     }
 
+    /// Queues every command in `cmds`, or none of them when the queue has fewer free slots
+    /// than `cmds.len()`.
+    pub fn send_all(&mut self, cmds: &[Command]) -> Result<(), CommandQueueFull> {
+        self.collect_garbage();
+        if self.commands.slots() < cmds.len() {
+            return Err(CommandQueueFull);
+        }
+        for cmd in cmds {
+            self.commands
+                .push(cmd.clone())
+                .map_err(|_| CommandQueueFull)?;
+        }
+        Ok(())
+    }
+
     /// Frees tracks the renderer has replaced. Dropping them here keeps deallocation off
     /// the audio thread.
     pub fn collect_garbage(&mut self) {

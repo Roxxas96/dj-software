@@ -31,7 +31,10 @@ impl Rig {
         let track = Arc::new(TrackBuffer::new(SR, vec![0.5; 200_000 * 2]).unwrap());
         c.send(engine::Command::Deck(
             d(0),
-            engine::DeckCommand::Load(track),
+            engine::DeckCommand::Load {
+                track,
+                memory: engine::TrackMemory::default(),
+            },
         ))
         .unwrap();
         let mut rig = Self {
@@ -440,6 +443,7 @@ fn snap(loaded: bool, playing: bool, position: f64, cue: f64, previewing: bool) 
         tempo_ratio: 1.0,
         cue_frames: cue,
         previewing,
+        ..DeckSnapshot::default()
     }
 }
 
