@@ -157,7 +157,18 @@ changes how keys are shown; the stored key is the same.
   tracks that are atonal, change key, or have little bass or harmony.
 - The first beat is the detector's best guess. Check it by ear and use `downbeat`.
 
-Results of comparing the detectors with other software on real music are added here.
+### Tested on a real library
+
+First check, November 2026, on a 4,536-track library (mostly hardcore, uptempo, dubstep
+and drum and bass) on an external drive, macOS, release build:
+
+- The scan took about 5 minutes. One file was skipped, and that file was empty (0 bytes).
+- Analysis took about an hour, around 0.8 s per track. It only runs again for new or
+  changed tracks.
+- BPM and key were checked by ear against VirtualDJ. They matched overall; this was
+  not a per-track count.
+- Browsing, loading (deck 3 included), restoring the cue point, grid edits, and
+  relinking a moved file (cue and locked grid kept) all worked.
 
 ## Beatgrid editing
 
