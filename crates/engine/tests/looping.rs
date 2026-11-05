@@ -204,16 +204,72 @@ fn halve_and_double_clamp() {
 }
 
 #[test]
-fn halving_a_manual_loop_on_a_gridded_track_halves_its_length() {
+fn resizing_an_active_loop_stops_at_the_beat_limits() {
+    // 120 BPM: a beat is 22,050 frames. Ten halves of a 4-beat loop stop at 1/32 beat.
     let (mut c, mut r, id) = setup();
+    step(&mut c, &mut r, id, DeckCommand::Seek(22_050.0));
+    step(&mut c, &mut r, id, DeckCommand::AutoLoop);
+    for _ in 0..10 {
+        step(&mut c, &mut r, id, DeckCommand::LoopHalve);
+    }
+    let s = c.deck(id);
+    assert_eq!(s.loop_beats, 1.0 / 32.0);
+    assert_eq!(s.loop_out, Some(22_050.0 + 22_050.0 / 32.0));
+    // Doubling stops at 64 beats.
+    for _ in 0..20 {
+        step(&mut c, &mut r, id, DeckCommand::LoopDouble);
+    }
+    let s = c.deck(id);
+    assert_eq!(s.loop_beats, 64.0);
+    assert_eq!(s.loop_out, Some(22_050.0 + 64.0 * 22_050.0));
+}
+
+#[test]
+fn resizing_without_grid_stops_with_the_loop_beats() {
+    // A 4,000-frame manual loop, no grid: the length follows loop_beats (4 at first) until
+    // it stops changing at 1/32 (seven halves) and at 64 (eleven doubles from there).
+    let (mut c, mut r, id) = setup_with(None);
     step(&mut c, &mut r, id, DeckCommand::Seek(1000.0));
     step(&mut c, &mut r, id, DeckCommand::LoopIn);
-    step(&mut c, &mut r, id, DeckCommand::Seek(2000.0));
+    step(&mut c, &mut r, id, DeckCommand::Seek(5000.0));
+    step(&mut c, &mut r, id, DeckCommand::LoopOut);
+    for _ in 0..10 {
+        step(&mut c, &mut r, id, DeckCommand::LoopHalve);
+    }
+    assert_eq!(c.deck(id).loop_out, Some(1000.0 + 4000.0 / 128.0));
+    for _ in 0..20 {
+        step(&mut c, &mut r, id, DeckCommand::LoopDouble);
+    }
+    assert_eq!(c.deck(id).loop_out, Some(1000.0 + 4000.0 / 128.0 * 2048.0));
+}
+
+#[test]
+fn halving_a_manual_loop_on_a_gridded_track_halves_its_length() {
+    let (mut c, mut r, id) = setup();
+    // A 1.5-beat manual loop (33,075 frames at 120 BPM) halves to 0.75 beats.
+    step(&mut c, &mut r, id, DeckCommand::Seek(1000.0));
+    step(&mut c, &mut r, id, DeckCommand::LoopIn);
+    step(&mut c, &mut r, id, DeckCommand::Seek(34_075.0));
     step(&mut c, &mut r, id, DeckCommand::LoopOut);
     step(&mut c, &mut r, id, DeckCommand::LoopHalve);
     let s = c.deck(id);
-    assert_eq!(s.loop_out, Some(1500.0));
+    assert_eq!(s.loop_out, Some(1000.0 + 33_075.0 / 2.0));
     assert_eq!(s.loop_beats, 2.0);
+}
+
+#[test]
+fn halving_a_manual_loop_below_the_minimum_leaves_it() {
+    // 600 frames is under 1/32 beat (689 frames at 120 BPM): a halve does not grow it to
+    // the minimum, it leaves it as it is.
+    let (mut c, mut r, id) = setup();
+    step(&mut c, &mut r, id, DeckCommand::Seek(1000.0));
+    step(&mut c, &mut r, id, DeckCommand::LoopIn);
+    step(&mut c, &mut r, id, DeckCommand::Seek(1600.0));
+    step(&mut c, &mut r, id, DeckCommand::LoopOut);
+    step(&mut c, &mut r, id, DeckCommand::LoopHalve);
+    assert_eq!(c.deck(id).loop_out, Some(1600.0));
+    step(&mut c, &mut r, id, DeckCommand::LoopDouble);
+    assert_eq!(c.deck(id).loop_out, Some(2200.0));
 }
 
 #[test]
