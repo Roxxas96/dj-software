@@ -83,6 +83,14 @@ pub enum WriteOp {
     /// not finite or is negative and with [`LibraryError::NoSuchTrack`] when the track is
     /// gone, changing nothing.
     SetCue { track: i64, frames: f64 },
+    /// Stores `frames` as hotcue `slot` (1 to 8) of track `track`, keeping the color and name
+    /// of an existing hotcue. Fails with [`LibraryError::InvalidHotcueSlot`] for a slot outside
+    /// 1-8, with [`LibraryError::InvalidCue`] when `frames` is not finite or is negative and
+    /// with [`LibraryError::NoSuchTrack`] when the track is gone, changing nothing.
+    SetHotcue { track: i64, slot: u8, frames: f64 },
+    /// Removes hotcue `slot` (1 to 8) of track `track`; an empty slot is fine. Fails like
+    /// [`WriteOp::SetHotcue`] for a bad slot or an unknown track, changing nothing.
+    DeleteHotcue { track: i64, slot: u8 },
     /// Flags these tracks' files as missing. Tracks are never deleted by a scan.
     MarkMissing(Vec<i64>),
     /// Adds a library folder (no-op if already there). Only the `folders` table changes.
@@ -452,6 +460,18 @@ fn apply(tx: &Transaction<'_>, op: &WriteOp) -> Result<WriteOutcome, LibraryErro
         } => grid::apply(tx, *track, *edit, *playhead_frames, *sample_rate),
         WriteOp::SetCue { track, frames } => {
             cues::set(tx, *track, *frames)?;
+            Ok(WriteOutcome::Done)
+        }
+        WriteOp::SetHotcue {
+            track,
+            slot,
+            frames,
+        } => {
+            cues::set_hotcue(tx, *track, *slot, *frames)?;
+            Ok(WriteOutcome::Done)
+        }
+        WriteOp::DeleteHotcue { track, slot } => {
+            cues::delete_hotcue(tx, *track, *slot)?;
             Ok(WriteOutcome::Done)
         }
         WriteOp::MarkMissing(ids) => {

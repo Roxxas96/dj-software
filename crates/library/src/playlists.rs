@@ -77,11 +77,11 @@ pub struct TrackSort {
 
 const TRACK_COLUMNS: &str = "t.id, t.title, t.artist, a.bpm, a.key, t.duration_frames, \
      t.sample_rate, \
-     (EXISTS (SELECT 1 FROM cues c WHERE c.track_id = t.id) \
+     (EXISTS (SELECT 1 FROM cues c WHERE c.track_id = t.id AND c.cue_frames > 0) \
       OR EXISTS (SELECT 1 FROM hotcues h WHERE h.track_id = t.id)), \
      t.missing";
 
-const UNPREPARED: &str = "NOT EXISTS (SELECT 1 FROM cues c WHERE c.track_id = t.id) \
+const UNPREPARED: &str = "NOT EXISTS (SELECT 1 FROM cues c WHERE c.track_id = t.id AND c.cue_frames > 0) \
      AND NOT EXISTS (SELECT 1 FROM hotcues h WHERE h.track_id = t.id)";
 
 fn track_row(row: &Row<'_>) -> rusqlite::Result<TrackRow> {
@@ -368,7 +368,7 @@ fn tracks_query(
     let dir = if sort.descending { "DESC" } else { "ASC" };
     let sql = format!(
         "SELECT p.id, p.title, p.artist, p.bpm, p.key, p.duration_frames, p.sample_rate, \
-                 (EXISTS (SELECT 1 FROM cues c WHERE c.track_id = p.id) \
+                 (EXISTS (SELECT 1 FROM cues c WHERE c.track_id = p.id AND c.cue_frames > 0) \
                   OR EXISTS (SELECT 1 FROM hotcues h WHERE h.track_id = p.id)), \
                  p.missing \
              FROM (SELECT t.id, t.title, t.artist, a.bpm, a.key, t.duration_frames, \
