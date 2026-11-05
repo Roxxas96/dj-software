@@ -605,3 +605,28 @@ fn a_file_that_is_not_a_database_is_refused() {
     assert!(matches!(err, LibraryError::Corrupt { .. }), "{err}");
     assert_eq!(backup_count(&path), 0);
 }
+
+#[test]
+fn quick_check_runs_only_when_a_backup_is_taken() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = db_path(&dir);
+    library_with_rows(&path);
+    // A second open takes the first backup (and checks the file).
+    drop(library::Library::open(&path).unwrap());
+    assert_eq!(backup_count(&path), 1);
+    let mut bytes = std::fs::read(&path).unwrap();
+    for b in &mut bytes[3 * 4096..6 * 4096] {
+        *b = 0xA5;
+    }
+    std::fs::write(&path, bytes).unwrap();
+
+    // Within ten minutes of that backup no backup is due, so the file is not read whole:
+    // the open (which only reads the header) goes through.
+    drop(library::Library::open(&path).expect("no integrity check without a backup"));
+    assert_eq!(backup_count(&path), 1);
+    // Once a backup is due again, the damage is found before anything is copied.
+    age_backups(&path);
+    let err = library::Library::open(&path).unwrap_err();
+    assert!(matches!(err, LibraryError::Corrupt { .. }), "{err}");
+    assert_eq!(backup_count(&path), 1);
+}
