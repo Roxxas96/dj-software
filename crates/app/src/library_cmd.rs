@@ -216,7 +216,8 @@ pub fn db_path(explicit: Option<&Path>) -> anyhow::Result<PathBuf> {
     if let Some(path) = explicit {
         return Ok(path.to_owned());
     }
-    let dirs = directories::ProjectDirs::from("", "", "dj-software")
+    crate::legacy_dirs::migrate();
+    let dirs = directories::ProjectDirs::from("", "", "open-jockey")
         .context("finding the per-user data directory (use --library-db)")?;
     Ok(dirs.data_dir().join("library.sqlite3"))
 }
@@ -262,7 +263,7 @@ fn add_folder(lib: &Library, dir: &Path) -> anyhow::Result<()> {
 fn scan_all(lib: &Library) -> anyhow::Result<()> {
     let folders = lib.reader()?.folders()?;
     if folders.is_empty() {
-        out!("no library folders; add one with `dj-software library add-folder <DIR>`");
+        out!("no library folders; add one with `open-jockey library add-folder <DIR>`");
     }
     for folder in folders {
         if !folder.exists() {

@@ -4,7 +4,7 @@ Files in this directory:
 
 - `mapping.toml`: the default mapping, built into the app (`--controller ddj-sb3`).
 - `capture.toml`: what every control of the owner's SB3 sent, recorded with
-  `dj-software midi capture`. It is the only source of the MIDI values in the mapping.
+  `open-jockey midi capture`. It is the only source of the MIDI values in the mapping.
 - `checklist.toml`: the steps of that capture.
 
 Every binding in the mapping is replayed from the capture by
@@ -13,8 +13,8 @@ Every binding in the mapping is replayed from the capture by
 ## Using it
 
 ```sh
-dj-software play a.mp3 --device "DDJ-SB3" --controller ddj-sb3 --cue-track b.mp3 --headphones 3,4
-dj-software midi monitor --controller ddj-sb3
+open-jockey play a.mp3 --device "DDJ-SB3" --controller ddj-sb3 --cue-track b.mp3 --headphones 3,4
+open-jockey midi monitor --controller ddj-sb3
 ```
 
 `--headphones 3,4` are the SB3's own headphone channels, so `--device "DDJ-SB3"` plays
@@ -26,7 +26,7 @@ knob or fader is taken where it is.
 
 To change the mapping without rebuilding, copy `mapping.toml` to
 `<config dir>/controllers/ddj-sb3/mapping.toml` (on macOS,
-`~/Library/Application Support/dj-software/`) and edit it, or pass a file path to
+`~/Library/Application Support/open-jockey/`) and edit it, or pass a file path to
 `--controller`.
 
 ## Layering: software

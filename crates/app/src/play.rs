@@ -12,7 +12,6 @@ use anyhow::{Context, anyhow};
 use audio_io::{
     AudioError, OutputRouting, OutputStream, RoutingError, StreamError, StreamErrorKind,
 };
-use controller::builtin::load_mapping;
 use controller::{Connection, PresenceChange, Runtime, TimedMidi, clock};
 use engine::{
     ChannelCommand, Command, DeckCommand, DeckId, DeckSnapshot, EngineController, engine,
@@ -31,7 +30,7 @@ const LED_TICK: Duration = Duration::from_millis(33);
 const START_TIMEOUT: Duration = Duration::from_secs(5);
 /// The shortest time between two automatic controller reconnects.
 const AUTO_RECONNECT_INTERVAL: Duration = Duration::from_secs(5);
-const DEVICES_HINT: &str = "run `dj-software devices` to see the available devices and channels";
+const DEVICES_HINT: &str = "run `open-jockey devices` to see the available devices and channels";
 
 #[derive(Debug, clap::Args)]
 pub struct PlayArgs {
@@ -187,7 +186,9 @@ pub fn play(args: &PlayArgs) -> anyhow::Result<()> {
     let mapping = args
         .controller
         .as_deref()
-        .map(|name| load_mapping(name).context("loading the controller mapping"))
+        .map(|name| {
+            crate::legacy_dirs::load_mapping(name).context("loading the controller mapping")
+        })
         .transpose()?;
     // Open the library before the slow decodes too.
     let library = args
@@ -562,7 +563,7 @@ mod tests {
         let text = describe_audio_error(&out_of_range);
         assert!(text.contains("output channel 4, but the device has only 2 channels"));
         assert!(text.contains("\"DDJ\""));
-        assert!(text.contains("dj-software devices"));
+        assert!(text.contains("open-jockey devices"));
 
         let overlap = AudioError::Routing {
             device: "DDJ".to_owned(),

@@ -7,10 +7,10 @@ modified, and tags are read, never written.
 ## Quick start
 
 ```sh
-dj-software library add-folder ~/Music/DJ      # registers the folder, then scans it
-dj-software library analyze                    # BPM, beatgrid, key and waveform
-dj-software library list --sort bpm --limit 20
-dj-software play --library --controller ddj-sb3 --device "DDJ-SB3" --master 3,4
+open-jockey library add-folder ~/Music/DJ      # registers the folder, then scans it
+open-jockey library analyze                    # BPM, beatgrid, key and waveform
+open-jockey library list --sort bpm --limit 20
+open-jockey play --library --controller ddj-sb3 --device "DDJ-SB3" --master 3,4
 ```
 
 Every `library` subcommand takes `--library-db <PATH>` to use another database file, and
@@ -22,9 +22,13 @@ The default database is `library.sqlite3` in the per-user data directory:
 
 | OS | Data directory |
 |---|---|
-| macOS | `~/Library/Application Support/dj-software` |
-| Windows | `%APPDATA%\dj-software\data` |
-| Linux | `$XDG_DATA_HOME/dj-software`, or `~/.local/share/dj-software` |
+| macOS | `~/Library/Application Support/open-jockey` |
+| Windows | `%APPDATA%\open-jockey\data` |
+| Linux | `$XDG_DATA_HOME/open-jockey`, or `~/.local/share/open-jockey` |
+
+The app used to be called `dj-software`. On its first start under the new name, it moves
+the old `dj-software` data and configuration folders to the `open-jockey` ones, unless
+those already exist.
 
 Every change to cues, grids, playlists and settings is written to the database at once
 (there is no "save on quit"). When the library is opened, the existing database is first
@@ -123,7 +127,7 @@ Detected tempos are folded into a range, 90 to 180 BPM by default: a tempo outsi
 doubled or halved until it fits, so 85 BPM reads as 170 and 185 BPM as 92.5.
 
 ```sh
-dj-software library set bpm-range 90 180
+open-jockey library set bpm-range 90 180
 ```
 
 The maximum must be at least twice the minimum, within 30 to 480. Ranges whose minimum is
@@ -134,9 +138,9 @@ others.
 ### Key notation
 
 ```sh
-dj-software library set key-notation camelot     # 8A (the default shown in the lists)
-dj-software library set key-notation standard    # Am
-dj-software library set key-notation open-key    # 1m
+open-jockey library set key-notation camelot     # 8A (the default shown in the lists)
+open-jockey library set key-notation standard    # Am
+open-jockey library set key-notation open-key    # 1m
 ```
 
 The Camelot and Open Key names are those of the published wheels. The setting only
@@ -196,11 +200,11 @@ with `library grid <ID> bpm` or by tapping). A tap sequence of fewer than 4 taps
 nothing.
 
 ```sh
-dj-software library grid 12 show          # BPM, first beat, lock state
-dj-software library grid 12 shift -5.5
-dj-software library grid 12 bpm 140
-dj-software library grid 12 halve
-dj-software library grid 12 lock          # or: unlock
+open-jockey library grid 12 show          # BPM, first beat, lock state
+open-jockey library grid 12 shift -5.5
+open-jockey library grid 12 bpm 140
+open-jockey library grid 12 halve
+open-jockey library grid 12 lock          # or: unlock
 ```
 
 The grid actions (`deck.grid_shift_back`, `deck.grid_shift_forward`,
@@ -211,13 +215,13 @@ yet: use the console.
 ## Playlists
 
 ```sh
-dj-software library playlist create "Peak time"
-dj-software library playlist add "Peak time" 12 40 7 [--at 2]
-dj-software library playlist list ["Peak time"]
-dj-software library playlist move "Peak time" 3 1
-dj-software library playlist remove "Peak time" 2
-dj-software library playlist rename "Peak time" "Warm up"
-dj-software library playlist delete "Peak time"
+open-jockey library playlist create "Peak time"
+open-jockey library playlist add "Peak time" 12 40 7 [--at 2]
+open-jockey library playlist list ["Peak time"]
+open-jockey library playlist move "Peak time" 3 1
+open-jockey library playlist remove "Peak time" 2
+open-jockey library playlist rename "Peak time" "Warm up"
+open-jockey library playlist delete "Peak time"
 ```
 
 Positions start at 1. Deleting a playlist keeps its tracks in the library. Playlists
@@ -233,7 +237,7 @@ cues, and `missing` for missing files. Filters: `--playlist NAME`, `--folder DIR
 ## Library mode: `play --library`
 
 ```sh
-dj-software play --library --controller ddj-sb3 --device "DDJ-SB3" --master 3,4
+open-jockey play --library --controller ddj-sb3 --device "DDJ-SB3" --master 3,4
 ```
 
 `--library` needs `--controller`. The track argument is optional. In this mode:

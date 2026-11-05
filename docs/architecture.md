@@ -47,6 +47,6 @@ Each plan that adds or changes a crate updates this page. The full design is in
 | `controller` | MIDI ports and messages, the mapping file format, the resolver that turns messages into actions (conditions, soft takeover), LED feedback, the capture tools' logic, and the built-in mappings (`controllers/<name>/mapping.toml`). Tested with fake ports. |
 | `analysis` | Offline track analysis written for this project: three-band waveform, tempo and constant beatgrid, and musical key with Camelot, standard and Open Key notation. Pure functions on decoded audio; no database. |
 | `library` | The SQLite library: schema and migrations, startup backups, folder scans and the watcher, fingerprints, tags, cues, playlists, beatgrid edits, the writer thread and the analyzer pool that stores `analysis` results. See [library.md](library.md). |
-| `dj-software` (`crates/app`) | The application binary. A command-line player and MIDI tools (`devices`, `play`, `library` and `midi` with `ports`, `monitor`, `capture` and `led-scan`) that wire the other crates together. |
+| `open-jockey` (`crates/app`) | The application binary. A command-line player and MIDI tools (`devices`, `play`, `library` and `midi` with `ports`, `monitor`, `capture` and `led-scan`) that wire the other crates together. |
 
 Controllers are documented in [`controllers/`](controllers/): the [mapping reference](controllers/mapping-reference.md) and [adding a controller](controllers/adding-a-controller.md).

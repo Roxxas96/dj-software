@@ -482,7 +482,7 @@ impl LibraryMode {
         }
         if failures.len() > REPORTS_SHOWN {
             printer.event(format!(
-                "… and {} more analysis failures (`dj-software library analyze` lists them)",
+                "… and {} more analysis failures (`open-jockey library analyze` lists them)",
                 failures.len() - REPORTS_SHOWN
             ));
         }

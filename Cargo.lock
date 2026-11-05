@@ -470,25 +470,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dj-software"
-version = "0.0.0"
-dependencies = [
- "actions",
- "analysis",
- "anyhow",
- "audio-io",
- "clap",
- "controller",
- "ctrlc",
- "decode",
- "directories",
- "dunce",
- "engine",
- "library",
- "tempfile",
-]
-
-[[package]]
 name = "dlopen2"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1220,6 +1201,25 @@ name = "once_cell_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
+
+[[package]]
+name = "open-jockey"
+version = "0.0.0"
+dependencies = [
+ "actions",
+ "analysis",
+ "anyhow",
+ "audio-io",
+ "clap",
+ "controller",
+ "ctrlc",
+ "decode",
+ "directories",
+ "dunce",
+ "engine",
+ "library",
+ "tempfile",
+]
 
 [[package]]
 name = "option-ext"

@@ -1,4 +1,4 @@
-# dj-software
+# Open Jockey
 
 Open-source DJ software written in Rust. It aims for a VirtualDJ-like workflow, built around
 precise controller mapping: every control on a supported controller is mapped to a named action,
@@ -48,30 +48,30 @@ On Linux you also need the ALSA headers (`libasound2-dev` on Debian and Ubuntu).
 
 ```bash
 # List output devices and their channel counts
-cargo run --release -p dj-software -- devices
+cargo run --release -p open-jockey -- devices
 
 # Play track A to the master output; track B only in the headphones (channels 3 and 4)
-cargo run --release -p dj-software -- play <track-a> --cue-track <track-b> \
+cargo run --release -p open-jockey -- play <track-a> --cue-track <track-b> \
   --device "DDJ-SB3" --headphones 3,4
 
 # Play on the default output
-cargo run --release -p dj-software -- play <track-a>
+cargo run --release -p open-jockey -- play <track-a>
 
 # Drive up to four decks with a DDJ-SB3 (tracks load paused; use the controller to play)
-cargo run --release -p dj-software -- play <track-a> --cue-track <track-b> \
+cargo run --release -p open-jockey -- play <track-a> --cue-track <track-b> \
   --deck3 <track-c> --deck4 <track-d> --controller ddj-sb3 --device "DDJ-SB3" --master 3,4
 
 # Build a library: add a folder (scans it), then analyze BPM, key and beatgrids
-cargo run --release -p dj-software -- library add-folder <music-folder>
-cargo run --release -p dj-software -- library analyze
-cargo run --release -p dj-software -- library list --sort bpm --limit 20
+cargo run --release -p open-jockey -- library add-folder <music-folder>
+cargo run --release -p open-jockey -- library analyze
+cargo run --release -p open-jockey -- library list --sort bpm --limit 20
 
 # Browse the library and load tracks from the DDJ-SB3
-cargo run --release -p dj-software -- play --library --controller ddj-sb3 \
+cargo run --release -p open-jockey -- play --library --controller ddj-sb3 \
   --device "DDJ-SB3" --master 3,4
 
 # Check what a controller sends and what the mapping does with it
-cargo run --release -p dj-software -- midi monitor --controller ddj-sb3
+cargo run --release -p open-jockey -- midi monitor --controller ddj-sb3
 ```
 
 Channel numbers are 1-based, as printed on the hardware. `--cue-track` needs `--headphones`.

@@ -3,6 +3,7 @@
 mod console;
 mod format;
 mod led_scan;
+mod legacy_dirs;
 mod library_cmd;
 mod library_mode;
 mod midi_cmd;
@@ -24,7 +25,7 @@ use library_cmd::LibraryCommand;
 use play::{PlayArgs, play};
 
 #[derive(Debug, Parser)]
-#[command(version, about = "Open-source DJ software")]
+#[command(version, about = "Open Jockey: open-source DJ software")]
 struct Cli {
     #[command(subcommand)]
     command: Sub,
@@ -175,7 +176,7 @@ mod tests {
 
     #[test]
     fn parses_one_based_channels() {
-        let args = play_args(&["dj-software", "play", "a.mp3", "--headphones", "3,4"]);
+        let args = play_args(&["open-jockey", "play", "a.mp3", "--headphones", "3,4"]);
         let routing = args.routing();
         assert_eq!(routing.headphones, Some([2, 3]));
         assert_eq!(routing.master, [0, 1]);
@@ -183,26 +184,26 @@ mod tests {
 
     #[test]
     fn rejects_channel_zero() {
-        assert!(parse(&["dj-software", "play", "a.mp3", "--master", "0,1"]).is_err());
+        assert!(parse(&["open-jockey", "play", "a.mp3", "--master", "0,1"]).is_err());
     }
 
     #[test]
     fn rejects_malformed_channel_pair() {
-        assert!(parse(&["dj-software", "play", "a.mp3", "--master", "1"]).is_err());
-        assert!(parse(&["dj-software", "play", "a.mp3", "--master", "a,b"]).is_err());
+        assert!(parse(&["open-jockey", "play", "a.mp3", "--master", "1"]).is_err());
+        assert!(parse(&["open-jockey", "play", "a.mp3", "--master", "a,b"]).is_err());
     }
 
     #[test]
     fn parses_midi_ports() {
         assert!(matches!(
-            parse(&["dj-software", "midi", "ports"]).unwrap().command,
+            parse(&["open-jockey", "midi", "ports"]).unwrap().command,
             Sub::Midi(MidiCommand::Ports)
         ));
     }
 
     #[test]
     fn parses_midi_monitor_port() {
-        match parse(&["dj-software", "midi", "monitor", "--port", "DDJ"])
+        match parse(&["open-jockey", "midi", "monitor", "--port", "DDJ"])
             .unwrap()
             .command
         {
@@ -213,7 +214,7 @@ mod tests {
             _ => panic!("expected midi monitor"),
         }
         assert!(matches!(
-            parse(&["dj-software", "midi", "monitor"]).unwrap().command,
+            parse(&["open-jockey", "midi", "monitor"]).unwrap().command,
             Sub::Midi(MidiCommand::Monitor {
                 port: None,
                 controller: None
@@ -223,10 +224,10 @@ mod tests {
 
     #[test]
     fn cue_track_needs_headphones_only_without_controller() {
-        let alone = play_args(&["dj-software", "play", "a.mp3", "--cue-track", "b.mp3"]);
+        let alone = play_args(&["open-jockey", "play", "a.mp3", "--cue-track", "b.mp3"]);
         assert!(alone.conflict().unwrap().contains("--headphones"));
         let with_headphones = play_args(&[
-            "dj-software",
+            "open-jockey",
             "play",
             "a.mp3",
             "--cue-track",
@@ -237,7 +238,7 @@ mod tests {
         assert_eq!(with_headphones.conflict(), None);
         // With a controller, PFL comes from it: master-only routing is fine.
         let controller = play_args(&[
-            "dj-software",
+            "open-jockey",
             "play",
             "a.mp3",
             "--cue-track",
@@ -250,7 +251,7 @@ mod tests {
 
     #[test]
     fn parses_monitor_with_controller() {
-        match parse(&["dj-software", "midi", "monitor", "--controller", "ddj-sb3"])
+        match parse(&["open-jockey", "midi", "monitor", "--controller", "ddj-sb3"])
             .unwrap()
             .command
         {
@@ -263,7 +264,7 @@ mod tests {
         // The mapping names the port.
         assert!(
             parse(&[
-                "dj-software",
+                "open-jockey",
                 "midi",
                 "monitor",
                 "--controller",
@@ -278,7 +279,7 @@ mod tests {
     #[test]
     fn parses_play_with_controller_and_four_decks() {
         let args = play_args(&[
-            "dj-software",
+            "open-jockey",
             "play",
             "a.mp3",
             "--cue-track",
@@ -298,18 +299,18 @@ mod tests {
         assert_eq!(args.deck3, Some(PathBuf::from("c.mp3")));
         assert_eq!(args.deck4, Some(PathBuf::from("d.mp3")));
 
-        let plain = play_args(&["dj-software", "play", "a.mp3"]);
+        let plain = play_args(&["open-jockey", "play", "a.mp3"]);
         assert_eq!(plain.controller, None);
         assert_eq!(plain.deck3, None);
         assert_eq!(args.conflict(), None);
         // Decks 3 and 4 are only reachable with a controller.
-        assert!(parse(&["dj-software", "play", "a.mp3", "--deck3", "c.mp3"]).is_err());
-        assert!(parse(&["dj-software", "play", "a.mp3", "--deck4", "d.mp3"]).is_err());
+        assert!(parse(&["open-jockey", "play", "a.mp3", "--deck3", "c.mp3"]).is_err());
+        assert!(parse(&["open-jockey", "play", "a.mp3", "--deck4", "d.mp3"]).is_err());
     }
 
     #[test]
     fn parses_midi_led_scan() {
-        match parse(&["dj-software", "midi", "led-scan"]).unwrap().command {
+        match parse(&["open-jockey", "midi", "led-scan"]).unwrap().command {
             Sub::Midi(MidiCommand::LedScan {
                 channels,
                 velocity,
@@ -327,7 +328,7 @@ mod tests {
             _ => panic!("expected led-scan"),
         }
         match parse(&[
-            "dj-software",
+            "open-jockey",
             "midi",
             "led-scan",
             "--kind",
@@ -359,7 +360,7 @@ mod tests {
     #[test]
     fn parses_midi_capture() {
         match parse(&[
-            "dj-software",
+            "open-jockey",
             "midi",
             "capture",
             "--checklist",
@@ -383,9 +384,9 @@ mod tests {
             }
             _ => panic!("expected midi capture"),
         }
-        assert!(parse(&["dj-software", "midi", "capture", "--out", "o.toml"]).is_err());
+        assert!(parse(&["open-jockey", "midi", "capture", "--out", "o.toml"]).is_err());
         match parse(&[
-            "dj-software",
+            "open-jockey",
             "midi",
             "capture",
             "--checklist",
@@ -408,7 +409,7 @@ mod tests {
     }
 
     fn library(args: &[&str]) -> LibraryArgs {
-        let mut full = vec!["dj-software", "library"];
+        let mut full = vec!["open-jockey", "library"];
         full.extend_from_slice(args);
         match parse(&full).unwrap().command {
             Sub::Library(library) => library,
@@ -452,7 +453,7 @@ mod tests {
         }
         assert!(
             parse(&[
-                "dj-software",
+                "open-jockey",
                 "library",
                 "list",
                 "--playlist",
@@ -462,7 +463,7 @@ mod tests {
             ])
             .is_err()
         );
-        assert!(parse(&["dj-software", "library", "list", "--sort", "color"]).is_err());
+        assert!(parse(&["open-jockey", "library", "list", "--sort", "color"]).is_err());
     }
 
     #[test]
@@ -519,7 +520,7 @@ mod tests {
                 ..
             }
         ));
-        assert!(parse(&["dj-software", "library", "analyze", "--all", "--track", "1"]).is_err());
+        assert!(parse(&["open-jockey", "library", "analyze", "--all", "--track", "1"]).is_err());
         match library(&["set", "bpm-range", "70", "140"]).command {
             LibraryCommand::Set(library_cmd::SetCommand::BpmRange { min, max }) => {
                 assert_eq!((min, max), (70.0, 140.0));
@@ -532,7 +533,7 @@ mod tests {
             }
             other => panic!("expected set key-notation, got {other:?}"),
         }
-        assert!(parse(&["dj-software", "library", "set", "key-notation", "solfege"]).is_err());
+        assert!(parse(&["open-jockey", "library", "set", "key-notation", "solfege"]).is_err());
         use library_cmd::PlaylistCommand as P;
         let playlist = |words: &[&str]| {
             let mut all = vec!["playlist"];
@@ -591,13 +592,13 @@ mod tests {
                 name: Some("Peak".into())
             }
         );
-        assert!(parse(&["dj-software", "library", "playlist", "add", "Peak"]).is_err());
+        assert!(parse(&["open-jockey", "library", "playlist", "add", "Peak"]).is_err());
     }
 
     #[test]
     fn parses_play_library_mode() {
         let args = play_args(&[
-            "dj-software",
+            "open-jockey",
             "play",
             "--library",
             "--controller",
@@ -606,11 +607,11 @@ mod tests {
         assert!(args.library);
         assert_eq!(args.track, None);
         // Without --library a track is required.
-        assert!(parse(&["dj-software", "play", "--controller", "ddj-sb3"]).is_err());
+        assert!(parse(&["open-jockey", "play", "--controller", "ddj-sb3"]).is_err());
         // Library mode needs a controller to play anything.
-        assert!(parse(&["dj-software", "play", "--library"]).is_err());
+        assert!(parse(&["open-jockey", "play", "--library"]).is_err());
         let with_db = play_args(&[
-            "dj-software",
+            "open-jockey",
             "play",
             "--library",
             "--controller",

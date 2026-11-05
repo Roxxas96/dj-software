@@ -18,7 +18,7 @@ console commands:
   grid <deck> halve|double     halve or double the BPM
   grid <deck> tap              tap the tempo (4 taps or more set the BPM)
   grid <deck> lock             lock or unlock the grid
-  load <deck> <track-id>       load a library track (ids: `dj-software library list`)
+  load <deck> <track-id>       load a library track (ids: `open-jockey library list`)
   help                         show this help
 decks are 1 to 4; grid and load need `play --library`";
 
