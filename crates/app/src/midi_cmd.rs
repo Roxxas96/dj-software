@@ -1067,12 +1067,12 @@ mod tests {
             "→ modifier.shift side left Release  → master.crossfader 0.250"
         );
         assert_eq!(describe(&mapping, &play, &vec![]), "→ (no action)");
-        let sync = MidiMessage::NoteOn {
+        let shift_sync = MidiMessage::NoteOn {
             channel: 0,
-            note: 0x58,
+            note: 0x5C,
             velocity: 127,
         };
-        assert_eq!(describe(&mapping, &sync, &vec![]), "→ (unbound)");
+        assert_eq!(describe(&mapping, &shift_sync, &vec![]), "→ (unbound)");
     }
 
     #[test]

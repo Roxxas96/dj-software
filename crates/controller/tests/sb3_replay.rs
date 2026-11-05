@@ -10,8 +10,8 @@ use controller::capture::{Control, Fixture, parse_fixture};
 use controller::mapping::Mapping;
 use controller::{BatchStats, MidiMessage, MidiOut, Runtime, TimedMidi};
 use engine::{
-    Command, DeckCommand, DeckId, EngineConfig, EngineController, EngineRenderer, TrackBuffer,
-    engine,
+    Command, DeckCommand, DeckId, EngineConfig, EngineController, EngineRenderer, Grid, HotcueSlot,
+    TrackBuffer, engine,
 };
 
 const CAPTURE: &str = include_str!("../../../controllers/ddj-sb3/capture.toml");
@@ -162,6 +162,44 @@ impl Rig {
         let mut actions = self.batch(&[cc(channel, msb, msb_value)]).0;
         actions.extend(self.batch(&[cc(channel, lsb, lsb_value)]).0);
         actions
+    }
+
+    /// Sends `command` to `deck` and renders a block so it takes effect.
+    fn deck_command(&mut self, deck: usize, command: DeckCommand) {
+        self.engine.send(Command::Deck(d(deck), command)).unwrap();
+        self.render();
+    }
+
+    /// Gives `deck` a constant grid of `bpm` with a beat at frame 0.
+    fn set_grid(&mut self, deck: usize, bpm: f64) {
+        let grid = Grid::from_bpm(bpm, 0.0, SAMPLE_RATE).unwrap();
+        self.deck_command(deck, DeckCommand::SetGrid(Some(grid)));
+    }
+
+    /// Sends the captured message `index` of the pad control `id` (a `pads_hot_cue`
+    /// control, one note per pad) with `velocity` (0 releases).
+    fn pad(&mut self, id: &str, index: usize, velocity: u8) -> Vec<Action> {
+        let range = self.control(id).messages[index];
+        self.batch(&[note(range.status & 0x0F, range.data1, velocity)])
+            .0
+    }
+
+    /// Sends the captured relative message `data1` of the jog control `id` as `steps`
+    /// steps of +1 (65) or -1 (63), in one batch.
+    fn jog(&mut self, id: &str, data1: u8, steps: usize, forward: bool) -> Vec<Action> {
+        let range = *self
+            .control(id)
+            .messages
+            .iter()
+            .find(|m| m.status & 0xF0 == 0xB0 && m.data1 == data1)
+            .unwrap_or_else(|| panic!("`{id}` has no controller {data1:#04X}"));
+        let value = if forward { 65 } else { 63 };
+        assert!(
+            range.min <= value && value <= range.max,
+            "`{id}` sends {value}"
+        );
+        let msg = cc(range.status & 0x0F, data1, value);
+        self.batch(&vec![msg; steps]).0
     }
 
     fn tick(&mut self) {
@@ -335,7 +373,98 @@ fn table() -> Vec<(&'static str, Layer, Action)> {
         ("load.left", Alt(l), Action::LoadSelected(d(3))),
         ("load.right", Alt(r), Action::LoadSelected(d(4))),
     ]
+    .into_iter()
+    .chain(performance_table())
+    .collect()
 }
+
+/// The single-action performance controls of every deck: SYNC, VINYL, the loop buttons
+/// (SHIFT variants included), the jog touch and the outer ring. The multi-message jog tops
+/// and the pads are covered by their own tests.
+fn performance_table() -> Vec<(&'static str, Layer, Action)> {
+    let l = Side::Left;
+    let r = Side::Right;
+    vec![
+        // Deck 1.
+        ("deck1.sync", Main, Action::Sync(d(1))),
+        ("deck1.vinyl", Main, Action::VinylToggle(d(1))),
+        ("deck1.auto_loop", Main, Action::AutoLoop(d(1))),
+        ("deck1.loop_half", Main, Action::LoopHalve(d(1))),
+        ("deck1.loop_double", Main, Action::LoopDouble(d(1))),
+        ("deck1.loop_half.shift", Main, Action::LoopIn(d(1))),
+        ("deck1.loop_double.shift", Main, Action::LoopOut(d(1))),
+        ("deck1.auto_loop.shift", Main, Action::ReloopExit(d(1))),
+        ("deck1.jog_touch", Main, Action::JogTouch(d(1))),
+        ("deck1.jog_outer", Main, Action::JogRing(d(1))),
+        // Deck 2.
+        ("deck2.sync", Main, Action::Sync(d(2))),
+        ("deck2.vinyl", Main, Action::VinylToggle(d(2))),
+        ("deck2.auto_loop", Main, Action::AutoLoop(d(2))),
+        ("deck2.loop_half", Main, Action::LoopHalve(d(2))),
+        ("deck2.loop_double", Main, Action::LoopDouble(d(2))),
+        ("deck2.loop_half.shift", Main, Action::LoopIn(d(2))),
+        ("deck2.loop_double.shift", Main, Action::LoopOut(d(2))),
+        ("deck2.auto_loop.shift", Main, Action::ReloopExit(d(2))),
+        ("deck2.jog_touch", Main, Action::JogTouch(d(2))),
+        ("deck2.jog_outer", Main, Action::JogRing(d(2))),
+        // Deck 3.
+        ("deck3.sync", Alt(l), Action::Sync(d(3))),
+        ("deck3.vinyl", Alt(l), Action::VinylToggle(d(3))),
+        ("deck3.auto_loop", Alt(l), Action::AutoLoop(d(3))),
+        ("deck3.loop_half", Alt(l), Action::LoopHalve(d(3))),
+        ("deck3.loop_double", Alt(l), Action::LoopDouble(d(3))),
+        ("deck3.loop_half.shift", Alt(l), Action::LoopIn(d(3))),
+        ("deck3.loop_double.shift", Alt(l), Action::LoopOut(d(3))),
+        ("deck3.auto_loop.shift", Alt(l), Action::ReloopExit(d(3))),
+        ("deck3.jog_touch", Alt(l), Action::JogTouch(d(3))),
+        ("deck3.jog_outer", Alt(l), Action::JogRing(d(3))),
+        // Deck 4.
+        ("deck4.sync", Alt(r), Action::Sync(d(4))),
+        ("deck4.vinyl", Alt(r), Action::VinylToggle(d(4))),
+        ("deck4.auto_loop", Alt(r), Action::AutoLoop(d(4))),
+        ("deck4.loop_half", Alt(r), Action::LoopHalve(d(4))),
+        ("deck4.loop_double", Alt(r), Action::LoopDouble(d(4))),
+        ("deck4.loop_half.shift", Alt(r), Action::LoopIn(d(4))),
+        ("deck4.loop_double.shift", Alt(r), Action::LoopOut(d(4))),
+        ("deck4.auto_loop.shift", Alt(r), Action::ReloopExit(d(4))),
+        ("deck4.jog_touch", Alt(r), Action::JogTouch(d(4))),
+        ("deck4.jog_outer", Alt(r), Action::JogRing(d(4))),
+    ]
+}
+
+/// Controls that send several kinds of messages (jog tops also send a touch and firmware
+/// ring noise, pads are one note each): their own tests check what they drive.
+const MULTI_MESSAGE_CONTROLS: [&str; 8] = [
+    "deck1.jog_top",
+    "deck1.jog_top.shift",
+    "deck1.pads_hot_cue",
+    "deck1.pads_hot_cue.shift",
+    "deck2.jog_top",
+    "deck2.jog_top.shift",
+    "deck2.pads_hot_cue",
+    "deck2.pads_hot_cue.shift",
+];
+
+/// Mapped controls that do nothing on a fresh rig (no playing master, no grid, no loop):
+/// their effect is checked by the tests of the loops and of SYNC.
+const NEEDS_SETUP: [&str; 16] = [
+    "deck1.sync",
+    "deck2.sync",
+    "deck3.sync",
+    "deck4.sync",
+    "deck1.auto_loop",
+    "deck2.auto_loop",
+    "deck3.auto_loop",
+    "deck4.auto_loop",
+    "deck1.loop_double.shift",
+    "deck2.loop_double.shift",
+    "deck3.loop_double.shift",
+    "deck4.loop_double.shift",
+    "deck1.auto_loop.shift",
+    "deck2.auto_loop.shift",
+    "deck3.auto_loop.shift",
+    "deck4.auto_loop.shift",
+];
 
 fn deck_select(side: Side) -> &'static str {
     match side {
@@ -370,7 +499,9 @@ fn every_mapped_control_has_capture_and_effect() {
             actions.iter().all(|a| *a == expected),
             "`{id}`: expected only {expected:?}, got {actions:?}"
         );
-        assert!(stats.applied > 0, "`{id}`: no action took effect");
+        if !NEEDS_SETUP.contains(&id) {
+            assert!(stats.applied > 0, "`{id}`: no action took effect");
+        }
         assert_eq!(stats.queue_full, 0, "`{id}`");
     }
 }
@@ -382,7 +513,9 @@ fn every_binding_is_in_the_table() {
     let fixture = fixture();
     let sent: Vec<MidiMessage> = table()
         .iter()
-        .flat_map(|(id, _, _)| replay_messages(fixture.control(id).unwrap()))
+        .map(|(id, _, _)| *id)
+        .chain(MULTI_MESSAGE_CONTROLS)
+        .flat_map(|id| replay_messages(fixture.control(id).unwrap()))
         .collect();
     let mapping = mapping();
     for (i, binding) in mapping.inputs.iter().enumerate() {
@@ -638,4 +771,290 @@ fn browse_scrolls_and_load_requests_side_deck() {
     assert_eq!(rig.replay("load.right").1.requests, [load(d(2))]);
     // Loading is the app's job: no deck changed here.
     assert_eq!(rig.runtime.state().side(Side::Left).active_deck, d(3));
+}
+
+fn slot(n: usize) -> HotcueSlot {
+    HotcueSlot::new(n as u8).unwrap()
+}
+
+#[test]
+fn pads_set_trigger_and_delete_hotcues_on_the_side_deck() {
+    let mut rig = Rig::attached();
+
+    // Left side, deck 1: a press on an empty pad sets it at the playhead.
+    for (n, at) in [(1, 10_000.0), (2, 20_000.0)] {
+        rig.deck_command(1, DeckCommand::Seek(at));
+        let pressed = rig.pad("deck1.pads_hot_cue", n - 1, 127);
+        assert_eq!(pressed, [Action::Hotcue(d(1), slot(n))]);
+        let released = rig.pad("deck1.pads_hot_cue", n - 1, 0);
+        assert_eq!(released, [Action::Hotcue(d(1), slot(n))]);
+    }
+    let snap = rig.engine.deck(d(1));
+    assert_eq!(snap.hotcues[0], Some(10_000.0));
+    assert_eq!(snap.hotcues[1], Some(20_000.0));
+    assert!(!snap.previewing, "setting a pad does not preview");
+
+    // Paused, a set pad jumps there and previews while held; the release stops.
+    rig.deck_command(1, DeckCommand::Seek(0.0));
+    rig.pad("deck1.pads_hot_cue", 0, 127);
+    let snap = rig.engine.deck(d(1));
+    assert!(snap.previewing && snap.playing, "held pad previews");
+    assert!(snap.position_frames >= 10_000.0);
+    rig.pad("deck1.pads_hot_cue", 0, 0);
+    let snap = rig.engine.deck(d(1));
+    assert!(!snap.previewing && !snap.playing);
+    assert_eq!(snap.position_frames, 10_000.0, "back at the hotcue");
+
+    // SHIFT + pad deletes (the SB3 sends notes 0x08-0x0F for it).
+    let deleted = rig.pad("deck1.pads_hot_cue.shift", 1, 127);
+    assert_eq!(deleted, [Action::HotcueDelete(d(1), slot(2))]);
+    let snap = rig.engine.deck(d(1));
+    assert_eq!(snap.hotcues[1], None);
+    assert_eq!(snap.hotcues[0], Some(10_000.0), "pad 1 stays");
+
+    // After DECK the left pads drive deck 3 and leave deck 1 alone.
+    rig.press("deck1.deck_select");
+    rig.deck_command(3, DeckCommand::Seek(30_000.0));
+    let pressed = rig.pad("deck1.pads_hot_cue", 2, 127);
+    assert_eq!(pressed, [Action::Hotcue(d(3), slot(3))]);
+    rig.pad("deck1.pads_hot_cue", 2, 0);
+    assert_eq!(rig.engine.deck(d(3)).hotcues[2], Some(30_000.0));
+    assert_eq!(rig.engine.deck(d(1)).hotcues[2], None);
+    let deleted = rig.pad("deck1.pads_hot_cue.shift", 2, 127);
+    assert_eq!(deleted, [Action::HotcueDelete(d(3), slot(3))]);
+    assert_eq!(rig.engine.deck(d(3)).hotcues[2], None);
+    assert_eq!(rig.engine.deck(d(1)).hotcues[0], Some(10_000.0));
+
+    // The right side's pads (channel 9) drive deck 2, all eight of them.
+    for n in 1..=8 {
+        let pressed = rig.pad("deck2.pads_hot_cue", n - 1, 127);
+        assert_eq!(pressed, [Action::Hotcue(d(2), slot(n))]);
+        rig.pad("deck2.pads_hot_cue", n - 1, 0);
+        let deleted = rig.pad("deck2.pads_hot_cue.shift", n - 1, 127);
+        assert_eq!(deleted, [Action::HotcueDelete(d(2), slot(n))]);
+    }
+    assert_eq!(rig.engine.deck(d(2)).hotcues, [None; 8]);
+}
+
+#[test]
+fn held_jog_and_pad_across_deck_switch_release_on_the_pressed_deck() {
+    let mut rig = Rig::attached();
+    rig.deck_command(1, DeckCommand::SetHotcue(slot(1), Some(10_000.0)));
+    rig.deck_command(1, DeckCommand::Seek(10_000.0));
+    let deck3_before = rig.engine.deck(d(3));
+
+    // On deck 1 (paused, hotcue 1 set): touch the jog and hold pad 1, which previews.
+    rig.button("deck1.jog_touch", 127);
+    rig.pad("deck1.pads_hot_cue", 0, 127);
+    let snap = rig.engine.deck(d(1));
+    assert!(snap.jog_touched && snap.previewing);
+
+    // DECK moves the side to deck 3; the releases still belong to deck 1.
+    rig.press("deck1.deck_select");
+    assert_eq!(rig.runtime.state().side(Side::Left).active_deck, d(3));
+    assert_eq!(
+        rig.button("deck1.jog_touch", 0),
+        [Action::JogTouch(d(1))],
+        "the release goes to the deck that was touched"
+    );
+    assert_eq!(
+        rig.pad("deck1.pads_hot_cue", 0, 0),
+        [Action::Hotcue(d(1), slot(1))]
+    );
+
+    let snap = rig.engine.deck(d(1));
+    assert!(!snap.jog_touched, "deck 1's jog is released");
+    assert!(!snap.previewing && !snap.playing, "no preview left");
+    assert_eq!(snap.position_frames, 10_000.0, "paused back at the hotcue");
+    assert_eq!(rig.engine.deck(d(3)), deck3_before, "deck 3 is unchanged");
+}
+
+#[test]
+fn jog_ring_nudges_and_top_scratches_when_touched() {
+    let mut rig = Rig::attached();
+
+    // Paused: the ring moves the playhead both ways.
+    let at = rig.engine.deck(d(1)).position_frames;
+    let actions = rig.jog("deck1.jog_outer", 0x21, 20, true);
+    assert_eq!(actions, [Action::JogRing(d(1)); 20]);
+    let forward = rig.engine.deck(d(1)).position_frames;
+    assert!(forward > at, "ring forward: {at} -> {forward}");
+    rig.jog("deck1.jog_outer", 0x21, 20, false);
+    assert!(rig.engine.deck(d(1)).position_frames < forward);
+
+    // Playing, the ring only bends the speed: the track nudges and keeps playing.
+    rig.press("deck1.play");
+    let actions = rig.jog("deck1.jog_outer", 0x21, 5, true);
+    assert_eq!(actions, [Action::JogRing(d(1)); 5]);
+    assert!(rig.engine.deck(d(1)).playing);
+
+    // The top without a touch does the same as the ring.
+    let actions = rig.jog("deck1.jog_top", 0x23, 5, true);
+    assert_eq!(actions, [Action::JogTop(d(1)); 5]);
+
+    // VINYL on and the top touched: scratching holds the record.
+    assert!(rig.engine.deck(d(1)).vinyl, "vinyl mode starts on");
+    rig.press("deck1.vinyl");
+    assert!(!rig.engine.deck(d(1)).vinyl, "VINYL turns it off");
+    rig.press("deck1.vinyl");
+    assert!(rig.engine.deck(d(1)).vinyl, "VINYL turns vinyl mode on");
+    assert_eq!(rig.button("deck1.jog_touch", 127), [Action::JogTouch(d(1))]);
+    assert!(rig.engine.deck(d(1)).jog_touched);
+    let before = rig.engine.deck(d(1)).position_frames;
+    rig.jog("deck1.jog_top", 0x23, 40, true);
+    for _ in 0..8 {
+        rig.render();
+    }
+    let forward = rig.engine.deck(d(1)).position_frames;
+    assert!(forward > before, "scratch forward: {before} -> {forward}");
+    rig.jog("deck1.jog_top", 0x23, 80, false);
+    for _ in 0..8 {
+        rig.render();
+    }
+    let back = rig.engine.deck(d(1)).position_frames;
+    assert!(back < forward, "scratch back: {forward} -> {back}");
+
+    // Releasing the top resumes playback.
+    assert_eq!(rig.button("deck1.jog_touch", 0), [Action::JogTouch(d(1))]);
+    let snap = rig.engine.deck(d(1));
+    assert!(!snap.jog_touched && snap.playing);
+    rig.render();
+    assert!(rig.engine.deck(d(1)).position_frames > back);
+
+    // Deck 3 after DECK, and the right wheel for deck 2, use their own wheels.
+    rig.press("deck1.deck_select");
+    let actions = rig.jog("deck3.jog_outer", 0x21, 2, true);
+    assert_eq!(actions, [Action::JogRing(d(3)); 2]);
+    let actions = rig.jog("deck2.jog_outer", 0x21, 2, true);
+    assert_eq!(actions, [Action::JogRing(d(2)); 2]);
+}
+
+#[test]
+fn loop_buttons_drive_the_loop() {
+    let mut rig = Rig::attached();
+    // 120 BPM: a beat is 22,050 frames. Start playing a little after the second beat.
+    rig.set_grid(1, 120.0);
+    rig.deck_command(1, DeckCommand::Seek(22_050.0 + 1_000.0));
+    rig.press("deck1.play");
+
+    // AUTO LOOP loops 4 beats from the beat before the playhead.
+    assert_eq!(rig.press("deck1.auto_loop"), [Action::AutoLoop(d(1)); 2]);
+    let snap = rig.engine.deck(d(1));
+    assert!(snap.loop_active);
+    assert_eq!(snap.loop_in, Some(22_050.0));
+    assert_eq!(snap.loop_out, Some(22_050.0 + 4.0 * 22_050.0));
+
+    // 1/2X halves it, 2X doubles it back.
+    rig.press("deck1.loop_half");
+    let snap = rig.engine.deck(d(1));
+    assert_eq!(snap.loop_out, Some(22_050.0 + 2.0 * 22_050.0));
+    assert_eq!(snap.loop_beats, 2.0);
+    rig.press("deck1.loop_double");
+    assert_eq!(rig.engine.deck(d(1)).loop_beats, 4.0);
+
+    // AUTO LOOP again exits.
+    rig.press("deck1.auto_loop");
+    let snap = rig.engine.deck(d(1));
+    assert!(!snap.loop_active && snap.playing);
+
+    // Manual loop: SHIFT+1/2X sets the loop in, SHIFT+2X the loop out.
+    let loop_in = rig.engine.deck(d(1)).position_frames;
+    rig.press("deck1.loop_half.shift");
+    let snap = rig.engine.deck(d(1));
+    assert!(snap.loop_in.is_some() && !snap.loop_active);
+    assert!(snap.loop_in.unwrap() >= loop_in - 1.0);
+    for _ in 0..20 {
+        rig.render();
+    }
+    rig.press("deck1.loop_double.shift");
+    let snap = rig.engine.deck(d(1));
+    assert!(snap.loop_active, "SHIFT+2X closes and starts the loop");
+    assert!(snap.loop_out.unwrap() > snap.loop_in.unwrap());
+
+    // SHIFT+AUTO LOOP exits, and once more jumps back in and loops.
+    rig.press("deck1.auto_loop.shift");
+    assert!(!rig.engine.deck(d(1)).loop_active);
+    rig.press("deck1.auto_loop.shift");
+    let snap = rig.engine.deck(d(1));
+    assert!(snap.loop_active);
+    assert!(snap.position_frames >= snap.loop_in.unwrap());
+
+    // The right deck's loop buttons (channel 2) drive deck 2.
+    assert_eq!(rig.press("deck2.auto_loop"), [Action::AutoLoop(d(2)); 2]);
+}
+
+#[test]
+fn sync_button_syncs_to_the_other_side() {
+    let mut rig = Rig::attached();
+    // Deck 1 (left) plays at 120 BPM; deck 2 (right) is a 128 BPM track, paused.
+    rig.set_grid(1, 120.0);
+    rig.set_grid(2, 128.0);
+    rig.press("deck1.play");
+    for _ in 0..4 {
+        rig.render();
+    }
+    rig.deck_command(2, DeckCommand::Seek(7_777.0));
+
+    // SYNC on the paused right deck matches the tempo to the playing left deck.
+    assert_eq!(rig.press("deck2.sync"), [Action::Sync(d(2)); 2]);
+    let ratio = rig.engine.deck(d(2)).tempo_ratio;
+    assert!((ratio - 120.0 / 128.0).abs() < 0.001, "tempo ratio {ratio}");
+    assert_eq!(
+        rig.engine.deck(d(1)).tempo_ratio,
+        1.0,
+        "the master is untouched"
+    );
+
+    // PLAY then starts it in phase with the master.
+    rig.press("deck2.play");
+    for _ in 0..2 {
+        rig.render();
+    }
+    let phase = |rig: &Rig, n: usize| {
+        let snap = rig.engine.deck(d(n));
+        let beats = snap.grid.unwrap().beats_at(snap.position_frames);
+        beats - beats.floor()
+    };
+    let (master, synced) = (phase(&rig, 1), phase(&rig, 2));
+    let distance = (master - synced).abs().min(1.0 - (master - synced).abs());
+    assert!(distance < 0.02, "beat phases {master} vs {synced}");
+
+    // The same button on the right side's second deck after DECK drives deck 4.
+    rig.press("deck2.deck_select");
+    assert_eq!(rig.press("deck4.sync"), [Action::Sync(d(4)); 2]);
+}
+
+#[test]
+fn shift_jog_searches() {
+    let mut rig = Rig::attached();
+    let at = 100_000.0;
+    rig.deck_command(1, DeckCommand::Seek(at));
+
+    // SHIFT + jog top searches 10 s of track per turn: 72 of 720 steps is 1 s.
+    let actions = rig.jog("deck1.jog_top.shift", 0x1F, 72, true);
+    assert_eq!(actions, [Action::JogSearch(d(1)); 72]);
+    let moved = rig.engine.deck(d(1)).position_frames - at;
+    assert!(
+        (moved - f64::from(SAMPLE_RATE)).abs() < 1_000.0,
+        "searched {moved} frames"
+    );
+    rig.jog("deck1.jog_top.shift", 0x1F, 72, false);
+    let back = rig.engine.deck(d(1)).position_frames;
+    assert!((back - at).abs() < 1_000.0, "back at {back}");
+
+    // The touch SHIFT turns into note 0x67 still reaches the jog touch, so a touch that
+    // ends with SHIFT held pairs with the one that started without it.
+    rig.button("deck1.jog_touch", 127);
+    assert!(rig.engine.deck(d(1)).jog_touched);
+    let range = rig.control("deck1.jog_top.shift").messages[0];
+    assert_eq!(range.data1, 0x67);
+    let (actions, _) = rig.batch(&[note(range.status & 0x0F, range.data1, 0)]);
+    assert_eq!(actions, [Action::JogTouch(d(1))]);
+    assert!(!rig.engine.deck(d(1)).jog_touched);
+
+    // Searching also works while playing.
+    rig.press("deck1.play");
+    let before = rig.engine.deck(d(1)).position_frames;
+    rig.jog("deck1.jog_top.shift", 0x1F, 72, true);
+    assert!(rig.engine.deck(d(1)).position_frames > before + 40_000.0);
 }

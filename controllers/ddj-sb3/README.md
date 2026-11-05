@@ -63,10 +63,38 @@ point you set is remembered and comes back when the track is loaded again. See
 | headphone MASTER button | headphones hear the master instead of the cue |
 | BROWSE turn, BROWSE press | scroll the library, switch tree and list (`--library`) |
 | LOAD left, LOAD right | load the selected track onto the side's deck (`--library`) |
+| SYNC | match tempo and beats to the playing deck on the other side |
+| VINYL | vinyl mode on/off (on at start): the touched jog top scratches |
+| jog top touch | holds the record in vinyl mode |
+| jog top | scratch (touched, vinyl on), otherwise nudge a playing deck or move a paused one |
+| jog outer ring | nudge a playing deck, move a paused one |
+| SHIFT + jog top | fast search |
+| AUTO LOOP | loop of the current length from the beat before the playhead; again to exit |
+| 1/2X, 2X | halve, double the loop length |
+| SHIFT + 1/2X | loop in |
+| SHIFT + 2X | loop out |
+| SHIFT + AUTO LOOP | reloop / exit |
+| HOT CUE pads 1-8 | set, jump to or (paused, while held) preview a hotcue |
+| SHIFT + HOT CUE pads 1-8 | delete the hotcue |
 
 The MASTER and HEADPHONES level knobs send MIDI, but the SB3 applies them in its own
 audio interface, so they are left unbound and the software levels are set to full when
 the controller attaches.
+
+## Performance controls
+
+The controls above act on the deck their side shows (decks 1/3 on the left, 2/4 on the
+right). The pads send on their own MIDI channels (8 left, 9 right), but they follow the
+side like every other control. Hotcues are remembered with the track in the library
+(`--library`) and come back on the next load.
+
+The mapping sets `jog_steps_per_turn = 720`, a first guess at how many steps one turn of
+a wheel sends. It, and the nudge strength, are tuned in the hands-on check.
+
+The SHIFT loop functions (loop in, loop out, reloop/exit) follow the labels printed on
+the SB3 in Pioneer's manual. The owner is yet to confirm them on the panel, and the
+hands-on check of the jog wheels, hotcues, loops and SYNC with the real hardware is yet to
+be done: record its results here.
 
 ## LEDs
 
@@ -92,8 +120,8 @@ must be picked up again (soft takeover).
 
 ## Not mapped yet
 
-SYNC, KEY LOCK, VINYL, the loop buttons, the jog wheels, the pad mode buttons and
-pads, the FX section and fader start: they need actions from later plans. The MIDI
+KEY LOCK, SHIFT + SYNC, SHIFT + VINYL, the pad mode buttons and the pads other than HOT CUE,
+the FX section and fader start: they need actions from later plans. The MIDI
 messages these unmapped controls send are listed in a comment at the end of
 `mapping.toml`.
 

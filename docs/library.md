@@ -247,16 +247,18 @@ open-jockey play --library --controller ddj-sb3 --device "DDJ-SB3" --master 3,4
   LOAD (left or right) loads the selected track onto the deck that side currently shows,
   decks 3 and 4 included. See [the DDJ-SB3 page](../controllers/ddj-sb3/README.md).
 - A browser line is printed: `▸ <path>  <n>/<count>  Artist – Title  <BPM>  <key>  •`
-  (the bullet means the track has cues, `missing` flags a missing file), followed by
+  (the bullet means the track has a cue point above 0 or at least one hotcue, `missing` flags a missing file), followed by
   analysis progress while the background analysis runs.
-- Tracks load in the background and a cue point you set is remembered with the track and
-  restored when you load it again. A load onto a playing deck prints
+- Tracks load in the background. A cue point or hotcue you set is remembered with the
+  track and restored when you load it again, and so is a hotcue you delete (it stays
+  deleted). The track's beatgrid is applied on load too, so SYNC and the loop buttons
+  work as soon as the track is analyzed. A load onto a playing deck prints
   "warning: deck N was playing".
 - Tracks not analyzed yet are analyzed in the background; failures and warnings are
   printed. A track the watcher sees change is analyzed again. While any deck plays,
   analysis runs on one worker thread only.
-- A cue point that could not be saved is retried once a second later (if it is still the
-  latest for that track); a warning is printed if the retry fails too.
+- A cue point or hotcue that could not be saved is retried once a second later (if it is
+  still the latest for that track); a warning is printed if the retry fails too.
 - Problems are printed as warnings and do not stop playback: a library change that could
   not be saved, a library worker that stopped, degraded folder watching.
 

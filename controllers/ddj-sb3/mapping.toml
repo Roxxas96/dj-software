@@ -19,6 +19,9 @@
 [controller]
 name = "Pioneer DDJ-SB3"
 port = "DDJ-SB3"
+# One full turn of a jog wheel (top or outer ring) sends this many relative steps. A first
+# estimate, to be tuned in the hands-on check; the jog bindings below require the key.
+jog_steps_per_turn = 720
 
 # The SB3 applies its MASTER and HEADPHONES knobs in its own audio interface, so the
 # software levels stay at full. Both knobs do send MIDI (MASTER cc14 ch7 0x08/0x28,
@@ -252,6 +255,336 @@ midi = { channel = 7, note = 0x47 }
 action = "deck.load_selected"
 side = "right"
 
+# ------------------------------------------------------------ performance, left side
+
+# SYNC
+[[input]]
+midi = { channel = 1, note = 0x58 }
+action = "deck.sync"
+side = "left"
+
+# VINYL
+[[input]]
+midi = { channel = 1, note = 0x17 }
+action = "deck.vinyl_toggle"
+side = "left"
+
+# AUTO LOOP
+[[input]]
+midi = { channel = 1, note = 0x14 }
+action = "deck.auto_loop"
+side = "left"
+
+# 1/2X
+[[input]]
+midi = { channel = 1, note = 0x12 }
+action = "deck.loop_halve"
+side = "left"
+
+# 2X
+[[input]]
+midi = { channel = 1, note = 0x13 }
+action = "deck.loop_double"
+side = "left"
+
+# SHIFT + 1/2X: loop in (per Pioneer's manual; the owner confirms the panel label)
+[[input]]
+midi = { channel = 1, note = 0x61 }
+action = "deck.loop_in"
+side = "left"
+
+# SHIFT + 2X: loop out (per Pioneer's manual)
+[[input]]
+midi = { channel = 1, note = 0x62 }
+action = "deck.loop_out"
+side = "left"
+
+# SHIFT + AUTO LOOP: reloop / exit (per Pioneer's manual)
+[[input]]
+midi = { channel = 1, note = 0x50 }
+action = "deck.reloop_exit"
+side = "left"
+
+# Jog top touched or released
+[[input]]
+midi = { channel = 1, note = 0x36 }
+action = "deck.jog_touch"
+side = "left"
+
+# SHIFT + jog touch: a touch that starts or ends with SHIFT held still pairs
+[[input]]
+midi = { channel = 1, note = 0x67 }
+action = "deck.jog_touch"
+side = "left"
+
+# Jog top
+[[input]]
+midi = { channel = 1, cc = 0x23 }
+action = "deck.jog_top"
+side = "left"
+value = "relative_offset"
+
+# Jog outer ring
+[[input]]
+midi = { channel = 1, cc = 0x21 }
+action = "deck.jog_ring"
+side = "left"
+value = "relative_offset"
+
+# SHIFT + jog top: fast search
+[[input]]
+midi = { channel = 1, cc = 0x1F }
+action = "deck.jog_search"
+side = "left"
+value = "relative_offset"
+
+# HOT CUE pad 1
+[[input]]
+midi = { channel = 8, note = 0x00 }
+action = "deck.hotcue_1"
+side = "left"
+
+[[input]]
+midi = { channel = 8, note = 0x01 }
+action = "deck.hotcue_2"
+side = "left"
+
+[[input]]
+midi = { channel = 8, note = 0x02 }
+action = "deck.hotcue_3"
+side = "left"
+
+[[input]]
+midi = { channel = 8, note = 0x03 }
+action = "deck.hotcue_4"
+side = "left"
+
+[[input]]
+midi = { channel = 8, note = 0x04 }
+action = "deck.hotcue_5"
+side = "left"
+
+[[input]]
+midi = { channel = 8, note = 0x05 }
+action = "deck.hotcue_6"
+side = "left"
+
+[[input]]
+midi = { channel = 8, note = 0x06 }
+action = "deck.hotcue_7"
+side = "left"
+
+[[input]]
+midi = { channel = 8, note = 0x07 }
+action = "deck.hotcue_8"
+side = "left"
+
+# SHIFT + HOT CUE pad 1
+[[input]]
+midi = { channel = 8, note = 0x08 }
+action = "deck.hotcue_delete_1"
+side = "left"
+
+[[input]]
+midi = { channel = 8, note = 0x09 }
+action = "deck.hotcue_delete_2"
+side = "left"
+
+[[input]]
+midi = { channel = 8, note = 0x0A }
+action = "deck.hotcue_delete_3"
+side = "left"
+
+[[input]]
+midi = { channel = 8, note = 0x0B }
+action = "deck.hotcue_delete_4"
+side = "left"
+
+[[input]]
+midi = { channel = 8, note = 0x0C }
+action = "deck.hotcue_delete_5"
+side = "left"
+
+[[input]]
+midi = { channel = 8, note = 0x0D }
+action = "deck.hotcue_delete_6"
+side = "left"
+
+[[input]]
+midi = { channel = 8, note = 0x0E }
+action = "deck.hotcue_delete_7"
+side = "left"
+
+[[input]]
+midi = { channel = 8, note = 0x0F }
+action = "deck.hotcue_delete_8"
+side = "left"
+
+# ------------------------------------------------------------ performance, right side
+
+# SYNC
+[[input]]
+midi = { channel = 2, note = 0x58 }
+action = "deck.sync"
+side = "right"
+
+# VINYL
+[[input]]
+midi = { channel = 2, note = 0x17 }
+action = "deck.vinyl_toggle"
+side = "right"
+
+# AUTO LOOP
+[[input]]
+midi = { channel = 2, note = 0x14 }
+action = "deck.auto_loop"
+side = "right"
+
+# 1/2X
+[[input]]
+midi = { channel = 2, note = 0x12 }
+action = "deck.loop_halve"
+side = "right"
+
+# 2X
+[[input]]
+midi = { channel = 2, note = 0x13 }
+action = "deck.loop_double"
+side = "right"
+
+# SHIFT + 1/2X: loop in (per Pioneer's manual; the owner confirms the panel label)
+[[input]]
+midi = { channel = 2, note = 0x61 }
+action = "deck.loop_in"
+side = "right"
+
+# SHIFT + 2X: loop out (per Pioneer's manual)
+[[input]]
+midi = { channel = 2, note = 0x62 }
+action = "deck.loop_out"
+side = "right"
+
+# SHIFT + AUTO LOOP: reloop / exit (per Pioneer's manual)
+[[input]]
+midi = { channel = 2, note = 0x50 }
+action = "deck.reloop_exit"
+side = "right"
+
+# Jog top touched or released
+[[input]]
+midi = { channel = 2, note = 0x36 }
+action = "deck.jog_touch"
+side = "right"
+
+# SHIFT + jog touch: a touch that starts or ends with SHIFT held still pairs
+[[input]]
+midi = { channel = 2, note = 0x67 }
+action = "deck.jog_touch"
+side = "right"
+
+# Jog top
+[[input]]
+midi = { channel = 2, cc = 0x23 }
+action = "deck.jog_top"
+side = "right"
+value = "relative_offset"
+
+# Jog outer ring
+[[input]]
+midi = { channel = 2, cc = 0x21 }
+action = "deck.jog_ring"
+side = "right"
+value = "relative_offset"
+
+# SHIFT + jog top: fast search
+[[input]]
+midi = { channel = 2, cc = 0x1F }
+action = "deck.jog_search"
+side = "right"
+value = "relative_offset"
+
+# HOT CUE pad 1
+[[input]]
+midi = { channel = 9, note = 0x00 }
+action = "deck.hotcue_1"
+side = "right"
+
+[[input]]
+midi = { channel = 9, note = 0x01 }
+action = "deck.hotcue_2"
+side = "right"
+
+[[input]]
+midi = { channel = 9, note = 0x02 }
+action = "deck.hotcue_3"
+side = "right"
+
+[[input]]
+midi = { channel = 9, note = 0x03 }
+action = "deck.hotcue_4"
+side = "right"
+
+[[input]]
+midi = { channel = 9, note = 0x04 }
+action = "deck.hotcue_5"
+side = "right"
+
+[[input]]
+midi = { channel = 9, note = 0x05 }
+action = "deck.hotcue_6"
+side = "right"
+
+[[input]]
+midi = { channel = 9, note = 0x06 }
+action = "deck.hotcue_7"
+side = "right"
+
+[[input]]
+midi = { channel = 9, note = 0x07 }
+action = "deck.hotcue_8"
+side = "right"
+
+# SHIFT + HOT CUE pad 1
+[[input]]
+midi = { channel = 9, note = 0x08 }
+action = "deck.hotcue_delete_1"
+side = "right"
+
+[[input]]
+midi = { channel = 9, note = 0x09 }
+action = "deck.hotcue_delete_2"
+side = "right"
+
+[[input]]
+midi = { channel = 9, note = 0x0A }
+action = "deck.hotcue_delete_3"
+side = "right"
+
+[[input]]
+midi = { channel = 9, note = 0x0B }
+action = "deck.hotcue_delete_4"
+side = "right"
+
+[[input]]
+midi = { channel = 9, note = 0x0C }
+action = "deck.hotcue_delete_5"
+side = "right"
+
+[[input]]
+midi = { channel = 9, note = 0x0D }
+action = "deck.hotcue_delete_6"
+side = "right"
+
+[[input]]
+midi = { channel = 9, note = 0x0E }
+action = "deck.hotcue_delete_7"
+side = "right"
+
+[[input]]
+midi = { channel = 9, note = 0x0F }
+action = "deck.hotcue_delete_8"
+side = "right"
+
 # ------------------------------------------------------------------------ LEDs
 #
 # Only the headphone MASTER LED responds. A full LED scan (all 16 channels, note-on,
@@ -265,29 +598,23 @@ on = 127
 off = 0
 
 # ----------------------------------------------------------------------------------
-# Not mapped yet (needs plan 4): every other captured control, with its MIDI message.
+# Not mapped yet: the captured controls without a binding, with their MIDI messages.
 # Left deck shown (channel 1, status 0x90/0xB0); the right deck sends the same on
 # channel 2 (0x91/0xB1). Decks 3/4 send the same bytes as decks 1/2.
 #
-#   SYNC                   note 0x58        SHIFT+SYNC        note 0x5C
+#   SHIFT+SYNC             note 0x5C
 #   SHIFT+PLAY             note 0x47
 #   KEY LOCK               note 0x1A
-#   VINYL                  note 0x17        SHIFT+VINYL       note 0x40
-#   AUTO LOOP              note 0x14        SHIFT+AUTO LOOP   note 0x50
-#   1/2X                   note 0x12        SHIFT+1/2X        note 0x61
-#   2X                     note 0x13        SHIFT+2X          note 0x62
-#   jog touch              note 0x36        SHIFT+jog touch   note 0x67
-#   jog top (spin)         cc 0x23          SHIFT+jog top     cc 0x1F
-#   jog outer ring         cc 0x21, relative offset 64 (65 = clockwise)
+#   SHIFT+VINYL            note 0x40
 #   pad mode HOT CUE       note 0x1B        SHIFT             note 0x69
 #   pad mode FX FADE       note 0x1E        SHIFT             note 0x6B
 #   pad mode PAD SCRATCH   note 0x20        SHIFT             note 0x6D
 #   pad mode SAMPLER       note 0x22        SHIFT             note 0x6E
 #   channel fader + SHIFT  (fader start) notes 0x52 / 0x66, with the fader's cc14
 #
-#   Pads: channel 8 (0x97) left, channel 9 (0x98) right, notes:
-#     HOT CUE 0x00-0x07 (SHIFT 0x08-0x0F), FX FADE 0x10-0x17, PAD SCRATCH 0x20-0x27,
-#     SAMPLER 0x30-0x37.
+#   Pads: channel 8 (0x97) left, channel 9 (0x98) right. HOT CUE (0x00-0x07, SHIFT
+#     0x08-0x0F) is mapped; the others, notes:
+#     FX FADE 0x10-0x17, PAD SCRATCH 0x20-0x27, SAMPLER 0x30-0x37.
 #     The FX FADE and PAD SCRATCH pad steps also recorded firmware-generated messages
 #     (notes 0x4D/0x4C/0x4A at a constant 127, cc 0x22): those are not pads.
 #
