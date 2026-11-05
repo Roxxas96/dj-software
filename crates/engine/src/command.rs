@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{DeckId, Grid, TrackBuffer, TrackMemory};
+use crate::{DeckId, Grid, HotcueSlot, TrackBuffer, TrackMemory};
 
 /// A message from the controller to the audio thread.
 #[derive(Debug, Clone)]
@@ -37,8 +37,20 @@ pub enum DeckCommand {
     /// `CueRelease` returns to the cue point as stored at release time.
     SetCue(f64),
     /// Replaces the beatgrid; `None` clears it. A grid whose period is not finite and
-    /// positive is ignored.
+    /// positive, or whose first beat is not finite, is ignored.
     SetGrid(Option<Grid>),
+    /// Hotcue button down. An empty slot stores the playhead; a set slot jumps there and,
+    /// while paused, previews until [`DeckCommand::HotcueRelease`].
+    HotcuePress(HotcueSlot),
+    /// Hotcue button up. Only ends the preview started by this same slot: it returns to the
+    /// hotcue and pauses, unless play was pressed during the hold.
+    HotcueRelease(HotcueSlot),
+    /// Clears a hotcue, ending its preview as a release would.
+    HotcueDelete(HotcueSlot),
+    /// Sets or clears a hotcue, in track frames clamped to `[0, frames]`, without moving the
+    /// playhead or changing the play state. A non-finite position is ignored. Used to restore
+    /// remembered hotcues; `None` behaves like [`DeckCommand::HotcueDelete`].
+    SetHotcue(HotcueSlot, Option<f64>),
 }
 
 /// How far the tempo slider reaches either side of the original tempo.

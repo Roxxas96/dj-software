@@ -535,6 +535,28 @@ fn set_grid_replaces_and_clears() {
 }
 
 #[test]
+fn set_grid_ignores_a_nan_first_beat() {
+    let (mut c, mut r) = setup(SR);
+    send(
+        &mut c,
+        deck(0),
+        DeckCommand::Load {
+            track: ramp_track(SR, 4096),
+            memory: TrackMemory::default(),
+        },
+    );
+    let g = grid_120_bpm();
+    send(&mut c, deck(0), DeckCommand::SetGrid(Some(g)));
+    let nan = Grid {
+        beat_period_frames: 22_050.0,
+        first_beat_frames: f64::NAN,
+    };
+    send(&mut c, deck(0), DeckCommand::SetGrid(Some(nan)));
+    render(&mut r, 64);
+    assert_eq!(c.deck(deck(0)).grid, Some(g));
+}
+
+#[test]
 fn send_all_is_all_or_nothing() {
     let (mut c, mut r) = engine(EngineConfig {
         sample_rate: SR,
