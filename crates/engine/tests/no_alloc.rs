@@ -5,7 +5,8 @@ use std::sync::Arc;
 use assert_no_alloc::{AllocDisabler, assert_no_alloc};
 use common::ramp_track;
 use engine::{
-    ChannelCommand, Command, DeckCommand, DeckId, EngineConfig, MasterCommand, XfaderAssign, engine,
+    ChannelCommand, Command, DeckCommand, DeckId, EngineConfig, Grid, MasterCommand, TrackMemory,
+    XfaderAssign, engine,
 };
 
 #[global_allocator]
@@ -59,7 +60,20 @@ fn render_does_not_allocate() {
         decks[0],
         DeckCommand::Load {
             track: replacement,
-            memory: engine::TrackMemory::default(),
+            memory: TrackMemory {
+                cue: 5000.0,
+                hotcues: [
+                    Some(100.0),
+                    None,
+                    Some(f64::NAN),
+                    Some(-1.0),
+                    None,
+                    None,
+                    None,
+                    None,
+                ],
+                grid: Grid::from_bpm(128.0, 300.0, 44_100),
+            },
         },
     ))
     .unwrap();
@@ -81,6 +95,12 @@ fn render_does_not_allocate() {
         DeckCommand::SetCue(-5.0),
         DeckCommand::CueRelease,
         DeckCommand::Play,
+        DeckCommand::SetGrid(Grid::from_bpm(120.0, 0.0, 44_100)),
+        DeckCommand::SetGrid(Some(Grid {
+            beat_period_frames: 0.0,
+            first_beat_frames: 0.0,
+        })),
+        DeckCommand::SetGrid(None),
     ] {
         c.send(Command::Deck(decks[0], cmd)).unwrap();
         render_blocks(10);

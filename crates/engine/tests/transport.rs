@@ -15,7 +15,7 @@ const SR: u32 = 44_100;
 /// An engine whose mixer passes every deck to master at unity gain: master level 1.0 and
 /// every channel off the crossfader. The always-on EQ isolator still shifts phase (it is an
 /// allpass at unity), so sample-exact transport output is pinned by the unit tests in
-/// `src/deck.rs`; these tests check the end-to-end path with settled DC levels.
+/// `src/deck/mod.rs`; these tests check the end-to-end path with settled DC levels.
 fn setup(sample_rate: u32) -> (EngineController, EngineRenderer) {
     let (mut c, mut r) = engine(EngineConfig {
         sample_rate,
@@ -462,7 +462,9 @@ fn load_applies_track_memory() {
     let s = c.deck(deck(0));
     assert_eq!(s.cue_frames, 500.0);
     assert_eq!(s.hotcues[2], Some(900.0));
-    assert_eq!(s.grid.unwrap().beat_period_frames, 22_050.0);
+    let grid = s.grid.unwrap();
+    assert_eq!(grid.beat_period_frames, 22_050.0);
+    assert_eq!(grid.first_beat_frames, 1000.0);
     assert!(!s.playing);
     assert_eq!(s.position_frames, 0.0);
 }
@@ -482,7 +484,7 @@ fn load_clamps_memory_like_clamped() {
             None,
             None,
         ],
-        grid: None,
+        grid: Some(grid_120_bpm()),
     };
     send(
         &mut c,
@@ -499,6 +501,8 @@ fn load_clamps_memory_like_clamped() {
     assert_eq!(expected.hotcues[..2], [Some(0.0), None]);
     assert_eq!(s.cue_frames, expected.cue);
     assert_eq!(s.hotcues, expected.hotcues);
+    assert_eq!(s.grid, Some(grid_120_bpm()));
+    assert_eq!(s.grid, expected.grid);
 }
 
 #[test]
@@ -542,13 +546,41 @@ fn send_all_is_all_or_nothing() {
     }
     let three = [cmd.clone(), cmd.clone(), cmd];
     assert_eq!(c.send_all(&three), Err(CommandQueueFull));
+    // The failed call queued nothing: exactly the 2 free slots remain.
+    for _ in 0..2 {
+        c.send(cmd_one()).unwrap();
+    }
+    assert_eq!(c.send(cmd_one()), Err(CommandQueueFull));
     render(&mut r, 1);
     assert_eq!(c.send_all(&three), Ok(()));
-    // Nothing was queued by the failed call: the queue holds exactly the 3 now.
-    render(&mut r, 1);
-    for _ in 0..256 {
-        c.send(Command::Master(MasterCommand::MasterLevel(1.0)))
-            .unwrap();
+}
+
+fn cmd_one() -> Command {
+    Command::Master(MasterCommand::MasterLevel(1.0))
+}
+
+#[test]
+fn load_drops_an_invalid_grid() {
+    let (mut c, mut r) = setup(SR);
+    for (period, first) in [(0.0, 0.0), (-1.0, 0.0), (f64::NAN, 0.0), (100.0, f64::NAN)] {
+        let memory = TrackMemory {
+            grid: Some(Grid {
+                beat_period_frames: period,
+                first_beat_frames: first,
+            }),
+            ..TrackMemory::default()
+        };
+        assert_eq!(memory.clamped(1000).grid, None);
+        send(
+            &mut c,
+            deck(0),
+            DeckCommand::Load {
+                track: ramp_track(SR, 1000),
+                memory,
+            },
+        );
+        render(&mut r, 64);
+        assert_eq!(c.deck(deck(0)).grid, None);
     }
 }
 

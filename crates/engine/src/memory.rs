@@ -75,7 +75,8 @@ pub struct TrackMemory {
 
 impl TrackMemory {
     /// The memory as the engine applies it to a track of `frames` frames: cue and hotcues
-    /// clamped to `[0, frames]`, a non-finite cue reset to 0, a non-finite hotcue dropped.
+    /// clamped to `[0, frames]`, a non-finite cue reset to 0, a non-finite hotcue dropped,
+    /// and a grid with a non-finite or non-positive period or a non-finite first beat dropped.
     pub fn clamped(self, frames: usize) -> TrackMemory {
         let end = frames as f64;
         let clamp = |v: f64| v.clamp(0.0, end);
@@ -86,7 +87,11 @@ impl TrackMemory {
                 0.0
             },
             hotcues: self.hotcues.map(|h| h.filter(|v| v.is_finite()).map(clamp)),
-            grid: self.grid,
+            grid: self.grid.filter(|g| {
+                g.beat_period_frames.is_finite()
+                    && g.beat_period_frames > 0.0
+                    && g.first_beat_frames.is_finite()
+            }),
         }
     }
 }
