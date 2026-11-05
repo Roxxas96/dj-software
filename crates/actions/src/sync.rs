@@ -18,8 +18,7 @@ pub(crate) struct SyncPlan {
     pub master: DeckId,
     pub slider: f32,
     pub range: TempoRange,
-    /// 2^k: the master's tempo the deck matches is the master's own times this, so 0.5 or
-    /// 2.0 for half or double time.
+    /// The deck's beats per master beat: 2^k, so 0.5 or 2.0 for half or double time.
     pub beat_ratio: f64,
 }
 
@@ -59,6 +58,9 @@ pub(crate) fn plan_sync(
     let master = choose_master(deck, state, snaps)?;
     let master_snap = &snaps[master.index()];
     let master_bpm = bpm(master_snap)? * master_snap.tempo_ratio;
+    if !(master_bpm.is_finite() && master_bpm > 0.0) {
+        return None;
+    }
 
     // Half or double time when that lands closer to the deck's own tempo.
     let (target, beat_ratio) = [0.5, 1.0, 2.0]
@@ -75,10 +77,12 @@ pub(crate) fn plan_sync(
 
     let needed = (ratio - 1.0).abs();
     let current = state.deck(deck).tempo_range;
-    let range = if needed <= current.fraction() {
+    // A little slack so a ratio at the edge of a range (1.10 in ±10 %) does not widen it.
+    let fits = |r: TempoRange| needed <= r.fraction() + 1e-9;
+    let range = if fits(current) {
         current
     } else {
-        RANGES.into_iter().find(|r| needed <= r.fraction())?
+        RANGES.into_iter().find(|&r| fits(r))?
     };
     let slider = 0.5 + (ratio - 1.0) / (2.0 * range.fraction());
     Some(SyncPlan {
@@ -94,6 +98,7 @@ mod tests {
     use engine::Grid;
 
     use super::*;
+    use crate::Side;
 
     fn snap(bpm: f64, ratio: f64) -> DeckSnapshot {
         DeckSnapshot {
@@ -113,6 +118,54 @@ mod tests {
         plan_sync(DeckId::ALL[0], &ControlState::default(), &snaps)
     }
 
+    fn deck(i: usize) -> DeckId {
+        DeckId::ALL[i]
+    }
+
+    /// Plans for deck 1 (index 0) with these decks playing at the given BPM.
+    fn plan_with(playing: &[(usize, f64)], active_right: usize) -> Option<SyncPlan> {
+        let mut snaps: [DeckSnapshot; 4] = Default::default();
+        snaps[0] = snap(128.0, 1.0);
+        snaps[0].playing = false;
+        for &(i, bpm) in playing {
+            snaps[i] = snap(bpm, 1.0);
+        }
+        let mut state = ControlState::default();
+        state.side_mut(Side::Right).active_deck = deck(active_right);
+        plan_sync(deck(0), &state, &snaps)
+    }
+
+    #[test]
+    fn the_other_sides_playing_deck_is_the_master() {
+        let plan = plan(128.0, 125.0, 1.0).unwrap();
+        assert_eq!(plan.master, deck(1));
+        assert_eq!(plan.beat_ratio, 1.0);
+    }
+
+    #[test]
+    fn the_other_sides_active_deck_wins_at_equal_tempo() {
+        // Same BPM everywhere: only the choice of master tells the plans apart.
+        let plan = plan_with(&[(1, 125.0), (3, 125.0)], 3).unwrap();
+        assert_eq!(plan.master, deck(3));
+        let plan = plan_with(&[(1, 125.0), (3, 125.0)], 1).unwrap();
+        assert_eq!(plan.master, deck(1));
+    }
+
+    #[test]
+    fn the_lowest_deck_follows_when_the_active_one_is_unusable() {
+        // The right side's active deck (index 1) does not play; decks 3 and 4 do.
+        let plan = plan_with(&[(2, 125.0), (3, 125.0)], 1).unwrap();
+        assert_eq!(plan.master, deck(2));
+    }
+
+    #[test]
+    fn half_time_picks_half_the_master_tempo() {
+        let plan = plan(87.0, 174.0, 1.0).unwrap();
+        assert_eq!(plan.master, deck(1));
+        assert_eq!(plan.beat_ratio, 0.5);
+        assert_eq!(plan.slider, 0.5);
+    }
+
     #[test]
     fn beat_ratio_is_the_power_of_two_picked() {
         assert_eq!(plan(87.0, 174.0, 1.0).unwrap().beat_ratio, 0.5);
@@ -125,5 +178,23 @@ mod tests {
         let plan = plan(100.0, 100.0, 1.05).unwrap();
         assert_eq!(plan.range, TempoRange::Ten);
         assert!((plan.slider - (0.5 + 0.05 / 0.2)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_ratio_on_the_edge_of_the_range_keeps_it() {
+        // 110 / 100 is 1.1 up to rounding: still ±10 %, slider at the end.
+        let plan = plan(100.0, 110.0, 1.0).unwrap();
+        assert_eq!(plan.range, TempoRange::Ten);
+        assert!((plan.slider - 1.0).abs() < 1e-6);
+        assert_eq!(
+            self::plan(100.0, 110.0001, 1.0).unwrap().range,
+            TempoRange::Sixteen
+        );
+    }
+
+    #[test]
+    fn a_master_without_a_usable_tempo_gives_no_plan() {
+        assert_eq!(plan(128.0, 125.0, 0.0), None);
+        assert_eq!(plan(128.0, 125.0, f64::NAN), None);
     }
 }
