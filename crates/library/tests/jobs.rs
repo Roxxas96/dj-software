@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use library::{
     ANALYZER_VERSION, AnalysisProgress, AnalysisRow, AnalysisWarning, Analyzer, BpmRangeError,
-    Library, LibraryError, PROGRESS_TAIL, REPORT_CAPACITY, RawStatement, ScanProgress,
+    FileStamp, Library, LibraryError, PROGRESS_TAIL, REPORT_CAPACITY, RawStatement, ScanProgress,
     StoreAnalysis, WriteOp, parse_bpm_range, scan_folder, validate_bpm_range,
 };
 use rusqlite::types::Value;
@@ -451,6 +451,7 @@ fn stale_analysis_is_not_stored() {
         WriteOp::StoreAnalysis(Box::new(StoreAnalysis {
             track_id,
             fingerprint,
+            file: None,
             analyzer_version: ANALYZER_VERSION,
             bpm: Some(120.0),
             first_beat_frames: Some(0.0),
@@ -550,6 +551,7 @@ fn store_analysis_keeps_a_locked_grid() {
         .submit_wait(WriteOp::StoreAnalysis(Box::new(StoreAnalysis {
             track_id: id,
             fingerprint,
+            file: None,
             analyzer_version: ANALYZER_VERSION,
             bpm: Some(120.0),
             first_beat_frames: Some(0.0),
@@ -669,4 +671,58 @@ fn max_active_limits_and_pauses_the_workers() {
     analyzer.set_max_active(usize::MAX);
     let p = wait(&analyzer);
     assert_eq!(p.done, 4, "{p:?}");
+}
+
+#[test]
+fn an_analysis_of_a_file_that_changed_since_it_was_read_is_stored_out_of_date() {
+    let s = setup();
+    let id = add_track(&s, "a.wav", 128.0, 0.25);
+    let (fingerprint, size, mtime): (Vec<u8>, Option<i64>, Option<i64>) = s
+        .lib
+        .reader()
+        .unwrap()
+        .connection()
+        .query_row(
+            "SELECT fingerprint, size, mtime FROM tracks WHERE id = ?1",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap();
+    let store = |file: FileStamp| {
+        s.lib
+            .writer()
+            .submit_wait(WriteOp::StoreAnalysis(Box::new(StoreAnalysis {
+                track_id: id,
+                fingerprint: fingerprint.clone(),
+                file: Some(file),
+                analyzer_version: ANALYZER_VERSION,
+                bpm: Some(120.0),
+                first_beat_frames: Some(0.0),
+                key: Some(3),
+                waveform: Vec::new(),
+            })))
+            .unwrap();
+    };
+    // Read while the file was smaller (a copy still in progress); the scan has since
+    // stored the completed file's size.
+    store(FileStamp {
+        size: size.map(|n| n / 2),
+        mtime,
+    });
+    let stored = || -> (i64, Option<f64>) {
+        s.lib
+            .reader()
+            .unwrap()
+            .connection()
+            .query_row(
+                "SELECT analyzer_version, bpm FROM analysis WHERE track_id = ?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+    };
+    assert_eq!(stored(), (0, Some(120.0)), "kept, but to be redone");
+    // Read from the file as stored: current.
+    store(FileStamp { size, mtime });
+    assert_eq!(stored().0, i64::from(ANALYZER_VERSION));
 }

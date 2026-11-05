@@ -48,6 +48,7 @@ fn analyze(lib: &Library, id: i64, bpm: f64, first_beat_frames: f64) {
         .submit_wait(WriteOp::StoreAnalysis(Box::new(StoreAnalysis {
             track_id: id,
             fingerprint: vec![u8::try_from(id).unwrap(); 32],
+            file: None,
             analyzer_version: library::ANALYZER_VERSION,
             bpm: Some(bpm),
             first_beat_frames: Some(first_beat_frames),
@@ -397,6 +398,7 @@ fn edit_grid_op_reports_the_new_grid() {
             track: 1,
             edit: GridEdit::Shift { frames: 50.0 },
             playhead_frames: None,
+            sample_rate: None,
         })
         .unwrap();
     assert_eq!(
@@ -415,6 +417,7 @@ fn edit_grid_op_reports_the_new_grid() {
             track: 1,
             edit: GridEdit::Tap { at_micros: 0 },
             playhead_frames: None,
+            sample_rate: None,
         })
         .unwrap();
     assert_eq!(
@@ -424,5 +427,55 @@ fn edit_grid_op_reports_the_new_grid() {
             first_beat_frames: Some(1050.0),
             grid_locked: true,
         })
+    );
+}
+
+#[test]
+fn the_decoded_rate_is_preferred_over_the_tag_rate() {
+    // Tags say 44.1 kHz (period 22050 at 120 BPM); the decoded track is 48 kHz
+    // (period 24000).
+    let s = analyzed(1000.0);
+    let row = s
+        .lib
+        .edit_grid_at_rate(1, GridEdit::Shift { frames: -2000.0 }, None, Some(48_000))
+        .unwrap();
+    assert_eq!(row.first_beat_frames, Some(23_000.0), "wrapped at 24000");
+    // Without a decoded rate the tag rate is the fallback.
+    let row = s
+        .lib
+        .edit_grid(1, GridEdit::Shift { frames: 23_000.0 }, None)
+        .unwrap();
+    assert_eq!(row.first_beat_frames, Some(46_000.0 - 2.0 * PERIOD));
+    // With no tag rate, a decoded rate still lets the edit through; with neither it is
+    // refused.
+    raw(&s.lib, "UPDATE tracks SET sample_rate = NULL", vec![]);
+    let row = s
+        .lib
+        .edit_grid_at_rate(
+            1,
+            GridEdit::SetDownbeat {
+                at_frames: 50_000.0,
+            },
+            None,
+            Some(48_000),
+        )
+        .unwrap();
+    assert_eq!(row.first_beat_frames, Some(2_000.0));
+    let err = s
+        .lib
+        .edit_grid(
+            1,
+            GridEdit::SetDownbeat {
+                at_frames: 50_000.0,
+            },
+            None,
+        )
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            library::LibraryError::Grid(library::GridError::NoSampleRate)
+        ),
+        "{err}"
     );
 }

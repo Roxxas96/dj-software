@@ -17,7 +17,7 @@ use analysis::{BpmRange, Key, Waveform, detect_beatgrid, detect_key, waveform};
 use rusqlite::OptionalExtension;
 
 use crate::settings::{BpmRangeError, InvalidBpmRange};
-use crate::writer::StoreAnalysis;
+use crate::writer::{FileStamp, StoreAnalysis};
 use crate::{Library, LibraryError, Reader, WriteOp, Writer};
 
 /// The version of the analysis algorithms. Tracks analyzed by an older version are
@@ -407,6 +407,7 @@ struct TrackInfo {
     path: String,
     missing: bool,
     fingerprint: Vec<u8>,
+    file: FileStamp,
     analyzer_version: Option<i64>,
     grid_locked: bool,
     bpm: Option<f64>,
@@ -418,7 +419,7 @@ fn track_info(reader: &Reader, id: i64) -> Result<Option<TrackInfo>, LibraryErro
         .connection()
         .prepare_cached(
             "SELECT t.path, t.missing, t.fingerprint, a.analyzer_version, \
-                    coalesce(a.grid_locked, 0), a.bpm, a.first_beat_frames \
+                    coalesce(a.grid_locked, 0), a.bpm, a.first_beat_frames, t.size, t.mtime \
              FROM tracks t LEFT JOIN analysis a ON a.track_id = t.id WHERE t.id = ?1",
         )?
         .query_row([id], |r| {
@@ -426,6 +427,10 @@ fn track_info(reader: &Reader, id: i64) -> Result<Option<TrackInfo>, LibraryErro
                 path: r.get(0)?,
                 missing: r.get(1)?,
                 fingerprint: r.get(2)?,
+                file: FileStamp {
+                    size: r.get(7)?,
+                    mtime: r.get(8)?,
+                },
                 analyzer_version: r.get(3)?,
                 grid_locked: r.get(4)?,
                 bpm: r.get(5)?,
@@ -496,6 +501,7 @@ fn run_job(
     let op = WriteOp::StoreAnalysis(Box::new(StoreAnalysis {
         track_id: id,
         fingerprint: info.fingerprint,
+        file: Some(info.file),
         // An analysis of part of the audio is stored as out of date, so it is redone
         // (say, once a file that was still being copied is complete).
         analyzer_version: if truncated { 0 } else { ANALYZER_VERSION },

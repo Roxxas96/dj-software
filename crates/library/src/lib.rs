@@ -42,7 +42,9 @@ pub use settings::{
     format_bpm_range, parse_bpm_range, validate_bpm_range,
 };
 pub use watch::{DEBOUNCE, RESCAN_INTERVAL, WatchHealth, Watcher, watch, watch_with_debounce};
-pub use writer::{FailedWrite, RawStatement, StoreAnalysis, WriteOp, WriteOutcome, Writer};
+pub use writer::{
+    FailedWrite, FileStamp, RawStatement, StoreAnalysis, WriteOp, WriteOutcome, Writer,
+};
 
 /// Everything that can go wrong opening or writing the library.
 #[derive(Debug, thiserror::Error)]
