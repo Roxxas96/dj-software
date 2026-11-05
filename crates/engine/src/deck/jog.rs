@@ -18,6 +18,9 @@ pub(super) const SEARCH_SECONDS_PER_TURN: f64 = 10.0;
 pub(super) const SCRATCH_LAG_SECONDS: f64 = 0.01;
 /// Fastest scratch, in track frames per output frame.
 pub(super) const SCRATCH_MAX_SPEED: f64 = 8.0;
+/// Scratch speed, in track frames per output frame, below which the record counts as held
+/// still and outputs silence rather than a constant sample (DC).
+pub(super) const SCRATCH_STILL_SPEED: f64 = 1e-3;
 
 impl Deck {
     pub(super) fn set_vinyl(&mut self, on: bool) {
@@ -52,8 +55,13 @@ impl Deck {
                     self.position + pending + turns * PLATTER_SECONDS_PER_TURN * track_rate;
                 self.scratch = Some(target.clamp(0.0, end) - self.position);
             }
+            // The hand is on the platter: a ring move neither nudges nor seeks.
+            Some(_) => {}
             _ if self.playing => {
-                self.nudge += turns * NUDGE_SECONDS_PER_TURN * track_rate;
+                // Kept within a track length so huge moves never overflow and poison the
+                // playhead.
+                self.nudge =
+                    (self.nudge + turns * NUDGE_SECONDS_PER_TURN * track_rate).clamp(-end, end);
             }
             _ => self.jump_by(turns * PLATTER_SECONDS_PER_TURN * track_rate),
         }

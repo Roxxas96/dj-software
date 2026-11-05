@@ -227,12 +227,18 @@ impl Deck {
         let frames = out.as_chunks_mut::<2>().0;
 
         if let Some(mut pending) = self.scratch {
+            // An empty track has no frame to scratch over.
+            if track.frames() == 0 {
+                return;
+            }
             // Only the platter moves the record, playing or paused; it never wraps a loop
-            // and holds at the ends instead of pausing.
+            // and holds at the ends instead of pausing. A record held still is silent.
             let lag = jog::SCRATCH_LAG_SECONDS * f64::from(output_sample_rate);
             for frame in frames {
-                add_frame(frame, track, self.position);
                 let speed = (pending / lag).clamp(-jog::SCRATCH_MAX_SPEED, jog::SCRATCH_MAX_SPEED);
+                if speed.abs() >= jog::SCRATCH_STILL_SPEED {
+                    add_frame(frame, track, self.position);
+                }
                 let next = (self.position + speed).clamp(0.0, end);
                 pending -= next - self.position;
                 self.position = next;
@@ -478,5 +484,41 @@ mod tests {
         // The first frames move at the full scratch speed, interpolated at whole frames.
         assert_eq!(frames[1], track.frame(19_992));
         assert!(deck.position < 20_000.0 - 1023.0 * 2.0);
+    }
+
+    #[test]
+    fn record_held_still_is_silent() {
+        let track = ramp_track(40_000);
+        let mut deck = playing_deck(&track);
+        let _ = deck.apply(DeckCommand::Seek(20_000.0));
+        let _ = deck.apply(DeckCommand::JogTouch(true));
+        let mut out = vec![0.0; 2 * 1024];
+        deck.render_add(&mut out, SR);
+        assert!(out.iter().all(|&s| s == 0.0));
+        // After a scratch has settled too.
+        let _ = deck.apply(DeckCommand::Jog {
+            turns: 0.01,
+            surface: JogSurface::Top,
+        });
+        let mut out = vec![0.0; 2 * 8192];
+        deck.render_add(&mut out, SR);
+        assert!(out[..2].iter().all(|&s| s != 0.0));
+        let settled = &out[2 * 6000..];
+        assert!(settled.iter().all(|&s| s == 0.0));
+    }
+
+    #[test]
+    fn empty_track_renders_nothing_even_when_scratched() {
+        let track = Arc::new(TrackBuffer::new(SR, Vec::new()).unwrap());
+        let mut deck = playing_deck(&track);
+        let _ = deck.apply(DeckCommand::JogTouch(true));
+        let _ = deck.apply(DeckCommand::Jog {
+            turns: 1.0,
+            surface: JogSurface::Top,
+        });
+        let mut out = vec![0.0; 2 * 64];
+        deck.render_add(&mut out, SR);
+        assert!(out.iter().all(|&s| s == 0.0));
+        assert_eq!(deck.position, 0.0);
     }
 }
