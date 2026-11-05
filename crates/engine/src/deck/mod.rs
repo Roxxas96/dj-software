@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+mod hotcue;
+
 use crate::{DeckCommand, DeckSnapshot, Grid, HOTCUES, TempoRange, TrackBuffer};
 
 /// Transport state of one deck. Owned by the renderer.
@@ -11,9 +13,9 @@ pub(crate) struct Deck {
     position: f64,
     /// Cue point in track frames.
     cue: f64,
-    /// Cue is held down and playing back from the cue point.
-    preview: bool,
-    /// Play was pressed during preview, so releasing cue keeps playing.
+    /// A cue or hotcue is held down and playing back from its point, and which one.
+    preview: Option<hotcue::PreviewSource>,
+    /// Play was pressed during preview, so releasing the held button keeps playing.
     play_latched: bool,
     tempo_slider: f32,
     tempo_range: TempoRange,
@@ -28,7 +30,7 @@ impl Default for Deck {
             playing: false,
             position: 0.0,
             cue: 0.0,
-            preview: false,
+            preview: None,
             play_latched: false,
             tempo_slider: 0.5,
             tempo_range: TempoRange::default(),
@@ -60,7 +62,7 @@ impl Deck {
             DeckCommand::Pause => self.pause(),
             DeckCommand::TogglePlay => {
                 // During cue preview, play latches instead of pausing (hold CUE, press PLAY).
-                if self.playing && !self.preview {
+                if self.playing && self.preview.is_none() {
                     self.pause();
                 } else {
                     self.play();
@@ -81,22 +83,26 @@ impl Deck {
             }
             DeckCommand::SetGrid(None) => self.grid = None,
             // A grid without a usable period would break every beat calculation: ignore it.
-            DeckCommand::SetGrid(Some(grid))
-                if grid.beat_period_frames.is_finite() && grid.beat_period_frames > 0.0 =>
-            {
-                self.grid = Some(grid);
+            DeckCommand::SetGrid(Some(grid)) if grid.is_valid() => self.grid = Some(grid),
+            DeckCommand::HotcuePress(slot) => self.hotcue_press(slot),
+            DeckCommand::HotcueRelease(slot) => self.hotcue_release(slot),
+            DeckCommand::HotcueDelete(slot) => self.hotcue_set(slot, None),
+            DeckCommand::SetHotcue(slot, None) => self.hotcue_set(slot, None),
+            DeckCommand::SetHotcue(slot, Some(frames)) if frames.is_finite() => {
+                self.hotcue_set(slot, Some(frames));
             }
             DeckCommand::SetTempoSlider(_)
             | DeckCommand::Seek(_)
             | DeckCommand::SetCue(_)
-            | DeckCommand::SetGrid(_) => {}
+            | DeckCommand::SetGrid(_)
+            | DeckCommand::SetHotcue(..) => {}
         }
         None
     }
 
     fn reset_transport(&mut self) {
         self.playing = false;
-        self.preview = false;
+        self.preview = None;
         self.play_latched = false;
         self.position = 0.0;
         self.cue = 0.0;
@@ -110,12 +116,12 @@ impl Deck {
         }
         self.playing = true;
         // Play pressed during cue preview: keep playing after cue is released.
-        self.play_latched = self.preview;
+        self.play_latched = self.preview.is_some();
     }
 
     fn pause(&mut self) {
         self.playing = false;
-        self.preview = false;
+        self.preview = None;
         self.play_latched = false;
     }
 
@@ -128,12 +134,12 @@ impl Deck {
             return;
         }
         if self.playing {
-            if !self.preview {
+            if self.preview.is_none() {
                 self.position = self.cue;
                 self.playing = false;
             }
         } else if self.at_cue() {
-            self.preview = true;
+            self.preview = Some(hotcue::PreviewSource::Cue);
             self.play_latched = false;
             self.playing = true;
         } else {
@@ -142,12 +148,16 @@ impl Deck {
     }
 
     fn cue_release(&mut self) {
-        if !self.preview {
-            return;
+        if self.preview == Some(hotcue::PreviewSource::Cue) {
+            self.end_preview(self.cue);
         }
-        self.preview = false;
+    }
+
+    /// Ends a preview: returns to `point` and pauses, unless play was latched during the hold.
+    fn end_preview(&mut self, point: f64) {
+        self.preview = None;
         if !self.play_latched {
-            self.position = self.cue;
+            self.position = point;
             self.playing = false;
         }
         self.play_latched = false;
@@ -206,7 +216,7 @@ impl Deck {
             track_sample_rate: self.track.as_ref().map_or(0, |t| t.sample_rate()),
             tempo_ratio: self.tempo_ratio(),
             cue_frames: self.cue,
-            previewing: self.preview,
+            previewing: self.preview.is_some(),
             grid: self.grid,
             hotcues: self.hotcues,
             // Filled in by the loop and jog behavior.

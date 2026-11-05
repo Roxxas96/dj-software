@@ -5,14 +5,18 @@ use std::sync::Arc;
 use assert_no_alloc::{AllocDisabler, assert_no_alloc};
 use common::ramp_track;
 use engine::{
-    ChannelCommand, Command, DeckCommand, DeckId, EngineConfig, Grid, MasterCommand, TrackMemory,
-    XfaderAssign, engine,
+    ChannelCommand, Command, DeckCommand, DeckId, EngineConfig, Grid, HotcueSlot, MasterCommand,
+    TrackMemory, XfaderAssign, engine,
 };
 
 #[global_allocator]
 static A: AllocDisabler = AllocDisabler;
 
 const BLOCK_FRAMES: usize = 512;
+
+fn slot(n: u8) -> HotcueSlot {
+    HotcueSlot::new(n).unwrap()
+}
 
 #[test]
 fn render_does_not_allocate() {
@@ -101,6 +105,22 @@ fn render_does_not_allocate() {
             first_beat_frames: 0.0,
         })),
         DeckCommand::SetGrid(None),
+        DeckCommand::HotcuePress(slot(1)),
+        DeckCommand::HotcueRelease(slot(1)),
+        DeckCommand::HotcuePress(slot(2)),
+        DeckCommand::HotcueRelease(slot(2)),
+        DeckCommand::SetHotcue(slot(3), Some(9000.0)),
+        DeckCommand::SetHotcue(slot(3), Some(f64::NAN)),
+        DeckCommand::HotcuePress(slot(3)),
+        DeckCommand::HotcueDelete(slot(3)),
+        DeckCommand::Pause,
+        DeckCommand::HotcuePress(slot(1)),
+        DeckCommand::TogglePlay,
+        DeckCommand::HotcueRelease(slot(1)),
+        DeckCommand::HotcuePress(slot(2)),
+        DeckCommand::HotcueDelete(slot(2)),
+        DeckCommand::SetHotcue(slot(1), None),
+        DeckCommand::Play,
     ] {
         c.send(Command::Deck(decks[0], cmd)).unwrap();
         render_blocks(10);

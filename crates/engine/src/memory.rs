@@ -57,6 +57,14 @@ impl Grid {
         )
     }
 
+    /// Whether the grid can drive beat calculations: a finite positive period and a finite
+    /// first beat.
+    pub(crate) fn is_valid(&self) -> bool {
+        self.beat_period_frames.is_finite()
+            && self.beat_period_frames > 0.0
+            && self.first_beat_frames.is_finite()
+    }
+
     /// The position `frames` in beats from the first beat (negative before it).
     pub fn beats_at(&self, frames: f64) -> f64 {
         (frames - self.first_beat_frames) / self.beat_period_frames
@@ -87,11 +95,7 @@ impl TrackMemory {
                 0.0
             },
             hotcues: self.hotcues.map(|h| h.filter(|v| v.is_finite()).map(clamp)),
-            grid: self.grid.filter(|g| {
-                g.beat_period_frames.is_finite()
-                    && g.beat_period_frames > 0.0
-                    && g.first_beat_frames.is_finite()
-            }),
+            grid: self.grid.filter(Grid::is_valid),
         }
     }
 }
