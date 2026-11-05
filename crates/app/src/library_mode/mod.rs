@@ -81,8 +81,9 @@ pub struct LibraryMode {
     worker: Option<JoinHandle<()>>,
     decks: [Option<DeckTrack>; 4],
     /// The track each deck held before its latest `Load`, still saved until the engine
-    /// applies that load.
-    outgoing: [Option<DeckTrack>; 4],
+    /// applies the load that replaced it: until the deck's `load_seq` passes the second
+    /// value.
+    outgoing: [Option<(DeckTrack, u64)>; 4],
     /// The deck's `load_seq` once the engine has applied the latest `Load` sent.
     engine_loads: [u64; 4],
     load_seq: [u64; 4],
@@ -444,12 +445,13 @@ impl LibraryMode {
             memory: MemorySync::new(frames, rate, loaded.memory, after),
             grid: loaded.memory.clamped(frames).grid,
         };
-        // The outgoing track's changes keep being saved until the engine applies this load
-        // (a track whose own load never showed had none).
+        // The outgoing track's changes keep being saved until the engine applies this load.
+        // A track whose own load never showed had none: the earlier outgoing track then
+        // stays, until the load that replaced it shows.
         if let Some(old) = self.decks[i].replace(incoming)
             && old.memory.load_applied()
         {
-            self.outgoing[i] = Some(old);
+            self.outgoing[i] = Some((old, after));
         }
         // A grid edited while the track was decoding reaches the deck at the refresh.
         self.refresh_wanted = true;
@@ -462,23 +464,31 @@ impl LibraryMode {
         }
     }
 
+    /// Saves the cue and hotcue changes on `deck`. Only a snapshot from one block is used
+    /// (Ruling R14): a mixed one could show one track's load count with another's cue
+    /// points. If none can be read now, the next round tries again.
     fn sync_deck(&mut self, deck: DeckId, engine: &mut EngineController, printer: &Printer) {
-        self.sync_snapshot(deck, &engine.deck(deck), printer);
+        if let Some(snap) = engine.deck_consistent(deck) {
+            self.sync_snapshot(deck, &snap, printer);
+        }
     }
 
-    /// Saves the changes `snap` shows to the track on `deck`, or to the outgoing track
-    /// while `snap` does not show the latest load applied.
+    /// Saves the changes `snap` (one block's snapshot) shows to the track on `deck`, and to
+    /// the outgoing track while `snap` does not show the load that replaced it.
     fn sync_snapshot(&mut self, deck: DeckId, snap: &DeckSnapshot, printer: &Printer) {
         let i = deck.index();
         let Some(mut current) = self.decks[i].take() else {
             return;
         };
-        if current.memory.shows_load(snap) {
-            self.outgoing[i] = None;
-        } else if let Some(mut old) = self.outgoing[i].take() {
-            let actions = old.memory.step(snap);
-            self.save_memory(&mut old, &actions, printer);
-            self.outgoing[i] = Some(old);
+        match self.outgoing[i].take() {
+            // Once a later load shows, the deck never holds that track again.
+            Some((_, replaced_after)) if snap.load_seq > replaced_after => {}
+            Some((mut old, replaced_after)) => {
+                let actions = old.memory.step(snap);
+                self.save_memory(&mut old, &actions, printer);
+                self.outgoing[i] = Some((old, replaced_after));
+            }
+            None => {}
         }
         let actions = current.memory.step(snap);
         self.save_memory(&mut current, &actions, printer);
@@ -557,8 +567,8 @@ impl LibraryMode {
         let name = track.map(|id| {
             self.decks
                 .iter()
-                .chain(&self.outgoing)
                 .flatten()
+                .chain(self.outgoing.iter().flatten().map(|(t, _)| t))
                 .find(|t| t.row.id == id)
                 .map_or_else(|| format!("track {id}"), |t| track_name(&t.row))
         });
@@ -1270,6 +1280,54 @@ mod tests {
             })
             .starts_with("warning: could not save the cue point for track 7: ")
         );
+        mode.shutdown(&mut engine, &printer);
+        printer.finish();
+    }
+
+    #[test]
+    fn two_loads_in_flight_never_save_to_the_first_track() {
+        let (_dir, mut mode, mut engine, printer) = mode();
+        let deck = DeckId::new(0).unwrap();
+        let shown = |load_seq, hotcue: Option<f64>| {
+            let mut hotcues = [None; engine::HOTCUES];
+            hotcues[0] = hotcue;
+            DeckSnapshot {
+                loaded: true,
+                duration_frames: 4410,
+                track_sample_rate: 44_100,
+                hotcues,
+                load_seq,
+                ..DeckSnapshot::default()
+            }
+        };
+        let mut load = |mode: &mut LibraryMode, id| {
+            let seq = mode.next_seq(deck);
+            let next = worker::Loaded {
+                seq,
+                row: TrackRow { id, ..row() },
+                ..loaded(seq)
+            };
+            mode.load(next, &mut engine, &printer);
+        };
+        // Track 7 (X) shows; then 8 (A) and 9 (B) are sent before any snapshot shows 8.
+        load(&mut mode, 7);
+        mode.sync_snapshot(deck, &shown(1, None), &printer);
+        load(&mut mode, 8);
+        load(&mut mode, 9);
+        assert_eq!(mode.outgoing[0].as_ref().map(|(t, _)| t.row.id), Some(7));
+        // The engine shows track 8 loaded, its hotcue 1 set: not track 7's, nor track 9's.
+        mode.sync_snapshot(deck, &shown(2, Some(100.0)), &printer);
+        assert!(mode.outgoing[0].is_none());
+        assert!(mode.latest_memory.is_empty(), "{:?}", mode.latest_memory);
+        // Track 9 shows: its own changes are saved.
+        mode.sync_snapshot(deck, &shown(3, None), &printer);
+        mode.sync_snapshot(deck, &shown(3, Some(50.0)), &printer);
+        assert_eq!(
+            mode.latest_memory.get(&(9, Spot::Hotcue(1))),
+            Some(&Some(50.0_f64.to_bits()))
+        );
+        assert_eq!(mode.latest_memory.len(), 1);
+        drop(load);
         mode.shutdown(&mut engine, &printer);
         printer.finish();
     }
