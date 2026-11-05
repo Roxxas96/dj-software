@@ -28,14 +28,18 @@ The default database is `library.sqlite3` in the per-user data directory:
 
 Every change to cues, grids, playlists and settings is written to the database at once
 (there is no "save on quit"). When the library is opened, the existing database is first
-checked with SQLite's `PRAGMA quick_check`. If the check fails, the library is not opened
-at all: the app stops with an error naming the database file and the `backups` folder,
-and the damaged file is not copied into the backups (so it cannot push a good backup
-out). Restore a backup as described below. Then the database is copied to `backups/library-<UTC yyyymmdd-hhmmss>.sqlite3` next to it, and only the 10
+copied to `backups/library-<UTC yyyymmdd-hhmmss>.sqlite3` next to it, and only the 10
 newest backups are kept. The copy is skipped when the newest backup is less than 10
 minutes old (so a series of short commands does not push the real backups out), unless a
 schema migration is pending: then a backup is always taken first. A migration runs in a
 transaction, so a failed one leaves the original file untouched.
+
+The database is checked with SQLite's `PRAGMA quick_check` when a backup is taken (the
+check reads the whole file, so it does not run on the opens in between). If the check
+fails, the library is not opened at all: the app stops with an error naming the database
+file and the `backups` folder, and the damaged file is not copied into the backups (so
+it cannot push a good backup out). Restore a backup as described below. A file that is
+not a database at all is refused on any open.
 
 ### Restoring a backup
 
@@ -84,14 +88,15 @@ ignored 3 non-audio file(s)`.
 
 ### Watching
 
-With `play --library`, the registered folders are watched. A path must stay quiet for
-2 seconds before it is looked at. A slow copy can still pause longer than that and be
-read half written: it is added as a track, and its analysis, which then covers only part
-of the audio, is stored as out of date (with a warning). When the copy completes, the
-watcher sees the file change and the track is analyzed again. Removals flag tracks missing and a rename relinks the track. If the operating
-system's watcher fails (for example, too many watches on Linux), the app prints
-"library watching degraded" and rescans the affected folders every 10 minutes instead.
-New tracks found this way are analyzed in the background.
+With `play --library`, the registered folders are watched. A path must stay quiet for 2
+seconds before it is looked at. A slow copy can still pause longer than that and be read
+half written: it is added as a track, and its analysis, which then covers only part of
+the audio, is stored as out of date (with a warning). When the copy completes, the
+watcher sees the file change and the track is analyzed again. Removals flag tracks
+missing and a rename relinks the track. If the operating system's watcher fails (for
+example, too many watches on Linux), the app prints "library watching degraded" and
+rescans the affected folders every 10 minutes instead. New tracks found this way are
+analyzed in the background.
 
 ## Analysis
 

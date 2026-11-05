@@ -41,15 +41,15 @@ impl Reader {
 
 impl Library {
     /// Opens (creating if needed) the library at `path`, in this order: create the parent
-    /// directories, check the existing file with `PRAGMA quick_check`, back it up (always
-    /// when a migration is pending, otherwise unless a backup under 10 minutes old
-    /// exists; the newest 10 are kept), open it in WAL mode with foreign keys on, migrate
+    /// directories, back up the existing file (always when a migration is pending,
+    /// otherwise unless a backup under 10 minutes old exists; the newest 10 are kept),
+    /// checking it with `PRAGMA quick_check` first when a backup is taken, open it in WAL mode with foreign keys on, migrate
     /// it to the latest schema in one transaction, and start the writer thread.
     ///
     /// # Errors
     ///
-    /// Fails with [`LibraryError::Corrupt`] if the existing file fails its integrity check
-    /// (it is then neither opened nor backed up), if the backup cannot be made (the
+    /// Fails with [`LibraryError::Corrupt`] if the existing file fails the integrity check
+    /// run before a backup (it is then neither opened nor backed up), if the backup cannot be made (the
     /// library is then not opened at all), if a migration fails
     /// ([`LibraryError::Migration`], with the database left at its previous version), or
     /// if the database is newer than this build ([`LibraryError::TooNew`]).

@@ -3,13 +3,13 @@
 //! `<dir>/backups/library-<UTC yyyymmdd-hhmmss>.sqlite3`, and only the newest
 //! [`KEEP`] backups are kept.
 //!
-//! Before anything else the database is checked with `PRAGMA quick_check`; a damaged
-//! one is refused ([`LibraryError::Corrupt`]) so it is neither opened nor copied over
-//! the good backups.
-//!
 //! A backup is always taken when a migration is pending. Otherwise it is skipped when a
 //! backup less than [`MIN_INTERVAL`] old already exists, so frequent short-lived opens
 //! (CLI commands) cannot rotate the real backups away.
+//!
+//! When a backup is taken, the database is first checked with `PRAGMA quick_check`; a
+//! damaged one is refused ([`LibraryError::Corrupt`]) so it is neither opened nor copied
+//! over the good backups. The check reads the whole file, so it runs only then.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -53,21 +53,27 @@ pub(crate) fn backup_if_needed(db: &Path, latest: usize) -> Result<Option<PathBu
     )
     .map_err(LibraryError::Backup)?;
     src.busy_timeout(LOCK_WAIT).map_err(LibraryError::Backup)?;
-    // A damaged database is never opened, nor rotated into the backups over good copies.
-    if let Err(detail) = quick_check(&src) {
-        return Err(LibraryError::Corrupt {
-            db: db.to_owned(),
-            backups: dir,
-            detail,
-        });
-    }
+    let corrupt = |detail: String| LibraryError::Corrupt {
+        db: db.to_owned(),
+        backups: dir.clone(),
+        detail,
+    };
     let version: i64 = src
         .pragma_query_value(None, "user_version", |row| row.get(0))
-        .map_err(LibraryError::Backup)?;
+        .map_err(|e| match e.sqlite_error_code() {
+            // Not even the header reads: refused whether or not a backup is due.
+            Some(rusqlite::ErrorCode::NotADatabase | rusqlite::ErrorCode::DatabaseCorrupt) => {
+                corrupt(e.to_string())
+            }
+            _ => LibraryError::Backup(e),
+        })?;
     let migration_pending = usize::try_from(version).is_ok_and(|v| v < latest);
     if !migration_pending && has_recent_backup(&dir, SystemTime::now()) {
         return Ok(None);
     }
+    // Checked only when a backup is taken (it reads the whole file): a damaged database
+    // is then neither opened nor rotated into the backups over good copies.
+    quick_check(&src).map_err(corrupt)?;
 
     let target = unique_name(&dir, &utc_stamp(SystemTime::now()));
     // Copy to a temporary name first so an interrupted backup never looks like a real one.
