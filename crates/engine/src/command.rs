@@ -27,7 +27,8 @@ pub enum DeckCommand {
     /// Slider position in `[0, 1]`: 0.5 is the original tempo, 1.0 the fastest.
     SetTempoSlider(f32),
     SetTempoRange(TempoRange),
-    /// Moves the playhead, in track frames, clamped to `[0, frames]`.
+    /// Moves the playhead, in track frames, clamped to `[0, frames]`. A seek outside an active
+    /// loop exits it.
     Seek(f64),
     /// Sets the cue point, in track frames, clamped to `[0, frames]`, without moving the
     /// playhead or changing the play state. Non-finite values are ignored. Used to restore
@@ -57,12 +58,14 @@ pub enum DeckCommand {
     /// loop. Otherwise does nothing.
     LoopOut,
     /// Exits an active loop and keeps playing. Otherwise, with a grid, loops the last beat
-    /// at or before the playhead for the current loop length in beats; without a grid it
-    /// does nothing.
+    /// at or before the playhead (loop-in clamps to 0 before the first beat) for the current
+    /// loop length in beats; without a grid it does nothing.
     AutoLoop,
-    /// Halves the loop length in beats (at least 1/32); an active loop is resized to match.
+    /// Halves the loop length in beats (at least 1/32); an active loop's own length is halved
+    /// too (at least 1 frame).
     LoopHalve,
-    /// Doubles the loop length in beats (at most 64); an active loop is resized to match.
+    /// Doubles the loop length in beats (at most 64); an active loop's own length is doubled
+    /// too.
     LoopDouble,
     /// Exits an active loop. Otherwise, with both points set, jumps to loop-in and loops.
     ReloopExit,

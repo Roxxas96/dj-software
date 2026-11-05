@@ -57,23 +57,64 @@ fn auto_loop_starts_on_the_last_beat() {
 
 #[test]
 fn loop_wraps_sample_exactly() {
+    // The mixer's EQ smears sample values, so sample-exact wrapping is covered by the deck
+    // unit tests; here the playhead after a block that crosses loop-out is exact.
     let (mut c, mut r, id) = setup();
     step(&mut c, &mut r, id, DeckCommand::Seek(22_050.0));
     step(&mut c, &mut r, id, DeckCommand::AutoLoop);
     step(&mut c, &mut r, id, DeckCommand::Seek(110_000.0));
     step(&mut c, &mut r, id, DeckCommand::Play);
-    let start = c.deck(id).position_frames as usize;
-    let (out, _) = render(&mut r, 1024);
-    // The ramp track rises by one step per frame and drops by ~0.22 where the loop wraps.
-    let left: Vec<f32> = out.chunks(2).map(|f| f[0]).collect();
-    let drop = left
-        .windows(2)
-        .position(|w| w[1] < w[0] - 0.05)
-        .expect("signal wraps");
-    // The wrap happens when the playhead reaches 110_250 (give or take the block's start).
-    assert!((start + drop + 1).abs_diff(110_250) < 600, "{start} {drop}");
+    let start = c.deck(id).position_frames;
+    render(&mut r, 1024);
+    let expected = 22_050.0 + (start + 1024.0 - 22_050.0) % 88_200.0;
+    assert_eq!(c.deck(id).position_frames, expected);
+}
+
+#[test]
+fn seek_outside_loop_exits_it() {
+    let (mut c, mut r, id) = setup();
+    step(&mut c, &mut r, id, DeckCommand::AutoLoop);
+    step(&mut c, &mut r, id, DeckCommand::Seek(200_000.0));
     let s = c.deck(id);
-    assert!((22_050.0..110_250.0).contains(&s.position_frames));
+    assert!(!s.loop_active);
+    assert_eq!(s.position_frames, 200_000.0);
+    assert!(s.loop_in.is_some() && s.loop_out.is_some());
+}
+
+#[test]
+fn seek_inside_loop_keeps_it() {
+    let (mut c, mut r, id) = setup();
+    step(&mut c, &mut r, id, DeckCommand::AutoLoop);
+    step(&mut c, &mut r, id, DeckCommand::Seek(50_000.0));
+    assert!(c.deck(id).loop_active);
+}
+
+#[test]
+fn cue_return_outside_loop_exits_it() {
+    let (mut c, mut r, id) = setup();
+    step(&mut c, &mut r, id, DeckCommand::SetCue(300_000.0));
+    step(&mut c, &mut r, id, DeckCommand::AutoLoop);
+    step(&mut c, &mut r, id, DeckCommand::Play);
+    step(&mut c, &mut r, id, DeckCommand::CuePress);
+    let s = c.deck(id);
+    assert!(!s.loop_active);
+    assert!(!s.playing);
+    assert_eq!(s.position_frames, 300_000.0);
+}
+
+#[test]
+fn loop_overhanging_the_end_wraps_at_the_end() {
+    let (mut c, mut r, id) = setup();
+    step(&mut c, &mut r, id, DeckCommand::Seek(390_000.0));
+    step(&mut c, &mut r, id, DeckCommand::AutoLoop);
+    let s = c.deck(id);
+    assert_eq!(s.loop_in, Some(374_850.0));
+    assert!(s.loop_out.unwrap() > FRAMES as f64);
+    step(&mut c, &mut r, id, DeckCommand::Play);
+    render(&mut r, 20_000);
+    let s = c.deck(id);
+    assert!(s.playing && s.loop_active);
+    assert!((374_850.0..FRAMES as f64).contains(&s.position_frames));
 }
 
 #[test]
@@ -163,6 +204,19 @@ fn halve_and_double_clamp() {
 }
 
 #[test]
+fn halving_a_manual_loop_on_a_gridded_track_halves_its_length() {
+    let (mut c, mut r, id) = setup();
+    step(&mut c, &mut r, id, DeckCommand::Seek(1000.0));
+    step(&mut c, &mut r, id, DeckCommand::LoopIn);
+    step(&mut c, &mut r, id, DeckCommand::Seek(2000.0));
+    step(&mut c, &mut r, id, DeckCommand::LoopOut);
+    step(&mut c, &mut r, id, DeckCommand::LoopHalve);
+    let s = c.deck(id);
+    assert_eq!(s.loop_out, Some(1500.0));
+    assert_eq!(s.loop_beats, 2.0);
+}
+
+#[test]
 fn halve_without_grid_halves_the_length() {
     let (mut c, mut r, id) = setup_with(None);
     step(&mut c, &mut r, id, DeckCommand::Seek(1000.0));
@@ -177,13 +231,14 @@ fn halve_without_grid_halves_the_length() {
 
 #[test]
 fn tiny_loop_stays_inside() {
+    // A separate engine: the block must hold 8192 frames. The playhead starts outside the
+    // loop and must end up inside it; per-sample checks are in the deck unit tests.
     let id = DeckId::new(0).unwrap();
-    // 1/32 beat at 180 BPM is about 459 frames; render 8192 of them in one block.
-    let (mut c2, mut r2) = engine(EngineConfig {
+    let (mut c, mut r) = engine(EngineConfig {
         sample_rate: SR,
         max_block_frames: 8192,
     });
-    c2.send(Command::Deck(
+    c.send(Command::Deck(
         id,
         DeckCommand::Load {
             track: ramp_track(SR, FRAMES),
@@ -194,30 +249,19 @@ fn tiny_loop_stays_inside() {
         },
     ))
     .unwrap();
-    for cmd in [
-        DeckCommand::Seek(10_000.0),
-        DeckCommand::LoopHalve,
-        DeckCommand::LoopHalve,
-        DeckCommand::LoopHalve,
-        DeckCommand::LoopHalve,
-        DeckCommand::LoopHalve,
-        DeckCommand::LoopHalve,
-        DeckCommand::LoopHalve,
-        DeckCommand::AutoLoop,
-        DeckCommand::Play,
-    ] {
-        c2.send(Command::Deck(id, cmd)).unwrap();
+    let mut cmds = vec![DeckCommand::Seek(20_000.0)];
+    cmds.extend(std::iter::repeat_n(DeckCommand::LoopHalve, 7));
+    cmds.extend([DeckCommand::AutoLoop, DeckCommand::Play]);
+    for cmd in cmds {
+        c.send(Command::Deck(id, cmd)).unwrap();
     }
-    render(&mut r2, 8192);
-    let s = c2.deck(id);
+    render(&mut r, 8192);
+    let s = c.deck(id);
     let (start, end) = (s.loop_in.unwrap(), s.loop_out.unwrap());
     assert!(s.loop_active);
-    assert!((end - start - 44_100.0 / 3.0 / 32.0).abs() < 1e-6);
-    assert!(
-        (start..end).contains(&s.position_frames),
-        "{start} {end} {}",
-        s.position_frames
-    );
+    assert_eq!(start, 14_700.0);
+    assert!((end - start - 14_700.0 / 32.0).abs() < 1e-6);
+    assert!((start..end).contains(&s.position_frames));
 }
 
 #[test]
