@@ -89,12 +89,23 @@ side like every other control. Hotcues are remembered with the track in the libr
 (`--library`) and come back on the next load.
 
 The mapping sets `jog_steps_per_turn = 720`, a first guess at how many steps one turn of
-a wheel sends. It, and the nudge strength, are tuned in the hands-on check.
+a wheel sends. The hands-on check below confirmed it.
 
 The SHIFT loop functions (loop in, loop out, reloop/exit) follow the labels printed on
-the SB3 in Pioneer's manual. The owner is yet to confirm them on the panel, and the
-hands-on check of the jog wheels, hotcues, loops and SYNC with the real hardware is yet to
-be done: record its results here.
+the SB3 in Pioneer's manual.
+
+### Hands-on check
+
+On 2026-11-05 the owner checked the deck controls with their SB3 on macOS:
+
+- Jog top scratch in VINYL mode feels right at `jog_steps_per_turn = 720`.
+- Hotcues work: set, trigger (playing, and the paused preview), SHIFT delete, remembered
+  across reloads, and on deck 3.
+- Loops work, including the SHIFT loop in, loop out and reloop functions, as labelled.
+- SYNC works: tempo, beat alignment, slider pickup, and sync on a paused deck followed by
+  PLAY.
+- The outer-ring nudge lagged by about 1 s when starting and stopping. It was changed from
+  a displacement to a speed bend that fades in 0.1 s. To re-check.
 
 ## LEDs
 
