@@ -25,6 +25,7 @@ impl Recorder {
 }
 
 /// Left side: fader on CC 19, SHIFT on note 63, deck toggle on note 114, cue on note 12.
+/// Tempo slider on CC 34 and SYNC on note 41 (channel 7), left side.
 /// Global: crossfader on CC 31, headphone mix on CC 32, headphone-master toggle on note 40.
 /// Outputs are all non-blinking, so their values do not depend on the clock.
 const MAP: &str = r#"
@@ -60,6 +61,16 @@ soft_takeover = false
 [[input]]
 midi = { cc = 33, channel = 7 }
 action = "master.level"
+
+[[input]]
+midi = { cc = 34, channel = 7 }
+action = "deck.tempo"
+side = "left"
+
+[[input]]
+midi = { note = 41, channel = 7 }
+action = "deck.sync"
+side = "left"
 
 [[input]]
 midi = { note = 63, channel = 1 }
@@ -766,4 +777,40 @@ action = "browser.toggle_focus"
     let stats = rig.batch(&[knob(127)]);
     assert_eq!(stats.requests, [scroll(-1)]);
     assert_eq!(stats.coalesced, 0);
+}
+
+#[test]
+fn tempo_slider_is_armed_after_sync() {
+    let mut rig = Rig::attached();
+    // Deck 1 at 128 BPM, deck 2 playing at 122 BPM.
+    for (deck, bpm, playing) in [(0, 128.0, false), (1, 122.0, true)] {
+        let track = Arc::new(TrackBuffer::new(44_100, vec![0.5; 100_000 * 2]).unwrap());
+        let memory = engine::TrackMemory {
+            grid: engine::Grid::from_bpm(bpm, 0.0, 44_100),
+            ..Default::default()
+        };
+        let load = DeckCommand::Load { track, memory };
+        rig.engine.send(Command::Deck(d(deck), load)).unwrap();
+        if playing {
+            let toggle = DeckCommand::TogglePlay;
+            rig.engine.send(Command::Deck(d(deck), toggle)).unwrap();
+        }
+    }
+    rig.render();
+    // Pick the slider up at the middle, then press SYNC.
+    rig.batch(&[cc(6, 34, 64)]);
+    let picked = rig.runtime.state().deck(d(0)).tempo;
+    rig.batch(&[on(6, 41)]);
+    let synced = rig.runtime.state().deck(d(0)).tempo;
+    assert_ne!(synced, picked);
+    rig.render();
+    let ratio = rig.engine.deck(d(0)).tempo_ratio;
+    assert!((ratio - 122.0 / 128.0).abs() < 1e-6);
+
+    // The slider is still where it was: moving it away from the new value is held back.
+    let stats = rig.batch(&[cc(6, 34, 127)]);
+    assert_eq!(stats.applied, 0);
+    assert_eq!(rig.runtime.state().deck(d(0)).tempo, synced);
+    rig.render();
+    assert_eq!(rig.engine.deck(d(0)).tempo_ratio, ratio);
 }
