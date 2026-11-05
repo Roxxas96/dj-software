@@ -500,7 +500,7 @@ fn takeover_after_deck_switch_detects_crossing_from_previous_position() {
 }
 
 #[test]
-fn second_press_without_release_keeps_first_press() {
+fn second_press_without_release_ends_the_first_and_holds_the_second() {
     let mut rig = Rig::new(&format!(
         r#"{LEFT_SIDE}
 [[input]]
@@ -512,13 +512,60 @@ side = "left"
     assert_eq!(rig.send(on(0, 12)), vec![(Action::Cue(d(0)), Input::Press)]);
     rig.send(on(0, 114));
     rig.send(off(0, 114));
-    // A repeated note-on (no release in between) still reaches the active deck…
-    assert_eq!(rig.send(on(0, 12)), vec![(Action::Cue(d(2)), Input::Press)]);
-    // …but the release goes to the deck that got the first press.
+    // A repeated note-on (no release in between) means the first press's note-off went
+    // elsewhere: the deck that got it is released, and the new press is held on the
+    // active deck…
+    assert_eq!(
+        rig.send(on(0, 12)),
+        vec![
+            (Action::Cue(d(0)), Input::Release),
+            (Action::Cue(d(2)), Input::Press)
+        ]
+    );
+    // …so the release reaches the deck that got the second press.
     assert_eq!(
         rig.send(off(0, 12)),
-        vec![(Action::Cue(d(0)), Input::Release)]
+        vec![(Action::Cue(d(2)), Input::Release)]
     );
+}
+
+#[test]
+fn press_after_a_release_on_a_sibling_note_holds_the_new_deck() {
+    let mut rig = Rig::new(&format!(
+        r#"{LEFT_SIDE}
+[[input]]
+midi = {{ note = 54, channel = 1 }}
+action = "deck.jog_touch"
+side = "left"
+
+[[input]]
+midi = {{ note = 103, channel = 1 }}
+action = "deck.jog_release"
+side = "left"
+"#
+    ));
+    // The touch begins on note 54 and ends on its sibling note 103 (SHIFT went down).
+    rig.send(on(0, 54));
+    assert_eq!(
+        rig.send(off(0, 103)),
+        vec![(Action::JogRelease(d(0)), Input::Release)]
+    );
+    rig.send(on(0, 114));
+    rig.send(off(0, 114));
+    // The next touch, on deck 3, is the one its release ends (deck 1's touch already
+    // ended; releasing it again changes nothing).
+    assert_eq!(
+        rig.send(on(0, 54)),
+        vec![
+            (Action::JogTouch(d(0)), Input::Release),
+            (Action::JogTouch(d(2)), Input::Press)
+        ]
+    );
+    assert_eq!(
+        rig.send(off(0, 54)),
+        vec![(Action::JogTouch(d(2)), Input::Release)]
+    );
+    assert!(!rig.engine.deck(d(2)).jog_touched);
 }
 
 #[test]
