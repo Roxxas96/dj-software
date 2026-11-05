@@ -141,9 +141,16 @@ impl Resolver {
             let input = match binding.value {
                 ValueKind::Button => {
                     if button_pressed(raw) {
-                        // A repeated press keeps the first one, so the release still
-                        // reaches the deck that got it.
-                        self.held.entry(i).or_insert(action);
+                        // A press on a binding still held means the earlier note-off
+                        // arrived elsewhere (on a SHIFT sibling note, which ended the hold)
+                        // or was lost. The new press is the one held, so its release
+                        // reaches the deck that got it; the earlier one is released if it
+                        // went elsewhere (a release with nothing held changes nothing).
+                        if let Some(stale) = self.held.insert(i, action)
+                            && stale != action
+                        {
+                            resolved.push((stale, Input::Release));
+                        }
                         Input::Press
                     } else {
                         Input::Release
