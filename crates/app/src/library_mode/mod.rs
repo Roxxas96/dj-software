@@ -39,6 +39,11 @@ const REPORTS_SHOWN: usize = 5;
 /// How many analysis workers may run while a deck is playing, so analysis cannot starve
 /// the audio.
 const WORKERS_WHILE_PLAYING: usize = 1;
+/// At shutdown, how many times a deck's snapshot is read before its last cue and hotcue
+/// changes are given up on, and the pause between reads (the renderer publishes one per
+/// block, so a read fails only while it is storing one).
+const SHUTDOWN_READ_ATTEMPTS: usize = 50;
+const SHUTDOWN_READ_PAUSE: Duration = Duration::from_millis(1);
 
 /// A file's size and mtime as last scanned: when it changes, the track is analyzed again.
 type FileStamp = (Option<i64>, Option<i64>);
@@ -440,9 +445,13 @@ impl LibraryMode {
         // of those is not applied yet.
         let after = engine.deck(deck).load_seq.max(self.engine_loads[i]);
         self.engine_loads[i] = after + 1;
+        let mut memory = MemorySync::new(frames, rate, loaded.memory, after);
+        if !loaded.hotcues_read {
+            memory = memory.without_hotcue_saves();
+        }
         let incoming = DeckTrack {
             row: loaded.row,
-            memory: MemorySync::new(frames, rate, loaded.memory, after),
+            memory,
             grid: loaded.memory.clamped(frames).grid,
         };
         // The outgoing track's changes keep being saved until the engine applies this load.
@@ -469,16 +478,87 @@ impl LibraryMode {
     /// points. If none can be read now, the next round tries again.
     fn sync_deck(&mut self, deck: DeckId, engine: &mut EngineController, printer: &Printer) {
         if let Some(snap) = engine.deck_consistent(deck) {
-            self.sync_snapshot(deck, &snap, printer);
+            let saved = self.sync_snapshot(deck, &snap, printer);
+            self.push_hotcues(deck, &saved, engine, printer);
         }
     }
 
+    /// Sends the hotcue changes saved from `from` (as (track, change)) to every other deck
+    /// holding the same track whose load has applied, and has its [`MemorySync`] expect them
+    /// so they are not saved back (Ruling R18): otherwise that deck's old pads would
+    /// overwrite the new value at its next change.
+    fn push_hotcues(
+        &mut self,
+        from: DeckId,
+        saved: &[(i64, MemoryAction)],
+        engine: &mut EngineController,
+        printer: &Printer,
+    ) {
+        for &(track, action) in saved {
+            let (slot, value) = match action {
+                MemoryAction::SaveHotcue(slot, frames) => (slot, Some(frames)),
+                MemoryAction::DeleteHotcue(slot) => (slot, None),
+                MemoryAction::SaveCue(_) => continue,
+            };
+            for deck in DeckId::ALL.into_iter().filter(|&d| d != from) {
+                let Some(other) = self.decks[deck.index()]
+                    .as_mut()
+                    .filter(|t| t.row.id == track && t.memory.wants_hotcue(slot, value))
+                else {
+                    continue;
+                };
+                let command = Command::Deck(deck, DeckCommand::SetHotcue(slot, value));
+                if engine.send(command).is_ok() {
+                    other.memory.pushed_hotcue(slot, value);
+                } else {
+                    printer.event(format!(
+                        "warning: deck {}: hotcue {} changed on deck {} but the engine command \
+                         queue is full; reload the track to see it",
+                        deck.index() + 1,
+                        slot.number(),
+                        from.index() + 1
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Saves the cue and hotcue changes on `deck` from a consistent snapshot, which `read`
+    /// returns or not ([`EngineController::deck_consistent`]), trying up to
+    /// [`SHUTDOWN_READ_ATTEMPTS`] times [`SHUTDOWN_READ_PAUSE`] apart: there is no next round
+    /// at shutdown. False if no snapshot could be read.
+    fn sync_deck_patiently(
+        &mut self,
+        deck: DeckId,
+        mut read: impl FnMut() -> Option<DeckSnapshot>,
+        printer: &Printer,
+    ) -> bool {
+        for attempt in 0..SHUTDOWN_READ_ATTEMPTS {
+            if attempt > 0 {
+                std::thread::sleep(SHUTDOWN_READ_PAUSE);
+            }
+            if let Some(snap) = read() {
+                // The engine stops next: other decks need no hotcue pushes.
+                self.sync_snapshot(deck, &snap, printer);
+                return true;
+            }
+        }
+        false
+    }
+
     /// Saves the changes `snap` (one block's snapshot) shows to the track on `deck`, and to
-    /// the outgoing track while `snap` does not show the load that replaced it.
-    fn sync_snapshot(&mut self, deck: DeckId, snap: &DeckSnapshot, printer: &Printer) {
+    /// the outgoing track while `snap` does not show the load that replaced it. Returns
+    /// what was saved, with the track it was saved for.
+    fn sync_snapshot(
+        &mut self,
+        deck: DeckId,
+        snap: &DeckSnapshot,
+        printer: &Printer,
+    ) -> Vec<(i64, MemoryAction)> {
         let i = deck.index();
+        let mut saved = Vec::new();
         let Some(mut current) = self.decks[i].take() else {
-            return;
+            return saved;
         };
         match self.outgoing[i].take() {
             // Once a later load shows, the deck never holds that track again.
@@ -486,13 +566,16 @@ impl LibraryMode {
             Some((mut old, replaced_after)) => {
                 let actions = old.memory.step(snap);
                 self.save_memory(&mut old, &actions, printer);
+                saved.extend(actions.into_iter().map(|a| (old.row.id, a)));
                 self.outgoing[i] = Some((old, replaced_after));
             }
             None => {}
         }
         let actions = current.memory.step(snap);
         self.save_memory(&mut current, &actions, printer);
+        saved.extend(actions.into_iter().map(|a| (current.row.id, a)));
         self.decks[i] = Some(current);
+        saved
     }
 
     /// Writes `actions` for `track` through to the library.
@@ -677,7 +760,14 @@ impl LibraryMode {
     /// Saves the last cue and hotcue changes, stops analysis, watching and the worker, waits for
     /// queued writes, and reports any that failed.
     pub fn shutdown(mut self, engine: &mut EngineController, printer: &Printer) {
-        self.sync_cues(engine, printer);
+        for deck in DeckId::ALL {
+            if !self.sync_deck_patiently(deck, || engine.deck_consistent(deck), printer) {
+                printer.event(format!(
+                    "warning: deck {}: could not read its last cue and hotcue changes to save them",
+                    deck.index() + 1
+                ));
+            }
+        }
         self.analyzer = None;
         self.watcher = None;
         self.jobs = None;
@@ -923,13 +1013,185 @@ mod tests {
     }
 
     fn mode() -> (tempfile::TempDir, LibraryMode, EngineController, Printer) {
+        let (dir, mode, engine, _renderer, printer) = mode_rendering();
+        (dir, mode, engine, printer)
+    }
+
+    /// [`mode`] with the engine's renderer, to render blocks with [`render`].
+    fn mode_rendering() -> (
+        tempfile::TempDir,
+        LibraryMode,
+        EngineController,
+        engine::EngineRenderer,
+        Printer,
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let mode = LibraryMode::start(Some(&dir.path().join("library.sqlite3"))).unwrap();
-        let (engine, _renderer) = engine::engine(engine::EngineConfig {
+        let (engine, renderer) = engine::engine(engine::EngineConfig {
             sample_rate: 44_100,
             max_block_frames: 512,
         });
-        (dir, mode, engine, Printer::spawn())
+        (dir, mode, engine, renderer, Printer::spawn())
+    }
+
+    fn render(renderer: &mut engine::EngineRenderer) {
+        let (mut master, mut headphones) = (vec![0.0; 1024], vec![0.0; 1024]);
+        renderer.render(&mut master, &mut headphones);
+    }
+
+    /// Adds track 7 to the library, so cue and hotcue writes for it succeed.
+    fn add_track_7(mode: &LibraryMode) {
+        mode.writer
+            .submit_wait(WriteOp::Raw(vec![library::RawStatement {
+                sql: "INSERT INTO tracks(id, path, fingerprint, added_at) \
+                      VALUES (7, '/m/7.wav', x'00', 0)"
+                    .into(),
+                params: vec![],
+            }]))
+            .unwrap();
+    }
+
+    /// Loads track 7 (see [`loaded`]) on `deck`.
+    fn load_7(
+        mode: &mut LibraryMode,
+        deck: usize,
+        engine: &mut EngineController,
+        printer: &Printer,
+    ) {
+        let deck = DeckId::new(deck).unwrap();
+        let seq = mode.next_seq(deck);
+        let next = worker::Loaded {
+            deck,
+            seq,
+            ..loaded(seq)
+        };
+        mode.load(next, engine, printer);
+    }
+
+    fn stored_hotcues(mode: &LibraryMode) -> [Option<f64>; engine::HOTCUES] {
+        flush(mode);
+        mode.lib.reader().unwrap().hotcues(7).unwrap()
+    }
+
+    #[test]
+    fn hotcues_reach_the_library_and_every_deck_holding_the_track() {
+        let (_dir, mut mode, mut engine, mut renderer, printer) = mode_rendering();
+        add_track_7(&mode);
+        let (d1, d3) = (DeckId::new(0).unwrap(), DeckId::new(2).unwrap());
+        load_7(&mut mode, 0, &mut engine, &printer);
+        load_7(&mut mode, 2, &mut engine, &printer);
+        render(&mut renderer);
+        mode.sync_cues(&mut engine, &printer);
+        let slot1 = engine::HotcueSlot::new(1).unwrap();
+        let set = |engine: &mut EngineController, deck, value| {
+            engine
+                .send(Command::Deck(deck, DeckCommand::SetHotcue(slot1, value)))
+                .unwrap();
+        };
+
+        // Pad 1 set on deck 1: saved, and sent to deck 3.
+        set(&mut engine, d1, Some(100.0));
+        render(&mut renderer);
+        mode.sync_cues(&mut engine, &printer);
+        // Deck 3 does not show it yet: its empty pad is no deletion.
+        mode.sync_cues(&mut engine, &printer);
+        assert_eq!(stored_hotcues(&mode)[0], Some(100.0));
+        render(&mut renderer);
+        assert_eq!(engine.deck(d3).hotcues[0], Some(100.0), "deck 3 has it");
+        mode.sync_cues(&mut engine, &printer);
+        assert_eq!(stored_hotcues(&mode)[0], Some(100.0));
+
+        // Deleted on deck 3: deleted in the library and on deck 1.
+        engine
+            .send(Command::Deck(d3, DeckCommand::HotcueDelete(slot1)))
+            .unwrap();
+        render(&mut renderer);
+        mode.sync_cues(&mut engine, &printer);
+        mode.sync_cues(&mut engine, &printer);
+        assert_eq!(stored_hotcues(&mode)[0], None);
+        render(&mut renderer);
+        assert_eq!(engine.deck(d1).hotcues[0], None, "deck 1 lost it too");
+        mode.sync_cues(&mut engine, &printer);
+        render(&mut renderer);
+        mode.sync_cues(&mut engine, &printer);
+        assert_eq!(stored_hotcues(&mode), [None; engine::HOTCUES]);
+        assert_eq!(mode.lib.failed_write_count(), 0);
+        mode.shutdown(&mut engine, &printer);
+        printer.finish();
+    }
+
+    #[test]
+    fn hotcues_are_not_saved_when_they_could_not_be_read() {
+        let (_dir, mut mode, mut engine, mut renderer, printer) = mode_rendering();
+        add_track_7(&mode);
+        let d1 = DeckId::new(0).unwrap();
+        let seq = mode.next_seq(d1);
+        let unread = worker::Loaded {
+            hotcues_read: false,
+            ..loaded(seq)
+        };
+        mode.load(unread, &mut engine, &printer);
+        render(&mut renderer);
+        mode.sync_cues(&mut engine, &printer);
+        let slot1 = engine::HotcueSlot::new(1).unwrap();
+        for cmd in [
+            DeckCommand::SetHotcue(slot1, Some(100.0)),
+            DeckCommand::SetCue(50.0),
+        ] {
+            engine.send(Command::Deck(d1, cmd)).unwrap();
+        }
+        render(&mut renderer);
+        mode.sync_cues(&mut engine, &printer);
+        assert_eq!(stored_hotcues(&mode), [None; engine::HOTCUES]);
+        assert_eq!(
+            mode.lib.cue(7).unwrap(),
+            Some(50.0),
+            "the cue point is saved"
+        );
+        mode.shutdown(&mut engine, &printer);
+        printer.finish();
+    }
+
+    #[test]
+    fn the_last_changes_are_read_patiently() {
+        let (_dir, mut mode, mut engine, printer) = mode();
+        add_track_7(&mode);
+        load_7(&mut mode, 0, &mut engine, &printer);
+        let d1 = DeckId::new(0).unwrap();
+        let mut hotcues = [None; engine::HOTCUES];
+        hotcues[0] = Some(100.0);
+        let shown = DeckSnapshot {
+            loaded: true,
+            duration_frames: 4410,
+            track_sample_rate: 44_100,
+            hotcues,
+            load_seq: 1,
+            ..DeckSnapshot::default()
+        };
+        // The renderer kept publishing for a few reads.
+        let mut reads = 0;
+        let read = || {
+            reads += 1;
+            (reads > 3).then_some(shown)
+        };
+        assert!(mode.sync_deck_patiently(d1, read, &printer));
+        assert_eq!(
+            mode.latest_memory.get(&(7, Spot::Hotcue(1))),
+            Some(&Some(100.0_f64.to_bits()))
+        );
+        // A deck that never reads whole is given up on after a bounded number of tries.
+        let mut reads = 0;
+        assert!(!mode.sync_deck_patiently(
+            d1,
+            || {
+                reads += 1;
+                None
+            },
+            &printer
+        ));
+        assert_eq!(reads, SHUTDOWN_READ_ATTEMPTS);
+        mode.shutdown(&mut engine, &printer);
+        printer.finish();
     }
 
     fn loaded(seq: u64) -> worker::Loaded {
@@ -939,6 +1201,7 @@ mod tests {
             row: row(),
             buffer: Arc::new(engine::TrackBuffer::new(44_100, vec![0.0; 2 * 4410]).unwrap()),
             memory: engine::TrackMemory::default(),
+            hotcues_read: true,
         }
     }
 

@@ -80,6 +80,9 @@ pub struct Loaded {
     pub buffer: Arc<TrackBuffer>,
     /// The remembered cue point, hotcues and beatgrid (at the decoded rate).
     pub memory: TrackMemory,
+    /// The hotcues could be read. If not, `memory` has none and the deck's hotcues are not
+    /// saved for this load (Ruling R19), so its empty pads never overwrite stored ones.
+    pub hotcues_read: bool,
 }
 
 struct LoadJob {
@@ -251,34 +254,47 @@ fn request_load(
     }
 }
 
-/// Track `track`'s cue point, hotcues and beatgrid, the grid at the decoded `rate`. A part
-/// that cannot be read is left out (the track still loads), with a warning.
-fn read_memory(reader: &Reader, track: i64, rate: u32, events: &Sender<Event>) -> TrackMemory {
+/// Track `track`'s cue point, hotcues and beatgrid, the grid at the decoded `rate`, and
+/// whether the hotcues could be read. A part that cannot be read is left out (the track
+/// still loads), with a warning.
+fn read_memory(
+    reader: &Reader,
+    track: i64,
+    rate: u32,
+    events: &Sender<Event>,
+) -> (TrackMemory, bool) {
     fn read_or_warn<T>(
         result: Result<T, library::LibraryError>,
         what: &str,
+        consequence: &str,
         track: i64,
         events: &Sender<Event>,
     ) -> Option<T> {
         result
             .inspect_err(|e| {
                 let _ = events.send(Event::Message(format!(
-                    "warning: could not read the {what} of track {track}: {}",
+                    "warning: could not read the {what} of track {track}: {}{consequence}",
                     safe(e)
                 )));
             })
             .ok()
     }
-    let cue = read_or_warn(reader.cue(track), "cue point", track, events).flatten();
-    let hotcues: [Option<f64>; HOTCUES] =
-        read_or_warn(reader.hotcues(track), "hotcues", track, events).unwrap_or_default();
-    let grid = read_or_warn(reader.beatgrid(track), "beatgrid", track, events).flatten();
-    TrackMemory {
+    let cue = read_or_warn(reader.cue(track), "cue point", "", track, events).flatten();
+    let hotcues: Option<[Option<f64>; HOTCUES]> = read_or_warn(
+        reader.hotcues(track),
+        "hotcues",
+        "; hotcues won't be remembered for this load",
+        track,
+        events,
+    );
+    let grid = read_or_warn(reader.beatgrid(track), "beatgrid", "", track, events).flatten();
+    let memory = TrackMemory {
         cue: cue.unwrap_or(0.0),
-        hotcues,
+        hotcues: hotcues.unwrap_or_default(),
         // Grid periods at the decoded rate, which is what the deck plays.
         grid: engine_grid(grid.as_ref(), rate),
-    }
+    };
+    (memory, hotcues.is_some())
 }
 
 /// Decodes queued tracks; of several queued for one deck only the latest is decoded.
@@ -317,13 +333,15 @@ fn load_one(reader: &Reader, job: LoadJob, events: &Sender<Event>, decode: Decod
                     safe(job.path.display())
                 )));
             }
-            let memory = read_memory(reader, job.row.id, decoded.track.sample_rate(), events);
+            let (memory, hotcues_read) =
+                read_memory(reader, job.row.id, decoded.track.sample_rate(), events);
             let _ = events.send(Event::Loaded(Box::new(Loaded {
                 deck: job.deck,
                 seq: job.seq,
                 row: job.row,
                 buffer: Arc::new(decoded.track),
                 memory,
+                hotcues_read,
             })));
         }
         Err(e) => {
@@ -477,6 +495,50 @@ mod tests {
             "the grid at the decoded rate"
         );
         assert!(loaded.buffer.frames() > 0);
+        assert!(loaded.hotcues_read);
+    }
+
+    #[test]
+    fn unreadable_hotcues_are_not_remembered_for_the_load() {
+        let s = setup(&["ok.wav"]);
+        let id = ids(&s.lib)[0];
+        s.lib
+            .writer()
+            .submit_wait(WriteOp::SetCue {
+                track: id,
+                frames: 1234.0,
+            })
+            .unwrap();
+        // A hotcue row that is not a number: reading the hotcues fails.
+        s.lib
+            .writer()
+            .submit_wait(WriteOp::Raw(vec![RawStatement {
+                sql: format!("INSERT INTO hotcues(track_id, slot, frames) VALUES ({id}, 1, 'x')"),
+                params: vec![],
+            }]))
+            .unwrap();
+        let (tx, events) = channel();
+        let (jobs, _worker) = spawn(Arc::clone(&s.lib), tx).unwrap();
+        jobs.send(Job::LoadTrack {
+            deck: deck(1),
+            track: id,
+            seq: 1,
+        })
+        .unwrap();
+        let text = wait_for(&events, message);
+        assert!(
+            text.starts_with(&format!(
+                "warning: could not read the hotcues of track {id}: "
+            )) && text.ends_with("; hotcues won't be remembered for this load"),
+            "{text}"
+        );
+        let loaded = wait_for(&events, |e| match e {
+            Event::Loaded(l) => Some(l),
+            _ => None,
+        });
+        assert!(!loaded.hotcues_read);
+        assert_eq!(loaded.memory.hotcues, [None; HOTCUES]);
+        assert_eq!(loaded.memory.cue, 1234.0, "the rest still loads");
     }
 
     /// The library [`saving_decode`] writes to.

@@ -251,7 +251,10 @@ open-jockey play --library --controller ddj-sb3 --device "DDJ-SB3" --master 3,4
   analysis progress while the background analysis runs.
 - Tracks load in the background. A cue point or hotcue you set is remembered with the
   track and restored when you load it again, and so is a hotcue you delete (it stays
-  deleted). The track's beatgrid is applied on load too, so SYNC and the loop buttons
+  deleted). With the same track on two decks, a hotcue set or deleted on one shows on
+  the other too. If the track's hotcues cannot be read when it loads, a warning says
+  they won't be remembered for this load, and hotcue changes are not saved until it is
+  loaded again. The track's beatgrid is applied on load too, so SYNC and the loop buttons
   work as soon as the track is analyzed. A load onto a playing deck prints
   "warning: deck N was playing".
 - Tracks not analyzed yet are analyzed in the background; failures and warnings are

@@ -36,6 +36,13 @@ pub struct MemorySync {
     /// The memory as the engine applies it on `Load`.
     expected: TrackMemory,
     state: State,
+    /// Hotcue changes are saved (off when the hotcues could not be read at load, Ruling
+    /// R19: the empty-looking pads must not overwrite the stored ones).
+    save_hotcues: bool,
+    /// Per slot, a hotcue sent to the deck because another deck holding the same track
+    /// changed it (Ruling R18), not shown yet: the value the deck showed before it. Until
+    /// the snapshot shows the sent value, that old value is not a change to save.
+    pushed: [Option<Option<f64>>; HOTCUES],
 }
 
 impl MemorySync {
@@ -48,7 +55,38 @@ impl MemorySync {
             after,
             expected: memory.clamped(frames),
             state: State::AwaitLoad,
+            save_hotcues: true,
+            pushed: [None; HOTCUES],
         }
+    }
+
+    /// The same, never saving hotcue changes (the cue point still is).
+    pub fn without_hotcue_saves(self) -> Self {
+        Self {
+            save_hotcues: false,
+            ..self
+        }
+    }
+
+    /// Whether the deck should be sent hotcue `slot` at `value`, which another deck holding
+    /// the same track just saved: the load has applied and the deck holds another value.
+    pub fn wants_hotcue(&self, slot: HotcueSlot, value: Option<f64>) -> bool {
+        match &self.state {
+            State::AwaitLoad => false,
+            State::Tracking { hotcues, .. } => hotcues[slot.index()] != value,
+        }
+    }
+
+    /// Hotcue `slot` was sent to the deck at `value` (see [`Self::wants_hotcue`]): the
+    /// library already holds it, so it is not saved again when the snapshot shows it.
+    pub fn pushed_hotcue(&mut self, slot: HotcueSlot, value: Option<f64>) {
+        let State::Tracking { hotcues, .. } = &mut self.state else {
+            return;
+        };
+        let i = slot.index();
+        // A push on top of one not shown yet: the deck may still show the first old value.
+        self.pushed[i] = Some(self.pushed[i].unwrap_or(hotcues[i]));
+        hotcues[i] = value;
     }
 
     /// Whether `snap` shows this track's `Load` applied.
@@ -85,8 +123,23 @@ impl MemorySync {
             *cue = snap.cue_frames;
             actions.push(MemoryAction::SaveCue(*cue));
         }
+        if !self.save_hotcues {
+            return actions;
+        }
         for slot in HotcueSlot::ALL {
             let (last, now) = (&mut hotcues[slot.index()], snap.hotcues[slot.index()]);
+            if let Some(before) = self.pushed[slot.index()] {
+                if now == *last {
+                    // The pushed value shows.
+                    self.pushed[slot.index()] = None;
+                    continue;
+                }
+                if now == before {
+                    continue; // Not applied yet.
+                }
+                // Changed on this deck since: a change like any other.
+                self.pushed[slot.index()] = None;
+            }
             if now == *last || now.is_some_and(|v| !v.is_finite()) {
                 continue;
             }
@@ -260,6 +313,57 @@ mod tests {
             ..snap(1, 0.0)
         };
         assert_eq!(sync.step(&empty), []);
+    }
+
+    #[test]
+    fn without_hotcue_saves_only_the_cue_is_saved() {
+        let mut sync =
+            MemorySync::new(1000, 44_100, TrackMemory::default(), 0).without_hotcue_saves();
+        assert_eq!(sync.step(&snap(1, 0.0)), []);
+        let mut hotcues = [None; HOTCUES];
+        hotcues[0] = Some(10.0);
+        assert_eq!(
+            sync.step(&with_hotcues(snap(1, 5.0), hotcues)),
+            [MemoryAction::SaveCue(5.0)]
+        );
+        assert_eq!(
+            sync.step(&snap(1, 5.0)),
+            [],
+            "a deletion is not saved either"
+        );
+    }
+
+    #[test]
+    fn a_pushed_hotcue_is_not_saved_back() {
+        let mut sync = MemorySync::new(1000, 44_100, TrackMemory::default(), 0);
+        assert!(
+            !sync.wants_hotcue(slot(1), Some(10.0)),
+            "before the load applies"
+        );
+        assert_eq!(sync.step(&snap(1, 0.0)), []);
+        assert!(sync.wants_hotcue(slot(1), Some(10.0)));
+        sync.pushed_hotcue(slot(1), Some(10.0));
+        assert!(!sync.wants_hotcue(slot(1), Some(10.0)));
+        // Not applied yet: the old (empty) pad is no deletion.
+        assert_eq!(sync.step(&snap(1, 0.0)), []);
+        let mut hotcues = [None; HOTCUES];
+        hotcues[0] = Some(10.0);
+        // Applied: nothing to save.
+        assert_eq!(sync.step(&with_hotcues(snap(1, 0.0), hotcues)), []);
+        // From then on, the deck's own changes are saved, back to empty too.
+        assert_eq!(
+            sync.step(&snap(1, 0.0)),
+            [MemoryAction::DeleteHotcue(slot(1))]
+        );
+
+        // A change on the deck before the push shows is saved.
+        sync.pushed_hotcue(slot(2), Some(20.0));
+        let mut mine = [None; HOTCUES];
+        mine[1] = Some(30.0);
+        assert_eq!(
+            sync.step(&with_hotcues(snap(1, 0.0), mine)),
+            [MemoryAction::SaveHotcue(slot(2), 30.0)]
+        );
     }
 
     #[test]
