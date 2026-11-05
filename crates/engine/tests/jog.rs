@@ -240,6 +240,62 @@ fn scratch_inside_loop_does_not_wrap() {
 }
 
 #[test]
+fn nudge_bend_is_capped_per_frame() {
+    let (mut c, mut r, id) = setup();
+    step(&mut c, &mut r, id, DeckCommand::Play);
+    let start = position(&c, id);
+    // One turn is 22_050 frames of nudge, far more than the 4001 frames below can apply.
+    step(&mut c, &mut r, id, ring(1.0));
+    render(&mut r, 4000);
+    let extra = position(&c, id) - start - 4001.0;
+    assert_eq!(extra, 4001.0 * 0.25);
+}
+
+#[test]
+fn ring_while_scratching_playing_is_dropped() {
+    let (mut c, mut r, id) = setup();
+    step(&mut c, &mut r, id, DeckCommand::Play);
+    step(&mut c, &mut r, id, DeckCommand::JogTouch(true));
+    let held = position(&c, id);
+    step(&mut c, &mut r, id, ring(1.0));
+    assert_eq!(position(&c, id), held);
+    step(&mut c, &mut r, id, DeckCommand::JogTouch(false));
+    render(&mut r, 4096);
+    // Plain playback after release: no nudge was stored.
+    assert_eq!(position(&c, id), held + 4097.0);
+}
+
+#[test]
+fn ring_while_scratching_paused_is_dropped() {
+    let (mut c, mut r, id) = setup();
+    step(&mut c, &mut r, id, DeckCommand::Seek(100_000.0));
+    step(&mut c, &mut r, id, DeckCommand::JogTouch(true));
+    step(&mut c, &mut r, id, ring(1.0));
+    assert_eq!(position(&c, id), 100_000.0);
+    step(&mut c, &mut r, id, DeckCommand::JogTouch(false));
+    step(&mut c, &mut r, id, DeckCommand::Play);
+    render(&mut r, 4096);
+    assert_eq!(position(&c, id), 100_000.0 + 4097.0);
+}
+
+#[test]
+fn huge_turns_keep_the_playhead_finite() {
+    let (mut c, mut r, id) = setup();
+    step(&mut c, &mut r, id, DeckCommand::Play);
+    for turns in [1e300, -1e300, 1e308, 1e308, -1e308, -1e308] {
+        step(&mut c, &mut r, id, ring(turns));
+        render(&mut r, 512);
+        assert!(position(&c, id).is_finite());
+    }
+    step(&mut c, &mut r, id, DeckCommand::JogTouch(true));
+    for turns in [1e308, -1e308, 1e308] {
+        step(&mut c, &mut r, id, top(turns));
+        render(&mut r, 512);
+        assert!(position(&c, id).is_finite());
+    }
+}
+
+#[test]
 fn non_finite_turns_are_ignored() {
     let (mut c, mut r, id) = setup();
     step(&mut c, &mut r, id, DeckCommand::Seek(1000.0));
