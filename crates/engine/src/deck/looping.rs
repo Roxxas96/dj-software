@@ -53,16 +53,36 @@ impl Deck {
     }
 
     /// Scales the loop length in beats by `factor` (clamped) and the length of an active loop
-    /// by the same factor, grid or not.
+    /// by the same factor, grid or not. With a grid the active loop's length stays within
+    /// [`MIN_LOOP_BEATS`, `MAX_LOOP_BEATS`] beats; without one it stops changing once the
+    /// loop length in beats does.
     pub(super) fn loop_resize(&mut self, factor: f64) {
-        self.loop_beats = (self.loop_beats * factor).clamp(MIN_LOOP_BEATS, MAX_LOOP_BEATS);
+        let beats = self.loop_beats;
+        self.loop_beats = (beats * factor).clamp(MIN_LOOP_BEATS, MAX_LOOP_BEATS);
         if !self.loop_active {
             return;
         }
         let (Some(start), Some(end)) = (self.loop_in, self.loop_out) else {
             return;
         };
-        self.loop_out = Some(start + ((end - start) * factor).max(MIN_LOOP_FRAMES));
+        let length = end - start;
+        let resized = length * factor;
+        let resized = match self.grid {
+            Some(grid) => {
+                let period = grid.beat_period_frames;
+                let clamped = resized.clamp(MIN_LOOP_BEATS * period, MAX_LOOP_BEATS * period);
+                // A manual loop already past a limit stays as it is rather than jumping
+                // the wrong way (a halve never grows a loop, a double never shrinks it).
+                if factor < 1.0 {
+                    clamped.min(length)
+                } else {
+                    clamped.max(length)
+                }
+            }
+            None if self.loop_beats == beats => return,
+            None => resized,
+        };
+        self.loop_out = Some(start + resized.max(MIN_LOOP_FRAMES));
     }
 
     pub(super) fn reloop_exit(&mut self) {

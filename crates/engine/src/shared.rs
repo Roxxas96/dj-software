@@ -314,16 +314,21 @@ mod tests {
                 }
             })
         };
-        let mut seen = 0;
+        let check = |s: &DeckSnapshot| {
+            let n = s.load_seq as f64;
+            assert_eq!((s.cue_frames, s.position_frames), (n, n));
+            assert!(s.hotcues.iter().all(|h| *h == Some(n)), "{s:?}");
+        };
         while !writer.is_finished() {
             if let Some(s) = deck.load_consistent() {
-                let n = s.load_seq as f64;
-                assert_eq!((s.cue_frames, s.position_frames), (n, n));
-                assert!(s.hotcues.iter().all(|h| *h == Some(n)), "{s:?}");
-                seen += 1;
+                check(&s);
             }
         }
         writer.join().unwrap();
-        assert!(seen > 0);
+        // With the writer gone a read always succeeds and sees its last block, even if the
+        // writer finished before the loop above got one in.
+        let last = deck.load_consistent().expect("no writer left to race");
+        check(&last);
+        assert_eq!(last.load_seq, 199_999);
     }
 }

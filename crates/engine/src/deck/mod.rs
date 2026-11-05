@@ -233,8 +233,10 @@ impl Deck {
         }
     }
 
-    pub(crate) fn is_playing(&self) -> bool {
-        self.playing
+    /// Playing for real: not just previewing from a held CUE or pad (unless play latched
+    /// during the hold). A preview snaps back on release, so a phase sync waits for this.
+    pub(crate) fn plays_for_real(&self) -> bool {
+        self.playing && (self.preview.is_none() || self.play_latched)
     }
 
     pub(crate) fn pending_sync(&self) -> Option<(DeckId, f64)> {
@@ -246,13 +248,14 @@ impl Deck {
     }
 
     /// Starts a phase sync to a master at `master_beats` (its beat position times `ratio`).
-    /// A playing deck aligns now, a paused one remembers `master` and `ratio` until it plays.
+    /// A deck playing for real aligns now; a paused or previewing one remembers `master` and
+    /// `ratio` until it plays.
     /// Does nothing without a loaded track and a grid.
     pub(crate) fn phase_sync(&mut self, master: DeckId, ratio: f64, master_beats: f64) {
         if self.track.is_none() || self.grid.is_none() {
             return;
         }
-        if self.playing {
+        if self.plays_for_real() {
             self.pending_sync = None;
             self.align_phase(master_beats);
         } else {

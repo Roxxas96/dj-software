@@ -158,3 +158,48 @@ fn pending_sync_dropped_when_master_stops() {
     render(&mut r, BLOCK);
     assert_eq!(c.deck(deck).position_frames, PERIOD * 4.75 + BLOCK as f64);
 }
+
+#[test]
+fn cue_preview_keeps_a_pending_sync_until_play() {
+    let (mut c, mut r, master, deck) = setup(grid());
+    let cue = PERIOD * 4.75;
+    send(&mut c, deck, DeckCommand::SetCue(cue));
+    sync(&mut c, deck, master, 1.0);
+    render(&mut r, BLOCK);
+
+    // Holding CUE previews from the cue point without aligning; the release returns there.
+    send(&mut c, deck, DeckCommand::CuePress);
+    render(&mut r, BLOCK);
+    let snap = c.deck(deck);
+    assert!(snap.previewing);
+    assert_eq!(
+        snap.position_frames,
+        cue + BLOCK as f64,
+        "the preview is not moved"
+    );
+    send(&mut c, deck, DeckCommand::CueRelease);
+    render(&mut r, BLOCK);
+    assert_eq!(c.deck(deck).position_frames, cue, "no move");
+
+    // PLAY then aligns.
+    send(&mut c, deck, DeckCommand::Play);
+    render(&mut r, BLOCK);
+    assert!(phase_error(&c, deck, master, 1.0) < 1e-6);
+}
+
+#[test]
+fn play_latched_during_a_preview_resolves_the_sync() {
+    let (mut c, mut r, master, deck) = setup(grid());
+    send(&mut c, deck, DeckCommand::SetCue(PERIOD * 4.75));
+    sync(&mut c, deck, master, 1.0);
+    send(&mut c, deck, DeckCommand::CuePress);
+    render(&mut r, BLOCK);
+    // PLAY during the hold latches: the deck now plays for real and aligns.
+    send(&mut c, deck, DeckCommand::Play);
+    render(&mut r, BLOCK);
+    assert!(phase_error(&c, deck, master, 1.0) < 1e-6);
+    send(&mut c, deck, DeckCommand::CueRelease);
+    render(&mut r, BLOCK);
+    assert!(c.deck(deck).playing);
+    assert!(phase_error(&c, deck, master, 1.0) < 1e-6);
+}

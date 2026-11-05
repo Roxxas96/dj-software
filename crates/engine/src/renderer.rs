@@ -122,7 +122,8 @@ impl EngineRenderer {
         }
     }
 
-    /// Before a chunk renders: aligns the decks that started playing with a pending sync
+    /// Before a chunk renders: aligns the decks that started playing (not just previewing)
+    /// with a pending sync
     /// against their master's position now, and drops the syncs whose master cannot be
     /// followed any more.
     fn resolve_pending_syncs(&mut self) {
@@ -135,7 +136,8 @@ impl EngineRenderer {
                 continue;
             };
             let deck = &mut self.decks[id.index()];
-            if deck.is_playing() {
+            // A preview from a held CUE or pad snaps back on release: wait for real play.
+            if deck.plays_for_real() {
                 deck.drop_pending_sync();
                 deck.align_phase(grid.beats_at(position) * ratio);
             }
