@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering, fence};
 
 use crate::{DeckId, Grid, HOTCUES};
 
@@ -30,8 +30,9 @@ pub struct DeckSnapshot {
     pub vinyl: bool,
     /// The jog wheel's top is touched.
     pub jog_touched: bool,
-    /// How many `Load`s the deck has applied. A snapshot showing a given count shows the
-    /// state right after that load or later, never an earlier one.
+    /// How many `Load`s the deck has applied. In a snapshot from
+    /// [`EngineController::deck_consistent`](crate::EngineController::deck_consistent)
+    /// every field is from the same block as this count.
     pub load_seq: u64,
 }
 
@@ -81,9 +82,10 @@ impl Meters {
     }
 }
 
-/// State the renderer publishes for the controller. Values are for display only, so each
-/// field is an independent `Relaxed` atomic and a snapshot may mix two consecutive blocks;
-/// only `load_seq` orders the rest (see [`DeckSnapshot::load_seq`]).
+/// State the renderer publishes for the controller. Each field is an independent `Relaxed`
+/// atomic, so a plain read may mix two consecutive blocks (fine for display). Deck
+/// snapshots are also published seqlock-style (Ruling R14), so a reader can get one block's
+/// snapshot whole ([`Shared::load_deck_consistent`]); the renderer never waits for readers.
 #[derive(Debug, Default)]
 pub(crate) struct Shared {
     decks: [DeckShared; DeckId::ALL.len()],
@@ -98,6 +100,10 @@ impl Shared {
 
     pub(crate) fn load_deck(&self, id: DeckId) -> DeckSnapshot {
         self.decks[id.index()].load()
+    }
+
+    pub(crate) fn load_deck_consistent(&self, id: DeckId) -> Option<DeckSnapshot> {
+        self.decks[id.index()].load_consistent()
     }
 
     pub(crate) fn store_meters(&self, meters: &Meters) {
@@ -125,8 +131,13 @@ fn store_f32s(atomics: &[AtomicU32], values: &[f32]) {
     }
 }
 
+/// How many times a consistent read is tried before giving up.
+const CONSISTENT_READ_TRIES: usize = 16;
+
 #[derive(Debug, Default)]
 struct DeckShared {
+    /// Seqlock sequence: odd while the renderer is storing a snapshot.
+    seq: AtomicU64,
     loaded: AtomicBool,
     playing: AtomicBool,
     position_frames: AtomicU64,
@@ -157,7 +168,18 @@ fn bits_opt(bits: u64) -> Option<f64> {
 }
 
 impl DeckShared {
+    /// Publishes `s`. Only the renderer calls this, so the sequence has one writer.
     fn store(&self, s: &DeckSnapshot) {
+        let seq = self.seq.load(Ordering::Relaxed);
+        self.seq.store(seq.wrapping_add(1), Ordering::Relaxed);
+        // The odd sequence is visible before any field store.
+        fence(Ordering::Release);
+        self.store_fields(s);
+        // Every field store is visible before the even sequence.
+        self.seq.store(seq.wrapping_add(2), Ordering::Release);
+    }
+
+    fn store_fields(&self, s: &DeckSnapshot) {
         self.loaded.store(s.loaded, Ordering::Relaxed);
         self.playing.store(s.playing, Ordering::Relaxed);
         self.position_frames
@@ -188,13 +210,30 @@ impl DeckShared {
             .store(s.loop_beats.to_bits(), Ordering::Relaxed);
         self.vinyl.store(s.vinyl, Ordering::Relaxed);
         self.jog_touched.store(s.jog_touched, Ordering::Relaxed);
-        // Last and `Release`, read first with `Acquire`: a reader that sees this count
-        // sees every field of this block (or a later one).
-        self.load_seq.store(s.load_seq, Ordering::Release);
+        self.load_seq.store(s.load_seq, Ordering::Relaxed);
     }
 
+    /// One block's snapshot whole, or `None` if the renderer was storing one at each of
+    /// [`CONSISTENT_READ_TRIES`] tries.
+    fn load_consistent(&self) -> Option<DeckSnapshot> {
+        for _ in 0..CONSISTENT_READ_TRIES {
+            let before = self.seq.load(Ordering::Acquire);
+            if before % 2 == 1 {
+                std::hint::spin_loop();
+                continue;
+            }
+            let snapshot = self.load();
+            // The field loads happen before the second sequence load.
+            fence(Ordering::Acquire);
+            if self.seq.load(Ordering::Relaxed) == before {
+                return Some(snapshot);
+            }
+        }
+        None
+    }
+
+    /// The fields as they are now, possibly from two blocks.
     fn load(&self) -> DeckSnapshot {
-        let load_seq = self.load_seq.load(Ordering::Acquire);
         DeckSnapshot {
             loaded: self.loaded.load(Ordering::Relaxed),
             playing: self.playing.load(Ordering::Relaxed),
@@ -220,7 +259,71 @@ impl DeckShared {
             loop_beats: f64::from_bits(self.loop_beats.load(Ordering::Relaxed)),
             vinyl: self.vinyl.load(Ordering::Relaxed),
             jog_touched: self.jog_touched.load(Ordering::Relaxed),
-            load_seq,
+            load_seq: self.load_seq.load(Ordering::Relaxed),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+
+    fn numbered(n: u64) -> DeckSnapshot {
+        DeckSnapshot {
+            loaded: true,
+            cue_frames: n as f64,
+            position_frames: n as f64,
+            hotcues: [Some(n as f64); HOTCUES],
+            load_seq: n,
+            ..DeckSnapshot::default()
+        }
+    }
+
+    #[test]
+    fn a_read_during_a_store_is_not_consistent() {
+        let deck = DeckShared::default();
+        deck.store(&numbered(3));
+        assert_eq!(deck.load_consistent(), Some(numbered(3)));
+        // The renderer is in the middle of a store: odd sequence, fields half written.
+        let seq = deck.seq.load(Ordering::Relaxed);
+        deck.seq.store(seq + 1, Ordering::Relaxed);
+        deck.store_fields(&DeckSnapshot {
+            load_seq: 4,
+            ..numbered(3)
+        });
+        assert_eq!(deck.load_consistent(), None);
+        assert_eq!(
+            deck.load().load_seq,
+            4,
+            "a plain read still shows the fields"
+        );
+        deck.seq.store(seq + 2, Ordering::Release);
+        assert_eq!(deck.load_consistent().map(|s| s.load_seq), Some(4));
+    }
+
+    #[test]
+    fn consistent_reads_never_mix_blocks() {
+        let deck = Arc::new(DeckShared::default());
+        let writer = {
+            let deck = Arc::clone(&deck);
+            std::thread::spawn(move || {
+                for n in 0..200_000 {
+                    deck.store(&numbered(n));
+                }
+            })
+        };
+        let mut seen = 0;
+        while !writer.is_finished() {
+            if let Some(s) = deck.load_consistent() {
+                let n = s.load_seq as f64;
+                assert_eq!((s.cue_frames, s.position_frames), (n, n));
+                assert!(s.hotcues.iter().all(|h| *h == Some(n)), "{s:?}");
+                seen += 1;
+            }
+        }
+        writer.join().unwrap();
+        assert!(seen > 0);
     }
 }

@@ -88,6 +88,11 @@ fn render_does_not_allocate() {
         2,
         "the second load was published"
     );
+    assert_eq!(
+        c.deck_consistent(decks[0]).map(|s| s.load_seq),
+        Some(2),
+        "published whole"
+    );
     for cmd in [
         DeckCommand::CuePress,
         DeckCommand::CuePress,

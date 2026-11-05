@@ -62,9 +62,18 @@ impl EngineController {
         }
     }
 
-    /// The deck's state as of the last rendered block.
+    /// The deck's state as of the last rendered block (for display: its fields may mix two
+    /// consecutive blocks).
     pub fn deck(&self, id: DeckId) -> DeckSnapshot {
         self.shared.load_deck(id)
+    }
+
+    /// The deck's state from one rendered block, every field together, or `None` if the
+    /// renderer kept publishing while it was read (try again later). Use it when acting on
+    /// several fields together, such as telling which track the cue points belong to;
+    /// [`EngineController::deck`] is enough for display.
+    pub fn deck_consistent(&self, id: DeckId) -> Option<DeckSnapshot> {
+        self.shared.load_deck_consistent(id)
     }
 
     /// Peak levels of the last rendered block.
