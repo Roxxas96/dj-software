@@ -555,7 +555,7 @@ port = "SB3"
 
 #[test]
 fn load_mapping_prefers_user_override() {
-    let dir = std::env::temp_dir().join(format!("dj-software-runtime-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("open-jockey-runtime-{}", std::process::id()));
     let mapping_dir = dir.join("controllers").join("ddj-sb3");
     std::fs::create_dir_all(&mapping_dir).unwrap();
 
@@ -578,7 +578,7 @@ fn load_mapping_prefers_user_override() {
 
 #[test]
 fn load_mapping_reads_existing_path() {
-    let dir = std::env::temp_dir().join(format!("dj-software-path-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("open-jockey-path-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("custom.toml");
     std::fs::write(&path, OVERRIDE).unwrap();
@@ -591,7 +591,7 @@ fn load_mapping_reads_existing_path() {
 fn load_mapping_does_not_read_a_directory_as_a_file() {
     // A `ddj-sb3` directory in the working directory (like the repo's `controllers/ddj-sb3`)
     // is a name to look up, not a mapping file.
-    let dir = std::env::temp_dir().join(format!("dj-software-dir-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("open-jockey-dir-{}", std::process::id()));
     let named = dir.join("ddj-sb3");
     std::fs::create_dir_all(&named).unwrap();
     let mapping = load_mapping(named.to_str().unwrap());

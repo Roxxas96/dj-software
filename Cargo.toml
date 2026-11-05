@@ -7,7 +7,7 @@ version = "0.0.0"
 edition = "2024"
 rust-version = "1.99"
 license = "Apache-2.0"
-repository = "https://github.com/Roxxas96/dj-software"
+repository = "https://github.com/Roxxas96/open-jockey"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

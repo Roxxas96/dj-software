@@ -1,4 +1,4 @@
-//! `dj-software midi led-scan`: finds which MIDI message lights a controller LED
+//! `open-jockey midi led-scan`: finds which MIDI message lights a controller LED
 //! by binary search, with the owner watching the device.
 //!
 //! The search itself ([`scan`]) is generic over [`LedSink`] and a question
@@ -469,7 +469,7 @@ pub fn try_one(port: Option<&str>, args: &[String]) -> anyhow::Result<()> {
     sent.map_err(Into::into)
 }
 
-/// `dj-software midi led-scan`.
+/// `open-jockey midi led-scan`.
 pub fn run(
     port: Option<&str>,
     channels: &[u8],

@@ -9,7 +9,7 @@ use midir::{Ignore, MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnec
 use crate::clock;
 use crate::midi::{MidiMessage, TimedMidi};
 
-const CLIENT_NAME: &str = "dj-software";
+const CLIENT_NAME: &str = "open-jockey";
 
 #[derive(Debug, thiserror::Error)]
 pub enum PortError {
@@ -96,7 +96,7 @@ pub fn open_input(name_contains: &str, tx: Sender<TimedMidi>) -> Result<InputPor
     let connection = input
         .connect(
             &ports[i],
-            "dj-software-in",
+            "open-jockey-in",
             move |_backend_micros, bytes, _| {
                 if let Some(message) = MidiMessage::parse(bytes) {
                     // The receiver may be gone during shutdown; nothing to do then.
@@ -154,7 +154,7 @@ pub fn open_output(name_contains: &str) -> Result<OutputPort, PortError> {
     };
     let name = names[i].clone();
     let connection = output
-        .connect(&ports[i], "dj-software-out")
+        .connect(&ports[i], "open-jockey-out")
         .map_err(backend)?;
     Ok(OutputPort {
         connection,

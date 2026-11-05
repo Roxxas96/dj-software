@@ -64,7 +64,7 @@ fn write_wav(path: &Path, mono: &[i16]) {
 }
 
 fn run(db: &Path, args: &[&str]) -> Output {
-    let output = Command::new(env!("CARGO_BIN_EXE_dj-software"))
+    let output = Command::new(env!("CARGO_BIN_EXE_open-jockey"))
         .arg("library")
         .args(args)
         .arg("--library-db")

@@ -1,5 +1,5 @@
 [package]
-name = "dj-software"
+name = "open-jockey"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,7 +11,7 @@ publish = false
 workspace = true
 
 [[bin]]
-name = "dj-software"
+name = "open-jockey"
 path = "src/main.rs"
 
 [dependencies]

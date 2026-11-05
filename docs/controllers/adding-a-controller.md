@@ -20,8 +20,8 @@ MIDI learn yet; it comes with the UI.
 ## 1. Plug it in and look
 
 ```sh
-cargo run --release -p dj-software -- midi ports
-cargo run --release -p dj-software -- midi monitor --port "<part of the port name>"
+cargo run --release -p open-jockey -- midi ports
+cargo run --release -p open-jockey -- midi monitor --port "<part of the port name>"
 ```
 
 `midi ports` lists MIDI inputs and outputs. `midi monitor` prints every message until
@@ -46,7 +46,7 @@ own capture. Do not copy code or mappings from other projects with incompatible 
 ## 3. Capture every control
 
 ```sh
-cargo run --release -p dj-software -- midi capture \
+cargo run --release -p open-jockey -- midi capture \
   --checklist controllers/<name>/checklist.toml \
   --out controllers/<name>/capture.toml
 ```
@@ -109,7 +109,7 @@ sometimes the same note numbers as the buttons work. When they are not known, se
 them:
 
 ```sh
-cargo run --release -p dj-software -- midi led-scan --port "<name>"
+cargo run --release -p open-jockey -- midi led-scan --port "<name>"
 ```
 
 The tool lights groups of messages and asks whether the LED you are watching lit up, narrowing
@@ -128,14 +128,14 @@ Create `controllers/<name>/mapping.toml`. The full file format is in the
 at the top with the layering decision and where the numbers came from. Try it live:
 
 ```sh
-cargo run --release -p dj-software -- midi monitor --controller controllers/<name>/mapping.toml
+cargo run --release -p open-jockey -- midi monitor --controller controllers/<name>/mapping.toml
 ```
 
 With `--controller`, the monitor shows what each message does under the mapping (the port
 comes from the mapping). Errors in the file name the binding that is wrong. To play with it:
 
 ```sh
-cargo run --release -p dj-software -- play <track> --controller controllers/<name>/mapping.toml \
+cargo run --release -p open-jockey -- play <track> --controller controllers/<name>/mapping.toml \
   --deck3 <track> --deck4 <track> --device "<output device>"
 ```
 

@@ -29,7 +29,7 @@ pub fn builtin_mapping(name: &str) -> Option<&'static str> {
 /// The app's configuration directory, where `controllers/<name>/mapping.toml` overrides a
 /// built-in mapping.
 pub fn config_dir() -> Option<PathBuf> {
-    ProjectDirs::from("", "", "dj-software").map(|dirs| dirs.config_dir().to_path_buf())
+    ProjectDirs::from("", "", "open-jockey").map(|dirs| dirs.config_dir().to_path_buf())
 }
 
 /// Loads a mapping. An existing file is loaded as such (a directory is not). Otherwise `name_or_path` names

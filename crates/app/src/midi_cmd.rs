@@ -11,7 +11,6 @@ use std::time::Duration;
 
 use actions::{Input, Target};
 use anyhow::{Context, anyhow, bail};
-use controller::builtin::load_mapping;
 use controller::capture::{
     CaptureSession, Fixture, LedProbe, LedSink, Meta, PROBE_VELOCITIES, Question, Redo, Source,
     Step, StepKind, StepStatus, parse_checklist, parse_fixture, run_led_probe,
@@ -91,7 +90,8 @@ const MONITOR_LED_TICK: Duration = Duration::from_millis(33);
 /// only so its command queue drains), so SHIFT, deck switching and soft takeover behave
 /// exactly as when playing.
 pub fn monitor_controller(name_or_path: &str) -> anyhow::Result<()> {
-    let mapping = load_mapping(name_or_path).context("loading the controller mapping")?;
+    let mapping =
+        crate::legacy_dirs::load_mapping(name_or_path).context("loading the controller mapping")?;
     let name = mapping.controller.name.clone();
 
     let interrupted = Arc::new(AtomicBool::new(false));
@@ -422,7 +422,7 @@ impl LedSink for TrackedLeds<'_> {
 /// One help line, shown at the start and on an unknown command.
 const KEYS_HELP: &str = "Keys (then Enter): Enter = finish now / keep, r = redo, x = mark as noise, u <status> <data1> = stop ignoring a source, s = skip, g <step> = go to a step, q = save and quit";
 
-/// `dj-software midi capture`: walks the checklist, recording each control,
+/// `open-jockey midi capture`: walks the checklist, recording each control,
 /// confirming it, and probing its LED. The fixture is saved after every step.
 /// With `redo` ids, only those steps of the existing fixture are captured again.
 pub fn capture(
@@ -1040,7 +1040,7 @@ mod tests {
         use actions::{Action, Side};
         use engine::DeckId;
 
-        let mapping = load_mapping("ddj-sb3").unwrap();
+        let mapping = controller::builtin::load_mapping("ddj-sb3").unwrap();
         let play = MidiMessage::NoteOn {
             channel: 0,
             note: 0x0B,
@@ -1152,7 +1152,7 @@ mod tests {
     #[test]
     fn write_atomic_replaces_file_and_leaves_no_temp() {
         let dir = std::env::temp_dir().join(format!(
-            "dj-software-capture-test-{}-{}",
+            "open-jockey-capture-test-{}-{}",
             std::process::id(),
             clock::now_micros()
         ));

@@ -8,15 +8,15 @@ New to this? [Adding a controller](adding-a-controller.md) walks through the who
 
 ## Where mappings are loaded from
 
-`dj-software play --controller <name-or-path>` and `dj-software midi monitor --controller <name-or-path>` look for a mapping like this:
+`open-jockey play --controller <name-or-path>` and `open-jockey midi monitor --controller <name-or-path>` look for a mapping like this:
 
 1. If the argument is a path to a file, that file is loaded.
 2. Otherwise it is a mapping name. A user file at `controllers/<name>/mapping.toml` inside the
    app's config directory wins:
-   - macOS: `~/Library/Application Support/dj-software/controllers/<name>/mapping.toml`
-   - Windows: `%APPDATA%\dj-software\config\controllers\<name>\mapping.toml`
-   - Linux: `$XDG_CONFIG_HOME/dj-software/controllers/<name>/mapping.toml`
-     (`~/.config/dj-software/controllers/<name>/mapping.toml` when `XDG_CONFIG_HOME` is not set)
+   - macOS: `~/Library/Application Support/open-jockey/controllers/<name>/mapping.toml`
+   - Windows: `%APPDATA%\open-jockey\config\controllers\<name>\mapping.toml`
+   - Linux: `$XDG_CONFIG_HOME/open-jockey/controllers/<name>/mapping.toml`
+     (`~/.config/open-jockey/controllers/<name>/mapping.toml` when `XDG_CONFIG_HOME` is not set)
 3. If there is no user file, the built-in mapping with that name is used.
 
 Copy a built-in `mapping.toml` to the user location and edit it to change a mapping without
