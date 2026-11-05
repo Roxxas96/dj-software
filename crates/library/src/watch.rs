@@ -542,8 +542,13 @@ mod tests {
         w.inject(Ok(
             notify::Event::new(EventKind::Other).set_flag(notify::event::Flag::Rescan)
         ));
-        wait_for("the skip", || w.skipped_count() == 1);
-        assert_eq!(w.skipped()[0].0, s.music.join("bad.mp3"));
+        // The OS may also report the copy itself (FSEvents on macOS CI does), so the
+        // file can be scanned, and skipped, more than once.
+        wait_for("the skip", || w.skipped_count() >= 1);
+        let bad = dunce::canonicalize(s.music.join("bad.mp3")).unwrap();
+        for (path, _) in w.skipped() {
+            assert_eq!(dunce::canonicalize(&path).unwrap(), bad);
+        }
         assert!(w.errors().try_recv().is_err());
         assert_eq!(w.health(), WatchHealth::Watching);
     }
