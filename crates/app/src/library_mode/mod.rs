@@ -64,10 +64,11 @@ pub struct LibraryMode {
     queued_total: usize,
     /// Analysis is held to [`WORKERS_WHILE_PLAYING`] because a deck is playing.
     throttled: bool,
-    /// The last cue point saved for each track this session.
-    latest_cues: HashMap<i64, f64>,
-    /// Cue writes already retried once, as (track, frames bits).
-    retried_cues: HashSet<(i64, u64)>,
+    /// The last value saved this session for each cue point and hotcue, as frames bits
+    /// (`None`: the hotcue was deleted).
+    latest_memory: HashMap<(i64, Spot), Option<u64>>,
+    /// Cue and hotcue writes already retried once, as (track, spot, value).
+    retried_memory: HashSet<(i64, Spot, Option<u64>)>,
     /// The watcher scanned something: look for tracks to analyze at the next refresh.
     find_new_tracks: bool,
     last_done: usize,
@@ -79,6 +80,11 @@ pub struct LibraryMode {
     events: Receiver<Event>,
     worker: Option<JoinHandle<()>>,
     decks: [Option<DeckTrack>; 4],
+    /// The track each deck held before its latest `Load`, still saved until the engine
+    /// applies that load.
+    outgoing: [Option<DeckTrack>; 4],
+    /// The deck's `load_seq` once the engine has applied the latest `Load` sent.
+    engine_loads: [u64; 4],
     load_seq: [u64; 4],
     notation: KeyNotation,
     browser: Option<BrowserView>,
@@ -128,8 +134,8 @@ impl LibraryMode {
             enqueued: HashMap::new(),
             queued_total: 0,
             throttled: false,
-            latest_cues: HashMap::new(),
-            retried_cues: HashSet::new(),
+            latest_memory: HashMap::new(),
+            retried_memory: HashSet::new(),
             find_new_tracks: false,
             last_done: 0,
             watcher,
@@ -140,6 +146,8 @@ impl LibraryMode {
             events,
             worker: Some(worker),
             decks: [None, None, None, None],
+            outgoing: [None, None, None, None],
+            engine_loads: [0; 4],
             load_seq: [0; 4],
             notation,
             browser: None,
@@ -426,11 +434,25 @@ impl LibraryMode {
             return;
         }
         printer.event(format!("Deck {n} ◂ {}", track_name(&loaded.row)));
-        self.decks[deck.index()] = Some(DeckTrack {
+        let i = deck.index();
+        // Counted from what the engine shows and from the loads sent before, in case one
+        // of those is not applied yet.
+        let after = engine.deck(deck).load_seq.max(self.engine_loads[i]);
+        self.engine_loads[i] = after + 1;
+        let incoming = DeckTrack {
             row: loaded.row,
-            memory: MemorySync::new(frames, rate, loaded.memory),
+            memory: MemorySync::new(frames, rate, loaded.memory, after),
             grid: loaded.memory.clamped(frames).grid,
-        });
+        };
+        // The outgoing track's changes keep being saved until the engine applies this load
+        // (a track whose own load never showed had none).
+        if let Some(old) = self.decks[i].replace(incoming)
+            && old.memory.load_applied()
+        {
+            self.outgoing[i] = Some(old);
+        }
+        // A grid edited while the track was decoding reaches the deck at the refresh.
+        self.refresh_wanted = true;
         self.dirty = true;
     }
 
@@ -441,36 +463,50 @@ impl LibraryMode {
     }
 
     fn sync_deck(&mut self, deck: DeckId, engine: &mut EngineController, printer: &Printer) {
-        let Some(track) = self.decks[deck.index()].as_mut() else {
+        self.sync_snapshot(deck, &engine.deck(deck), printer);
+    }
+
+    /// Saves the changes `snap` shows to the track on `deck`, or to the outgoing track
+    /// while `snap` does not show the latest load applied.
+    fn sync_snapshot(&mut self, deck: DeckId, snap: &DeckSnapshot, printer: &Printer) {
+        let i = deck.index();
+        let Some(mut current) = self.decks[i].take() else {
             return;
         };
-        for action in track.memory.step(&engine.deck(deck)) {
-            let id = track.row.id;
-            let (op, what) = match action {
-                MemoryAction::SaveCue(frames) => {
-                    self.latest_cues.insert(id, frames);
-                    self.retried_cues.retain(|(t, _)| *t != id);
-                    (
-                        WriteOp::SetCue { track: id, frames },
-                        "save the cue point".to_owned(),
-                    )
-                }
-                MemoryAction::SaveHotcue(slot, frames) => (
-                    WriteOp::SetHotcue {
-                        track: id,
-                        slot: slot.number(),
-                        frames,
-                    },
-                    format!("save hotcue {}", slot.number()),
-                ),
-                MemoryAction::DeleteHotcue(slot) => (
-                    WriteOp::DeleteHotcue {
-                        track: id,
-                        slot: slot.number(),
-                    },
-                    format!("delete hotcue {}", slot.number()),
-                ),
+        if current.memory.shows_load(snap) {
+            self.outgoing[i] = None;
+        } else if let Some(mut old) = self.outgoing[i].take() {
+            let actions = old.memory.step(snap);
+            self.save_memory(&mut old, &actions, printer);
+            self.outgoing[i] = Some(old);
+        }
+        let actions = current.memory.step(snap);
+        self.save_memory(&mut current, &actions, printer);
+        self.decks[i] = Some(current);
+    }
+
+    /// Writes `actions` for `track` through to the library.
+    fn save_memory(&mut self, track: &mut DeckTrack, actions: &[MemoryAction], printer: &Printer) {
+        let id = track.row.id;
+        for &action in actions {
+            let op = match action {
+                MemoryAction::SaveCue(frames) => WriteOp::SetCue { track: id, frames },
+                MemoryAction::SaveHotcue(slot, frames) => WriteOp::SetHotcue {
+                    track: id,
+                    slot: slot.number(),
+                    frames,
+                },
+                MemoryAction::DeleteHotcue(slot) => WriteOp::DeleteHotcue {
+                    track: id,
+                    slot: slot.number(),
+                },
             };
+            if let Some((track, spot, value)) = memory_write(&op) {
+                self.latest_memory.insert((track, spot), value);
+                self.retried_memory
+                    .retain(|&(t, s, _)| (t, s) != (track, spot));
+            }
+            let what = write_text(&op);
             if let Err(e) = self.writer.submit(op) {
                 printer.event(format!(
                     "warning: could not {what} for {}: {}",
@@ -491,14 +527,15 @@ impl LibraryMode {
         }
     }
 
-    /// Reports the writes that failed. A failed cue write that is still the track's
-    /// latest cue point is retried once first, silently; it is reported if the retry
-    /// fails too.
+    /// Reports the writes that failed. A failed cue or hotcue write that is still the
+    /// latest for its cue point or hotcue slot is retried once first, silently (Ruling
+    /// R13); it is reported if the retry fails too. A stale one is never retried, so it
+    /// cannot overwrite a newer value.
     fn report_failed_writes(&mut self, printer: &Printer) {
         for failed in self.lib.take_failed_writes() {
-            if let WriteOp::SetCue { track, frames } = failed.op
-                && self.latest_cues.get(&track) == Some(&frames)
-                && self.retried_cues.insert((track, frames.to_bits()))
+            if let Some((track, spot, value)) = memory_write(&failed.op)
+                && self.latest_memory.get(&(track, spot)) == Some(&value)
+                && self.retried_memory.insert((track, spot, value))
                 && self.writer.submit(failed.op.clone()).is_ok()
             {
                 continue;
@@ -508,28 +545,29 @@ impl LibraryMode {
     }
 
     fn failed_write_text(&self, failed: &FailedWrite) -> String {
-        let (what, track) = match &failed.op {
-            WriteOp::SetCue { track, .. } => ("the cue point", Some(*track)),
-            WriteOp::SetHotcue { track, .. } | WriteOp::DeleteHotcue { track, .. } => {
-                ("a hotcue", Some(*track))
-            }
-            WriteOp::EditGrid { track, .. } => ("the beatgrid", Some(*track)),
-            WriteOp::StoreAnalysis(a) => ("the analysis", Some(a.track_id)),
-            _ => ("a library change", None),
+        let track = match &failed.op {
+            WriteOp::SetCue { track, .. }
+            | WriteOp::SetHotcue { track, .. }
+            | WriteOp::DeleteHotcue { track, .. }
+            | WriteOp::EditGrid { track, .. } => Some(*track),
+            WriteOp::StoreAnalysis(a) => Some(a.track_id),
+            _ => None,
         };
+        let what = write_text(&failed.op);
         let name = track.map(|id| {
             self.decks
                 .iter()
+                .chain(&self.outgoing)
                 .flatten()
                 .find(|t| t.row.id == id)
                 .map_or_else(|| format!("track {id}"), |t| track_name(&t.row))
         });
         match name {
             Some(name) => format!(
-                "warning: could not save {what} for {name}: {}",
+                "warning: could not {what} for {name}: {}",
                 safe(&failed.error)
             ),
-            None => format!("warning: could not save {what}: {}", safe(&failed.error)),
+            None => format!("warning: could not {what}: {}", safe(&failed.error)),
         }
     }
 
@@ -648,6 +686,40 @@ impl LibraryMode {
         // A cue write retried just now: wait for it, and report it if it failed again.
         let _ = self.writer.submit_wait(WriteOp::Batch(Vec::new()));
         self.report_failed_writes(printer);
+    }
+}
+
+/// A cue point or one hotcue slot of a track.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Spot {
+    Cue,
+    Hotcue(u8),
+}
+
+/// The track, spot and value (frames bits, `None` for a deletion) a cue or hotcue write
+/// stores; `None` for other writes.
+fn memory_write(op: &WriteOp) -> Option<(i64, Spot, Option<u64>)> {
+    match *op {
+        WriteOp::SetCue { track, frames } => Some((track, Spot::Cue, Some(frames.to_bits()))),
+        WriteOp::SetHotcue {
+            track,
+            slot,
+            frames,
+        } => Some((track, Spot::Hotcue(slot), Some(frames.to_bits()))),
+        WriteOp::DeleteHotcue { track, slot } => Some((track, Spot::Hotcue(slot), None)),
+        _ => None,
+    }
+}
+
+/// What a write does, for "could not …": `save hotcue 3`, `delete hotcue 3`.
+fn write_text(op: &WriteOp) -> String {
+    match op {
+        WriteOp::SetCue { .. } => "save the cue point".to_owned(),
+        WriteOp::SetHotcue { slot, .. } => format!("save hotcue {slot}"),
+        WriteOp::DeleteHotcue { slot, .. } => format!("delete hotcue {slot}"),
+        WriteOp::EditGrid { .. } => "save the beatgrid".to_owned(),
+        WriteOp::StoreAnalysis(_) => "save the analysis".to_owned(),
+        _ => "save a library change".to_owned(),
     }
 }
 
@@ -940,7 +1012,7 @@ mod tests {
         let shift = GridEditRequest::Shift { millis: 10 };
         let refused = |mode: &LibraryMode| mode.grid_job(deck, shift, &engine).unwrap_err();
         assert!(refused(&mode).contains("load a library track"));
-        let mut memory = MemorySync::new(4410, 48_000, engine::TrackMemory::default());
+        let mut memory = MemorySync::new(4410, 48_000, engine::TrackMemory::default(), 0);
         mode.decks[0] = Some(DeckTrack {
             row: TrackRow {
                 sample_rate: Some(48_000),
@@ -964,6 +1036,7 @@ mod tests {
             tempo_ratio: 1.0,
             cue_frames: 0.0,
             previewing: false,
+            load_seq: 1,
             ..DeckSnapshot::default()
         };
         memory.step(&snap);
@@ -1065,7 +1138,8 @@ mod tests {
     fn a_failed_cue_write_is_retried_once_if_still_the_latest() {
         let (_dir, mut mode, mut engine, printer) = mode();
         // Track 7 does not exist yet: the write fails.
-        mode.latest_cues.insert(7, 500.0);
+        mode.latest_memory
+            .insert((7, Spot::Cue), Some(500.0_f64.to_bits()));
         mode.writer
             .submit(WriteOp::SetCue {
                 track: 7,
@@ -1082,7 +1156,8 @@ mod tests {
         assert_eq!(mode.lib.failed_write_count(), 2, "and only once");
 
         // A superseded value is not retried.
-        mode.latest_cues.insert(7, 900.0);
+        mode.latest_memory
+            .insert((7, Spot::Cue), Some(900.0_f64.to_bits()));
         mode.writer
             .submit(WriteOp::SetCue {
                 track: 7,
@@ -1114,6 +1189,132 @@ mod tests {
         flush(&mode);
         assert_eq!(mode.lib.failed_write_count(), 4);
         assert_eq!(mode.lib.cue(7).unwrap(), Some(900.0));
+        mode.shutdown(&mut engine, &printer);
+        printer.finish();
+    }
+
+    #[test]
+    fn a_failed_hotcue_write_is_retried_once_if_still_the_latest() {
+        let (_dir, mut mode, mut engine, printer) = mode();
+        let set = |frames| WriteOp::SetHotcue {
+            track: 7,
+            slot: 3,
+            frames,
+        };
+        let delete = WriteOp::DeleteHotcue { track: 7, slot: 3 };
+        // Track 7 does not exist yet: writes fail.
+        mode.latest_memory
+            .insert((7, Spot::Hotcue(3)), Some(500.0_f64.to_bits()));
+        mode.writer.submit(set(500.0)).unwrap();
+        flush(&mode);
+        mode.report_failed_writes(&printer);
+        flush(&mode);
+        assert_eq!(mode.lib.failed_write_count(), 2, "retried once");
+        mode.report_failed_writes(&printer);
+        flush(&mode);
+        assert_eq!(mode.lib.failed_write_count(), 2, "and only once");
+
+        // The slot was deleted since: the failed set is stale and never retried.
+        mode.latest_memory.insert((7, Spot::Hotcue(3)), None);
+        mode.writer.submit(set(600.0)).unwrap();
+        flush(&mode);
+        mode.report_failed_writes(&printer);
+        flush(&mode);
+        assert_eq!(mode.lib.failed_write_count(), 3);
+
+        // A failed delete that is still the latest is retried: once the track exists, the
+        // retry succeeds (the count of failures does not grow).
+        mode.writer.submit(delete).unwrap();
+        flush(&mode);
+        assert_eq!(mode.lib.failed_write_count(), 4);
+        mode.writer
+            .submit_wait(WriteOp::Raw(vec![library::RawStatement {
+                sql: "INSERT INTO tracks(id, path, fingerprint, added_at) \
+                      VALUES (7, '/m/7.wav', x'00', 0)"
+                    .into(),
+                params: vec![],
+            }]))
+            .unwrap();
+        mode.report_failed_writes(&printer);
+        flush(&mode);
+        assert_eq!(mode.lib.failed_write_count(), 4);
+        mode.shutdown(&mut engine, &printer);
+        printer.finish();
+    }
+
+    #[test]
+    fn failed_hotcue_writes_name_the_slot() {
+        let (_dir, mode, mut engine, printer) = mode();
+        let text = |op| {
+            mode.failed_write_text(&FailedWrite {
+                op,
+                error: library::LibraryError::NoSuchTrack(7),
+            })
+        };
+        assert!(
+            text(WriteOp::SetHotcue {
+                track: 7,
+                slot: 3,
+                frames: 1.0,
+            })
+            .starts_with("warning: could not save hotcue 3 for track 7: ")
+        );
+        assert!(
+            text(WriteOp::DeleteHotcue { track: 7, slot: 5 })
+                .starts_with("warning: could not delete hotcue 5 for track 7: ")
+        );
+        assert!(
+            text(WriteOp::SetCue {
+                track: 7,
+                frames: 1.0,
+            })
+            .starts_with("warning: could not save the cue point for track 7: ")
+        );
+        mode.shutdown(&mut engine, &printer);
+        printer.finish();
+    }
+
+    #[test]
+    fn the_outgoing_track_is_saved_until_the_new_load_applies() {
+        let (_dir, mut mode, mut engine, printer) = mode();
+        let deck = DeckId::new(0).unwrap();
+        let shown = |load_seq, hotcue: Option<f64>| {
+            let mut hotcues = [None; engine::HOTCUES];
+            hotcues[0] = hotcue;
+            DeckSnapshot {
+                loaded: true,
+                duration_frames: 4410,
+                track_sample_rate: 44_100,
+                hotcues,
+                load_seq,
+                ..DeckSnapshot::default()
+            }
+        };
+        let seq = mode.next_seq(deck);
+        mode.load(loaded(seq), &mut engine, &printer);
+        mode.sync_snapshot(deck, &shown(1, None), &printer);
+        assert!(mode.decks[0].as_ref().unwrap().memory.load_applied());
+        // Track 8 is sent; the engine still shows track 7, whose hotcue 1 is set now.
+        let seq = mode.next_seq(deck);
+        let next = worker::Loaded {
+            seq,
+            row: TrackRow { id: 8, ..row() },
+            ..loaded(seq)
+        };
+        mode.load(next, &mut engine, &printer);
+        assert!(
+            mode.refresh_wanted,
+            "a grid edited during the decode is fetched"
+        );
+        mode.sync_snapshot(deck, &shown(1, Some(100.0)), &printer);
+        let hotcue_1 =
+            |mode: &LibraryMode, track| mode.latest_memory.get(&(track, Spot::Hotcue(1))).copied();
+        assert_eq!(hotcue_1(&mode, 7), Some(Some(100.0_f64.to_bits())));
+        assert_eq!(hotcue_1(&mode, 8), None);
+        // Track 8's load shows: the outgoing track is done with.
+        mode.sync_snapshot(deck, &shown(2, None), &printer);
+        assert!(mode.outgoing[0].is_none());
+        assert_eq!(hotcue_1(&mode, 8), None);
         mode.shutdown(&mut engine, &printer);
         printer.finish();
     }

@@ -38,6 +38,8 @@ pub(crate) struct Deck {
     nudge: f64,
     /// A phase sync waiting for this deck to play: the master and the beat ratio.
     pending_sync: Option<(DeckId, f64)>,
+    /// How many `Load`s were applied.
+    load_seq: u64,
 }
 
 impl Default for Deck {
@@ -62,6 +64,7 @@ impl Default for Deck {
             scratch: None,
             nudge: 0.0,
             pending_sync: None,
+            load_seq: 0,
         }
     }
 }
@@ -78,6 +81,7 @@ impl Deck {
                 self.cue = memory.cue;
                 self.hotcues = memory.hotcues;
                 self.grid = memory.grid;
+                self.load_seq = self.load_seq.wrapping_add(1);
                 return self.track.replace(track);
             }
             DeckCommand::Unload => {
@@ -356,6 +360,7 @@ impl Deck {
             loop_beats: self.loop_beats,
             vinyl: self.vinyl,
             jog_touched: self.jog_touched,
+            load_seq: self.load_seq,
         }
     }
 }

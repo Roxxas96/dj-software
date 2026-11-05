@@ -30,6 +30,9 @@ pub struct DeckSnapshot {
     pub vinyl: bool,
     /// The jog wheel's top is touched.
     pub jog_touched: bool,
+    /// How many `Load`s the deck has applied. A snapshot showing a given count shows the
+    /// state right after that load or later, never an earlier one.
+    pub load_seq: u64,
 }
 
 impl Default for DeckSnapshot {
@@ -52,6 +55,7 @@ impl Default for DeckSnapshot {
             loop_beats: 4.0,
             vinyl: true,
             jog_touched: false,
+            load_seq: 0,
         }
     }
 }
@@ -78,7 +82,8 @@ impl Meters {
 }
 
 /// State the renderer publishes for the controller. Values are for display only, so each
-/// field is an independent `Relaxed` atomic and a snapshot may mix two consecutive blocks.
+/// field is an independent `Relaxed` atomic and a snapshot may mix two consecutive blocks;
+/// only `load_seq` orders the rest (see [`DeckSnapshot::load_seq`]).
 #[derive(Debug, Default)]
 pub(crate) struct Shared {
     decks: [DeckShared; DeckId::ALL.len()],
@@ -140,6 +145,7 @@ struct DeckShared {
     loop_beats: AtomicU64,
     vinyl: AtomicBool,
     jog_touched: AtomicBool,
+    load_seq: AtomicU64,
 }
 
 fn opt_bits(v: Option<f64>) -> u64 {
@@ -182,9 +188,13 @@ impl DeckShared {
             .store(s.loop_beats.to_bits(), Ordering::Relaxed);
         self.vinyl.store(s.vinyl, Ordering::Relaxed);
         self.jog_touched.store(s.jog_touched, Ordering::Relaxed);
+        // Last and `Release`, read first with `Acquire`: a reader that sees this count
+        // sees every field of this block (or a later one).
+        self.load_seq.store(s.load_seq, Ordering::Release);
     }
 
     fn load(&self) -> DeckSnapshot {
+        let load_seq = self.load_seq.load(Ordering::Acquire);
         DeckSnapshot {
             loaded: self.loaded.load(Ordering::Relaxed),
             playing: self.playing.load(Ordering::Relaxed),
@@ -210,6 +220,7 @@ impl DeckShared {
             loop_beats: f64::from_bits(self.loop_beats.load(Ordering::Relaxed)),
             vinyl: self.vinyl.load(Ordering::Relaxed),
             jog_touched: self.jog_touched.load(Ordering::Relaxed),
+            load_seq,
         }
     }
 }

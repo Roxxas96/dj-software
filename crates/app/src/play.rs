@@ -176,13 +176,22 @@ pub(crate) fn deck_line(deck: DeckId, snapshot: &DeckSnapshot) -> String {
     line
 }
 
-/// A loop length in beats: `4`, or `1/4` for a loop shorter than a beat.
+/// A loop length in beats: `4`, `1.5`, a fraction of a beat as `1/4` or `3/4` (down to
+/// 1/64), else to two decimals; `?` for a length that is not positive and finite.
 fn loop_text(beats: f64) -> String {
-    if beats >= 1.0 {
-        format!("{}", beats.round())
-    } else {
-        format!("1/{}", (1.0 / beats).round())
+    if !beats.is_finite() || beats <= 0.0 {
+        return "?".to_owned();
     }
+    if beats < 1.0 {
+        for denominator in [2.0, 4.0, 8.0, 16.0, 32.0, 64.0] {
+            let numerator = beats * denominator;
+            if (numerator - numerator.round()).abs() < 1e-9 {
+                return format!("{}/{denominator}", numerator.round());
+            }
+        }
+    }
+    let text = format!("{beats:.2}");
+    text.trim_end_matches('0').trim_end_matches('.').to_owned()
 }
 
 /// The status line with a controller: every loaded deck, playing ones marked with `>`.
@@ -734,6 +743,26 @@ mod tests {
             deck_line(deck, &vinyl_off),
             "Deck 1  01:05 / 03:20  loop 2  vinyl off"
         );
+    }
+
+    #[test]
+    fn loop_lengths_read_sensibly() {
+        for (beats, text) in [
+            (4.0, "4"),
+            (1.0, "1"),
+            (64.0, "64"),
+            (0.5, "1/2"),
+            (1.0 / 32.0, "1/32"),
+            (0.75, "3/4"),
+            (1.5, "1.5"),
+            (0.3, "0.3"),
+            (0.0, "?"),
+            (-1.0, "?"),
+            (f64::NAN, "?"),
+            (f64::INFINITY, "?"),
+        ] {
+            assert_eq!(loop_text(beats), text, "{beats}");
+        }
     }
 
     #[test]

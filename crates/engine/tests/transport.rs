@@ -470,6 +470,29 @@ fn load_applies_track_memory() {
 }
 
 #[test]
+fn load_seq_counts_every_load() {
+    let (mut c, mut r) = setup(SR);
+    assert_eq!(c.deck(deck(0)).load_seq, 0);
+    for expected in 1..=2 {
+        send(
+            &mut c,
+            deck(0),
+            DeckCommand::Load {
+                track: ramp_track(SR, 4096),
+                memory: TrackMemory::default(),
+            },
+        );
+        render(&mut r, 64);
+        assert_eq!(c.deck(deck(0)).load_seq, expected);
+    }
+    // Other commands and other decks leave it alone.
+    send(&mut c, deck(0), DeckCommand::Play);
+    render(&mut r, 64);
+    assert_eq!(c.deck(deck(0)).load_seq, 2);
+    assert_eq!(c.deck(deck(1)).load_seq, 0);
+}
+
+#[test]
 fn load_clamps_memory_like_clamped() {
     let (mut c, mut r) = setup(SR);
     let memory = TrackMemory {
