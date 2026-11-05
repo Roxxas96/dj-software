@@ -56,8 +56,9 @@ written in decimal or hex (`note = 0x0B`).
 |---|---|
 | `name` | Display name. |
 | `port` | Text matched against the names of the MIDI input and output ports. Any port whose name contains it is used. |
+| `jog_steps_per_turn` | Optional, 1 to 10000. How many relative steps the jog wheel sends for one full turn of the platter. Required when any binding uses `deck.jog_top`, `deck.jog_ring` or `deck.jog_search`; the default of 720 only applies to mappings with no jog bindings. |
 
-Both keys are required.
+`name` and `port` are required.
 
 ### `[[init]]`
 
@@ -115,8 +116,9 @@ Exactly one of these, plus `channel` (1-16):
 
 If you leave `value` out, notes are `button` and everything else is `absolute`.
 
-The action decides which kinds it accepts (the "Takes" column below). Only `browser.scroll`
-accepts relative steps for now; a relative binding to any other action fails to load.
+The action decides which kinds it accepts (the "Takes" column below). The relative actions are
+`browser.scroll`, `deck.jog_top`, `deck.jog_ring` and `deck.jog_search`; a relative binding to
+any other action fails to load.
 
 #### Soft takeover
 
@@ -234,7 +236,7 @@ move; a button press or release in between keeps the steps on each side of it ap
 Only "absolute" actions can be used in `[[init]]`. `soft_takeover` has an effect only on absolute bindings, and `invert` flips absolute values (or negates relative steps).
 Button actions ignore releases, except `deck.cue`, `deck.hotcue_1` to `deck.hotcue_8`, `deck.jog_touch` and `modifier.shift`.
 
-Jog wheel actions turn the steps a wheel sends into platter turns using a steps-per-turn setting (720 by default).
+Jog wheel actions turn the steps a wheel sends into platter turns using the `jog_steps_per_turn` key of `[controller]`, which jog bindings (`deck.jog_top`, `deck.jog_ring`, `deck.jog_search`) require: a mapping that binds one without it fails to load.
 
 The `deck.grid_*` actions edit the loaded track's beatgrid in the library. Every grid edit
 except `deck.grid_lock_toggle` also locks the grid, so analyzing the track again never undoes

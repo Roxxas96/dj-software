@@ -71,11 +71,15 @@ pub struct Runtime {
 
 impl Runtime {
     pub fn new(mapping: Mapping) -> Self {
+        let mut state = ControlState::default();
+        if let Some(steps) = mapping.controller.jog_steps_per_turn {
+            state.jog_steps_per_turn = steps;
+        }
         Self {
             resolver: Resolver::new(&mapping),
             feedback: Feedback::new(&mapping),
             init: mapping.init,
-            state: ControlState::default(),
+            state,
             attached: false,
             attached_once: false,
             pending: Vec::new(),

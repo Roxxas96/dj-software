@@ -67,6 +67,7 @@ fn parses_full_example() {
         controller: ControllerInfo {
             name: "Pioneer DDJ-SB3".into(),
             port: "DDJ-SB3".into(),
+            jog_steps_per_turn: None,
         },
         init: vec![InitAction {
             action: Action::MasterLevel,
@@ -363,5 +364,44 @@ fn outputs_accept_targets_that_fit() {
             "[controller]\nname = \"X\"\nport = \"X\"\n\n[[output]]\nmidi = {{ note = 1, channel = 1 }}\n{body}\n"
         );
         parse_mapping("ok.toml", &text).unwrap();
+    }
+}
+
+const JOG_BINDING: &str = r#"
+[[input]]
+midi = { cc = 33, channel = 1 }
+action = "deck.jog_ring"
+deck = 1
+value = "relative_offset"
+"#;
+
+#[test]
+fn jog_binding_requires_steps_per_turn() {
+    let head = "[controller]\nname = \"X\"\nport = \"X\"\n";
+    for kind in ["jog_top", "jog_ring", "jog_search"] {
+        let binding = JOG_BINDING.replace("jog_ring", kind);
+        let err = parse_mapping("bad.toml", &format!("{head}{binding}")).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("jog_steps_per_turn is required by jog bindings"),
+            "{err}"
+        );
+    }
+    let ok = format!("{head}jog_steps_per_turn = 1000\n{JOG_BINDING}");
+    let mapping = parse_mapping("ok.toml", &ok).unwrap();
+    assert_eq!(mapping.controller.jog_steps_per_turn, Some(1000));
+    // Jog touch is a button and needs no resolution.
+    let touch =
+        "[[input]]\nmidi = { note = 1, channel = 1 }\naction = \"deck.jog_touch\"\ndeck = 1\n";
+    parse_mapping("ok.toml", &format!("{head}{touch}")).unwrap();
+}
+
+#[test]
+fn steps_per_turn_must_be_in_range() {
+    for bad in ["0", "10001", "-5"] {
+        let text =
+            format!("[controller]\nname = \"X\"\nport = \"X\"\njog_steps_per_turn = {bad}\n");
+        let err = parse_mapping("bad.toml", &text).unwrap_err().to_string();
+        assert!(err.contains("jog_steps_per_turn"), "{err}");
     }
 }

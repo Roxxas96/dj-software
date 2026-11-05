@@ -814,3 +814,84 @@ fn tempo_slider_is_armed_after_sync() {
     rig.render();
     assert_eq!(rig.engine.deck(d(0)).tempo_ratio, ratio);
 }
+
+const JOG_MAP: &str = r#"
+[[input]]
+midi = { cc = 33, channel = 1 }
+action = "deck.jog_ring"
+side = "left"
+value = "relative_offset"
+
+[[input]]
+midi = { note = 54, channel = 1 }
+action = "deck.jog_touch"
+side = "left"
+
+[[input]]
+midi = { note = 28, channel = 1 }
+action = "deck.hotcue_1"
+side = "left"
+"#;
+
+fn jog_runtime(per_turn: &str) -> Runtime {
+    let map = MAP.replacen(
+        "port = \"Test\"\n",
+        &format!("port = \"Test\"\n{per_turn}\n"),
+        1,
+    );
+    Runtime::new(parse_mapping("test.toml", &format!("{map}{JOG_MAP}")).unwrap())
+}
+
+#[test]
+fn steps_per_turn_reaches_control_state() {
+    let runtime = jog_runtime("jog_steps_per_turn = 1000");
+    assert_eq!(runtime.state().jog_steps_per_turn, 1000);
+    // Without the key the default stays.
+    assert_eq!(Runtime::new(mapping()).state().jog_steps_per_turn, 720);
+}
+
+#[test]
+fn jog_steps_are_summed_per_run() {
+    let position_after = |messages: &[MidiMessage]| {
+        let mut rig = Rig::new();
+        rig.runtime = jog_runtime("jog_steps_per_turn = 100");
+        rig.runtime.attach(&mut rig.engine, &mut rig.out);
+        let track = Arc::new(TrackBuffer::new(44_100, vec![0.5; 400_000 * 2]).unwrap());
+        let load = DeckCommand::Load {
+            track,
+            memory: engine::TrackMemory::default(),
+        };
+        rig.engine.send(Command::Deck(d(0), load)).unwrap();
+        rig.render();
+        let before = rig.engine.deck(d(0)).position_frames;
+        let stats = rig.batch(messages);
+        rig.render();
+        (stats, rig.engine.deck(d(0)).position_frames - before)
+    };
+    // Three +1 steps on the ring of a paused deck.
+    let (stats, moved) = position_after(&[cc(0, 33, 65), cc(0, 33, 65), cc(0, 33, 65)]);
+    assert_eq!(stats.applied, 1, "one Jog for the run");
+    assert_eq!(stats.coalesced, 2);
+    let (_, single) = position_after(&[cc(0, 33, 67)]);
+    assert!(moved > 0.0);
+    assert_eq!(moved, single, "the sum of the steps, as one move");
+}
+
+#[test]
+fn held_jog_touch_and_hotcue_release_on_the_pressed_deck() {
+    let mut rig = Rig::new();
+    rig.runtime = jog_runtime("jog_steps_per_turn = 720");
+    rig.runtime.attach(&mut rig.engine, &mut rig.out);
+    rig.batch(&[on(0, 54), on(0, 28), on(0, 114)]);
+    assert_eq!(rig.runtime.state().side(Side::Left).active_deck, d(2));
+    rig.batch(&[off(0, 54), off(0, 28)]);
+    let last = rig.runtime.last_resolved();
+    assert_eq!(last[0].1, [(Action::JogTouch(d(0)), Input::Release)]);
+    assert_eq!(
+        last[1].1,
+        [(
+            Action::Hotcue(d(0), engine::HotcueSlot::ALL[0]),
+            Input::Release
+        )]
+    );
+}
