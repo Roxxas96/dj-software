@@ -83,6 +83,11 @@ fn render_does_not_allocate() {
     .unwrap();
     c.send(Command::Deck(decks[0], DeckCommand::Play)).unwrap();
     render_blocks(10);
+    assert_eq!(
+        c.deck(decks[0]).load_seq,
+        2,
+        "the second load was published"
+    );
     for cmd in [
         DeckCommand::CuePress,
         DeckCommand::CuePress,

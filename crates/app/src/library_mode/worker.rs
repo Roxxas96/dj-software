@@ -87,9 +87,6 @@ struct LoadJob {
     seq: u64,
     row: TrackRow,
     path: PathBuf,
-    cue: Option<f64>,
-    hotcues: [Option<f64>; HOTCUES],
-    grid: Option<Beatgrid>,
 }
 
 /// Starts the worker (and its loader). It stops when the returned sender is dropped.
@@ -124,9 +121,14 @@ fn run(lib: &Library, jobs: &Receiver<Job>, events: &Sender<Event>, decode: Deco
     let say = |text: String| {
         let _ = events.send(Event::Message(text));
     };
-    let (reader, mut browser) = match (lib.reader(), lib.reader().and_then(Browser::new)) {
-        (Ok(reader), Ok(browser)) => (reader, browser),
-        (Err(e), _) | (_, Err(e)) => {
+    let readers = (
+        lib.reader(),
+        lib.reader().and_then(Browser::new),
+        lib.reader(),
+    );
+    let (reader, mut browser, loader_reader) = match readers {
+        (Ok(reader), Ok(browser), Ok(loader_reader)) => (reader, browser, loader_reader),
+        (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => {
             say(format!("error: cannot read the library: {}", safe(e)));
             return;
         }
@@ -136,7 +138,7 @@ fn run(lib: &Library, jobs: &Receiver<Job>, events: &Sender<Event>, decode: Deco
     let loader_events = events.clone();
     let loader = std::thread::Builder::new()
         .name("track-loader".into())
-        .spawn(move || load_tracks(&load_rx, &loader_events, decode));
+        .spawn(move || load_tracks(&loader_reader, &load_rx, &loader_events, decode));
     if let Err(e) = &loader {
         say(format!("error: cannot start the track loader: {e}"));
     }
@@ -236,15 +238,11 @@ fn request_load(
             safe(details.path.display())
         ));
     }
-    // A track whose memory cannot be read still loads, without it.
     let job = LoadJob {
         deck,
         seq,
         row: details.row,
         path: details.path,
-        cue: read_or_warn(reader.cue(track), "cue point", track, say).flatten(),
-        hotcues: read_or_warn(reader.hotcues(track), "hotcues", track, say).unwrap_or_default(),
-        grid: read_or_warn(reader.beatgrid(track), "beatgrid", track, say).flatten(),
     };
     if loader.send(job).is_err() {
         say(format!(
@@ -253,25 +251,43 @@ fn request_load(
     }
 }
 
-/// The value read, or `None` after saying why it could not be read.
-fn read_or_warn<T>(
-    result: Result<T, library::LibraryError>,
-    what: &str,
-    track: i64,
-    say: &dyn Fn(String),
-) -> Option<T> {
-    result
-        .inspect_err(|e| {
-            say(format!(
-                "warning: could not read the {what} of track {track}: {}",
-                safe(e)
-            ));
-        })
-        .ok()
+/// Track `track`'s cue point, hotcues and beatgrid, the grid at the decoded `rate`. A part
+/// that cannot be read is left out (the track still loads), with a warning.
+fn read_memory(reader: &Reader, track: i64, rate: u32, events: &Sender<Event>) -> TrackMemory {
+    fn read_or_warn<T>(
+        result: Result<T, library::LibraryError>,
+        what: &str,
+        track: i64,
+        events: &Sender<Event>,
+    ) -> Option<T> {
+        result
+            .inspect_err(|e| {
+                let _ = events.send(Event::Message(format!(
+                    "warning: could not read the {what} of track {track}: {}",
+                    safe(e)
+                )));
+            })
+            .ok()
+    }
+    let cue = read_or_warn(reader.cue(track), "cue point", track, events).flatten();
+    let hotcues: [Option<f64>; HOTCUES] =
+        read_or_warn(reader.hotcues(track), "hotcues", track, events).unwrap_or_default();
+    let grid = read_or_warn(reader.beatgrid(track), "beatgrid", track, events).flatten();
+    TrackMemory {
+        cue: cue.unwrap_or(0.0),
+        hotcues,
+        // Grid periods at the decoded rate, which is what the deck plays.
+        grid: engine_grid(grid.as_ref(), rate),
+    }
 }
 
 /// Decodes queued tracks; of several queued for one deck only the latest is decoded.
-fn load_tracks(jobs: &Receiver<LoadJob>, events: &Sender<Event>, decode: DecodeFn) {
+fn load_tracks(
+    reader: &Reader,
+    jobs: &Receiver<LoadJob>,
+    events: &Sender<Event>,
+    decode: DecodeFn,
+) {
     while let Ok(first) = jobs.recv() {
         let mut latest: HashMap<usize, LoadJob> = HashMap::new();
         for job in std::iter::once(first).chain(jobs.try_iter()) {
@@ -280,14 +296,15 @@ fn load_tracks(jobs: &Receiver<LoadJob>, events: &Sender<Event>, decode: DecodeF
         let mut batch: Vec<LoadJob> = latest.into_values().collect();
         batch.sort_by_key(|j| j.deck.index());
         for job in batch {
-            load_one(job, events, decode);
+            load_one(reader, job, events, decode);
         }
     }
 }
 
-/// Decodes one track. A decoder panic (say, on a malformed file) fails this load only:
-/// it is reported and the loader goes on.
-fn load_one(job: LoadJob, events: &Sender<Event>, decode: DecodeFn) {
+/// Decodes one track, then reads its memory (so a change saved during the decode is
+/// loaded). A decoder panic (say, on a malformed file) fails this load only: it is
+/// reported and the loader goes on.
+fn load_one(reader: &Reader, job: LoadJob, events: &Sender<Event>, decode: DecodeFn) {
     let n = deck_number(job.deck);
     let result = catch_unwind(AssertUnwindSafe(|| decode(&job.path)))
         .map_err(|_| "the decoder crashed on this file".to_owned())
@@ -300,12 +317,7 @@ fn load_one(job: LoadJob, events: &Sender<Event>, decode: DecodeFn) {
                     safe(job.path.display())
                 )));
             }
-            // Grid periods at the decoded rate, which is what the deck plays.
-            let memory = TrackMemory {
-                cue: job.cue.unwrap_or(0.0),
-                hotcues: job.hotcues,
-                grid: engine_grid(job.grid.as_ref(), decoded.track.sample_rate()),
-            };
+            let memory = read_memory(reader, job.row.id, decoded.track.sample_rate(), events);
             let _ = events.send(Event::Loaded(Box::new(Loaded {
                 deck: job.deck,
                 seq: job.seq,
@@ -465,6 +477,42 @@ mod tests {
             "the grid at the decoded rate"
         );
         assert!(loaded.buffer.frames() > 0);
+    }
+
+    /// The library [`saving_decode`] writes to.
+    static DURING_DECODE: std::sync::OnceLock<(Arc<Library>, i64)> = std::sync::OnceLock::new();
+
+    /// Decodes, saving a hotcue for the track meanwhile, as the DJ might on another deck.
+    fn saving_decode(path: &Path) -> Result<decode::Decoded, decode::DecodeError> {
+        let (lib, track) = DURING_DECODE.get().unwrap();
+        lib.writer()
+            .submit_wait(WriteOp::SetHotcue {
+                track: *track,
+                slot: 1,
+                frames: 77.0,
+            })
+            .unwrap();
+        decode::decode_file(path)
+    }
+
+    #[test]
+    fn the_memory_is_read_after_the_decode() {
+        let s = setup(&["ok.wav"]);
+        let id = ids(&s.lib)[0];
+        DURING_DECODE.set((Arc::clone(&s.lib), id)).unwrap();
+        let (tx, events) = channel();
+        let (jobs, _worker) = spawn_with(Arc::clone(&s.lib), tx, saving_decode).unwrap();
+        jobs.send(Job::LoadTrack {
+            deck: deck(1),
+            track: id,
+            seq: 1,
+        })
+        .unwrap();
+        let loaded = wait_for(&events, |e| match e {
+            Event::Loaded(l) => Some(l),
+            _ => None,
+        });
+        assert_eq!(loaded.memory.hotcues[0], Some(77.0));
     }
 
     fn panicking_decode(path: &Path) -> Result<decode::Decoded, decode::DecodeError> {
