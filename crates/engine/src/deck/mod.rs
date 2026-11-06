@@ -382,7 +382,7 @@ impl Deck {
         if self.scratch.is_none()
             && self.playing
             && self.tempo_ratio() > 0.0
-            && self.stretches(self.tempo_ratio() * (1.0 + self.bend))
+            && self.stretches()
             // A clone of the deck's own track: it is never the last one, so never freed here.
             && let Some(track) = self.track.clone()
         {
