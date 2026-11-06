@@ -132,6 +132,18 @@ impl Resolver {
                 }
                 continue;
             }
+            // A release whose binding is not held but whose hold partner on the same side
+            // is (SHIFT went down during the hold, maybe after a deck switch or a pad mode
+            // change) ends that hold on the deck that got the press. Looked up before the
+            // conditions: the partner's layer may no longer be the one that holds, and a
+            // held press always gets its release.
+            if binding.value == ValueKind::Button
+                && !button_pressed(raw)
+                && let Some(held) = self.take_held_partner(&binding)
+            {
+                resolved.push((held, Input::Release));
+                continue;
+            }
             if !conditions_hold(&binding, state) {
                 continue;
             }
@@ -152,12 +164,6 @@ impl Resolver {
                             resolved.push((stale, Input::Release));
                         }
                         Input::Press
-                    } else if let Some(held) = self.take_held_partner(&binding) {
-                        // This binding is not held, but its hold partner on the same side
-                        // is (SHIFT went down during the hold, maybe after a deck switch):
-                        // the release ends that hold on the deck that got the press.
-                        resolved.push((held, Input::Release));
-                        continue;
                     } else {
                         Input::Release
                     }
@@ -210,7 +216,7 @@ impl Resolver {
 
     /// Removes and returns the held press, on `binding`'s side, whose action kind is the
     /// [hold partner](actions::ActionKind::hold_partner) of `binding`'s kind (the lowest binding
-    /// index if several are held).
+    /// index if several are held). The partner's conditions are not consulted.
     fn take_held_partner(&mut self, binding: &InputBinding) -> Option<Action> {
         let partner = binding.kind.hold_partner()?;
         let side = binding.side();

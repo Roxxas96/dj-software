@@ -509,7 +509,9 @@ impl ActionKind {
     /// `deck.return_to_start` ends `deck.cue`. `deck.loop_roll_N` and `deck.slice_N` are
     /// their own partner: a controller binds them to the shifted pad note as well, and a
     /// release arriving on that sibling binding ends the held press of the same kind on the
-    /// deck it went to. Other kinds have no partner.
+    /// deck it went to. Other kinds have no partner. The partner lookup ignores binding
+    /// conditions (pad mode, SHIFT, deck): a held press always gets its release, even when
+    /// the layer it was pressed on no longer holds.
     pub fn hold_partner(self) -> Option<ActionKind> {
         match self {
             ActionKind::JogRelease => Some(ActionKind::JogTouch),
