@@ -47,8 +47,9 @@ impl Default for Config {
 pub struct SamplerConfig {
     /// Sampler volume, 0 to 1.
     pub volume: f32,
-    /// What pads 1 to 8 load, in order; pads past the end stay empty.
-    pub pads: Vec<PadSource>,
+    /// What pads 1 to 8 load, in order; `None` (a `{}` entry) and pads past the end stay
+    /// empty.
+    pub pads: Vec<Option<PadSource>>,
 }
 
 impl Default for SamplerConfig {
@@ -250,7 +251,11 @@ fn parse_sampler(table: &Table, file: &str, home: Option<&Path>) -> anyhow::Resu
     Ok(sampler)
 }
 
-fn parse_pads(value: &Value, file: &str, home: Option<&Path>) -> anyhow::Result<Vec<PadSource>> {
+fn parse_pads(
+    value: &Value,
+    file: &str,
+    home: Option<&Path>,
+) -> anyhow::Result<Vec<Option<PadSource>>> {
     let items = value
         .as_array()
         .ok_or_else(|| invalid(file, "sampler.pads", "expected an array of tables"))?;
@@ -270,7 +275,7 @@ fn parse_pads(value: &Value, file: &str, home: Option<&Path>) -> anyhow::Result<
                 invalid(
                     file,
                     &at,
-                    "expected a table like { file = \"...\" } or { track = 1 }",
+                    "expected a table like { file = \"...\" }, { track = 1 } or {}",
                 )
             })?;
             if let Some(key) = table
@@ -281,20 +286,20 @@ fn parse_pads(value: &Value, file: &str, home: Option<&Path>) -> anyhow::Result<
             }
             match (table.get("file"), table.get("track")) {
                 (Some(_), Some(_)) => Err(invalid(file, &at, "has both `file` and `track`")),
-                (None, None) => Err(invalid(file, &at, "needs `file` or `track`")),
+                (None, None) => Ok(None),
                 (Some(file_value), None) => {
                     let key = format!("{at}.file");
                     let text = file_value
                         .as_str()
                         .ok_or_else(|| invalid(file, &key, "expected a path string"))?;
                     expand_path(text, home)
-                        .map(PadSource::File)
+                        .map(|path| Some(PadSource::File(path)))
                         .map_err(|problem| invalid(file, &key, problem))
                 }
                 (None, Some(track)) => track
                     .as_integer()
                     .filter(|id| *id >= 0)
-                    .map(PadSource::Track)
+                    .map(|id| Some(PadSource::Track(id)))
                     .ok_or_else(|| {
                         invalid(
                             file,
@@ -374,8 +379,8 @@ pads = [0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8]
         assert_eq!(
             config.sampler.pads,
             [
-                PadSource::File(home().join("Samples/airhorn.wav")),
-                PadSource::Track(1234)
+                Some(PadSource::File(home().join("Samples/airhorn.wav"))),
+                Some(PadSource::Track(1234))
             ]
         );
         assert_eq!(
@@ -389,6 +394,15 @@ pads = [0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8]
         assert_eq!(
             config.loop_roll_pads,
             Some([0.0625, 0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0])
+        );
+    }
+
+    #[test]
+    fn an_empty_table_is_an_empty_pad() {
+        let config = parse_text("[sampler]\npads = [{}, {}, {}, {}, { track = 3 }]").unwrap();
+        assert_eq!(
+            config.sampler.pads,
+            [None, None, None, None, Some(PadSource::Track(3))]
         );
     }
 
@@ -412,10 +426,6 @@ pads = [0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8]
             (
                 "[sampler]\npads = [{ file = \"/a.wav\", track = 1 }]",
                 "config.toml: sampler.pads[0]: has both `file` and `track`",
-            ),
-            (
-                "[sampler]\npads = [{ file = \"/a.wav\" }, {}]",
-                "config.toml: sampler.pads[1]: needs `file` or `track`",
             ),
             (
                 "[sampler]\npads = [{ file = \"relative.wav\" }]",

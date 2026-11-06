@@ -58,22 +58,28 @@ pub struct Sample {
 /// (192 kHz), plus one frame so a sample just over the limit is seen as such.
 const MAX_PREFIX_FRAMES: usize = (MAX_SAMPLE_SECONDS as usize) * 192_000 + 1;
 
-/// Decodes every configured pad; a result's number is the pad's 0-based index. A `track` is
-/// read through `library`. A sample too long is refused without decoding all of it.
-pub fn load(
-    config: &SamplerConfig,
-    library: Option<&Reader>,
-) -> Vec<(usize, Result<Sample, SampleError>)> {
+/// Decodes every configured pad that is not empty, with the pad's 0-based index and source.
+/// A `track` is read through `library`: `Ok(None)` when there is none, `Err` with the reason
+/// when it could not be opened or read (each `track` pad then fails with that reason). A
+/// sample too long is refused without decoding all of it.
+pub fn load<'a>(
+    config: &'a SamplerConfig,
+    library: Result<Option<&Reader>, &str>,
+) -> Vec<(usize, &'a PadSource, Result<Sample, SampleError>)> {
     config
         .pads
         .iter()
         .enumerate()
+        .filter_map(|(index, source)| Some((index, source.as_ref()?)))
         .map(|(index, source)| {
             let loaded = match source {
                 PadSource::File(path) => load_file(path),
-                PadSource::Track(id) => load_track(*id, library),
+                PadSource::Track(id) => match library {
+                    Ok(library) => load_track(*id, library),
+                    Err(reason) => Err(SampleError::Library(reason.to_owned())),
+                },
             };
-            (index, loaded)
+            (index, source, loaded)
         })
         .collect()
 }
@@ -178,23 +184,23 @@ mod tests {
         let config = SamplerConfig {
             volume: 1.0,
             pads: vec![
-                PadSource::File(good),
-                PadSource::File(dir.path().join("missing.wav")),
-                PadSource::File(long),
-                PadSource::Track(999),
+                Some(PadSource::File(good)),
+                Some(PadSource::File(dir.path().join("missing.wav"))),
+                Some(PadSource::File(long)),
+                Some(PadSource::Track(999)),
             ],
         };
-        let loaded = load(&config, Some(&reader));
+        let loaded = load(&config, Ok(Some(&reader)));
         assert_eq!(loaded.len(), 4);
-        let buffer = &loaded[0].1.as_ref().unwrap().buffer;
+        let buffer = &loaded[0].2.as_ref().unwrap().buffer;
         assert_eq!(buffer.frames(), 2_000);
         assert_eq!(buffer.sample_rate(), 8_000);
 
         let lines: Vec<String> = loaded
             .iter()
-            .filter_map(|(index, result)| {
+            .filter_map(|(index, source, result)| {
                 let error = result.as_ref().err()?;
-                Some(failure_line(*index, &config.pads[*index], error))
+                Some(failure_line(*index, source, error))
             })
             .collect();
         assert_eq!(lines.len(), 3, "{lines:?}");
@@ -208,8 +214,45 @@ mod tests {
         );
 
         // A track id with no library at all.
-        let no_library = load(&config, None);
-        assert!(matches!(no_library[3].1, Err(SampleError::NoLibrary)));
+        let no_library = load(&config, Ok(None));
+        assert!(matches!(no_library[3].2, Err(SampleError::NoLibrary)));
+    }
+
+    #[test]
+    fn empty_pads_are_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = SamplerConfig {
+            volume: 1.0,
+            pads: vec![None, Some(PadSource::File(dir.path().join("missing.wav")))],
+        };
+        let loaded = load(&config, Ok(None));
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].0, 1, "pad 2");
+        assert!(matches!(loaded[0].2, Err(SampleError::MissingFile)));
+    }
+
+    #[test]
+    fn a_library_failure_fails_only_the_track_pads() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = SamplerConfig {
+            volume: 1.0,
+            pads: vec![
+                Some(PadSource::Track(7)),
+                Some(PadSource::File(dir.path().join("missing.wav"))),
+            ],
+        };
+        let loaded = load(&config, Err("disk I/O error\u{1b}[2J"));
+        let lines: Vec<String> = loaded
+            .iter()
+            .filter_map(|(index, source, result)| {
+                Some(failure_line(*index, source, result.as_ref().err()?))
+            })
+            .collect();
+        assert_eq!(
+            lines[0], "sampler pad 1 (track 7): library error: disk I/O error\u{fffd}[2J",
+            "{lines:?}"
+        );
+        assert!(lines[1].ends_with("): file not found"), "{lines:?}");
     }
 
     #[test]
@@ -228,10 +271,10 @@ mod tests {
         let reader = lib.reader().unwrap();
         let config = SamplerConfig {
             volume: 1.0,
-            pads: vec![PadSource::Track(5)],
+            pads: vec![Some(PadSource::Track(5))],
         };
-        let loaded = load(&config, Some(&reader));
-        let error = loaded[0].1.as_ref().unwrap_err();
+        let loaded = load(&config, Ok(Some(&reader)));
+        let error = loaded[0].2.as_ref().unwrap_err();
         assert!(matches!(error, SampleError::TooLong(_)), "{error}");
         assert!(
             error.to_string().contains("2267.6 s is too long"),
@@ -249,13 +292,13 @@ mod tests {
         std::fs::write(&path, &bytes[..44 + 8_000]).unwrap();
         let config = SamplerConfig {
             volume: 1.0,
-            pads: vec![PadSource::File(path)],
+            pads: vec![Some(PadSource::File(path))],
         };
-        let loaded = load(&config, None);
-        let sample = loaded[0].1.as_ref().unwrap();
+        let loaded = load(&config, Ok(None));
+        let sample = loaded[0].2.as_ref().unwrap();
         assert!(sample.truncated);
         assert!(sample.buffer.frames() > 0);
-        let line = truncated_line(0, &config.pads[0]);
+        let line = truncated_line(0, loaded[0].1);
         assert!(line.starts_with("sampler pad 1 ("), "{line}");
         assert!(line.contains("the file ended early"), "{line}");
     }
