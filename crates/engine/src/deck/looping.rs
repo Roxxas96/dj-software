@@ -10,7 +10,7 @@ pub(super) const MIN_LOOP_BEATS: f64 = 1.0 / 32.0;
 /// Longest loop length in beats.
 pub(super) const MAX_LOOP_BEATS: f64 = 64.0;
 /// Shortest loop in track frames, so wrapping never divides by zero.
-const MIN_LOOP_FRAMES: f64 = 1.0;
+pub(super) const MIN_LOOP_FRAMES: f64 = 1.0;
 
 impl Deck {
     pub(super) fn loop_in_press(&mut self) {
@@ -31,7 +31,7 @@ impl Deck {
             && self.position - start >= MIN_LOOP_FRAMES
         {
             if !self.loop_active {
-                self.slip_begin(SlipOwner::Loop, false);
+                self.slip_begin(SlipOwner::Loop);
             }
             self.loop_out = Some(self.position);
             self.loop_active = true;
@@ -49,7 +49,7 @@ impl Deck {
         if self.track.is_none() {
             return;
         }
-        self.slip_begin(SlipOwner::Loop, false);
+        self.slip_begin(SlipOwner::Loop);
         let beat = (grid.beats_at(self.position) + 1e-6).floor();
         let start = (grid.first_beat_frames + beat * grid.beat_period_frames).max(0.0);
         self.loop_in = Some(start);
@@ -95,7 +95,7 @@ impl Deck {
         if self.loop_active {
             self.exit_loop();
         } else if let (Some(start), Some(_)) = (self.loop_in, self.loop_out) {
-            self.slip_begin(SlipOwner::Loop, false);
+            self.slip_begin(SlipOwner::Loop);
             self.position = start;
             self.loop_active = true;
         }

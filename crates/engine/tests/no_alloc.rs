@@ -220,6 +220,23 @@ fn render_does_not_allocate() {
         DeckCommand::BeatJump { beats: 1.0 },
         DeckCommand::ReloopExit,
         DeckCommand::ReloopExit,
+        // Loop roll: press, replace, a stale release, a beat jump and the release.
+        DeckCommand::RollPress { beats: 0.5 },
+        DeckCommand::RollPress { beats: 1.0 / 16.0 },
+        DeckCommand::RollRelease { beats: 0.5 },
+        DeckCommand::BeatJump { beats: 2.0 },
+        DeckCommand::RollRelease { beats: 1.0 / 16.0 },
+        // Slicer inside a normal loop: press, move to another slice, release.
+        DeckCommand::AutoLoop,
+        DeckCommand::SlicePress(2),
+        DeckCommand::SlicePress(6),
+        DeckCommand::SliceRelease(2),
+        DeckCommand::SliceRelease(6),
+        DeckCommand::AutoLoop,
+        // A jump ends a held pad.
+        DeckCommand::SlicePress(1),
+        DeckCommand::Seek(40_000.0),
+        DeckCommand::SliceRelease(1),
     ] {
         c.send(Command::Deck(decks[0], cmd)).unwrap();
         render_blocks(10);

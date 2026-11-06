@@ -26,10 +26,8 @@ pub(super) enum SlipOwner {
     /// A hotcue pad is held after a jump.
     Hotcue(HotcueSlot),
     /// A loop roll pad is held; always slips.
-    #[cfg_attr(not(test), expect(dead_code, reason = "loop roll comes with Task 3"))]
     Roll,
     /// A slicer pad is held; always slips.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the slicer comes with Task 3"))]
     Slice,
 }
 
@@ -49,11 +47,12 @@ impl Deck {
         }
     }
 
-    /// Starts a ghost for `owner` at the playhead when slip is on or `forced`, and returns
-    /// whether `owner` now holds a ghost. One ghost runs at a time: while one runs, a
-    /// forced begin takes it over as it is (it still is where the track would be) and any
-    /// other begin does nothing.
-    pub(super) fn slip_begin(&mut self, owner: SlipOwner, forced: bool) -> bool {
+    /// Starts a ghost for `owner` at the playhead when slip is on or `owner` always slips
+    /// (a roll or slice), and returns whether `owner` now holds a ghost. One ghost runs at
+    /// a time: while one runs, a roll or slice takes it over as it is (it still is where the
+    /// track would be) and any other begin does nothing.
+    pub(super) fn slip_begin(&mut self, owner: SlipOwner) -> bool {
+        let forced = owner.forced();
         if let Some(ghost) = &mut self.ghost {
             if forced {
                 ghost.owner = owner;
@@ -82,9 +81,11 @@ impl Deck {
         }
     }
 
-    /// A deliberate jump wins over any slip: the ghost is dropped.
+    /// A deliberate jump wins over any slip: the ghost is dropped, and a held roll or slice
+    /// ends with it (its loop would hold the playhead away from the jump).
     pub(super) fn slip_drop(&mut self) {
         self.ghost = None;
+        self.roll = None;
     }
 
     /// The normal loop was deactivated, by request or by a jump outside it. The ghost stops
@@ -166,18 +167,18 @@ mod tests {
             (ghost.owner, ghost.position),
             (SlipOwner::Scratch, 51_000.0)
         );
-        assert!(deck.slip_begin(SlipOwner::Roll, true));
+        assert!(deck.slip_begin(SlipOwner::Roll));
         let ghost = deck.ghost.unwrap();
         assert_eq!((ghost.owner, ghost.position), (SlipOwner::Roll, 51_000.0));
         // A non-forced begin while a ghost runs changes nothing.
-        assert!(!deck.slip_begin(SlipOwner::Loop, false));
+        assert!(!deck.slip_begin(SlipOwner::Loop));
         assert_eq!(deck.ghost.unwrap().owner, SlipOwner::Roll);
     }
 
     #[test]
     fn only_the_owner_ends_the_ghost() {
         let mut deck = scratching_deck();
-        assert!(deck.slip_begin(SlipOwner::Slice, true));
+        assert!(deck.slip_begin(SlipOwner::Slice));
         render(&mut deck, 1000);
         let _ = deck.apply(DeckCommand::JogTouch(false));
         deck.slip_end(SlipOwner::Scratch);
@@ -193,7 +194,7 @@ mod tests {
         let mut deck = scratching_deck();
         let _ = deck.apply(DeckCommand::SetSlip(false));
         assert_eq!(deck.ghost, None, "the scratch's ghost is dropped");
-        assert!(deck.slip_begin(SlipOwner::Roll, true));
+        assert!(deck.slip_begin(SlipOwner::Roll));
         let _ = deck.apply(DeckCommand::SetSlip(false));
         assert_eq!(deck.ghost.map(|g| g.owner), Some(SlipOwner::Roll));
     }
