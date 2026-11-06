@@ -470,3 +470,156 @@ fn pad_mode_on_a_deck_binding_scopes_to_its_side() {
     assert_eq!(binding.pad_mode, Some(PadMode::BeatJump));
     assert_eq!(binding.side(), Some(Side::Right));
 }
+
+fn parse_inputs(body: &str) -> Vec<InputBinding> {
+    let text = format!("[controller]\nname = \"X\"\nport = \"X\"\n\n{body}\n");
+    parse_mapping("range.toml", &text).unwrap().inputs
+}
+
+#[test]
+fn note_range_expands_with_n() {
+    let inputs = parse_inputs(
+        r#"
+[[input]]
+midi = { channel = 8, notes = [0x00, 0x07] }
+action = "deck.hotcue_{n}"
+side = "left"
+pad_mode = "hardware"
+"#,
+    );
+    assert_eq!(inputs.len(), 8);
+    for (i, binding) in inputs.iter().enumerate() {
+        assert_eq!(
+            binding.midi,
+            MidiSource::Note {
+                channel: 7,
+                note: i as u8
+            }
+        );
+        assert_eq!(
+            binding.kind,
+            ActionKind::from_id(&format!("deck.hotcue_{}", i + 1)).unwrap()
+        );
+    }
+}
+
+#[test]
+fn range_keeps_other_keys_and_order() {
+    let inputs = parse_inputs(
+        r#"
+[[input]]
+midi = { channel = 1, note = 0x0B }
+action = "deck.play_pause"
+side = "left"
+
+[[input]]
+midi = { channel = 9, notes = [0x38, 0x3A] }
+action = "sampler.stop_{n}"
+side = "right"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 1, note = 0x0C }
+action = "deck.cue"
+side = "left"
+"#,
+    );
+    let notes: Vec<u8> = inputs
+        .iter()
+        .map(|b| match b.midi {
+            MidiSource::Note { note, .. } => note,
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(notes, [0x0B, 0x38, 0x39, 0x3A, 0x0C]);
+    for binding in &inputs[1..4] {
+        assert_eq!(binding.pad_scope, Some(Side::Right));
+        assert_eq!(binding.pad_mode, Some(PadMode::Hardware));
+        assert_eq!(binding.value, ValueKind::Button);
+    }
+    assert_eq!(
+        inputs[1].kind,
+        ActionKind::from_id("sampler.stop_1").unwrap()
+    );
+    assert_eq!(
+        inputs[3].kind,
+        ActionKind::from_id("sampler.stop_3").unwrap()
+    );
+}
+
+#[test]
+fn bad_note_ranges_are_errors() {
+    let cases = [
+        (
+            "midi = { channel = 1, notes = [0, 7], note = 3 }\naction = \"deck.hotcue_{n}\"\nside = \"left\"",
+            "can't be combined",
+        ),
+        (
+            "midi = { channel = 1, notes = [0, 7], cc = 3 }\naction = \"deck.hotcue_{n}\"\nside = \"left\"",
+            "can't be combined",
+        ),
+        (
+            "midi = { channel = 1, notes = [7, 0] }\naction = \"deck.hotcue_{n}\"\nside = \"left\"",
+            "reversed",
+        ),
+        (
+            "midi = { channel = 1, notes = [0, 128] }\naction = \"deck.hotcue_{n}\"\nside = \"left\"",
+            "above 127",
+        ),
+        (
+            "midi = { channel = 1, notes = [-1, 7] }\naction = \"deck.hotcue_{n}\"\nside = \"left\"",
+            "negative",
+        ),
+        (
+            "midi = { channel = 1, notes = [0, 1, 2] }\naction = \"deck.hotcue_{n}\"\nside = \"left\"",
+            "two integers",
+        ),
+        (
+            "midi = { channel = 1, note = 3 }\naction = \"deck.hotcue_{n}\"\nside = \"left\"",
+            "`{n}`",
+        ),
+        (
+            "midi = { channel = 1, notes = [0, 8] }\naction = \"deck.hotcue_{n}\"\nside = \"left\"",
+            "input[0] (note 0x08): unknown action `deck.hotcue_9`",
+        ),
+    ];
+    for (body, expected) in cases {
+        let text = format!("[controller]\nname = \"X\"\nport = \"X\"\n\n[[input]]\n{body}\n");
+        let err = parse_mapping("bad.toml", &text).unwrap_err().to_string();
+        assert!(
+            err.contains("input[0]") && err.contains(expected),
+            "{body}: {err}"
+        );
+    }
+}
+
+#[test]
+fn expanded_binding_errors_name_the_note() {
+    let text = "[controller]\nname = \"X\"\nport = \"X\"\n\n[[input]]\nmidi = { channel = 1, notes = [2, 4] }\naction = \"deck.hotcue_{n}\"\nside = \"left\"\nvalue = \"absolute\"\n";
+    let err = parse_mapping("bad.toml", text).unwrap_err().to_string();
+    assert!(err.contains("input[0] (note 0x02):"), "{err}");
+}
+
+#[test]
+fn sb3_mapping_expands_to_the_same_bindings() {
+    let text = include_str!("../../../controllers/ddj-sb3/mapping.toml");
+    let mapping = parse_mapping("sb3.toml", text).unwrap();
+    let mut actual: Vec<String> = mapping
+        .inputs
+        .iter()
+        .map(|b| {
+            format!(
+                "{:?} | {:?} | {:?} | {:?} | {:?}",
+                b.midi, b.kind, b.target, b.pad_mode, b.shift
+            )
+        })
+        .collect();
+    let mut expected: Vec<String> = include_str!("fixtures/sb3_inputs.txt")
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    actual.sort();
+    expected.sort();
+    assert_eq!(actual.len(), expected.len());
+    assert_eq!(actual, expected);
+}
