@@ -4,7 +4,7 @@ use rtrb::{Consumer, Producer};
 use thiserror::Error;
 
 use crate::shared::Shared;
-use crate::{Command, DeckId, DeckSnapshot, Meters, TrackBuffer};
+use crate::{Command, DeckId, DeckSnapshot, Meters, SamplerSnapshot, TrackBuffer};
 
 /// The command queue to the audio thread is full; the command was not sent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -79,5 +79,10 @@ impl EngineController {
     /// Peak levels of the last rendered block.
     pub fn meters(&self) -> Meters {
         self.shared.load_meters()
+    }
+
+    /// Which sampler slots were playing at the last rendered block (for display).
+    pub fn sampler(&self) -> SamplerSnapshot {
+        self.shared.load_sampler()
     }
 }

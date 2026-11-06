@@ -8,6 +8,7 @@ pub enum Command {
     Deck(DeckId, DeckCommand),
     Channel(DeckId, ChannelCommand),
     Master(MasterCommand),
+    Sampler(SamplerCommand),
     /// Aligns `deck`'s beat phase to `master`'s: moves the playhead by the smallest amount, at
     /// most half a beat, so that the fraction of its beat position equals the fraction of the
     /// master's beat position times `beat_ratio` (the deck's beats per master beat: 1, 2 or
@@ -220,4 +221,24 @@ pub enum MasterCommand {
     HeadphoneLevel(f32),
     /// 0.0 is cue only, 1.0 master only.
     HeadphoneMix(f32),
+    /// Turns the crossfader on or off (on for a new engine). While off, every channel's
+    /// crossfader gain is 1.0 whatever its assignment or the crossfader position; turning
+    /// it on again restores the gains from the current position.
+    CrossfaderEnabled(bool),
+}
+
+/// Sampler commands. A slot index `>= SAMPLER_SLOTS` is ignored.
+#[derive(Debug, Clone)]
+pub enum SamplerCommand {
+    /// Puts a sample in a slot (`None` empties it), stopping what the slot was playing. A
+    /// replaced buffer goes back to the controller to be freed, like a track.
+    Set(usize, Option<Arc<TrackBuffer>>),
+    /// Plays the slot's sample from the start, restarting it if it is playing. An empty
+    /// slot does nothing.
+    Play(usize),
+    /// Stops the slot.
+    Stop(usize),
+    /// Sampler volume in `[0, 1]` (clamped, 1.0 for a new engine); the engine owns the
+    /// curve ([`level_gain`](crate::mixer::level_gain)). Non-finite values are ignored.
+    Volume(f32),
 }

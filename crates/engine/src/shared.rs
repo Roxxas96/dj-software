@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering, fence};
 
-use crate::{DeckId, Grid, HOTCUES};
+use crate::{DeckId, Grid, HOTCUES, SAMPLER_SLOTS, SamplerSnapshot};
 
 /// A deck's state as last published by the renderer.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -105,6 +105,7 @@ pub(crate) struct Shared {
     decks: [DeckShared; DeckId::ALL.len()],
     channel_peak: [AtomicU32; DeckId::ALL.len()],
     master_peak: [AtomicU32; 2],
+    sampler_playing: [AtomicBool; SAMPLER_SLOTS],
 }
 
 impl Shared {
@@ -123,6 +124,21 @@ impl Shared {
     pub(crate) fn store_meters(&self, meters: &Meters) {
         store_f32s(&self.channel_peak, &meters.channel_peak);
         store_f32s(&self.master_peak, &meters.master_peak);
+    }
+
+    pub(crate) fn store_sampler(&self, snapshot: &SamplerSnapshot) {
+        for (atomic, playing) in self.sampler_playing.iter().zip(snapshot.playing) {
+            atomic.store(playing, Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) fn load_sampler(&self) -> SamplerSnapshot {
+        SamplerSnapshot {
+            playing: self
+                .sampler_playing
+                .each_ref()
+                .map(|a| a.load(Ordering::Relaxed)),
+        }
     }
 
     pub(crate) fn load_meters(&self) -> Meters {

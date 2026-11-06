@@ -12,16 +12,19 @@ mod ids;
 mod memory;
 pub mod mixer;
 mod renderer;
+mod sampler;
 mod shared;
 mod track;
 
 pub use command::{
-    ChannelCommand, Command, DeckCommand, JogSurface, MasterCommand, TempoRange, XfaderAssign,
+    ChannelCommand, Command, DeckCommand, JogSurface, MasterCommand, SamplerCommand, TempoRange,
+    XfaderAssign,
 };
 pub use controller::{CommandQueueFull, EngineController};
 pub use ids::DeckId;
 pub use memory::{Grid, HOTCUES, HotcueSlot, TrackMemory};
 pub use renderer::EngineRenderer;
+pub use sampler::{SAMPLER_SLOTS, SamplerSnapshot};
 pub use shared::{DeckSnapshot, Meters};
 pub use track::{TrackBuffer, TrackError};
 
