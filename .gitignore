@@ -1,2 +1,5 @@
 .superpowers/
 /target
+
+# Raw MIDI recordings (large); commit condensed versions instead
+controllers/*/*.log
