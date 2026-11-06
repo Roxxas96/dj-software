@@ -25,6 +25,11 @@ struct Rig {
 impl Rig {
     /// An engine with a constant track loaded on deck 1, and a default control state.
     fn new() -> Self {
+        Self::with_memory(engine::TrackMemory::default())
+    }
+
+    /// The same with `memory` loaded along with the track.
+    fn with_memory(memory: engine::TrackMemory) -> Self {
         let (mut c, r) = engine(EngineConfig {
             sample_rate: SR,
             max_block_frames: BLOCK,
@@ -32,10 +37,7 @@ impl Rig {
         let track = Arc::new(TrackBuffer::new(SR, vec![0.5; 200_000 * 2]).unwrap());
         c.send(engine::Command::Deck(
             d(0),
-            engine::DeckCommand::Load {
-                track,
-                memory: engine::TrackMemory::default(),
-            },
+            engine::DeckCommand::Load { track, memory },
         ))
         .unwrap();
         let mut rig = Self {
@@ -141,6 +143,59 @@ fn ids_round_trip_for_every_action() {
         "deck.jog_top",
         "deck.jog_ring",
         "deck.jog_search",
+        "deck.beat_jump_1",
+        "deck.beat_jump_2",
+        "deck.beat_jump_3",
+        "deck.beat_jump_4",
+        "deck.beat_jump_5",
+        "deck.beat_jump_6",
+        "deck.beat_jump_7",
+        "deck.beat_jump_8",
+        "deck.beat_jump_shift_1",
+        "deck.beat_jump_shift_2",
+        "deck.beat_jump_shift_3",
+        "deck.beat_jump_shift_4",
+        "deck.beat_jump_shift_5",
+        "deck.beat_jump_shift_6",
+        "deck.beat_jump_shift_7",
+        "deck.beat_jump_shift_8",
+        "deck.loop_roll_1",
+        "deck.loop_roll_2",
+        "deck.loop_roll_3",
+        "deck.loop_roll_4",
+        "deck.loop_roll_5",
+        "deck.loop_roll_6",
+        "deck.loop_roll_7",
+        "deck.loop_roll_8",
+        "deck.slice_1",
+        "deck.slice_2",
+        "deck.slice_3",
+        "deck.slice_4",
+        "deck.slice_5",
+        "deck.slice_6",
+        "deck.slice_7",
+        "deck.slice_8",
+        "deck.slip_toggle",
+        "sampler.play_1",
+        "sampler.play_2",
+        "sampler.play_3",
+        "sampler.play_4",
+        "sampler.play_5",
+        "sampler.play_6",
+        "sampler.play_7",
+        "sampler.play_8",
+        "sampler.stop_1",
+        "sampler.stop_2",
+        "sampler.stop_3",
+        "sampler.stop_4",
+        "sampler.stop_5",
+        "sampler.stop_6",
+        "sampler.stop_7",
+        "sampler.stop_8",
+        "pads.mode_hardware",
+        "pads.mode_beat_jump",
+        "pads.mode_loop_roll",
+        "pads.mode_slicer",
     ];
     let ids: HashSet<_> = ActionKind::ALL.iter().map(|k| k.id()).collect();
     assert_eq!(ids, expected.into_iter().collect::<HashSet<_>>());
@@ -151,7 +206,7 @@ fn ids_round_trip_for_every_action() {
         assert_eq!(ActionKind::from_id(kind.id()), Some(kind));
         let target = match kind.id().split('.').next().unwrap() {
             "deck" | "channel" => Target::Deck(d(2)),
-            "side" | "modifier" => Target::Side(Side::Right),
+            "side" | "modifier" | "pads" => Target::Side(Side::Right),
             _ => Target::Global,
         };
         let action = Action::new(kind, target).unwrap();
@@ -169,7 +224,7 @@ fn ids_round_trip_for_every_action() {
         .into_iter()
         .filter(|k| k.takes_release())
         .collect();
-    assert_eq!(ActionKind::ALL.len(), 58);
+    assert_eq!(ActionKind::ALL.len(), 111);
     let hotcue = |n| ActionKind::Hotcue(HotcueSlot::new(n).unwrap());
     let hotcue_delete = |n| ActionKind::HotcueDelete(HotcueSlot::new(n).unwrap());
     let mut expected_release = vec![
@@ -180,11 +235,13 @@ fn ids_round_trip_for_every_action() {
     expected_release.extend((1..=8).map(hotcue));
     expected_release.extend((1..=8).map(hotcue_delete));
     expected_release.extend([ActionKind::JogTouch, ActionKind::JogRelease]);
+    expected_release.extend((1..=8).map(|n| ActionKind::LoopRoll(slot(n))));
+    expected_release.extend((1..=8).map(|n| ActionKind::Slice(slot(n))));
     assert_eq!(
         with_release.iter().collect::<HashSet<_>>(),
         expected_release.iter().collect::<HashSet<_>>()
     );
-    assert_eq!(with_release.len(), 21);
+    assert_eq!(with_release.len(), 37);
     for kind in [
         ActionKind::JogTop,
         ActionKind::JogRing,
@@ -1118,4 +1175,138 @@ fn sync_updates_control_state_tempo() {
     other.load_grid(0, 128.0, false);
     other.apply(deck_action(ActionKind::Tempo, 0), Input::Absolute(tempo));
     assert_eq!(other.ratio(0), rig.ratio(0));
+}
+
+/// 120 BPM, first beat at frame 0.
+fn grid_memory() -> engine::TrackMemory {
+    engine::TrackMemory {
+        grid: engine::Grid::from_bpm(120.0, 0.0, SR),
+        ..engine::TrackMemory::default()
+    }
+}
+
+#[test]
+fn pad_mode_actions_set_the_side_mode() {
+    use actions::PadMode;
+    let mut rig = Rig::new();
+    assert_eq!(rig.state.side(Side::Left).pad_mode, PadMode::Hardware);
+    for mode in PadMode::ALL {
+        let kind = ActionKind::PadMode(mode);
+        assert_eq!(kind.id(), format!("pads.mode_{}", mode.id()));
+        let action = Action::new(kind, Target::Side(Side::Left)).unwrap();
+        assert_eq!(rig.apply(action, Input::Press), ApplyResult::Sent(0));
+        assert_eq!(rig.state.side(Side::Left).pad_mode, mode);
+        assert_eq!(rig.state.side(Side::Right).pad_mode, PadMode::Hardware);
+        assert_eq!(rig.apply(action, Input::Release), ApplyResult::Ignored);
+        assert_eq!(PadMode::from_id(mode.id()), Some(mode));
+    }
+    assert_eq!(PadMode::from_id("nope"), None);
+}
+
+#[test]
+fn defaults_hold_the_pad_sizes() {
+    let s = ControlState::default();
+    assert_eq!(
+        s.beat_jump_pads,
+        [-4.0, 4.0, -8.0, 8.0, -16.0, 16.0, -32.0, 32.0]
+    );
+    assert_eq!(
+        s.beat_jump_shift_pads,
+        [-1.0, 1.0, -2.0, 2.0, -4.0, 4.0, -64.0, 64.0]
+    );
+    assert_eq!(
+        s.loop_roll_pads,
+        [0.0625, 0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0]
+    );
+}
+
+#[test]
+fn beat_jump_uses_the_configured_sizes() {
+    let mut rig = Rig::with_memory(grid_memory());
+    let beat = 22_050.0;
+    let seek = Action::new(ActionKind::ReturnToStart, Target::Deck(d(0))).unwrap();
+    rig.apply(seek, Input::Press);
+    let jump = |n| deck_action(ActionKind::BeatJump(slot(n)), 0);
+    let shift_jump = |n| deck_action(ActionKind::BeatJumpShift(slot(n)), 0);
+
+    // Pad 2 jumps 4 beats forward by default, the shifted pad 2 one beat.
+    assert_eq!(rig.apply(jump(2), Input::Press), ApplyResult::Sent(1));
+    assert_eq!(rig.c.deck(d(0)).position_frames, 4.0 * beat);
+    assert_eq!(rig.apply(shift_jump(2), Input::Press), ApplyResult::Sent(1));
+    assert_eq!(rig.c.deck(d(0)).position_frames, 5.0 * beat);
+    // Releases are ignored.
+    assert_eq!(rig.apply(jump(2), Input::Release), ApplyResult::Ignored);
+
+    rig.state.beat_jump_pads[0] = -2.0;
+    rig.state.beat_jump_shift_pads[0] = 0.5;
+    rig.apply(jump(1), Input::Press);
+    assert_eq!(rig.c.deck(d(0)).position_frames, 3.0 * beat);
+    rig.apply(shift_jump(1), Input::Press);
+    assert_eq!(rig.c.deck(d(0)).position_frames, 3.5 * beat);
+}
+
+#[test]
+fn roll_and_slice_send_press_and_release() {
+    let mut rig = Rig::with_memory(grid_memory());
+    rig.apply(deck_action(ActionKind::PlayPause, 0), Input::Press);
+    rig.render(4096);
+
+    let roll = deck_action(ActionKind::LoopRoll(slot(5)), 0);
+    assert_eq!(rig.apply(roll, Input::Press), ApplyResult::Sent(1));
+    assert!(rig.c.deck(d(0)).roll_active);
+    // A release of another size does not end the roll.
+    let other = deck_action(ActionKind::LoopRoll(slot(6)), 0);
+    rig.apply(other, Input::Release);
+    assert!(rig.c.deck(d(0)).roll_active);
+    assert_eq!(rig.apply(roll, Input::Release), ApplyResult::Sent(1));
+    assert!(!rig.c.deck(d(0)).roll_active);
+
+    let slice = deck_action(ActionKind::Slice(slot(3)), 0);
+    assert_eq!(rig.apply(slice, Input::Press), ApplyResult::Sent(1));
+    assert!(rig.c.deck(d(0)).roll_active);
+    assert_eq!(rig.apply(slice, Input::Release), ApplyResult::Sent(1));
+    assert!(!rig.c.deck(d(0)).roll_active);
+}
+
+#[test]
+fn roll_and_slice_are_their_own_hold_partner() {
+    for n in 1..=8 {
+        for kind in [ActionKind::LoopRoll(slot(n)), ActionKind::Slice(slot(n))] {
+            assert_eq!(kind.hold_partner(), Some(kind));
+        }
+        assert_eq!(ActionKind::BeatJump(slot(n)).hold_partner(), None);
+    }
+}
+
+#[test]
+fn slip_toggle_reads_the_snapshot() {
+    let mut rig = Rig::new();
+    let slip = deck_action(ActionKind::SlipToggle, 0);
+    assert!(!rig.c.deck(d(0)).slip);
+    assert_eq!(rig.apply(slip, Input::Press), ApplyResult::Sent(1));
+    assert!(rig.c.deck(d(0)).slip);
+    assert_eq!(rig.apply(slip, Input::Press), ApplyResult::Sent(1));
+    assert!(!rig.c.deck(d(0)).slip);
+    assert_eq!(rig.apply(slip, Input::Release), ApplyResult::Ignored);
+}
+
+#[test]
+fn sampler_actions_send_slot_commands() {
+    let mut rig = Rig::new();
+    let track = Arc::new(TrackBuffer::new(SR, vec![0.5; 100_000 * 2]).unwrap());
+    rig.c
+        .send(engine::Command::Sampler(engine::SamplerCommand::Set(
+            2,
+            Some(track),
+        )))
+        .unwrap();
+    rig.render(1);
+    let play = global_action(ActionKind::SamplerPlay(slot(3)));
+    let stop = global_action(ActionKind::SamplerStop(slot(3)));
+    assert_eq!(rig.apply(play, Input::Press), ApplyResult::Sent(1));
+    assert!(rig.c.sampler().playing[2]);
+    assert!(!rig.c.sampler().playing[0]);
+    assert_eq!(rig.apply(stop, Input::Press), ApplyResult::Sent(1));
+    assert!(!rig.c.sampler().playing[2]);
+    assert_eq!(rig.apply(play, Input::Release), ApplyResult::Ignored);
 }

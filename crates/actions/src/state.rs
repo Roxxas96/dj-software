@@ -34,6 +34,41 @@ impl Default for DeckControl {
     }
 }
 
+/// What a side's performance pads do. The hardware mode leaves the pads to the controller's
+/// own modes; the others make the mapping's pad-mode bindings for that side apply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum PadMode {
+    #[default]
+    Hardware,
+    BeatJump,
+    LoopRoll,
+    Slicer,
+}
+
+impl PadMode {
+    /// Every mode.
+    pub const ALL: [PadMode; 4] = [
+        PadMode::Hardware,
+        PadMode::BeatJump,
+        PadMode::LoopRoll,
+        PadMode::Slicer,
+    ];
+
+    /// The id used in mapping files.
+    pub fn id(self) -> &'static str {
+        match self {
+            PadMode::Hardware => "hardware",
+            PadMode::BeatJump => "beat_jump",
+            PadMode::LoopRoll => "loop_roll",
+            PadMode::Slicer => "slicer",
+        }
+    }
+
+    pub fn from_id(id: &str) -> Option<PadMode> {
+        Self::ALL.into_iter().find(|mode| mode.id() == id)
+    }
+}
+
 /// One side of the controller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SideControl {
@@ -41,6 +76,8 @@ pub struct SideControl {
     pub active_deck: DeckId,
     /// SHIFT is held.
     pub shift: bool,
+    /// What the side's performance pads do.
+    pub pad_mode: PadMode,
 }
 
 /// The app-side model of everything controls have set. [`crate::apply`] updates it only
@@ -60,7 +97,30 @@ pub struct ControlState {
     /// Jog wheel steps that make one turn of the platter. The controller runtime sets it
     /// from the mapping.
     pub jog_steps_per_turn: u16,
+    /// Beats the beat jump pads 1 to 8 move the playhead (negative is backwards). The
+    /// config sets them.
+    pub beat_jump_pads: [f64; 8],
+    /// The same with SHIFT held.
+    pub beat_jump_shift_pads: [f64; 8],
+    /// Beats the loop roll pads 1 to 8 roll.
+    pub loop_roll_pads: [f64; 8],
 }
+
+/// The default [`ControlState::beat_jump_pads`].
+const DEFAULT_BEAT_JUMP_PADS: [f64; 8] = [-4.0, 4.0, -8.0, 8.0, -16.0, 16.0, -32.0, 32.0];
+/// The default [`ControlState::beat_jump_shift_pads`].
+const DEFAULT_BEAT_JUMP_SHIFT_PADS: [f64; 8] = [-1.0, 1.0, -2.0, 2.0, -4.0, 4.0, -64.0, 64.0];
+/// The default [`ControlState::loop_roll_pads`].
+const DEFAULT_LOOP_ROLL_PADS: [f64; 8] = [
+    1.0 / 16.0,
+    1.0 / 8.0,
+    1.0 / 4.0,
+    1.0 / 2.0,
+    1.0,
+    2.0,
+    4.0,
+    8.0,
+];
 
 /// The default [`ControlState::jog_steps_per_turn`].
 const DEFAULT_JOG_STEPS_PER_TURN: u16 = 720;
@@ -73,6 +133,7 @@ impl Default for ControlState {
             sides: Side::ALL.map(|side| SideControl {
                 active_deck: side.decks()[0],
                 shift: false,
+                pad_mode: PadMode::Hardware,
             }),
             crossfader: 0.5,
             master_level: 0.8,
@@ -80,6 +141,9 @@ impl Default for ControlState {
             headphone_mix: 0.0,
             headphone_master: false,
             jog_steps_per_turn: DEFAULT_JOG_STEPS_PER_TURN,
+            beat_jump_pads: DEFAULT_BEAT_JUMP_PADS,
+            beat_jump_shift_pads: DEFAULT_BEAT_JUMP_SHIFT_PADS,
+            loop_roll_pads: DEFAULT_LOOP_ROLL_PADS,
         }
     }
 }

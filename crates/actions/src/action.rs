@@ -1,5 +1,7 @@
 use engine::{DeckId, HotcueSlot};
 
+use crate::PadMode;
+
 /// One half of the controller. Decks 1 and 3 sit on the left, decks 2 and 4 on the right.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Side {
@@ -135,6 +137,20 @@ pub enum ActionKind {
     JogTop,
     JogRing,
     JogSearch,
+    /// Sets the side's [`PadMode`]; no engine command.
+    PadMode(PadMode),
+    /// Beat jump pad `slot`, by the size in `ControlState::beat_jump_pads`.
+    BeatJump(HotcueSlot),
+    /// Beat jump pad `slot`, by the size in `ControlState::beat_jump_shift_pads`.
+    BeatJumpShift(HotcueSlot),
+    /// Loop roll pad `slot`: held, by the size in `ControlState::loop_roll_pads`.
+    LoopRoll(HotcueSlot),
+    /// Slicer pad `slot`: held, plays that slice.
+    Slice(HotcueSlot),
+    SlipToggle,
+    /// Plays sampler slot `slot` (the sampler has as many slots as there are pads).
+    SamplerPlay(HotcueSlot),
+    SamplerStop(HotcueSlot),
 }
 
 /// Ids of [`ActionKind::Hotcue`], by slot index.
@@ -161,10 +177,82 @@ const HOTCUE_DELETE_IDS: [&str; 8] = [
     "deck.hotcue_delete_8",
 ];
 
+/// Ids of [`ActionKind::BeatJump`], by slot index.
+const BEAT_JUMP_IDS: [&str; 8] = [
+    "deck.beat_jump_1",
+    "deck.beat_jump_2",
+    "deck.beat_jump_3",
+    "deck.beat_jump_4",
+    "deck.beat_jump_5",
+    "deck.beat_jump_6",
+    "deck.beat_jump_7",
+    "deck.beat_jump_8",
+];
+
+/// Ids of [`ActionKind::BeatJumpShift`], by slot index.
+const BEAT_JUMP_SHIFT_IDS: [&str; 8] = [
+    "deck.beat_jump_shift_1",
+    "deck.beat_jump_shift_2",
+    "deck.beat_jump_shift_3",
+    "deck.beat_jump_shift_4",
+    "deck.beat_jump_shift_5",
+    "deck.beat_jump_shift_6",
+    "deck.beat_jump_shift_7",
+    "deck.beat_jump_shift_8",
+];
+
+/// Ids of [`ActionKind::LoopRoll`], by slot index.
+const LOOP_ROLL_IDS: [&str; 8] = [
+    "deck.loop_roll_1",
+    "deck.loop_roll_2",
+    "deck.loop_roll_3",
+    "deck.loop_roll_4",
+    "deck.loop_roll_5",
+    "deck.loop_roll_6",
+    "deck.loop_roll_7",
+    "deck.loop_roll_8",
+];
+
+/// Ids of [`ActionKind::Slice`], by slot index.
+const SLICE_IDS: [&str; 8] = [
+    "deck.slice_1",
+    "deck.slice_2",
+    "deck.slice_3",
+    "deck.slice_4",
+    "deck.slice_5",
+    "deck.slice_6",
+    "deck.slice_7",
+    "deck.slice_8",
+];
+
+/// Ids of [`ActionKind::SamplerPlay`], by slot index.
+const SAMPLER_PLAY_IDS: [&str; 8] = [
+    "sampler.play_1",
+    "sampler.play_2",
+    "sampler.play_3",
+    "sampler.play_4",
+    "sampler.play_5",
+    "sampler.play_6",
+    "sampler.play_7",
+    "sampler.play_8",
+];
+
+/// Ids of [`ActionKind::SamplerStop`], by slot index.
+const SAMPLER_STOP_IDS: [&str; 8] = [
+    "sampler.stop_1",
+    "sampler.stop_2",
+    "sampler.stop_3",
+    "sampler.stop_4",
+    "sampler.stop_5",
+    "sampler.stop_6",
+    "sampler.stop_7",
+    "sampler.stop_8",
+];
+
 impl ActionKind {
-    /// Every kind: both hotcue families once per slot.
-    pub const ALL: [ActionKind; 58] = {
-        let mut all = [ActionKind::PlayPause; 58];
+    /// Every kind: each slot family (hotcues, beat jumps, rolls, slices, sampler) once per slot.
+    pub const ALL: [ActionKind; 111] = {
+        let mut all = [ActionKind::PlayPause; 111];
         let fixed = [
             ActionKind::PlayPause,
             ActionKind::Cue,
@@ -208,6 +296,11 @@ impl ActionKind {
             ActionKind::JogTop,
             ActionKind::JogRing,
             ActionKind::JogSearch,
+            ActionKind::PadMode(PadMode::Hardware),
+            ActionKind::PadMode(PadMode::BeatJump),
+            ActionKind::PadMode(PadMode::LoopRoll),
+            ActionKind::PadMode(PadMode::Slicer),
+            ActionKind::SlipToggle,
         ];
         let mut i = 0;
         while i < fixed.len() {
@@ -216,8 +309,16 @@ impl ActionKind {
         }
         let mut slot = 0;
         while slot < HotcueSlot::ALL.len() {
-            all[fixed.len() + slot] = ActionKind::Hotcue(HotcueSlot::ALL[slot]);
-            all[fixed.len() + 8 + slot] = ActionKind::HotcueDelete(HotcueSlot::ALL[slot]);
+            let s = HotcueSlot::ALL[slot];
+            let at = fixed.len() + slot;
+            all[at] = ActionKind::Hotcue(s);
+            all[at + 8] = ActionKind::HotcueDelete(s);
+            all[at + 16] = ActionKind::BeatJump(s);
+            all[at + 24] = ActionKind::BeatJumpShift(s);
+            all[at + 32] = ActionKind::LoopRoll(s);
+            all[at + 40] = ActionKind::Slice(s);
+            all[at + 48] = ActionKind::SamplerPlay(s);
+            all[at + 56] = ActionKind::SamplerStop(s);
             slot += 1;
         }
         all
@@ -270,6 +371,17 @@ impl ActionKind {
             ActionKind::JogTop => "deck.jog_top",
             ActionKind::JogRing => "deck.jog_ring",
             ActionKind::JogSearch => "deck.jog_search",
+            ActionKind::PadMode(PadMode::Hardware) => "pads.mode_hardware",
+            ActionKind::PadMode(PadMode::BeatJump) => "pads.mode_beat_jump",
+            ActionKind::PadMode(PadMode::LoopRoll) => "pads.mode_loop_roll",
+            ActionKind::PadMode(PadMode::Slicer) => "pads.mode_slicer",
+            ActionKind::BeatJump(slot) => BEAT_JUMP_IDS[slot.index()],
+            ActionKind::BeatJumpShift(slot) => BEAT_JUMP_SHIFT_IDS[slot.index()],
+            ActionKind::LoopRoll(slot) => LOOP_ROLL_IDS[slot.index()],
+            ActionKind::Slice(slot) => SLICE_IDS[slot.index()],
+            ActionKind::SlipToggle => "deck.slip_toggle",
+            ActionKind::SamplerPlay(slot) => SAMPLER_PLAY_IDS[slot.index()],
+            ActionKind::SamplerStop(slot) => SAMPLER_STOP_IDS[slot.index()],
         }
     }
 
@@ -314,6 +426,11 @@ impl ActionKind {
             | ActionKind::JogSearch
             | ActionKind::Hotcue(_)
             | ActionKind::HotcueDelete(_)
+            | ActionKind::BeatJump(_)
+            | ActionKind::BeatJumpShift(_)
+            | ActionKind::LoopRoll(_)
+            | ActionKind::Slice(_)
+            | ActionKind::SlipToggle
             | ActionKind::LoadSelected => Scope::Deck,
             ActionKind::Crossfader
             | ActionKind::MasterLevel
@@ -321,8 +438,10 @@ impl ActionKind {
             | ActionKind::HeadphoneMix
             | ActionKind::HeadphoneMasterToggle
             | ActionKind::BrowserScroll
-            | ActionKind::BrowserToggleFocus => Scope::Global,
-            ActionKind::DeckToggle | ActionKind::Shift => Scope::Side,
+            | ActionKind::BrowserToggleFocus
+            | ActionKind::SamplerPlay(_)
+            | ActionKind::SamplerStop(_) => Scope::Global,
+            ActionKind::DeckToggle | ActionKind::Shift | ActionKind::PadMode(_) => Scope::Side,
         }
     }
 
@@ -378,6 +497,8 @@ impl ActionKind {
                 | ActionKind::Hotcue(_)
                 | ActionKind::JogTouch
                 | ActionKind::JogRelease
+                | ActionKind::LoopRoll(_)
+                | ActionKind::Slice(_)
         )
     }
 
@@ -385,12 +506,16 @@ impl ActionKind {
     /// control: a controller that sends a different note with SHIFT held sends the
     /// note-off there when SHIFT goes down during the hold. `deck.jog_release` ends
     /// `deck.jog_touch`, `deck.hotcue_delete_N` ends `deck.hotcue_N` (same slot) and
-    /// `deck.return_to_start` ends `deck.cue`. Other kinds have no partner.
+    /// `deck.return_to_start` ends `deck.cue`. `deck.loop_roll_N` and `deck.slice_N` are
+    /// their own partner: a controller binds them to the shifted pad note as well, and a
+    /// release arriving on that sibling binding ends the held press of the same kind on the
+    /// deck it went to. Other kinds have no partner.
     pub fn hold_partner(self) -> Option<ActionKind> {
         match self {
             ActionKind::JogRelease => Some(ActionKind::JogTouch),
             ActionKind::HotcueDelete(slot) => Some(ActionKind::Hotcue(slot)),
             ActionKind::ReturnToStart => Some(ActionKind::Cue),
+            ActionKind::LoopRoll(_) | ActionKind::Slice(_) => Some(self),
             _ => None,
         }
     }
@@ -443,6 +568,14 @@ pub enum Action {
     JogTop(DeckId),
     JogRing(DeckId),
     JogSearch(DeckId),
+    PadMode(Side, PadMode),
+    BeatJump(DeckId, HotcueSlot),
+    BeatJumpShift(DeckId, HotcueSlot),
+    LoopRoll(DeckId, HotcueSlot),
+    Slice(DeckId, HotcueSlot),
+    SlipToggle(DeckId),
+    SamplerPlay(HotcueSlot),
+    SamplerStop(HotcueSlot),
 }
 
 impl Action {
@@ -494,6 +627,14 @@ impl Action {
             (K::JogTop, Target::Deck(d)) => Action::JogTop(d),
             (K::JogRing, Target::Deck(d)) => Action::JogRing(d),
             (K::JogSearch, Target::Deck(d)) => Action::JogSearch(d),
+            (K::PadMode(mode), Target::Side(s)) => Action::PadMode(s, mode),
+            (K::BeatJump(slot), Target::Deck(d)) => Action::BeatJump(d, slot),
+            (K::BeatJumpShift(slot), Target::Deck(d)) => Action::BeatJumpShift(d, slot),
+            (K::LoopRoll(slot), Target::Deck(d)) => Action::LoopRoll(d, slot),
+            (K::Slice(slot), Target::Deck(d)) => Action::Slice(d, slot),
+            (K::SlipToggle, Target::Deck(d)) => Action::SlipToggle(d),
+            (K::SamplerPlay(slot), Target::Global) => Action::SamplerPlay(slot),
+            (K::SamplerStop(slot), Target::Global) => Action::SamplerStop(slot),
             _ => return None,
         })
     }
@@ -554,6 +695,14 @@ impl Action {
             Action::JogTop(_) => ActionKind::JogTop,
             Action::JogRing(_) => ActionKind::JogRing,
             Action::JogSearch(_) => ActionKind::JogSearch,
+            Action::PadMode(_, mode) => ActionKind::PadMode(*mode),
+            Action::BeatJump(_, slot) => ActionKind::BeatJump(*slot),
+            Action::BeatJumpShift(_, slot) => ActionKind::BeatJumpShift(*slot),
+            Action::LoopRoll(_, slot) => ActionKind::LoopRoll(*slot),
+            Action::Slice(_, slot) => ActionKind::Slice(*slot),
+            Action::SlipToggle(_) => ActionKind::SlipToggle,
+            Action::SamplerPlay(slot) => ActionKind::SamplerPlay(*slot),
+            Action::SamplerStop(slot) => ActionKind::SamplerStop(*slot),
         }
     }
 
@@ -593,15 +742,22 @@ impl Action {
             | Action::JogRelease(d)
             | Action::JogTop(d)
             | Action::JogRing(d)
-            | Action::JogSearch(d) => Target::Deck(d),
+            | Action::JogSearch(d)
+            | Action::BeatJump(d, _)
+            | Action::BeatJumpShift(d, _)
+            | Action::LoopRoll(d, _)
+            | Action::Slice(d, _)
+            | Action::SlipToggle(d) => Target::Deck(d),
             Action::Crossfader
             | Action::MasterLevel
             | Action::HeadphoneLevel
             | Action::HeadphoneMix
             | Action::HeadphoneMasterToggle
             | Action::BrowserScroll
-            | Action::BrowserToggleFocus => Target::Global,
-            Action::DeckToggle(s) | Action::Shift(s) => Target::Side(s),
+            | Action::BrowserToggleFocus
+            | Action::SamplerPlay(_)
+            | Action::SamplerStop(_) => Target::Global,
+            Action::DeckToggle(s) | Action::Shift(s) | Action::PadMode(s, _) => Target::Side(s),
         }
     }
 

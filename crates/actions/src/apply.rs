@@ -1,6 +1,6 @@
 use engine::{
     ChannelCommand, Command, DeckCommand, DeckId, EngineController, JogSurface, MasterCommand,
-    TempoRange,
+    SamplerCommand, TempoRange,
 };
 
 use crate::sync::plan_sync;
@@ -99,6 +99,46 @@ pub fn apply(
         (Action::HotcueDelete(d, slot), Input::Release) => {
             (deck(d, DeckCommand::HotcueRelease(slot)), Update::None)
         }
+        (Action::PadMode(side, mode), Input::Press) => {
+            state.side_mut(side).pad_mode = mode;
+            return ApplyResult::Sent(0);
+        }
+        (Action::BeatJump(d, slot), Input::Press) => {
+            let beats = state.beat_jump_pads[slot.index()];
+            (deck(d, DeckCommand::BeatJump { beats }), Update::None)
+        }
+        (Action::BeatJumpShift(d, slot), Input::Press) => {
+            let beats = state.beat_jump_shift_pads[slot.index()];
+            (deck(d, DeckCommand::BeatJump { beats }), Update::None)
+        }
+        (Action::LoopRoll(d, slot), Input::Press) => {
+            let beats = state.loop_roll_pads[slot.index()];
+            (deck(d, DeckCommand::RollPress { beats }), Update::None)
+        }
+        (Action::LoopRoll(d, slot), Input::Release) => {
+            let beats = state.loop_roll_pads[slot.index()];
+            (deck(d, DeckCommand::RollRelease { beats }), Update::None)
+        }
+        (Action::Slice(d, slot), Input::Press) => {
+            let slice = slot.index() as u8;
+            (deck(d, DeckCommand::SlicePress(slice)), Update::None)
+        }
+        (Action::Slice(d, slot), Input::Release) => {
+            let slice = slot.index() as u8;
+            (deck(d, DeckCommand::SliceRelease(slice)), Update::None)
+        }
+        (Action::SlipToggle(d), Input::Press) => {
+            let slip = !engine.deck(d).slip;
+            (deck(d, DeckCommand::SetSlip(slip)), Update::None)
+        }
+        (Action::SamplerPlay(slot), Input::Press) => (
+            Command::Sampler(SamplerCommand::Play(slot.index())),
+            Update::None,
+        ),
+        (Action::SamplerStop(slot), Input::Press) => (
+            Command::Sampler(SamplerCommand::Stop(slot.index())),
+            Update::None,
+        ),
         (Action::LoopIn(d), Input::Press) => (deck(d, DeckCommand::LoopIn), Update::None),
         (Action::LoopOut(d), Input::Press) => (deck(d, DeckCommand::LoopOut), Update::None),
         (Action::AutoLoop(d), Input::Press) => (deck(d, DeckCommand::AutoLoop), Update::None),

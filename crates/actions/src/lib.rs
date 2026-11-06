@@ -13,4 +13,4 @@ mod sync;
 pub use action::{Action, ActionKind, Input, InputKind, Scope, Side, Target, ValueTarget};
 pub use apply::{ApplyResult, GRID_SHIFT_FINE_MILLIS, GRID_SHIFT_MILLIS, apply};
 pub use request::{AppRequest, BrowserRequest, GridEditRequest};
-pub use state::{ControlState, DeckControl, Led, SideControl, StateKey, led};
+pub use state::{ControlState, DeckControl, Led, PadMode, SideControl, StateKey, led};
