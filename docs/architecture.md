@@ -123,8 +123,16 @@ what is heard is at the playhead; a later tempo change lets them drift apart by 
 output latency (about 90 ms) times the change in tempo ratio, about 9 ms for a 10 % move.
 A restart costs about one millisecond of the audio callback.
 
+**Effects.** Every channel has three effect slots (`ChannelCommand::FxEnabled`) sharing one
+amount (`ChannelCommand::FxAmount`); the effect in each slot is a master setting
+(`MasterCommand::FxSlot`, an `EffectKind`), which `play` sends at startup from `[fx] slots`
+in `config.toml`. The actions `deck.fx_toggle_1` to `_3` and `deck.fx_level` drive the
+side's deck, and `deck.keylock_toggle` flips `DeckCommand::SetKeylock` from the snapshot.
+The app tracks the slots it switched in `DeckControl::fx_on` and the amount in
+`DeckControl::fx_level` (the soft takeover value).
+
 **config.toml.** `play` reads the per-user `config.toml` ([config.md](config.md)) before the
-controller attaches: the crossfader switch, the sampler files and volume, and the beat jump
+controller attaches: the crossfader switch, the effect in each slot, the sampler files and volume, and the beat jump
 and loop roll size tables, which are written into `ControlState`.
 
 Controllers are documented in [`controllers/`](controllers/): the [mapping reference](controllers/mapping-reference.md) and [adding a controller](controllers/adding-a-controller.md).

@@ -176,6 +176,11 @@ fn ids_round_trip_for_every_action() {
         "deck.slice_7",
         "deck.slice_8",
         "deck.slip_toggle",
+        "deck.keylock_toggle",
+        "deck.fx_toggle_1",
+        "deck.fx_toggle_2",
+        "deck.fx_toggle_3",
+        "deck.fx_level",
         "sampler.play_1",
         "sampler.play_2",
         "sampler.play_3",
@@ -224,7 +229,7 @@ fn ids_round_trip_for_every_action() {
         .into_iter()
         .filter(|k| k.takes_release())
         .collect();
-    assert_eq!(ActionKind::ALL.len(), 111);
+    assert_eq!(ActionKind::ALL.len(), 116);
     let hotcue = |n| ActionKind::Hotcue(HotcueSlot::new(n).unwrap());
     let hotcue_delete = |n| ActionKind::HotcueDelete(HotcueSlot::new(n).unwrap());
     let mut expected_release = vec![
@@ -1309,4 +1314,55 @@ fn sampler_actions_send_slot_commands() {
     assert_eq!(rig.apply(stop, Input::Press), ApplyResult::Sent(1));
     assert!(!rig.c.sampler().playing[2]);
     assert_eq!(rig.apply(play, Input::Release), ApplyResult::Ignored);
+}
+
+#[test]
+fn keylock_toggle_reads_the_snapshot() {
+    let mut rig = Rig::new();
+    let keylock = deck_action(ActionKind::KeylockToggle, 0);
+    assert!(!rig.c.deck(d(0)).keylock);
+    assert_eq!(rig.apply(keylock, Input::Press), ApplyResult::Sent(1));
+    assert!(rig.c.deck(d(0)).keylock);
+    assert_eq!(rig.apply(keylock, Input::Press), ApplyResult::Sent(1));
+    assert!(!rig.c.deck(d(0)).keylock);
+    assert_eq!(rig.apply(keylock, Input::Release), ApplyResult::Ignored);
+}
+
+#[test]
+fn fx_toggles_track_state_and_send() {
+    let mut rig = Rig::new();
+    let second = deck_action(ActionKind::FxToggle(1), 2);
+    assert_eq!(rig.apply(second, Input::Press), ApplyResult::Sent(1));
+    assert_eq!(rig.state.deck(d(2)).fx_on, [false, true, false]);
+    assert_eq!(rig.c.channel(d(2)).fx_enabled, [false, true, false]);
+    assert_eq!(rig.c.channel(d(0)).fx_enabled, [false; 3]);
+    assert_eq!(rig.apply(second, Input::Press), ApplyResult::Sent(1));
+    assert_eq!(rig.state.deck(d(2)).fx_on, [false; 3]);
+    assert_eq!(rig.c.channel(d(2)).fx_enabled, [false; 3]);
+    assert_eq!(rig.apply(second, Input::Release), ApplyResult::Ignored);
+    let third = deck_action(ActionKind::FxToggle(2), 2);
+    rig.apply(third, Input::Press);
+    assert_eq!(rig.c.channel(d(2)).fx_enabled, [false, false, true]);
+}
+
+#[test]
+fn fx_level_is_a_takeover_value() {
+    let mut rig = Rig::new();
+    let level = deck_action(ActionKind::FxLevel, 1);
+    assert!(ActionKind::FxLevel.is_absolute());
+    assert_eq!(
+        rig.state.value((ActionKind::FxLevel, Some(d(1)))),
+        Some(0.5)
+    );
+    assert_eq!(rig.apply(level, Input::Absolute(0.8)), ApplyResult::Sent(1));
+    assert_eq!(
+        rig.state.value((ActionKind::FxLevel, Some(d(1)))),
+        Some(0.8)
+    );
+    assert_eq!(
+        rig.state.value((ActionKind::FxLevel, Some(d(0)))),
+        Some(0.5)
+    );
+    assert_eq!(rig.c.channel(d(1)).fx_amount, 0.8);
+    assert_eq!(rig.apply(level, Input::Press), ApplyResult::Ignored);
 }

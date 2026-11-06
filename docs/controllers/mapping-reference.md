@@ -289,6 +289,11 @@ browser actions).
 | `deck.slice_7` | deck | button | Hold to play slice 7 of the 8-beat block around where the track would be; release to return to the track. Needs a beatgrid. |
 | `deck.slice_8` | deck | button | Hold to play slice 8 of the 8-beat block around where the track would be; release to return to the track. Needs a beatgrid. |
 | `deck.slip_toggle` | deck | button | Press to turn slip mode on or off. In slip mode, scratching, loops, hotcue holds, rolls and slices run on a ghost playhead, and the track rejoins where it would have been. |
+| `deck.keylock_toggle` | deck | button | Press to turn keylock on or off. With keylock on, a deck away from its original tempo keeps its pitch. |
+| `deck.fx_toggle_1` | deck | button | Press to turn effect slot 1 of the deck's channel on or off. The slot's effect is set with `[fx] slots` in `config.toml`. |
+| `deck.fx_toggle_2` | deck | button | Press to turn effect slot 2 of the deck's channel on or off. |
+| `deck.fx_toggle_3` | deck | button | Press to turn effect slot 3 of the deck's channel on or off. |
+| `deck.fx_level` | deck | absolute | Sets how much of the deck's effects is heard (the effect amount), 0 to 1; 0.5 until moved. Takes soft takeover like the other knobs. |
 | `sampler.play_1` | none | button | Press to play sampler slot 1 from the start, restarting it if it is playing. An empty slot does nothing. |
 | `sampler.play_2` | none | button | Press to play sampler slot 2 from the start, restarting it if it is playing. An empty slot does nothing. |
 | `sampler.play_3` | none | button | Press to play sampler slot 3 from the start, restarting it if it is playing. An empty slot does nothing. |

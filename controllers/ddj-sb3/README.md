@@ -54,6 +54,9 @@ point you set is remembered and comes back when the track is loaded again. See
 | CUE | cue (hold to preview when paused at the cue point) |
 | SHIFT + CUE | return to the start of the track |
 | TEMPO slider | tempo; toward you is faster (checked on the owner's SB3) |
+| KEY LOCK | keylock on or off (the deck keeps its pitch when the tempo is not 0 %) |
+| FX 1, 2, 3 | switch the effect in that slot on or off on the side's deck (which effect: `[fx] slots` in `docs/config.md`) |
+| FX LEVEL | how much of the deck's effects is heard (soft takeover) |
 | SHIFT + KEY LOCK | next tempo range (6, 10, 16, 100 %) |
 | SHIFT | shift |
 | DECK | switch the side's deck |
@@ -176,8 +179,8 @@ must be picked up again (soft takeover).
 
 ## Not mapped yet
 
-KEY LOCK, SHIFT + SYNC, the FX FADE and PAD SCRATCH pad routines (and the TRANS pads, notes
-0x70-0x77), the FX section and fader start: they need actions from later plans. The MIDI
+SHIFT + SYNC, the FX FADE and PAD SCRATCH pad routines (and the TRANS pads, notes
+0x70-0x77), SHIFT + the FX buttons (effect parameters) and fader start: they need actions from later plans. The MIDI
 messages these unmapped controls send are listed in a comment at the end of
 `mapping.toml`.
 

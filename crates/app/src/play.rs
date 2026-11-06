@@ -15,8 +15,8 @@ use audio_io::{
 };
 use controller::{Connection, PresenceChange, Runtime, TimedMidi, clock};
 use engine::{
-    ChannelCommand, Command, DeckCommand, DeckId, DeckSnapshot, EngineController, MasterCommand,
-    SamplerCommand, SamplerSnapshot, engine,
+    ChannelCommand, ChannelSnapshot, Command, DeckCommand, DeckId, DeckSnapshot, EffectKind,
+    EngineController, MasterCommand, SamplerCommand, SamplerSnapshot, engine,
 };
 
 use crate::config::{Config, PadSource};
@@ -254,6 +254,9 @@ pub(crate) fn deck_line(deck: DeckId, snapshot: &DeckSnapshot) -> String {
     if snapshot.slip {
         line.push_str("  slip");
     }
+    if snapshot.keylock {
+        line.push_str("  keylock");
+    }
     if snapshot.roll_active {
         line.push_str("  roll");
     }
@@ -261,6 +264,22 @@ pub(crate) fn deck_line(deck: DeckId, snapshot: &DeckSnapshot) -> String {
         line.push_str("  vinyl off");
     }
     line
+}
+
+/// `  fx: echo reverb` listing the kinds of the channel's enabled effect slots; empty while
+/// none is on.
+pub(crate) fn fx_suffix(slots: &[EffectKind; 3], channel: &ChannelSnapshot) -> String {
+    let on: Vec<&str> = slots
+        .iter()
+        .zip(channel.fx_enabled)
+        .filter(|(_, enabled)| *enabled)
+        .map(|(kind, _)| kind.id())
+        .collect();
+    if on.is_empty() {
+        String::new()
+    } else {
+        format!("  fx: {}", on.join(" "))
+    }
 }
 
 /// The pad modes that are not `hardware`, as `left: beat jump   right: slicer`; `None` while
@@ -322,13 +341,20 @@ fn loop_text(beats: f64) -> String {
 }
 
 /// The status line with a controller: every loaded deck, playing ones marked with `>`.
-fn decks_line(snapshots: &[(DeckId, DeckSnapshot)]) -> String {
+fn decks_line(
+    snapshots: &[(DeckId, DeckSnapshot, ChannelSnapshot)],
+    slots: &[EffectKind; 3],
+) -> String {
     snapshots
         .iter()
-        .filter(|(_, snap)| snap.loaded)
-        .map(|(id, snap)| {
+        .filter(|(_, snap, _)| snap.loaded)
+        .map(|(id, snap, channel)| {
             let mark = if snap.playing { '>' } else { ' ' };
-            format!("{mark}{}", deck_line(*id, snap))
+            format!(
+                "{mark}{}{}",
+                deck_line(*id, snap),
+                fx_suffix(slots, channel)
+            )
         })
         .collect::<Vec<_>>()
         .join("   ")
@@ -373,6 +399,12 @@ pub fn play(args: &PlayArgs) -> anyhow::Result<()> {
         &mut controller,
         Command::Master(MasterCommand::CrossfaderEnabled(config.crossfader)),
     )?;
+    for (slot, kind) in config.fx_slots.into_iter().enumerate() {
+        send(
+            &mut controller,
+            Command::Master(MasterCommand::FxSlot(slot, kind)),
+        )?;
+    }
     send(
         &mut controller,
         Command::Sampler(SamplerCommand::Volume(config.sampler.volume)),
@@ -720,13 +752,13 @@ fn control_loop(
             stream_errors = errors;
             match &library {
                 Some(library) => {
-                    let mut lines = library.status_lines(engine);
+                    let mut lines = library.status_lines(engine, &config.fx_slots);
                     lines.extend(extra_status(runtime.state(), engine));
                     printer.status_lines(lines);
                 }
                 None => {
-                    let snapshots = DeckId::ALL.map(|id| (id, engine.deck(id)));
-                    let mut lines = vec![decks_line(&snapshots)];
+                    let snapshots = DeckId::ALL.map(|id| (id, engine.deck(id), engine.channel(id)));
+                    let mut lines = vec![decks_line(&snapshots, &config.fx_slots)];
                     lines.extend(extra_status(runtime.state(), engine));
                     printer.status_lines(lines);
                 }
@@ -1028,11 +1060,37 @@ mod tests {
             playing: false,
             ..snapshot
         };
-        let line = decks_line(&[
-            (DeckId::new(0).unwrap(), snapshot),
-            (DeckId::new(1).unwrap(), idle),
-            (DeckId::new(2).unwrap(), paused),
-        ]);
+        let ch = ChannelSnapshot::default();
+        let slots = [EffectKind::Echo, EffectKind::Reverb, EffectKind::Flanger];
+        let line = decks_line(
+            &[
+                (DeckId::new(0).unwrap(), snapshot, ch),
+                (DeckId::new(1).unwrap(), idle, ch),
+                (DeckId::new(2).unwrap(), paused, ch),
+            ],
+            &slots,
+        );
         assert_eq!(line, ">Deck 1  01:05 / 03:20    Deck 3  01:05 / 03:20");
+    }
+
+    #[test]
+    fn deck_line_shows_keylock_and_enabled_effects() {
+        let deck = DeckId::new(0).unwrap();
+        let snapshot = DeckSnapshot {
+            loaded: true,
+            playing: true,
+            duration_frames: 44_100 * 200,
+            track_sample_rate: 44_100,
+            keylock: true,
+            ..DeckSnapshot::default()
+        };
+        assert_eq!(deck_line(deck, &snapshot), "Deck 1  00:00 / 03:20  keylock");
+        let slots = [EffectKind::Echo, EffectKind::Reverb, EffectKind::Filter];
+        let mut channel = ChannelSnapshot::default();
+        assert_eq!(fx_suffix(&slots, &channel), "");
+        channel.fx_enabled = [true, false, true];
+        assert_eq!(fx_suffix(&slots, &channel), "  fx: echo filter");
+        let line = decks_line(&[(deck, snapshot, channel)], &slots);
+        assert_eq!(line, ">Deck 1  00:00 / 03:20  keylock  fx: echo filter");
     }
 }

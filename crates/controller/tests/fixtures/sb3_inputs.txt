@@ -332,3 +332,13 @@ Note { channel: 8, note: 14 } | Slice(HotcueSlot(7)) | Side(Right) | Some(Slicer
 Note { channel: 8, note: 62 } | Slice(HotcueSlot(7)) | Side(Right) | Some(Slicer) | None
 Note { channel: 8, note: 15 } | Slice(HotcueSlot(8)) | Side(Right) | Some(Slicer) | None
 Note { channel: 8, note: 63 } | Slice(HotcueSlot(8)) | Side(Right) | Some(Slicer) | None
+Note { channel: 0, note: 26 } | KeylockToggle | Side(Left) | None | None
+Note { channel: 4, note: 71 } | FxToggle(0) | Side(Left) | None | None
+Note { channel: 4, note: 72 } | FxToggle(1) | Side(Left) | None | None
+Note { channel: 4, note: 73 } | FxToggle(2) | Side(Left) | None | None
+Cc14 { channel: 4, msb: 2, lsb: 34 } | FxLevel | Side(Left) | None | None
+Note { channel: 1, note: 26 } | KeylockToggle | Side(Right) | None | None
+Note { channel: 5, note: 71 } | FxToggle(0) | Side(Right) | None | None
+Note { channel: 5, note: 72 } | FxToggle(1) | Side(Right) | None | None
+Note { channel: 5, note: 73 } | FxToggle(2) | Side(Right) | None | None
+Cc14 { channel: 5, msb: 2, lsb: 34 } | FxLevel | Side(Right) | None | None

@@ -15,6 +15,10 @@ pub struct DeckControl {
     pub eq_low: f32,
     pub filter: f32,
     pub fader: f32,
+    /// Effect amount, 0 to 1.
+    pub fx_level: f32,
+    /// Which effect slots the app turned on.
+    pub fx_on: [bool; 3],
 }
 
 impl Default for DeckControl {
@@ -30,6 +34,8 @@ impl Default for DeckControl {
             eq_low: 0.5,
             filter: 0.5,
             fader: 1.0,
+            fx_level: 0.5,
+            fx_on: [false; 3],
         }
     }
 }
@@ -179,6 +185,7 @@ impl ControlState {
                     ActionKind::EqLow => Some(deck.eq_low),
                     ActionKind::Filter => Some(deck.filter),
                     ActionKind::Fader => Some(deck.fader),
+                    ActionKind::FxLevel => Some(deck.fx_level),
                     _ => None,
                 }
             }
@@ -209,6 +216,7 @@ impl ControlState {
                     ActionKind::EqLow => Some(&mut deck.eq_low),
                     ActionKind::Filter => Some(&mut deck.filter),
                     ActionKind::Fader => Some(&mut deck.fader),
+                    ActionKind::FxLevel => Some(&mut deck.fx_level),
                     _ => None,
                 }
             }
