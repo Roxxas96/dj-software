@@ -78,6 +78,17 @@ impl Effect {
         self.filter.clear();
     }
 
+    /// Clears the state of the running kind only, leaving the others' buffers alone: the
+    /// cheap way to start a slot that was off over.
+    pub(crate) fn clear_active(&mut self) {
+        match self.kind {
+            EffectKind::Echo => self.echo.clear(),
+            EffectKind::Reverb => self.reverb.clear(),
+            EffectKind::Flanger => self.flanger.clear(),
+            EffectKind::Filter => self.filter.clear(),
+        }
+    }
+
     /// The Filter kind's cutoff follows `amount` (0 to 1, a non-finite value counts as 0);
     /// the other kinds ignore it. Recomputes coefficients: call when the amount changes.
     pub(crate) fn set_amount(&mut self, amount: f32) {
@@ -138,4 +149,35 @@ pub fn effect_for_tests(sample_rate: u32, kind: EffectKind) -> EffectForTests {
     let mut effect = Effect::new(sample_rate);
     effect.set_kind(kind);
     EffectForTests(effect)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SR: u32 = 48_000;
+    const BEAT: f64 = 24_000.0;
+
+    fn feed(effect: &mut Effect, x: f32, frames: usize) -> f32 {
+        let mut energy = 0.0;
+        for _ in 0..frames {
+            energy += effect.process(0, x, BEAT).abs();
+            effect.process(1, x, BEAT);
+        }
+        energy
+    }
+
+    #[test]
+    fn clear_active_clears_only_the_running_kind() {
+        let mut effect = Effect::new(SR);
+        effect.set_kind(EffectKind::Echo);
+        feed(&mut effect, 1.0, 5_000);
+        // Switched without a clear, as only this test can: the echo keeps its buffers.
+        effect.kind = EffectKind::Reverb;
+        feed(&mut effect, 1.0, 5_000);
+        effect.clear_active();
+        assert_eq!(feed(&mut effect, 0.0, 30_000), 0.0, "reverb cleared");
+        effect.kind = EffectKind::Echo;
+        assert!(feed(&mut effect, 0.0, 30_000) > 0.0, "echo kept");
+    }
 }
