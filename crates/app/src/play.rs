@@ -153,46 +153,76 @@ fn decode(path: &Path) -> anyhow::Result<Arc<engine::TrackBuffer>> {
 
 /// Decodes the configured sampler pads, reporting each failure (the pad stays empty).
 /// Track ids are read through the `--library` library, else the default library when it
-/// exists.
+/// exists; a library that cannot be opened or read fails only the `track` pads.
 fn load_samples(
     config: &Config,
     library: Option<&LibraryMode>,
-) -> anyhow::Result<Vec<(usize, Arc<engine::TrackBuffer>)>> {
-    let pads = &config.sampler.pads;
-    let uses_tracks = pads.iter().any(|p| matches!(p, PadSource::Track(_)));
-    // Kept alive while the samples load.
-    let mut _default_library = None;
-    let reader = if !uses_tracks {
-        None
-    } else if let Some(library) = library {
-        Some(library.reader().context("reading the library")?)
-    } else {
-        let path = crate::library_cmd::db_path(None)?;
-        if path.is_file() {
-            let lib = crate::library_cmd::open_library(Some(&path))?;
-            let reader = lib.reader().context("reading the library")?;
-            _default_library = Some(lib);
-            Some(reader)
-        } else {
-            None
-        }
+) -> Vec<(usize, Arc<engine::TrackBuffer>)> {
+    let (loaded, lines) = load_samples_from(config, open_sample_library(config, library));
+    for line in lines {
+        eprintln!("{line}");
+    }
+    loaded
+}
+
+/// The library reader for the `track` pads, with the default library it reads (kept alive
+/// while the samples load): `None` when no pad uses a track or there is no library file.
+fn open_sample_library(
+    config: &Config,
+    library: Option<&LibraryMode>,
+) -> anyhow::Result<Option<(library::Reader, Option<library::Library>)>> {
+    let uses_tracks = config
+        .sampler
+        .pads
+        .iter()
+        .any(|p| matches!(p, Some(PadSource::Track(_))));
+    if !uses_tracks {
+        return Ok(None);
+    }
+    if let Some(library) = library {
+        return Ok(Some((
+            library.reader().context("reading the library")?,
+            None,
+        )));
+    }
+    let path = crate::library_cmd::db_path(None)?;
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let lib = crate::library_cmd::open_library(Some(&path))?;
+    let reader = lib.reader().context("reading the library")?;
+    Ok(Some((reader, Some(lib))))
+}
+
+/// Decodes the pads with the library `opened` gave, returning the samples and the lines to
+/// report.
+fn load_samples_from(
+    config: &Config,
+    opened: anyhow::Result<Option<(library::Reader, Option<library::Library>)>>,
+) -> (Vec<(usize, Arc<engine::TrackBuffer>)>, Vec<String>) {
+    let failure = opened.as_ref().err().map(|e| format!("{e:#}"));
+    let reader = match &failure {
+        Some(reason) => Err(reason.as_str()),
+        None => Ok(opened
+            .as_ref()
+            .ok()
+            .and_then(Option::as_ref)
+            .map(|(reader, _)| reader)),
     };
     let mut loaded = Vec::new();
-    for (index, result) in crate::samples::load(&config.sampler, reader.as_ref()) {
+    let mut lines = Vec::new();
+    for (index, source, result) in crate::samples::load(&config.sampler, reader) {
         match result {
             Ok(sample) => {
                 if sample.truncated {
-                    eprintln!("{}", crate::samples::truncated_line(index, &pads[index]));
+                    lines.push(crate::samples::truncated_line(index, source));
                 }
                 loaded.push((index, sample.buffer));
             }
-            Err(error) => eprintln!(
-                "{}",
-                crate::samples::failure_line(index, &pads[index], &error)
-            ),
+            Err(error) => lines.push(crate::samples::failure_line(index, source, &error)),
         }
     }
-    Ok(loaded)
+    (loaded, lines)
 }
 
 fn send(controller: &mut engine::EngineController, command: Command) -> anyhow::Result<()> {
@@ -321,7 +351,7 @@ pub fn play(args: &PlayArgs) -> anyhow::Result<()> {
         .library
         .then(|| LibraryMode::start(args.library_db.as_deref()))
         .transpose()?;
-    let samples = load_samples(&config, library.as_ref())?;
+    let samples = load_samples(&config, library.as_ref());
     let track = args.track.as_deref().map(decode).transpose()?;
     let cue_track = args.cue_track.as_deref().map(decode).transpose()?;
     let deck3_track = args.deck3.as_deref().map(decode).transpose()?;
@@ -734,6 +764,26 @@ fn receive_batch(rx: &Receiver<TimedMidi>, batch: &mut Vec<TimedMidi>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_library_that_cannot_be_read_fails_only_the_track_pads() {
+        let mut config = Config::default();
+        config.sampler.pads = vec![Some(PadSource::Track(42)), None, Some(PadSource::Track(43))];
+        let opened = Err(anyhow!(
+            "opening the library /x/library.sqlite3: disk I/O error"
+        ));
+        let (loaded, lines) = load_samples_from(&config, opened);
+        assert!(loaded.is_empty());
+        assert_eq!(
+            lines,
+            [
+                "sampler pad 1 (track 42): library error: opening the library \
+                 /x/library.sqlite3: disk I/O error",
+                "sampler pad 3 (track 43): library error: opening the library \
+                 /x/library.sqlite3: disk I/O error",
+            ]
+        );
+    }
 
     #[test]
     fn routing_errors_use_one_based_channels_and_a_hint() {
