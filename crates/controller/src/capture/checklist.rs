@@ -486,10 +486,10 @@ kind = "button"
             }
         }
         for step in &checklist.steps {
-            if step.kind == StepKind::Pads {
-                // Pad mode is selected before listening, except the SHIFT pass
-                // that stays in HOT CUE mode.
-                assert_eq!(step.prepare.is_some(), !step.shift, "{}", step.id);
+            if step.kind == StepKind::Pads && !step.shift {
+                // Pad mode is selected before listening. A SHIFT pass usually
+                // stays in the mode the step before it selected.
+                assert!(step.prepare.is_some(), "{}", step.id);
             }
         }
         let shifted = checklist

@@ -458,3 +458,118 @@ id = "load.right"
 prompt = "Press and release the RIGHT LOAD button."
 kind = "button"
 shift = true
+
+# ---------------------------------------------------------------- plan 5 additions
+#
+# SHIFT pad modes (VirtualDJ: SHIFT + HOT CUE = beat jump, SHIFT + FX FADE = loop
+# roll, SHIFT + PAD SCRATCH = slicer, SHIFT + SAMPLER = trans) and SHIFT + pads in
+# the modes plan 5 binds. Decks 3/4 send the same bytes as 1/2 (software layering),
+# so each side is captured once, on whichever deck it shows.
+
+[[section]]
+name = "Left pad modes"
+setup = "Use the LEFT side. For SHIFT steps, hold the LEFT SHIFT."
+shift_control = ["deck1.shift", "deck3.shift"]
+
+[[section.step]]
+id = "pads.left.beat_jump"
+prepare = "Hold LEFT SHIFT, press LEFT HOT CUE (the button blinks), then release both."
+prompt = "Tap the 8 LEFT pads one by one, 1 to 8."
+kind = "pads"
+
+[[section.step]]
+id = "pads.left.beat_jump.shift"
+prompt = "Still in that mode: hold LEFT SHIFT and keep holding it, then tap the 8 LEFT pads one by one, 1 to 8."
+kind = "pads"
+held_shift = true
+
+[[section.step]]
+id = "pads.left.loop_roll"
+prepare = "Hold LEFT SHIFT, press LEFT FX FADE (the button blinks), then release both."
+prompt = "Tap the 8 LEFT pads one by one, 1 to 8."
+kind = "pads"
+
+[[section.step]]
+id = "pads.left.loop_roll.shift"
+prompt = "Still in that mode: hold LEFT SHIFT and keep holding it, then tap the 8 LEFT pads one by one, 1 to 8."
+kind = "pads"
+held_shift = true
+
+[[section.step]]
+id = "pads.left.slicer"
+prepare = "Hold LEFT SHIFT, press LEFT PAD SCRATCH (the button blinks), then release both."
+prompt = "Tap the 8 LEFT pads one by one, 1 to 8."
+kind = "pads"
+
+[[section.step]]
+id = "pads.left.slicer.shift"
+prompt = "Still in that mode: hold LEFT SHIFT and keep holding it, then tap the 8 LEFT pads one by one, 1 to 8."
+kind = "pads"
+held_shift = true
+
+[[section.step]]
+id = "pads.left.trans"
+prepare = "Hold LEFT SHIFT, press LEFT SAMPLER (the button blinks), then release both."
+prompt = "Tap the 8 LEFT pads one by one, 1 to 8."
+kind = "pads"
+
+[[section.step]]
+id = "pads.left.sampler.shift"
+prepare = "Press LEFT SAMPLER (without SHIFT) to select its pad mode."
+prompt = "Hold LEFT SHIFT and keep holding it, then tap the 8 LEFT pads one by one, 1 to 8."
+kind = "pads"
+held_shift = true
+
+[[section]]
+name = "Right pad modes"
+setup = "Use the RIGHT side. For SHIFT steps, hold the RIGHT SHIFT."
+shift_control = ["deck2.shift", "deck4.shift"]
+
+[[section.step]]
+id = "pads.right.beat_jump"
+prepare = "Hold RIGHT SHIFT, press RIGHT HOT CUE (the button blinks), then release both."
+prompt = "Tap the 8 RIGHT pads one by one, 1 to 8."
+kind = "pads"
+
+[[section.step]]
+id = "pads.right.beat_jump.shift"
+prompt = "Still in that mode: hold RIGHT SHIFT and keep holding it, then tap the 8 RIGHT pads one by one, 1 to 8."
+kind = "pads"
+held_shift = true
+
+[[section.step]]
+id = "pads.right.loop_roll"
+prepare = "Hold RIGHT SHIFT, press RIGHT FX FADE (the button blinks), then release both."
+prompt = "Tap the 8 RIGHT pads one by one, 1 to 8."
+kind = "pads"
+
+[[section.step]]
+id = "pads.right.loop_roll.shift"
+prompt = "Still in that mode: hold RIGHT SHIFT and keep holding it, then tap the 8 RIGHT pads one by one, 1 to 8."
+kind = "pads"
+held_shift = true
+
+[[section.step]]
+id = "pads.right.slicer"
+prepare = "Hold RIGHT SHIFT, press RIGHT PAD SCRATCH (the button blinks), then release both."
+prompt = "Tap the 8 RIGHT pads one by one, 1 to 8."
+kind = "pads"
+
+[[section.step]]
+id = "pads.right.slicer.shift"
+prompt = "Still in that mode: hold RIGHT SHIFT and keep holding it, then tap the 8 RIGHT pads one by one, 1 to 8."
+kind = "pads"
+held_shift = true
+
+[[section.step]]
+id = "pads.right.trans"
+prepare = "Hold RIGHT SHIFT, press RIGHT SAMPLER (the button blinks), then release both."
+prompt = "Tap the 8 RIGHT pads one by one, 1 to 8."
+kind = "pads"
+
+[[section.step]]
+id = "pads.right.sampler.shift"
+prepare = "Press RIGHT SAMPLER (without SHIFT) to select its pad mode."
+prompt = "Hold RIGHT SHIFT and keep holding it, then tap the 8 RIGHT pads one by one, 1 to 8."
+kind = "pads"
+held_shift = true
