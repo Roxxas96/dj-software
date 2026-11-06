@@ -162,17 +162,20 @@ fn replaced_sample_goes_to_garbage() {
 #[test]
 fn out_of_range_slot_is_ignored() {
     let (mut c, mut r) = setup();
+    // Only the command holds the buffer: the test keeps a Weak.
     let track = constant_track(SR, 1000, 0.5);
-    set(&mut c, SAMPLER_SLOTS, &track);
+    let weak = Arc::downgrade(&track);
+    sampler(&mut c, SamplerCommand::Set(SAMPLER_SLOTS, Some(track)));
     sampler(&mut c, SamplerCommand::Play(SAMPLER_SLOTS));
     sampler(&mut c, SamplerCommand::Play(99));
     sampler(&mut c, SamplerCommand::Stop(SAMPLER_SLOTS));
     sampler(&mut c, SamplerCommand::Volume(f32::NAN));
     let (m, _) = render(&mut r, 100);
     assert!(m.iter().all(|&s| s == 0.0));
+    // The rejected buffer went to the garbage queue, not freed on the audio thread.
+    assert!(weak.upgrade().is_some());
     c.collect_garbage();
-    // The rejected buffer came back and nothing else holds it.
-    assert_eq!(Arc::strong_count(&track), 1);
+    assert!(weak.upgrade().is_none());
     assert_eq!(c.sampler().playing, [false; SAMPLER_SLOTS]);
 }
 
