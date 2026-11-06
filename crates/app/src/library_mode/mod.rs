@@ -103,6 +103,11 @@ pub struct LibraryMode {
 }
 
 impl LibraryMode {
+    /// A read-only connection to the library.
+    pub fn reader(&self) -> Result<library::Reader, library::LibraryError> {
+        self.lib.reader()
+    }
+
     /// Opens the library, queues the tracks not analyzed yet, watches the library folders
     /// and starts the worker. Prints what it does (before the control loop starts).
     pub fn start(db: Option<&Path>) -> anyhow::Result<Self> {

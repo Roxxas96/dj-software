@@ -26,6 +26,7 @@ engine = { path = "../engine" }
 directories.workspace = true
 dunce.workspace = true
 library = { path = "../library" }
+toml.workspace = true
 analysis = { path = "../analysis" }
 
 [dev-dependencies]

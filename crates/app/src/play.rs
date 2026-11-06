@@ -14,9 +14,11 @@ use audio_io::{
 };
 use controller::{Connection, PresenceChange, Runtime, TimedMidi, clock};
 use engine::{
-    ChannelCommand, Command, DeckCommand, DeckId, DeckSnapshot, EngineController, engine,
+    ChannelCommand, Command, DeckCommand, DeckId, DeckSnapshot, EngineController, MasterCommand,
+    SamplerCommand, engine,
 };
 
+use crate::config::{Config, PadSource};
 use crate::console::{self, ConsoleCommand};
 use crate::library_mode::LibraryMode;
 use crate::printer::Printer;
@@ -70,6 +72,9 @@ pub struct PlayArgs {
     /// data directory)
     #[arg(long, value_name = "PATH", requires = "library")]
     pub library_db: Option<PathBuf>,
+    /// Configuration file (default: config.toml in the per-user configuration folder)
+    #[arg(long, value_name = "PATH")]
+    pub config: Option<PathBuf>,
 }
 
 impl PlayArgs {
@@ -145,6 +150,48 @@ fn decode(path: &Path) -> anyhow::Result<Arc<engine::TrackBuffer>> {
     Ok(Arc::new(decoded.track))
 }
 
+/// Decodes the configured sampler pads, reporting each failure (the pad stays empty).
+/// Track ids are read through the `--library` library, else the default library when it
+/// exists.
+fn load_samples(
+    config: &Config,
+    library: Option<&LibraryMode>,
+    library_mode: bool,
+) -> anyhow::Result<Vec<(usize, Arc<engine::TrackBuffer>)>> {
+    let pads = &config.sampler.pads;
+    let uses_tracks = pads.iter().any(|p| matches!(p, PadSource::Track(_)));
+    // Kept alive while the samples load.
+    let mut _default_library = None;
+    let reader = if !uses_tracks {
+        None
+    } else if let Some(library) = library {
+        Some(library.reader().context("reading the library")?)
+    } else if library_mode {
+        None
+    } else {
+        let path = crate::library_cmd::db_path(None)?;
+        if path.is_file() {
+            let lib = crate::library_cmd::open_library(Some(&path))?;
+            let reader = lib.reader().context("reading the library")?;
+            _default_library = Some(lib);
+            Some(reader)
+        } else {
+            None
+        }
+    };
+    let mut loaded = Vec::new();
+    for (index, result) in crate::samples::load(&config.sampler, reader.as_ref()) {
+        match result {
+            Ok(buffer) => loaded.push((index, buffer)),
+            Err(error) => eprintln!(
+                "{}",
+                crate::samples::failure_line(index, &pads[index], &error)
+            ),
+        }
+    }
+    Ok(loaded)
+}
+
 fn send(controller: &mut engine::EngineController, command: Command) -> anyhow::Result<()> {
     controller
         .send(command)
@@ -209,6 +256,8 @@ fn decks_line(snapshots: &[(DeckId, DeckSnapshot)]) -> String {
 
 pub fn play(args: &PlayArgs) -> anyhow::Result<()> {
     let routing = args.routing();
+    // Read the configuration first too: a bad value fails before any device is opened.
+    let config = crate::config::load(args.config.as_deref())?;
     // Load the mapping before anything slow, so a bad mapping file fails at once.
     let mapping = args
         .controller
@@ -222,6 +271,7 @@ pub fn play(args: &PlayArgs) -> anyhow::Result<()> {
         .library
         .then(|| LibraryMode::start(args.library_db.as_deref()))
         .transpose()?;
+    let samples = load_samples(&config, library.as_ref(), args.library)?;
     let track = args.track.as_deref().map(decode).transpose()?;
     let cue_track = args.cue_track.as_deref().map(decode).transpose()?;
     let deck3_track = args.deck3.as_deref().map(decode).transpose()?;
@@ -239,6 +289,20 @@ pub fn play(args: &PlayArgs) -> anyhow::Result<()> {
         })?;
     let (mut controller, renderer) = engine(pending.engine_config());
     let deck = |n: usize| DeckId::new(n - 1).with_context(|| format!("deck {n} missing"));
+    send(
+        &mut controller,
+        Command::Master(MasterCommand::CrossfaderEnabled(config.crossfader)),
+    )?;
+    send(
+        &mut controller,
+        Command::Sampler(SamplerCommand::Volume(config.sampler.volume)),
+    )?;
+    for (slot, buffer) in samples {
+        send(
+            &mut controller,
+            Command::Sampler(SamplerCommand::Set(slot, Some(buffer))),
+        )?;
+    }
     if let Some(track) = track {
         send(
             &mut controller,
@@ -298,7 +362,14 @@ pub fn play(args: &PlayArgs) -> anyhow::Result<()> {
     let mut stream = pending.start(renderer).context("starting audio output")?;
 
     match mapping {
-        Some(mapping) => control_loop(mapping, library, &mut controller, &mut stream, &interrupted),
+        Some(mapping) => control_loop(
+            mapping,
+            &config,
+            library,
+            &mut controller,
+            &mut stream,
+            &interrupted,
+        ),
         None => playback_loop(deck(1)?, &mut controller, &mut stream, &interrupted),
     }
 }
@@ -441,6 +512,7 @@ fn reconnect_message(change: PresenceChange, why: &str) -> String {
 /// most every [`AUTO_RECONNECT_INTERVAL`], and when Enter is pressed (stdin a terminal).
 fn control_loop(
     mapping: controller::mapping::Mapping,
+    config: &Config,
     mut library: Option<LibraryMode>,
     engine: &mut EngineController,
     stream: &mut OutputStream,
@@ -450,6 +522,17 @@ fn control_loop(
     let (tx, rx) = channel::<TimedMidi>();
     let mut connection = Connection::new(&mapping, tx).context("opening the controller")?;
     let mut runtime = Runtime::new(mapping);
+    // The size tables are not engine values, so there is no soft takeover to arm.
+    let state = runtime.control_state_mut();
+    if let Some(pads) = config.beat_jump_pads {
+        state.beat_jump_pads = pads;
+    }
+    if let Some(pads) = config.beat_jump_shift_pads {
+        state.beat_jump_shift_pads = pads;
+    }
+    if let Some(pads) = config.loop_roll_pads {
+        state.loop_roll_pads = pads;
+    }
     let printer = Printer::spawn();
     let lines = std::io::stdin().is_terminal().then(console::spawn_reader);
     let keys = if lines.is_some() {

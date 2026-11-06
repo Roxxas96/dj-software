@@ -1219,6 +1219,7 @@ dependencies = [
  "engine",
  "library",
  "tempfile",
+ "toml",
 ]
 
 [[package]]
