@@ -31,7 +31,8 @@ impl EngineRenderer {
             commands,
             garbage,
             shared: Arc::default(),
-            decks: Default::default(),
+            // The decks' keylock stretchers allocate: built here, before the audio thread.
+            decks: std::array::from_fn(|_| Deck::new(config.sample_rate, config.max_block_frames)),
             mixer: Mixer::new(config.sample_rate, config.max_block_frames),
             sampler: Sampler::new(config.max_block_frames),
         };

@@ -32,6 +32,8 @@ pub struct DeckSnapshot {
     pub jog_touched: bool,
     /// Slip mode is on.
     pub slip: bool,
+    /// Keylock is on.
+    pub keylock: bool,
     /// While slipping, where the track would be, in track frames.
     pub ghost_frames: Option<f64>,
     /// A loop roll or slice is held and the playhead wraps in its roll loop.
@@ -67,6 +69,7 @@ impl Default for DeckSnapshot {
             vinyl: true,
             jog_touched: false,
             slip: false,
+            keylock: false,
             ghost_frames: None,
             roll_active: false,
             slicer_block_beat: None,
@@ -187,6 +190,7 @@ struct DeckShared {
     vinyl: AtomicBool,
     jog_touched: AtomicBool,
     slip: AtomicBool,
+    keylock: AtomicBool,
     ghost_frames: AtomicU64,
     roll_active: AtomicBool,
     slicer_block_beat: AtomicU64,
@@ -245,6 +249,7 @@ impl DeckShared {
         self.vinyl.store(s.vinyl, Ordering::Relaxed);
         self.jog_touched.store(s.jog_touched, Ordering::Relaxed);
         self.slip.store(s.slip, Ordering::Relaxed);
+        self.keylock.store(s.keylock, Ordering::Relaxed);
         self.ghost_frames
             .store(opt_bits(s.ghost_frames), Ordering::Relaxed);
         self.roll_active.store(s.roll_active, Ordering::Relaxed);
@@ -300,6 +305,7 @@ impl DeckShared {
             vinyl: self.vinyl.load(Ordering::Relaxed),
             jog_touched: self.jog_touched.load(Ordering::Relaxed),
             slip: self.slip.load(Ordering::Relaxed),
+            keylock: self.keylock.load(Ordering::Relaxed),
             ghost_frames: bits_opt(self.ghost_frames.load(Ordering::Relaxed)),
             roll_active: self.roll_active.load(Ordering::Relaxed),
             slicer_block_beat: bits_opt(self.slicer_block_beat.load(Ordering::Relaxed)),

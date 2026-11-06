@@ -134,6 +134,11 @@ pub enum DeckCommand {
     /// and leaves the playhead where it is. Off for a new deck and kept across loads;
     /// `Load` drops the ghost.
     SetSlip(bool),
+    /// Turns keylock on or off: with it on, a tempo change keeps the track's pitch (the
+    /// playing audio is time-stretched rather than resampled). Scratching, a paused deck and
+    /// the original tempo (within 1e-4, nudge included) play without the stretcher. Off for
+    /// a new deck and kept across loads.
+    SetKeylock(bool),
     /// Jog wheel top touched or released. With vinyl on, a touch holds the record: normal
     /// motion stops and the deck follows the platter until release, which resumes playback
     /// if the deck is playing.
