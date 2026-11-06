@@ -131,8 +131,14 @@ impl OutputPort {
     }
 
     pub fn send(&mut self, msg: MidiMessage) -> Result<(), PortError> {
+        self.send_bytes(&msg.encode())
+    }
+
+    /// Sends raw bytes as one message, for messages [`MidiMessage`] does not model
+    /// (such as SysEx).
+    pub fn send_bytes(&mut self, bytes: &[u8]) -> Result<(), PortError> {
         self.connection
-            .send(&msg.encode())
+            .send(bytes)
             .map_err(|e| PortError::Send(e.to_string()))
     }
 }

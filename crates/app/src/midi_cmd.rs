@@ -34,6 +34,64 @@ pub fn ports() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `open-jockey midi send`: sends each message, in order, to the output port.
+pub fn send(port: Option<&str>, hold: bool, messages: &[String]) -> anyhow::Result<()> {
+    let messages = messages
+        .iter()
+        .map(|m| parse_hex_message(m).with_context(|| format!("reading message {m:?}")))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let outputs = output_port_names().context("listing MIDI outputs")?;
+    let wanted = choose_port(port, &outputs)?;
+    let mut output = open_output(&wanted).context("opening MIDI output")?;
+    for bytes in &messages {
+        output
+            .send_bytes(bytes)
+            .with_context(|| format!("sending to {}", output.name()))?;
+        println!("sent {}", hex(bytes));
+    }
+    if hold {
+        println!("Holding {} open; press Enter to close.", output.name());
+        let mut line = String::new();
+        io::stdin().lock().read_line(&mut line)?;
+    }
+    Ok(())
+}
+
+/// Reads a message written as hex bytes separated by spaces: a status byte (0x80 and
+/// up) followed by data bytes (below 0x80), or a SysEx message from F0 to F7.
+fn parse_hex_message(text: &str) -> anyhow::Result<Vec<u8>> {
+    let bytes = text
+        .split_whitespace()
+        .map(|b| {
+            let b = b.trim_start_matches("0x").trim_start_matches("0X");
+            u8::from_str_radix(b, 16).map_err(|_| anyhow!("{b:?} is not a hex byte"))
+        })
+        .collect::<anyhow::Result<Vec<u8>>>()?;
+    let Some((&first, rest)) = bytes.split_first() else {
+        bail!("empty message");
+    };
+    if first < 0x80 {
+        bail!("a message starts with a status byte (80 to FF), not {first:02X}");
+    }
+    if first == 0xF0 {
+        match rest.split_last() {
+            Some((0xF7, data)) if data.iter().all(|&b| b < 0x80) => {}
+            _ => bail!("a SysEx message ends with F7 and has data bytes below 80 in between"),
+        }
+    } else if let Some(&b) = rest.iter().find(|&&b| b >= 0x80) {
+        bail!("data byte {b:02X} is not below 80");
+    }
+    Ok(bytes)
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|b| format!("{b:02X}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Picks the port to monitor: the requested name, else the first input containing "DDJ".
 pub(crate) fn choose_port(requested: Option<&str>, inputs: &[String]) -> anyhow::Result<String> {
     if let Some(name) = requested {
@@ -1030,6 +1088,23 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+
+    #[test]
+    fn hex_messages_parse_and_are_checked() {
+        assert_eq!(parse_hex_message("90 0B 7F").unwrap(), [0x90, 0x0B, 0x7F]);
+        assert_eq!(
+            parse_hex_message("0x96 0x69 0x7f").unwrap(),
+            [0x96, 0x69, 0x7F]
+        );
+        assert_eq!(
+            parse_hex_message("F0 00 20 7F 03 01 F7").unwrap(),
+            [0xF0, 0x00, 0x20, 0x7F, 0x03, 0x01, 0xF7]
+        );
+        for bad in ["", "0B 7F", "90 8B 7F", "F0 00 20", "F0 90 F7", "90 zz"] {
+            assert!(parse_hex_message(bad).is_err(), "{bad:?}");
+        }
+        assert_eq!(hex(&[0xF0, 0x01, 0xF7]), "F0 01 F7");
+    }
 
     fn names(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| (*s).to_owned()).collect()
