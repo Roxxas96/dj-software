@@ -76,6 +76,15 @@ point you set is remembered and comes back when the track is loaded again. See
 | SHIFT + AUTO LOOP | reloop / exit |
 | HOT CUE pads 1-8 | set, jump to or (paused, while held) preview a hotcue |
 | SHIFT + HOT CUE pads 1-8 | delete the hotcue |
+| SAMPLER pads 1-8 (hardware pad mode) | play sample 1-8 from the start; again restarts it |
+| SHIFT + SAMPLER pads 1-8 | stop sample 1-8 |
+| SHIFT + HOT CUE, SHIFT + FX FADE, SHIFT + PAD SCRATCH | software pad mode of the side: beat jump, loop roll, slicer |
+| HOT CUE, FX FADE, PAD SCRATCH, SAMPLER, SHIFT + SAMPLER | back to the hardware pad mode |
+| pads in beat jump mode | jump by `beat_jump.pads` beats (default -4, 4, -8, 8, -16, 16, -32, 32) |
+| SHIFT + pads in beat jump mode | jump by `beat_jump.shift_pads` beats (default -1, 1, -2, 2, -4, 4, -64, 64) |
+| pads in loop roll mode | hold to roll `loop_roll.pads` beats (default 1/16 to 8), slip back on release |
+| pads in slicer mode | hold to repeat beat 1-8 of the current 8-beat bar, slip back on release |
+| SHIFT + VINYL | slip mode on/off |
 
 The MASTER and HEADPHONES level knobs send MIDI, but the SB3 applies them in its own
 audio interface, so they are left unbound and the software levels are set to full when
@@ -107,6 +116,43 @@ On 2026-11-05 the owner checked the deck controls with their SB3 on macOS:
 - The outer-ring nudge lagged by about 1 s when starting and stopping. It was changed from
   a displacement to a speed bend that fades out within about half a second. To re-check.
 
+## Sampler and software pad modes
+
+The sampler plays up to eight samples listed in `config.toml` (see
+[docs/config.md](../../docs/config.md)); both sides' SAMPLER pads play the same samples.
+
+The SB3 does not switch its pads for the SHIFT pad modes (SHIFT + HOT CUE, SHIFT + FX FADE,
+SHIFT + PAD SCRATCH): its pads keep sending the notes of the last hardware mode and its
+mode lights do not change. So the app remembers each side's pad mode. The mode shows in the
+status line (`left: beat jump`, `right: slicer`), because the SB3 has no light for it. The
+software modes read the HOT CUE bank and the SAMPLER bank alike, so they work whichever of
+the two the pads were in.
+
+Caveat: if a side was in FX FADE or PAD SCRATCH before a software mode was chosen, the SB3
+keeps running its own routine on those pads (filter or fader moves, jog touches). Press HOT
+CUE or SAMPLER first, then the SHIFT mode.
+
+A deck's line shows `slip` while slip mode is on and `roll` while a roll or slice is held.
+A line `sampler: 2 5` lists the playing samples.
+
+Crossfader: `mixer.crossfader = false` in `config.toml` makes the crossfader do nothing.
+
+### Hands-on check (plan 5)
+
+To do with the owner's SB3 and a `config.toml` holding two or three samples
+(`play --library --controller ddj-sb3`, master on the laptop speakers):
+
+- [ ] Sampler: SAMPLER pads play from start to end, again restarts, SHIFT + pad stops; a
+  missing file is reported at startup.
+- [ ] Beat jump: pads jump -4/4/-8/8/-16/16/-32/32, SHIFT + pads -1/1/-2/2/-4/4/-64/64;
+  a size changed in `config.toml` applies after a restart.
+- [ ] Loop roll: after HOT CUE, the pads roll 1/16 to 8 beats; the release lands in time.
+- [ ] Slicer: after HOT CUE, the pads repeat beats of the current bar; the release lands in
+  time.
+- [ ] Slip: SHIFT + VINYL; with slip on, scratch, loop or hotcue, then let go: playback
+  lands where the track would have been.
+- [ ] Crossfader: with `crossfader = false`, moving it changes nothing.
+
 ## LEDs
 
 Only the headphone MASTER LED is driven. An LED scan of all 16 channels (note-on, with
@@ -131,8 +177,8 @@ must be picked up again (soft takeover).
 
 ## Not mapped yet
 
-KEY LOCK, SHIFT + SYNC, SHIFT + VINYL, the pad mode buttons and the pads other than HOT CUE,
-the FX section and fader start: they need actions from later plans. The MIDI
+KEY LOCK, SHIFT + SYNC, the FX FADE and PAD SCRATCH pad routines (and the TRANS pads, notes
+0x70-0x77), the FX section and fader start: they need actions from later plans. The MIDI
 messages these unmapped controls send are listed in a comment at the end of
 `mapping.toml`.
 

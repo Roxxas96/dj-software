@@ -341,87 +341,860 @@ action = "deck.jog_search"
 side = "left"
 value = "relative_offset"
 
+# Pad modes. The SB3 has hardware pad modes (HOT CUE, FX FADE, PAD SCRATCH, SAMPLER) that
+# decide which notes the pads send; software pad modes decide what the app does with them.
+# Each side has its own software mode, set by the buttons below, and the pad bindings
+# carry `pad_mode` so only the side's current mode applies:
+#   hardware   the notes the hardware mode sends: HOT CUE pads set/jump/delete hotcues,
+#              SAMPLER pads play and stop samples (config.toml holds the files)
+#   beat_jump  SHIFT + HOT CUE; the SB3 does not switch its pads, so they keep sending
+#              the notes of the last hardware mode, and the software modes bind both the
+#              HOT CUE bank (0x00-0x0F) and the SAMPLER bank (0x30-0x3F)
+#   loop_roll  SHIFT + FX FADE; the pads are held, and bound on the shifted notes too so
+#              a release after SHIFT went down still ends the roll
+#   slicer     SHIFT + PAD SCRATCH; held pads, as for loop_roll
+# Press HOT CUE or SAMPLER before choosing a software mode: while the SB3 is in FX FADE or
+# PAD SCRATCH it runs its own routine on the pads and sends other notes. HOT CUE, FX FADE,
+# PAD SCRATCH, SAMPLER and SHIFT + SAMPLER (TRANS) all go back to the hardware mode. The
+# SB3 does not light the mode buttons for this, so the status line shows the mode.
+# Capture note: the left SHIFT + SAMPLER pads were captured on 0x30-0x37 (the unshifted
+# notes); the right side sent 0x38-0x3F, and the left side is bound the same.
+
+# HOT CUE
+[[input]]
+midi = { channel = 1, note = 0x1B }
+action = "pads.mode_hardware"
+side = "left"
+
+# FX FADE
+[[input]]
+midi = { channel = 1, note = 0x1E }
+action = "pads.mode_hardware"
+side = "left"
+
+# PAD SCRATCH
+[[input]]
+midi = { channel = 1, note = 0x20 }
+action = "pads.mode_hardware"
+side = "left"
+
+# SAMPLER
+[[input]]
+midi = { channel = 1, note = 0x22 }
+action = "pads.mode_hardware"
+side = "left"
+
+# SHIFT + SAMPLER (TRANS)
+[[input]]
+midi = { channel = 1, note = 0x6E }
+action = "pads.mode_hardware"
+side = "left"
+
+# SHIFT + HOT CUE
+[[input]]
+midi = { channel = 1, note = 0x69 }
+action = "pads.mode_beat_jump"
+side = "left"
+
+# SHIFT + FX FADE
+[[input]]
+midi = { channel = 1, note = 0x6B }
+action = "pads.mode_loop_roll"
+side = "left"
+
+# SHIFT + PAD SCRATCH
+[[input]]
+midi = { channel = 1, note = 0x6D }
+action = "pads.mode_slicer"
+side = "left"
+
+# SHIFT + VINYL
+[[input]]
+midi = { channel = 1, note = 0x40 }
+action = "deck.slip_toggle"
+side = "left"
+
 # HOT CUE pad 1
 [[input]]
 midi = { channel = 8, note = 0x00 }
 action = "deck.hotcue_1"
 side = "left"
+pad_mode = "hardware"
 
 [[input]]
 midi = { channel = 8, note = 0x01 }
 action = "deck.hotcue_2"
 side = "left"
+pad_mode = "hardware"
 
 [[input]]
 midi = { channel = 8, note = 0x02 }
 action = "deck.hotcue_3"
 side = "left"
+pad_mode = "hardware"
 
 [[input]]
 midi = { channel = 8, note = 0x03 }
 action = "deck.hotcue_4"
 side = "left"
+pad_mode = "hardware"
 
 [[input]]
 midi = { channel = 8, note = 0x04 }
 action = "deck.hotcue_5"
 side = "left"
+pad_mode = "hardware"
 
 [[input]]
 midi = { channel = 8, note = 0x05 }
 action = "deck.hotcue_6"
 side = "left"
+pad_mode = "hardware"
 
 [[input]]
 midi = { channel = 8, note = 0x06 }
 action = "deck.hotcue_7"
 side = "left"
+pad_mode = "hardware"
 
 [[input]]
 midi = { channel = 8, note = 0x07 }
 action = "deck.hotcue_8"
 side = "left"
+pad_mode = "hardware"
 
 # SHIFT + HOT CUE pad 1
 [[input]]
 midi = { channel = 8, note = 0x08 }
 action = "deck.hotcue_delete_1"
 side = "left"
+pad_mode = "hardware"
 
 [[input]]
 midi = { channel = 8, note = 0x09 }
 action = "deck.hotcue_delete_2"
 side = "left"
+pad_mode = "hardware"
 
 [[input]]
 midi = { channel = 8, note = 0x0A }
 action = "deck.hotcue_delete_3"
 side = "left"
+pad_mode = "hardware"
 
 [[input]]
 midi = { channel = 8, note = 0x0B }
 action = "deck.hotcue_delete_4"
 side = "left"
+pad_mode = "hardware"
 
 [[input]]
 midi = { channel = 8, note = 0x0C }
 action = "deck.hotcue_delete_5"
 side = "left"
+pad_mode = "hardware"
 
 [[input]]
 midi = { channel = 8, note = 0x0D }
 action = "deck.hotcue_delete_6"
 side = "left"
+pad_mode = "hardware"
 
 [[input]]
 midi = { channel = 8, note = 0x0E }
 action = "deck.hotcue_delete_7"
 side = "left"
+pad_mode = "hardware"
 
 [[input]]
 midi = { channel = 8, note = 0x0F }
 action = "deck.hotcue_delete_8"
 side = "left"
+pad_mode = "hardware"
+
+# SAMPLER pad 1: the sampler is shared, so both sides play the same samples
+[[input]]
+midi = { channel = 8, note = 0x30 }
+action = "sampler.play_1"
+side = "left"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 8, note = 0x31 }
+action = "sampler.play_2"
+side = "left"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 8, note = 0x32 }
+action = "sampler.play_3"
+side = "left"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 8, note = 0x33 }
+action = "sampler.play_4"
+side = "left"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 8, note = 0x34 }
+action = "sampler.play_5"
+side = "left"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 8, note = 0x35 }
+action = "sampler.play_6"
+side = "left"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 8, note = 0x36 }
+action = "sampler.play_7"
+side = "left"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 8, note = 0x37 }
+action = "sampler.play_8"
+side = "left"
+pad_mode = "hardware"
+
+# SHIFT + SAMPLER pad 1
+[[input]]
+midi = { channel = 8, note = 0x38 }
+action = "sampler.stop_1"
+side = "left"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 8, note = 0x39 }
+action = "sampler.stop_2"
+side = "left"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 8, note = 0x3A }
+action = "sampler.stop_3"
+side = "left"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 8, note = 0x3B }
+action = "sampler.stop_4"
+side = "left"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 8, note = 0x3C }
+action = "sampler.stop_5"
+side = "left"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 8, note = 0x3D }
+action = "sampler.stop_6"
+side = "left"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 8, note = 0x3E }
+action = "sampler.stop_7"
+side = "left"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 8, note = 0x3F }
+action = "sampler.stop_8"
+side = "left"
+pad_mode = "hardware"
+
+# Software mode beat jump, pad 1 (each pad is bound on the HOT CUE note, then the same
+# pad of the SAMPLER bank)
+[[input]]
+midi = { channel = 8, note = 0x00 }
+action = "deck.beat_jump_1"
+side = "left"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 8, note = 0x30 }
+action = "deck.beat_jump_1"
+side = "left"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 8, note = 0x01 }
+action = "deck.beat_jump_2"
+side = "left"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 8, note = 0x31 }
+action = "deck.beat_jump_2"
+side = "left"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 8, note = 0x02 }
+action = "deck.beat_jump_3"
+side = "left"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 8, note = 0x32 }
+action = "deck.beat_jump_3"
+side = "left"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 8, note = 0x03 }
+action = "deck.beat_jump_4"
+side = "left"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 8, note = 0x33 }
+action = "deck.beat_jump_4"
+side = "left"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 8, note = 0x04 }
+action = "deck.beat_jump_5"
+side = "left"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 8, note = 0x34 }
+action = "deck.beat_jump_5"
+side = "left"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 8, note = 0x05 }
+action = "deck.beat_jump_6"
+side = "left"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 8, note = 0x35 }
+action = "deck.beat_jump_6"
+side = "left"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 8, note = 0x06 }
+action = "deck.beat_jump_7"
+side = "left"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 8, note = 0x36 }
+action = "deck.beat_jump_7"
+side = "left"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 8, note = 0x07 }
+action = "deck.beat_jump_8"
+side = "left"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 8, note = 0x37 }
+action = "deck.beat_jump_8"
+side = "left"
+pad_mode = "beat_jump"
+
+# Software mode beat jump with SHIFT, pad 1 (SHIFT + HOT CUE note, then SHIFT + SAMPLER)
+[[input]]
+midi = { channel = 8, note = 0x08 }
+action = "deck.beat_jump_shift_1"
+side = "left"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 8, note = 0x38 }
+action = "deck.beat_jump_shift_1"
+side = "left"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 8, note = 0x09 }
+action = "deck.beat_jump_shift_2"
+side = "left"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 8, note = 0x39 }
+action = "deck.beat_jump_shift_2"
+side = "left"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 8, note = 0x0A }
+action = "deck.beat_jump_shift_3"
+side = "left"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 8, note = 0x3A }
+action = "deck.beat_jump_shift_3"
+side = "left"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 8, note = 0x0B }
+action = "deck.beat_jump_shift_4"
+side = "left"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 8, note = 0x3B }
+action = "deck.beat_jump_shift_4"
+side = "left"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 8, note = 0x0C }
+action = "deck.beat_jump_shift_5"
+side = "left"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 8, note = 0x3C }
+action = "deck.beat_jump_shift_5"
+side = "left"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 8, note = 0x0D }
+action = "deck.beat_jump_shift_6"
+side = "left"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 8, note = 0x3D }
+action = "deck.beat_jump_shift_6"
+side = "left"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 8, note = 0x0E }
+action = "deck.beat_jump_shift_7"
+side = "left"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 8, note = 0x3E }
+action = "deck.beat_jump_shift_7"
+side = "left"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 8, note = 0x0F }
+action = "deck.beat_jump_shift_8"
+side = "left"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 8, note = 0x3F }
+action = "deck.beat_jump_shift_8"
+side = "left"
+pad_mode = "beat_jump"
+
+# Software mode loop roll, pad 1. The shifted notes bind the same action, so a release
+# after SHIFT went down mid-press still ends the roll.
+[[input]]
+midi = { channel = 8, note = 0x00 }
+action = "deck.loop_roll_1"
+side = "left"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 8, note = 0x30 }
+action = "deck.loop_roll_1"
+side = "left"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 8, note = 0x01 }
+action = "deck.loop_roll_2"
+side = "left"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 8, note = 0x31 }
+action = "deck.loop_roll_2"
+side = "left"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 8, note = 0x02 }
+action = "deck.loop_roll_3"
+side = "left"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 8, note = 0x32 }
+action = "deck.loop_roll_3"
+side = "left"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 8, note = 0x03 }
+action = "deck.loop_roll_4"
+side = "left"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 8, note = 0x33 }
+action = "deck.loop_roll_4"
+side = "left"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 8, note = 0x04 }
+action = "deck.loop_roll_5"
+side = "left"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 8, note = 0x34 }
+action = "deck.loop_roll_5"
+side = "left"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 8, note = 0x05 }
+action = "deck.loop_roll_6"
+side = "left"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 8, note = 0x35 }
+action = "deck.loop_roll_6"
+side = "left"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 8, note = 0x06 }
+action = "deck.loop_roll_7"
+side = "left"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 8, note = 0x36 }
+action = "deck.loop_roll_7"
+side = "left"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 8, note = 0x07 }
+action = "deck.loop_roll_8"
+side = "left"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 8, note = 0x37 }
+action = "deck.loop_roll_8"
+side = "left"
+pad_mode = "loop_roll"
+
+# Software mode loop roll, SHIFT bank: pad 1
+[[input]]
+midi = { channel = 8, note = 0x08 }
+action = "deck.loop_roll_1"
+side = "left"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 8, note = 0x38 }
+action = "deck.loop_roll_1"
+side = "left"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 8, note = 0x09 }
+action = "deck.loop_roll_2"
+side = "left"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 8, note = 0x39 }
+action = "deck.loop_roll_2"
+side = "left"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 8, note = 0x0A }
+action = "deck.loop_roll_3"
+side = "left"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 8, note = 0x3A }
+action = "deck.loop_roll_3"
+side = "left"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 8, note = 0x0B }
+action = "deck.loop_roll_4"
+side = "left"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 8, note = 0x3B }
+action = "deck.loop_roll_4"
+side = "left"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 8, note = 0x0C }
+action = "deck.loop_roll_5"
+side = "left"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 8, note = 0x3C }
+action = "deck.loop_roll_5"
+side = "left"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 8, note = 0x0D }
+action = "deck.loop_roll_6"
+side = "left"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 8, note = 0x3D }
+action = "deck.loop_roll_6"
+side = "left"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 8, note = 0x0E }
+action = "deck.loop_roll_7"
+side = "left"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 8, note = 0x3E }
+action = "deck.loop_roll_7"
+side = "left"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 8, note = 0x0F }
+action = "deck.loop_roll_8"
+side = "left"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 8, note = 0x3F }
+action = "deck.loop_roll_8"
+side = "left"
+pad_mode = "loop_roll"
+
+# Software mode slicer, pad 1. The shifted notes bind the same action, so a release
+# after SHIFT went down mid-press still ends the slice.
+[[input]]
+midi = { channel = 8, note = 0x00 }
+action = "deck.slice_1"
+side = "left"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 8, note = 0x30 }
+action = "deck.slice_1"
+side = "left"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 8, note = 0x01 }
+action = "deck.slice_2"
+side = "left"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 8, note = 0x31 }
+action = "deck.slice_2"
+side = "left"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 8, note = 0x02 }
+action = "deck.slice_3"
+side = "left"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 8, note = 0x32 }
+action = "deck.slice_3"
+side = "left"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 8, note = 0x03 }
+action = "deck.slice_4"
+side = "left"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 8, note = 0x33 }
+action = "deck.slice_4"
+side = "left"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 8, note = 0x04 }
+action = "deck.slice_5"
+side = "left"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 8, note = 0x34 }
+action = "deck.slice_5"
+side = "left"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 8, note = 0x05 }
+action = "deck.slice_6"
+side = "left"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 8, note = 0x35 }
+action = "deck.slice_6"
+side = "left"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 8, note = 0x06 }
+action = "deck.slice_7"
+side = "left"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 8, note = 0x36 }
+action = "deck.slice_7"
+side = "left"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 8, note = 0x07 }
+action = "deck.slice_8"
+side = "left"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 8, note = 0x37 }
+action = "deck.slice_8"
+side = "left"
+pad_mode = "slicer"
+
+# Software mode slicer, SHIFT bank: pad 1
+[[input]]
+midi = { channel = 8, note = 0x08 }
+action = "deck.slice_1"
+side = "left"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 8, note = 0x38 }
+action = "deck.slice_1"
+side = "left"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 8, note = 0x09 }
+action = "deck.slice_2"
+side = "left"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 8, note = 0x39 }
+action = "deck.slice_2"
+side = "left"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 8, note = 0x0A }
+action = "deck.slice_3"
+side = "left"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 8, note = 0x3A }
+action = "deck.slice_3"
+side = "left"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 8, note = 0x0B }
+action = "deck.slice_4"
+side = "left"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 8, note = 0x3B }
+action = "deck.slice_4"
+side = "left"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 8, note = 0x0C }
+action = "deck.slice_5"
+side = "left"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 8, note = 0x3C }
+action = "deck.slice_5"
+side = "left"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 8, note = 0x0D }
+action = "deck.slice_6"
+side = "left"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 8, note = 0x3D }
+action = "deck.slice_6"
+side = "left"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 8, note = 0x0E }
+action = "deck.slice_7"
+side = "left"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 8, note = 0x3E }
+action = "deck.slice_7"
+side = "left"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 8, note = 0x0F }
+action = "deck.slice_8"
+side = "left"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 8, note = 0x3F }
+action = "deck.slice_8"
+side = "left"
+pad_mode = "slicer"
+
 
 # ------------------------------------------------------------ performance, right side
 
@@ -507,87 +1280,845 @@ action = "deck.jog_search"
 side = "right"
 value = "relative_offset"
 
+# Pad mode buttons. HOT CUE, FX FADE, PAD SCRATCH and SAMPLER (and SHIFT + SAMPLER,
+# TRANS) leave the pads to the controller's own modes; the SHIFT variants of the other
+# three pick a software pad mode.
+
+# HOT CUE
+[[input]]
+midi = { channel = 2, note = 0x1B }
+action = "pads.mode_hardware"
+side = "right"
+
+# FX FADE
+[[input]]
+midi = { channel = 2, note = 0x1E }
+action = "pads.mode_hardware"
+side = "right"
+
+# PAD SCRATCH
+[[input]]
+midi = { channel = 2, note = 0x20 }
+action = "pads.mode_hardware"
+side = "right"
+
+# SAMPLER
+[[input]]
+midi = { channel = 2, note = 0x22 }
+action = "pads.mode_hardware"
+side = "right"
+
+# SHIFT + SAMPLER (TRANS)
+[[input]]
+midi = { channel = 2, note = 0x6E }
+action = "pads.mode_hardware"
+side = "right"
+
+# SHIFT + HOT CUE
+[[input]]
+midi = { channel = 2, note = 0x69 }
+action = "pads.mode_beat_jump"
+side = "right"
+
+# SHIFT + FX FADE
+[[input]]
+midi = { channel = 2, note = 0x6B }
+action = "pads.mode_loop_roll"
+side = "right"
+
+# SHIFT + PAD SCRATCH
+[[input]]
+midi = { channel = 2, note = 0x6D }
+action = "pads.mode_slicer"
+side = "right"
+
+# SHIFT + VINYL
+[[input]]
+midi = { channel = 2, note = 0x40 }
+action = "deck.slip_toggle"
+side = "right"
+
 # HOT CUE pad 1
 [[input]]
 midi = { channel = 9, note = 0x00 }
 action = "deck.hotcue_1"
 side = "right"
+pad_mode = "hardware"
 
 [[input]]
 midi = { channel = 9, note = 0x01 }
 action = "deck.hotcue_2"
 side = "right"
+pad_mode = "hardware"
 
 [[input]]
 midi = { channel = 9, note = 0x02 }
 action = "deck.hotcue_3"
 side = "right"
+pad_mode = "hardware"
 
 [[input]]
 midi = { channel = 9, note = 0x03 }
 action = "deck.hotcue_4"
 side = "right"
+pad_mode = "hardware"
 
 [[input]]
 midi = { channel = 9, note = 0x04 }
 action = "deck.hotcue_5"
 side = "right"
+pad_mode = "hardware"
 
 [[input]]
 midi = { channel = 9, note = 0x05 }
 action = "deck.hotcue_6"
 side = "right"
+pad_mode = "hardware"
 
 [[input]]
 midi = { channel = 9, note = 0x06 }
 action = "deck.hotcue_7"
 side = "right"
+pad_mode = "hardware"
 
 [[input]]
 midi = { channel = 9, note = 0x07 }
 action = "deck.hotcue_8"
 side = "right"
+pad_mode = "hardware"
 
 # SHIFT + HOT CUE pad 1
 [[input]]
 midi = { channel = 9, note = 0x08 }
 action = "deck.hotcue_delete_1"
 side = "right"
+pad_mode = "hardware"
 
 [[input]]
 midi = { channel = 9, note = 0x09 }
 action = "deck.hotcue_delete_2"
 side = "right"
+pad_mode = "hardware"
 
 [[input]]
 midi = { channel = 9, note = 0x0A }
 action = "deck.hotcue_delete_3"
 side = "right"
+pad_mode = "hardware"
 
 [[input]]
 midi = { channel = 9, note = 0x0B }
 action = "deck.hotcue_delete_4"
 side = "right"
+pad_mode = "hardware"
 
 [[input]]
 midi = { channel = 9, note = 0x0C }
 action = "deck.hotcue_delete_5"
 side = "right"
+pad_mode = "hardware"
 
 [[input]]
 midi = { channel = 9, note = 0x0D }
 action = "deck.hotcue_delete_6"
 side = "right"
+pad_mode = "hardware"
 
 [[input]]
 midi = { channel = 9, note = 0x0E }
 action = "deck.hotcue_delete_7"
 side = "right"
+pad_mode = "hardware"
 
 [[input]]
 midi = { channel = 9, note = 0x0F }
 action = "deck.hotcue_delete_8"
 side = "right"
+pad_mode = "hardware"
+
+# SAMPLER pad 1: the sampler is shared, so both sides play the same samples
+[[input]]
+midi = { channel = 9, note = 0x30 }
+action = "sampler.play_1"
+side = "right"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 9, note = 0x31 }
+action = "sampler.play_2"
+side = "right"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 9, note = 0x32 }
+action = "sampler.play_3"
+side = "right"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 9, note = 0x33 }
+action = "sampler.play_4"
+side = "right"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 9, note = 0x34 }
+action = "sampler.play_5"
+side = "right"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 9, note = 0x35 }
+action = "sampler.play_6"
+side = "right"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 9, note = 0x36 }
+action = "sampler.play_7"
+side = "right"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 9, note = 0x37 }
+action = "sampler.play_8"
+side = "right"
+pad_mode = "hardware"
+
+# SHIFT + SAMPLER pad 1
+[[input]]
+midi = { channel = 9, note = 0x38 }
+action = "sampler.stop_1"
+side = "right"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 9, note = 0x39 }
+action = "sampler.stop_2"
+side = "right"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 9, note = 0x3A }
+action = "sampler.stop_3"
+side = "right"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 9, note = 0x3B }
+action = "sampler.stop_4"
+side = "right"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 9, note = 0x3C }
+action = "sampler.stop_5"
+side = "right"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 9, note = 0x3D }
+action = "sampler.stop_6"
+side = "right"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 9, note = 0x3E }
+action = "sampler.stop_7"
+side = "right"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 9, note = 0x3F }
+action = "sampler.stop_8"
+side = "right"
+pad_mode = "hardware"
+
+# Software mode beat jump, pad 1 (each pad is bound on the HOT CUE note, then the same
+# pad of the SAMPLER bank)
+[[input]]
+midi = { channel = 9, note = 0x00 }
+action = "deck.beat_jump_1"
+side = "right"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 9, note = 0x30 }
+action = "deck.beat_jump_1"
+side = "right"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 9, note = 0x01 }
+action = "deck.beat_jump_2"
+side = "right"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 9, note = 0x31 }
+action = "deck.beat_jump_2"
+side = "right"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 9, note = 0x02 }
+action = "deck.beat_jump_3"
+side = "right"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 9, note = 0x32 }
+action = "deck.beat_jump_3"
+side = "right"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 9, note = 0x03 }
+action = "deck.beat_jump_4"
+side = "right"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 9, note = 0x33 }
+action = "deck.beat_jump_4"
+side = "right"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 9, note = 0x04 }
+action = "deck.beat_jump_5"
+side = "right"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 9, note = 0x34 }
+action = "deck.beat_jump_5"
+side = "right"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 9, note = 0x05 }
+action = "deck.beat_jump_6"
+side = "right"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 9, note = 0x35 }
+action = "deck.beat_jump_6"
+side = "right"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 9, note = 0x06 }
+action = "deck.beat_jump_7"
+side = "right"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 9, note = 0x36 }
+action = "deck.beat_jump_7"
+side = "right"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 9, note = 0x07 }
+action = "deck.beat_jump_8"
+side = "right"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 9, note = 0x37 }
+action = "deck.beat_jump_8"
+side = "right"
+pad_mode = "beat_jump"
+
+# Software mode beat jump with SHIFT, pad 1 (SHIFT + HOT CUE note, then SHIFT + SAMPLER)
+[[input]]
+midi = { channel = 9, note = 0x08 }
+action = "deck.beat_jump_shift_1"
+side = "right"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 9, note = 0x38 }
+action = "deck.beat_jump_shift_1"
+side = "right"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 9, note = 0x09 }
+action = "deck.beat_jump_shift_2"
+side = "right"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 9, note = 0x39 }
+action = "deck.beat_jump_shift_2"
+side = "right"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 9, note = 0x0A }
+action = "deck.beat_jump_shift_3"
+side = "right"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 9, note = 0x3A }
+action = "deck.beat_jump_shift_3"
+side = "right"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 9, note = 0x0B }
+action = "deck.beat_jump_shift_4"
+side = "right"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 9, note = 0x3B }
+action = "deck.beat_jump_shift_4"
+side = "right"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 9, note = 0x0C }
+action = "deck.beat_jump_shift_5"
+side = "right"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 9, note = 0x3C }
+action = "deck.beat_jump_shift_5"
+side = "right"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 9, note = 0x0D }
+action = "deck.beat_jump_shift_6"
+side = "right"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 9, note = 0x3D }
+action = "deck.beat_jump_shift_6"
+side = "right"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 9, note = 0x0E }
+action = "deck.beat_jump_shift_7"
+side = "right"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 9, note = 0x3E }
+action = "deck.beat_jump_shift_7"
+side = "right"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 9, note = 0x0F }
+action = "deck.beat_jump_shift_8"
+side = "right"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { channel = 9, note = 0x3F }
+action = "deck.beat_jump_shift_8"
+side = "right"
+pad_mode = "beat_jump"
+
+# Software mode loop roll, pad 1. The shifted notes bind the same action, so a release
+# after SHIFT went down mid-press still ends the roll.
+[[input]]
+midi = { channel = 9, note = 0x00 }
+action = "deck.loop_roll_1"
+side = "right"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 9, note = 0x30 }
+action = "deck.loop_roll_1"
+side = "right"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 9, note = 0x01 }
+action = "deck.loop_roll_2"
+side = "right"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 9, note = 0x31 }
+action = "deck.loop_roll_2"
+side = "right"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 9, note = 0x02 }
+action = "deck.loop_roll_3"
+side = "right"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 9, note = 0x32 }
+action = "deck.loop_roll_3"
+side = "right"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 9, note = 0x03 }
+action = "deck.loop_roll_4"
+side = "right"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 9, note = 0x33 }
+action = "deck.loop_roll_4"
+side = "right"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 9, note = 0x04 }
+action = "deck.loop_roll_5"
+side = "right"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 9, note = 0x34 }
+action = "deck.loop_roll_5"
+side = "right"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 9, note = 0x05 }
+action = "deck.loop_roll_6"
+side = "right"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 9, note = 0x35 }
+action = "deck.loop_roll_6"
+side = "right"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 9, note = 0x06 }
+action = "deck.loop_roll_7"
+side = "right"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 9, note = 0x36 }
+action = "deck.loop_roll_7"
+side = "right"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 9, note = 0x07 }
+action = "deck.loop_roll_8"
+side = "right"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 9, note = 0x37 }
+action = "deck.loop_roll_8"
+side = "right"
+pad_mode = "loop_roll"
+
+# Software mode loop roll, SHIFT bank: pad 1
+[[input]]
+midi = { channel = 9, note = 0x08 }
+action = "deck.loop_roll_1"
+side = "right"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 9, note = 0x38 }
+action = "deck.loop_roll_1"
+side = "right"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 9, note = 0x09 }
+action = "deck.loop_roll_2"
+side = "right"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 9, note = 0x39 }
+action = "deck.loop_roll_2"
+side = "right"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 9, note = 0x0A }
+action = "deck.loop_roll_3"
+side = "right"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 9, note = 0x3A }
+action = "deck.loop_roll_3"
+side = "right"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 9, note = 0x0B }
+action = "deck.loop_roll_4"
+side = "right"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 9, note = 0x3B }
+action = "deck.loop_roll_4"
+side = "right"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 9, note = 0x0C }
+action = "deck.loop_roll_5"
+side = "right"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 9, note = 0x3C }
+action = "deck.loop_roll_5"
+side = "right"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 9, note = 0x0D }
+action = "deck.loop_roll_6"
+side = "right"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 9, note = 0x3D }
+action = "deck.loop_roll_6"
+side = "right"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 9, note = 0x0E }
+action = "deck.loop_roll_7"
+side = "right"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 9, note = 0x3E }
+action = "deck.loop_roll_7"
+side = "right"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 9, note = 0x0F }
+action = "deck.loop_roll_8"
+side = "right"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { channel = 9, note = 0x3F }
+action = "deck.loop_roll_8"
+side = "right"
+pad_mode = "loop_roll"
+
+# Software mode slicer, pad 1. The shifted notes bind the same action, so a release
+# after SHIFT went down mid-press still ends the slice.
+[[input]]
+midi = { channel = 9, note = 0x00 }
+action = "deck.slice_1"
+side = "right"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 9, note = 0x30 }
+action = "deck.slice_1"
+side = "right"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 9, note = 0x01 }
+action = "deck.slice_2"
+side = "right"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 9, note = 0x31 }
+action = "deck.slice_2"
+side = "right"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 9, note = 0x02 }
+action = "deck.slice_3"
+side = "right"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 9, note = 0x32 }
+action = "deck.slice_3"
+side = "right"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 9, note = 0x03 }
+action = "deck.slice_4"
+side = "right"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 9, note = 0x33 }
+action = "deck.slice_4"
+side = "right"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 9, note = 0x04 }
+action = "deck.slice_5"
+side = "right"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 9, note = 0x34 }
+action = "deck.slice_5"
+side = "right"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 9, note = 0x05 }
+action = "deck.slice_6"
+side = "right"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 9, note = 0x35 }
+action = "deck.slice_6"
+side = "right"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 9, note = 0x06 }
+action = "deck.slice_7"
+side = "right"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 9, note = 0x36 }
+action = "deck.slice_7"
+side = "right"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 9, note = 0x07 }
+action = "deck.slice_8"
+side = "right"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 9, note = 0x37 }
+action = "deck.slice_8"
+side = "right"
+pad_mode = "slicer"
+
+# Software mode slicer, SHIFT bank: pad 1
+[[input]]
+midi = { channel = 9, note = 0x08 }
+action = "deck.slice_1"
+side = "right"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 9, note = 0x38 }
+action = "deck.slice_1"
+side = "right"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 9, note = 0x09 }
+action = "deck.slice_2"
+side = "right"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 9, note = 0x39 }
+action = "deck.slice_2"
+side = "right"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 9, note = 0x0A }
+action = "deck.slice_3"
+side = "right"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 9, note = 0x3A }
+action = "deck.slice_3"
+side = "right"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 9, note = 0x0B }
+action = "deck.slice_4"
+side = "right"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 9, note = 0x3B }
+action = "deck.slice_4"
+side = "right"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 9, note = 0x0C }
+action = "deck.slice_5"
+side = "right"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 9, note = 0x3C }
+action = "deck.slice_5"
+side = "right"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 9, note = 0x0D }
+action = "deck.slice_6"
+side = "right"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 9, note = 0x3D }
+action = "deck.slice_6"
+side = "right"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 9, note = 0x0E }
+action = "deck.slice_7"
+side = "right"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 9, note = 0x3E }
+action = "deck.slice_7"
+side = "right"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 9, note = 0x0F }
+action = "deck.slice_8"
+side = "right"
+pad_mode = "slicer"
+
+[[input]]
+midi = { channel = 9, note = 0x3F }
+action = "deck.slice_8"
+side = "right"
+pad_mode = "slicer"
+
 
 # ------------------------------------------------------------------------ LEDs
 #
@@ -609,16 +2140,11 @@ off = 0
 #   SHIFT+SYNC             note 0x5C
 #   SHIFT+PLAY             note 0x47
 #   KEY LOCK               note 0x1A
-#   SHIFT+VINYL            note 0x40
-#   pad mode HOT CUE       note 0x1B        SHIFT             note 0x69
-#   pad mode FX FADE       note 0x1E        SHIFT             note 0x6B
-#   pad mode PAD SCRATCH   note 0x20        SHIFT             note 0x6D
-#   pad mode SAMPLER       note 0x22        SHIFT             note 0x6E
 #   channel fader + SHIFT  (fader start) notes 0x52 / 0x66, with the fader's cc14
 #
 #   Pads: channel 8 (0x97) left, channel 9 (0x98) right. HOT CUE (0x00-0x07, SHIFT
-#     0x08-0x0F) is mapped; the others, notes:
-#     FX FADE 0x10-0x17, PAD SCRATCH 0x20-0x27, SAMPLER 0x30-0x37.
+#     0x08-0x0F) and SAMPLER (0x30-0x37, SHIFT 0x38-0x3F) are mapped; the others, notes:
+#     FX FADE 0x10-0x17, PAD SCRATCH 0x20-0x27.
 #     The FX FADE and PAD SCRATCH pad steps also recorded firmware-generated messages
 #     (notes 0x4D/0x4C/0x4A at a constant 127, cc 0x22): those are not pads.
 #
