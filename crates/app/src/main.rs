@@ -73,6 +73,19 @@ enum MidiCommand {
         #[arg(long, value_name = "STEP")]
         redo: Vec<String>,
     },
+    /// Send raw MIDI messages to a controller, for exploring it
+    Send {
+        /// Output port name (substring; default: the first output containing "DDJ")
+        #[arg(long, value_name = "NAME")]
+        port: Option<String>,
+        /// Keep the port open until Enter is pressed (some controllers forget what
+        /// they were sent when the sender goes away)
+        #[arg(long)]
+        hold: bool,
+        /// Messages in hex, one per argument, e.g. "90 0B 7F" or "F0 00 20 7F 03 01 F7"
+        #[arg(required = true, value_name = "HEX")]
+        messages: Vec<String>,
+    },
     /// Find which MIDI message lights a controller LED, by binary search
     LedScan {
         /// Port name (substring; default: the first input containing "DDJ")
@@ -124,6 +137,11 @@ fn main() -> ExitCode {
             port,
             redo,
         }) => midi_cmd::capture(&checklist, &out, port.as_deref(), &redo),
+        Sub::Midi(MidiCommand::Send {
+            port,
+            hold,
+            messages,
+        }) => midi_cmd::send(port.as_deref(), hold, &messages),
         Sub::Midi(MidiCommand::LedScan {
             port,
             channels,
