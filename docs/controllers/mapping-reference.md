@@ -232,9 +232,9 @@ browser actions).
 | `browser.scroll` | none | relative | Move the cursor of the focused browser pane by the steps sent (positive is down). It stops at the first and last rows. |
 | `browser.toggle_focus` | none | button | Press to switch the browser between the tree (playlists, folders, all tracks) and the track list. |
 | `pads.mode_hardware` | side | button | Press to set the side's pad mode to hardware (the controller's own pad modes); no sound changes by itself. |
-| `pads.mode_beat_jump` | side | button | Press to set the side's pad mode to beat jump (beat jump); no sound changes by itself. |
-| `pads.mode_loop_roll` | side | button | Press to set the side's pad mode to loop roll (loop roll); no sound changes by itself. |
-| `pads.mode_slicer` | side | button | Press to set the side's pad mode to slicer (the slicer); no sound changes by itself. |
+| `pads.mode_beat_jump` | side | button | Press to set the side's pad mode to beat jump; no sound changes by itself. |
+| `pads.mode_loop_roll` | side | button | Press to set the side's pad mode to loop roll; no sound changes by itself. |
+| `pads.mode_slicer` | side | button | Press to set the side's pad mode to slicer; no sound changes by itself. |
 | `deck.beat_jump_1` | deck | button | Press to jump the playhead by the size of beat jump pad 1 (default -4, 4, -8, 8, -16, 16, -32, 32 beats for pads 1 to 8). Needs a beatgrid; the jump stops at the track's start and end. |
 | `deck.beat_jump_2` | deck | button | Press to jump the playhead by the size of beat jump pad 2 (default -4, 4, -8, 8, -16, 16, -32, 32 beats for pads 1 to 8). Needs a beatgrid; the jump stops at the track's start and end. |
 | `deck.beat_jump_3` | deck | button | Press to jump the playhead by the size of beat jump pad 3 (default -4, 4, -8, 8, -16, 16, -32, 32 beats for pads 1 to 8). Needs a beatgrid; the jump stops at the track's start and end. |
