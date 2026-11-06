@@ -213,7 +213,9 @@ pub enum ChannelCommand {
     /// is ignored. Turning a slot on from off starts the effect from clear state.
     FxEnabled(usize, bool),
     /// The channel's effect amount in `[0, 1]` (clamped, 0.5 for a new engine): the dry/wet
-    /// of all its effects, or the cutoff of a Filter slot (which is always fully wet).
+    /// of all its effects, or the cutoff of a Filter slot (which is always fully wet). Echo
+    /// and reverb keep the dry signal at unity up to 0.5 while the wet rises to unity, then
+    /// fade the dry out (dry `min(1, 2(1 − a))`, wet `min(1, 2a)`); flanger crossfades.
     FxAmount(f32),
 }
 

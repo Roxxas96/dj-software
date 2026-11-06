@@ -2,7 +2,7 @@
 //!
 //! One [`Effect`] holds the state of every kind, all allocated up front, so switching the
 //! kind on the audio thread never allocates. [`Effect::process`] returns the wet signal
-//! only; the channel crossfades it with the dry input by the effect amount.
+//! only; the channel mixes it with the dry input by the effect amount.
 
 mod echo;
 mod filter;
