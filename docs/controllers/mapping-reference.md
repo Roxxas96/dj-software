@@ -83,6 +83,7 @@ It is not applied again after a reconnect, so values you set meanwhile are kept.
 | `side` | `"left"` or `"right"`: whatever deck that side shows now (see [Layers](#layers-and-deck-switching)). Use `deck` or `side`, never both. |
 | `shift` | `true` or `false`: only fire while SHIFT of the binding's side is held, or not held. For master and browser actions, any side's SHIFT counts. |
 | `active_deck` | 1-4: only fire while the binding's side shows this deck. Must be a deck on the binding's side. |
+| `pad_mode` | `"hardware"`, `"beat_jump"`, `"loop_roll"` or `"slicer"`: only fire while the binding's side has its performance pads in this mode. Needs a side: a `side`, or a `deck` (that deck's side). A master action takes `side` only together with `pad_mode`, where it just scopes the condition and the action stays global (for example `sampler.play_3` with `side = "left"`); `pad_mode` on a master action without `side` is a load error (`pad_mode needs a side`), and so is `side` on a master action without `pad_mode`. A press keeps its release even if the pad mode changes while it is held. |
 | `value` | How to read the message: `"button"`, `"absolute"`, `"relative_twos"` or `"relative_offset"`. |
 | `invert` | `true` flips an absolute value (`1 - v`) or negates relative steps. Default `false`. |
 | `soft_takeover` | `false` turns [soft takeover](#soft-takeover) off for an absolute binding. Default `true`. |

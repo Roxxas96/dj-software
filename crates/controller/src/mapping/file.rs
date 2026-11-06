@@ -6,7 +6,7 @@
 
 use std::fmt;
 
-use actions::{Action, ActionKind, InputKind, Scope, Side, StateKey, Target};
+use actions::{Action, ActionKind, InputKind, PadMode, Scope, Side, StateKey, Target};
 use engine::DeckId;
 use serde::Deserialize;
 
@@ -84,6 +84,11 @@ pub struct InputBinding {
     pub shift: Option<bool>,
     /// Condition: the side `Side::of(deck)` currently shows this deck.
     pub active_deck: Option<DeckId>,
+    /// Condition: the binding's side has its performance pads in this mode.
+    pub pad_mode: Option<PadMode>,
+    /// The `side` of a master action's binding, which only scopes `pad_mode` (and the
+    /// SHIFT condition); the action itself stays global.
+    pub pad_scope: Option<Side>,
     pub value: ValueKind,
     /// Absolute values become `1 - v`; relative steps are negated.
     pub invert: bool,
@@ -92,9 +97,9 @@ pub struct InputBinding {
 }
 
 impl InputBinding {
-    /// The side whose SHIFT and active deck this binding's conditions read, if any.
+    /// The side whose SHIFT, active deck and pad mode this binding's conditions read, if any.
     pub fn side(&self) -> Option<Side> {
-        side_of(self.target)
+        side_of(self.target).or(self.pad_scope)
     }
 }
 
@@ -261,6 +266,7 @@ struct RawInput {
     side: Option<RawSide>,
     shift: Option<bool>,
     active_deck: Option<i64>,
+    pad_mode: Option<String>,
     value: Option<RawValueKind>,
     #[serde(default)]
     invert: bool,
@@ -308,12 +314,30 @@ fn init_action(raw: RawInit) -> Result<InitAction, String> {
 fn input_binding(raw: RawInput) -> Result<InputBinding, String> {
     let kind = action_kind(&raw.action)?;
     let midi = midi_source(&raw.midi)?;
+    let pad_mode = raw
+        .pad_mode
+        .as_deref()
+        .map(|id| {
+            PadMode::from_id(id).ok_or_else(|| {
+                let ids: Vec<&str> = PadMode::ALL.iter().map(|mode| mode.id()).collect();
+                format!("unknown pad_mode `{id}` (use {})", ids.join(", "))
+            })
+        })
+        .transpose()?;
+    // A master action takes a `side` only to scope its `pad_mode`.
+    let (scope_side, pad_scope) = match (kind.scope(), pad_mode, raw.side) {
+        (Scope::Global, Some(_), Some(s)) if raw.deck.is_none() => (None, Some(side(s))),
+        _ => (raw.side, None),
+    };
     let target = scoped_target(
         kind.scope(),
         &format!("action `{}`", raw.action),
         raw.deck,
-        raw.side,
+        scope_side,
     )?;
+    if pad_mode.is_some() && side_of(target).or(pad_scope).is_none() {
+        return Err("pad_mode needs a side".into());
+    }
     let value = match raw.value {
         Some(RawValueKind::Button) => ValueKind::Button,
         Some(RawValueKind::Absolute) => ValueKind::Absolute,
@@ -360,6 +384,8 @@ fn input_binding(raw: RawInput) -> Result<InputBinding, String> {
         target,
         shift: raw.shift,
         active_deck,
+        pad_mode,
+        pad_scope,
         value,
         invert: raw.invert,
         soft_takeover: value == ValueKind::Absolute && raw.soft_takeover.unwrap_or(true),
