@@ -88,6 +88,25 @@ const DEFAULT_FX_AMOUNT: f32 = 0.5;
 const DEFAULT_FX_KINDS: [EffectKind; FX_SLOTS] =
     [EffectKind::Echo, EffectKind::Reverb, EffectKind::Flanger];
 
+/// A slot's output for dry input `x` and its effect's `wet` output, with the slot `on`
+/// (0 to 1, ramped) and the channel's effect `amount` (0 to 1). Echo and reverb follow a
+/// DJ mixer's dry/wet curve: the dry signal stays at unity up to mid amount while the wet
+/// rises, then fades out as the wet holds at unity. Flanger crossfades by the amount;
+/// Filter's amount is its cutoff, so only `on` mixes it.
+#[inline]
+fn fx_mix(kind: EffectKind, x: f32, wet: f32, on: f32, amount: f32) -> f32 {
+    let full = match kind {
+        EffectKind::Echo | EffectKind::Reverb => {
+            let dry_gain = (2.0 * (1.0 - amount)).min(1.0);
+            let wet_gain = (2.0 * amount).min(1.0);
+            x * dry_gain + wet * wet_gain
+        }
+        EffectKind::Flanger => x + (wet - x) * amount,
+        EffectKind::Filter => wet,
+    };
+    x + (full - x) * on
+}
+
 #[derive(Debug)]
 struct FxSlot {
     effect: Effect,
@@ -372,12 +391,7 @@ impl Mixer {
                             continue;
                         }
                         let wet = slot.effect.process(ch, pre_fader, beat_frames);
-                        let mix = if slot.kind == EffectKind::Filter {
-                            on.at(i)
-                        } else {
-                            on.at(i) * fx_amount.at(i)
-                        };
-                        pre_fader += (wet - pre_fader) * mix;
+                        pre_fader = fx_mix(slot.kind, pre_fader, wet, on.at(i), fx_amount.at(i));
                     }
                     h[ch] += pre_fader * pfl;
                     let post_fader = pre_fader * fader;
@@ -423,5 +437,40 @@ impl Mixer {
             channel_peak,
             master_peak,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn echo_and_reverb_keep_the_dry_signal_to_mid_amount() {
+        for kind in [EffectKind::Echo, EffectKind::Reverb] {
+            // Dry at unity and wet at unity at mid amount.
+            assert_eq!(fx_mix(kind, 1.0, 0.0, 1.0, 0.5), 1.0, "{kind:?}");
+            assert_eq!(fx_mix(kind, 0.0, 1.0, 1.0, 0.5), 1.0, "{kind:?}");
+            // Full amount: wet only.
+            assert_eq!(fx_mix(kind, 1.0, 0.0, 1.0, 1.0), 0.0, "{kind:?}");
+            assert_eq!(fx_mix(kind, 0.0, 1.0, 1.0, 1.0), 1.0, "{kind:?}");
+            // A quarter: dry at unity, wet at half.
+            assert_eq!(fx_mix(kind, 1.0, 0.0, 1.0, 0.25), 1.0, "{kind:?}");
+            assert_eq!(fx_mix(kind, 0.0, 1.0, 1.0, 0.25), 0.5, "{kind:?}");
+            // A slot fading out goes back to the dry input.
+            assert_eq!(fx_mix(kind, 0.3, 0.9, 0.0, 1.0), 0.3, "{kind:?}");
+            assert!(
+                (fx_mix(kind, 1.0, 0.0, 0.5, 1.0) - 0.5).abs() < 1e-6,
+                "{kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn flanger_and_filter_crossfade() {
+        assert_eq!(fx_mix(EffectKind::Flanger, 1.0, 0.0, 1.0, 0.5), 0.5);
+        assert_eq!(fx_mix(EffectKind::Flanger, 0.0, 1.0, 1.0, 0.25), 0.25);
+        // Filter's amount is its cutoff: on mixes it alone.
+        assert_eq!(fx_mix(EffectKind::Filter, 1.0, 0.0, 1.0, 0.5), 0.0);
+        assert_eq!(fx_mix(EffectKind::Filter, 1.0, 0.0, 0.5, 0.1), 0.5);
     }
 }
