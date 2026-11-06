@@ -316,3 +316,31 @@ fn render_handles_mismatched_buffer_lengths() {
     assert!(m.iter().all(|&s| s == 1.0));
     assert!(h[10..].iter().all(|&s| s == 0.0));
 }
+
+#[test]
+fn crossfader_disabled_plays_every_channel_at_full_level() {
+    let (mut c, mut r) = setup();
+    master(&mut c, MasterCommand::MasterLevel(1.0));
+    master(&mut c, MasterCommand::Crossfader(0.0));
+    master(&mut c, MasterCommand::CrossfaderEnabled(false));
+    // Deck 2 (index 1) defaults to B, which full A would mute.
+    settle(&mut r);
+    play(&mut c, 1);
+    settle_playback(&mut r);
+    let (m, _) = render(&mut r, 1024);
+    assert_all_near(&m, SIGNAL);
+
+    // Re-enabling restores the gain from the current position.
+    master(&mut c, MasterCommand::CrossfaderEnabled(true));
+    render(&mut r, BLOCK);
+    let (m, _) = render(&mut r, 1024);
+    assert!(m.iter().all(|&s| s.abs() < SETTLED_EPSILON));
+
+    // A position change while disabled is kept for later.
+    master(&mut c, MasterCommand::CrossfaderEnabled(false));
+    master(&mut c, MasterCommand::Crossfader(1.0));
+    channel(&mut c, 1, ChannelCommand::XfaderAssign(XfaderAssign::A));
+    render(&mut r, BLOCK);
+    let (m, _) = render(&mut r, 1024);
+    assert_all_near(&m, SIGNAL);
+}

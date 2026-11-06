@@ -4,6 +4,7 @@ use rtrb::{Consumer, Producer, PushError};
 
 use crate::deck::Deck;
 use crate::mixer::Mixer;
+use crate::sampler::Sampler;
 use crate::shared::Shared;
 use crate::{Command, DeckId, EngineConfig, Meters, TrackBuffer};
 
@@ -16,6 +17,7 @@ pub struct EngineRenderer {
     shared: Arc<Shared>,
     decks: [Deck; DeckId::ALL.len()],
     mixer: Mixer,
+    sampler: Sampler,
 }
 
 impl EngineRenderer {
@@ -31,6 +33,7 @@ impl EngineRenderer {
             shared: Arc::default(),
             decks: Default::default(),
             mixer: Mixer::new(config.sample_rate, config.max_block_frames),
+            sampler: Sampler::new(config.max_block_frames),
         };
         renderer.publish();
         renderer
@@ -70,7 +73,10 @@ impl EngineRenderer {
             for (deck, input) in self.decks.iter_mut().zip(inputs) {
                 deck.render_add(input, self.config.sample_rate);
             }
-            meters.merge(&self.mixer.process(master, headphones));
+            let sampler = self
+                .sampler
+                .render(master.len() / 2, self.config.sample_rate);
+            meters.merge(&self.mixer.process(master, headphones, sampler));
         }
 
         self.publish();
@@ -92,6 +98,11 @@ impl EngineRenderer {
             } => self.phase_sync(deck, master, beat_ratio),
             Command::Channel(id, cmd) => self.mixer.apply_channel(id, cmd),
             Command::Master(cmd) => self.mixer.apply_master(cmd),
+            Command::Sampler(cmd) => {
+                if let Some(old) = self.sampler.apply(cmd) {
+                    self.discard(old);
+                }
+            }
         }
     }
 
@@ -159,5 +170,6 @@ impl EngineRenderer {
         for (id, deck) in DeckId::ALL.into_iter().zip(&self.decks) {
             self.shared.store_deck(id, &deck.snapshot());
         }
+        self.shared.store_sampler(&self.sampler.snapshot());
     }
 }

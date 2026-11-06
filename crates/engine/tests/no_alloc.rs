@@ -6,7 +6,7 @@ use assert_no_alloc::{AllocDisabler, assert_no_alloc};
 use common::ramp_track;
 use engine::{
     ChannelCommand, Command, DeckCommand, DeckId, EngineConfig, Grid, HotcueSlot, JogSurface,
-    MasterCommand, TrackMemory, XfaderAssign, engine,
+    MasterCommand, SamplerCommand, TrackMemory, XfaderAssign, engine,
 };
 
 #[global_allocator]
@@ -47,6 +47,7 @@ fn render_does_not_allocate() {
     drop(first);
     // Built up front: allocating it inside the guarded section would abort the test.
     let replacement = ramp_track(44_100, 200_000);
+    let sample = ramp_track(44_100, 8_000);
     let mut master = vec![0.0; BLOCK_FRAMES * 2];
     let mut headphones = vec![0.0; BLOCK_FRAMES * 2];
 
@@ -59,6 +60,13 @@ fn render_does_not_allocate() {
         });
     };
 
+    for slot in 0..8 {
+        c.send(Command::Sampler(SamplerCommand::Set(
+            slot,
+            Some(ramp_track(22_050, 30_000)),
+        )))
+        .unwrap();
+    }
     render_blocks(50);
     c.send(Command::Deck(
         decks[0],
@@ -272,10 +280,42 @@ fn render_does_not_allocate() {
         MasterCommand::HeadphoneLevel(0.7),
         MasterCommand::HeadphoneMix(0.5),
         MasterCommand::Crossfader(f32::INFINITY),
+        MasterCommand::CrossfaderEnabled(false),
+        MasterCommand::Crossfader(0.9),
+        MasterCommand::CrossfaderEnabled(true),
     ] {
         c.send(Command::Master(cmd)).unwrap();
         render_blocks(2);
     }
+
+    // Sampler: set, play, restart, stop, volume, and a render with every slot playing.
+    for cmd in [
+        SamplerCommand::Volume(0.6),
+        SamplerCommand::Volume(f32::NAN),
+        SamplerCommand::Play(0),
+        SamplerCommand::Play(0),
+        SamplerCommand::Stop(0),
+        SamplerCommand::Play(99),
+    ] {
+        c.send(Command::Sampler(cmd)).unwrap();
+        render_blocks(2);
+    }
+    for slot in 0..8 {
+        c.send(Command::Sampler(SamplerCommand::Play(slot)))
+            .unwrap();
+    }
+    render_blocks(10);
+    assert!(c.sampler().playing.iter().all(|&p| p));
+    // Replacing a playing sample hands the old one to the garbage queue.
+    c.send(Command::Sampler(SamplerCommand::Set(3, Some(sample))))
+        .unwrap();
+    render_blocks(2);
+    c.send(Command::Sampler(SamplerCommand::Set(4, None)))
+        .unwrap();
+    render_blocks(2);
+    c.send(Command::Sampler(SamplerCommand::Play(3))).unwrap();
+    render_blocks(100);
+    assert!(!c.sampler().playing[3], "the sample ran out");
 
     // Phase sync between two playing decks, and a pending one resolved on play.
     c.send(Command::Deck(decks[1], DeckCommand::Play)).unwrap();

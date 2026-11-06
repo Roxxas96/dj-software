@@ -1,7 +1,8 @@
 //! Four-channel DJ mixer: channel strips, crossfader, master and headphone buses.
 //!
 //! Signal flow per channel: deck → trim → EQ → filter → PFL tap → fader → crossfader →
-//! master sum → master level → clamp to `[-1, 1]`. Headphones get
+//! master sum → master level → clamp to `[-1, 1]`. The sampler's output joins the master
+//! sum after the channels. Headphones get
 //! `lerp(cue_sum, master_pre_clamp, mix) * headphone_level`, clamped, where `cue_sum` is the
 //! sum of the PFL taps. Every gain change is ramped linearly across one block.
 //!
@@ -68,6 +69,11 @@ fn side_gain(assign: XfaderAssign, crossfader: f32) -> f32 {
     }
 }
 
+/// A channel's crossfader gain; `None` is a disabled crossfader, which passes everything.
+fn strip_gain(assign: XfaderAssign, crossfader: Option<f32>) -> f32 {
+    crossfader.map_or(1.0, |position| side_gain(assign, position))
+}
+
 #[derive(Debug)]
 struct ChannelStrip {
     trim: Ramp,
@@ -93,7 +99,7 @@ impl ChannelStrip {
             fader: Ramp::new(fader_gain(1.0)),
             pfl: Ramp::new(0.0),
             assign,
-            xfade: Ramp::new(side_gain(assign, crossfader)),
+            xfade: Ramp::new(strip_gain(assign, Some(crossfader))),
         }
     }
 
@@ -110,6 +116,7 @@ pub(crate) struct Mixer {
     inputs: [Box<[f32]>; CHANNELS],
     sample_rate: u32,
     crossfader: f32,
+    crossfader_enabled: bool,
     master_level: Ramp,
     headphone_level: Ramp,
     headphone_mix: Ramp,
@@ -132,6 +139,7 @@ impl Mixer {
             sample_rate,
             inputs: std::array::from_fn(|_| vec![0.0; max_block_frames * 2].into_boxed_slice()),
             crossfader: CROSSFADER,
+            crossfader_enabled: true,
             master_level: Ramp::new(level_gain(0.8)),
             headphone_level: Ramp::new(level_gain(0.8)),
             headphone_mix: Ramp::new(0.0),
@@ -140,7 +148,7 @@ impl Mixer {
 
     // Non-finite positions would poison the buses (and later the filter state): drop them.
     pub(crate) fn apply_channel(&mut self, id: DeckId, cmd: ChannelCommand) {
-        let crossfader = self.crossfader;
+        let crossfader = self.crossfader_enabled.then_some(self.crossfader);
         let strip = &mut self.channels[id.index()];
         match cmd {
             ChannelCommand::Trim(v) if v.is_finite() => strip.trim.target = trim_gain(v),
@@ -152,7 +160,7 @@ impl Mixer {
             ChannelCommand::Pfl(on) => strip.pfl.target = if on { 1.0 } else { 0.0 },
             ChannelCommand::XfaderAssign(assign) => {
                 strip.assign = assign;
-                strip.xfade.target = side_gain(assign, crossfader);
+                strip.xfade.target = strip_gain(assign, crossfader);
             }
             ChannelCommand::Trim(_)
             | ChannelCommand::EqLow(_)
@@ -167,9 +175,11 @@ impl Mixer {
         match cmd {
             MasterCommand::Crossfader(v) if v.is_finite() => {
                 self.crossfader = v.clamp(0.0, 1.0);
-                for strip in &mut self.channels {
-                    strip.xfade.target = side_gain(strip.assign, self.crossfader);
-                }
+                self.retarget_crossfader();
+            }
+            MasterCommand::CrossfaderEnabled(enabled) => {
+                self.crossfader_enabled = enabled;
+                self.retarget_crossfader();
             }
             MasterCommand::MasterLevel(v) if v.is_finite() => {
                 self.master_level.target = level_gain(v);
@@ -187,6 +197,13 @@ impl Mixer {
         }
     }
 
+    fn retarget_crossfader(&mut self) {
+        let position = self.crossfader_enabled.then_some(self.crossfader);
+        for strip in &mut self.channels {
+            strip.xfade.target = strip_gain(strip.assign, position);
+        }
+    }
+
     /// Zeroes the first `samples` samples of each channel input and returns them, in deck
     /// order, for the decks to render into.
     pub(crate) fn inputs(&mut self, samples: usize) -> [&mut [f32]; CHANNELS] {
@@ -198,8 +215,14 @@ impl Mixer {
     }
 
     /// Mixes the channel inputs filled since [`inputs`](Self::inputs) into the interleaved
-    /// stereo `master` and `headphones` buffers (overwritten) and returns the block's peaks.
-    pub(crate) fn process(&mut self, master: &mut [f32], headphones: &mut [f32]) -> Meters {
+    /// stereo `master` and `headphones` buffers (overwritten), adds the interleaved stereo
+    /// `sampler` block to the master sum, and returns the block's peaks.
+    pub(crate) fn process(
+        &mut self,
+        master: &mut [f32],
+        headphones: &mut [f32],
+        sampler: &[f32],
+    ) -> Meters {
         let frames = master.len() / 2;
         master.fill(0.0);
         headphones.fill(0.0);
@@ -248,14 +271,20 @@ impl Mixer {
         let headphone_level = self.headphone_level.block(frames);
         let headphone_mix = self.headphone_mix.block(frames);
         let mut master_peak = [0.0_f32; 2];
-        for (i, (m, h)) in master_frames.iter_mut().zip(cue_frames).enumerate() {
+        let sampler = sampler.as_chunks::<2>().0;
+        for (i, ((m, h), s)) in master_frames
+            .iter_mut()
+            .zip(cue_frames)
+            .zip(sampler)
+            .enumerate()
+        {
             let (level, hp_level, mix) = (
                 master_level.at(i),
                 headphone_level.at(i),
                 headphone_mix.at(i),
             );
             for ch in 0..2 {
-                let pre_clamp = m[ch] * level;
+                let pre_clamp = (m[ch] + s[ch]) * level;
                 let cue = h[ch];
                 h[ch] = ((cue + (pre_clamp - cue) * mix) * hp_level).clamp(-1.0, 1.0);
                 m[ch] = pre_clamp.clamp(-1.0, 1.0);
