@@ -12,7 +12,8 @@ pub enum Command {
     /// Aligns `deck`'s beat phase to `master`'s: moves the playhead by the smallest amount, at
     /// most half a beat, so that the fraction of its beat position equals the fraction of the
     /// master's beat position times `beat_ratio` (the deck's beats per master beat: 1, 2 or
-    /// 0.5). Needs both grids, both decks loaded, the master playing and `deck != master`.
+    /// 0.5). A running slip ghost moves by the same amount, so the return stays in phase.
+    /// Needs both grids, both decks loaded, the master playing and `deck != master`.
     ///
     /// A paused deck remembers the request and aligns in the first block where it plays,
     /// against the master's position then. That pending alignment is dropped by `Load`,
