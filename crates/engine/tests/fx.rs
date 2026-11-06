@@ -209,3 +209,39 @@ fn a_non_finite_filter_amount_means_zero() {
         }
     }
 }
+
+#[test]
+fn echo_slews_to_a_new_beat_length_without_a_jump() {
+    let mut fx = effect_for_tests(SR, EffectKind::Echo);
+    let sine =
+        |i: usize| (0.5 * (std::f64::consts::TAU * 440.0 * i as f64 / f64::from(SR)).sin()) as f32;
+    let mut last = 0.0_f32;
+    let mut max_jump = 0.0_f32;
+    for i in 0..SR as usize * 3 {
+        // A tempo change after one second: the beat shortens by a sixth.
+        let beat = if i < SR as usize { BEAT } else { 20_000.0 };
+        let y = fx.process(0, sine(i), beat);
+        fx.process(1, 0.0, beat);
+        if i > SR as usize / 2 {
+            max_jump = max_jump.max((y - last).abs());
+        }
+        last = y;
+    }
+    // The wet sine (up to about 0.5) moves at most about 0.03 per frame at 440 Hz.
+    assert!(max_jump < 0.05, "jump {max_jump}");
+
+    // Once settled, the echo sits at half the new beat.
+    let mut fx = effect_for_tests(SR, EffectKind::Echo);
+    let mut run = |x: f32, beat: f64| {
+        let y = fx.process(0, x, beat);
+        fx.process(1, 0.0, beat);
+        y
+    };
+    for i in 0..SR as usize * 3 {
+        run(0.0, if i < SR as usize { BEAT } else { 20_000.0 });
+    }
+    let y: Vec<f32> = (0..11_000)
+        .map(|i| run(if i == 0 { 1.0 } else { 0.0 }, 20_000.0))
+        .collect();
+    assert!((y[10_000] - 0.5).abs() < 1e-3, "{}", y[10_000]);
+}
