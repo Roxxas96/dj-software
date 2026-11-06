@@ -317,7 +317,7 @@ impl MidiSource {
     }
 }
 
-/// Whether the binding's `shift` and `active_deck` conditions hold.
+/// Whether the binding's `shift`, `active_deck` and `pad_mode` conditions hold.
 fn conditions_hold(binding: &InputBinding, state: &ControlState) -> bool {
     let shift_ok = binding.shift.is_none_or(|want| {
         let shift = match binding.side() {
@@ -329,7 +329,12 @@ fn conditions_hold(binding: &InputBinding, state: &ControlState) -> bool {
     let deck_ok = binding
         .active_deck
         .is_none_or(|deck| state.side(Side::of(deck)).active_deck == deck);
-    shift_ok && deck_ok
+    let pad_ok = binding.pad_mode.is_none_or(|mode| {
+        binding
+            .side()
+            .is_some_and(|side| state.side(side).pad_mode == mode)
+    });
+    shift_ok && deck_ok && pad_ok
 }
 
 /// The action a binding drives now: side bindings of deck actions follow the side's

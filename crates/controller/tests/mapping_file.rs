@@ -1,4 +1,4 @@
-use actions::{Action, ActionKind, Side, StateKey, Target};
+use actions::{Action, ActionKind, PadMode, Side, StateKey, Target};
 use controller::mapping::{
     ControllerInfo, InitAction, InputBinding, Mapping, MidiSource, OutputBinding, OutputMidi,
     ValueKind, parse_mapping,
@@ -83,6 +83,8 @@ fn parses_full_example() {
                 target: Target::Deck(d(0)),
                 shift: Some(false),
                 active_deck: Some(d(0)),
+                pad_mode: None,
+                pad_scope: None,
                 value: ValueKind::Button,
                 invert: false,
                 soft_takeover: false,
@@ -97,6 +99,8 @@ fn parses_full_example() {
                 target: Target::Side(Side::Right),
                 shift: None,
                 active_deck: None,
+                pad_mode: None,
+                pad_scope: None,
                 value: ValueKind::Absolute,
                 invert: false,
                 soft_takeover: true,
@@ -107,6 +111,8 @@ fn parses_full_example() {
                 target: Target::Global,
                 shift: None,
                 active_deck: None,
+                pad_mode: None,
+                pad_scope: None,
                 value: ValueKind::Absolute,
                 invert: true,
                 soft_takeover: false,
@@ -120,6 +126,8 @@ fn parses_full_example() {
                 target: Target::Side(Side::Left),
                 shift: None,
                 active_deck: None,
+                pad_mode: None,
+                pad_scope: None,
                 value: ValueKind::Absolute,
                 invert: false,
                 soft_takeover: true,
@@ -404,4 +412,61 @@ fn steps_per_turn_must_be_in_range() {
         let err = parse_mapping("bad.toml", &text).unwrap_err().to_string();
         assert!(err.contains("jog_steps_per_turn"), "{err}");
     }
+}
+
+fn pad_mode_error(binding: &str) -> String {
+    let text = format!("[controller]\nname = \"X\"\nport = \"X\"\n\n[[input]]\n{binding}");
+    parse_mapping("bad.toml", &text).unwrap_err().to_string()
+}
+
+#[test]
+fn pad_mode_needs_a_side() {
+    let err = pad_mode_error(
+        "midi = { note = 1, channel = 1 }\naction = \"sampler.play_1\"\npad_mode = \"slicer\"",
+    );
+    assert!(
+        err.contains("input[0]") && err.contains("pad_mode needs a side"),
+        "{err}"
+    );
+}
+
+#[test]
+fn unknown_pad_mode_lists_the_ids() {
+    let err = pad_mode_error(
+        "midi = { note = 1, channel = 1 }\naction = \"deck.beat_jump_1\"\nside = \"left\"\npad_mode = \"drums\"",
+    );
+    assert!(
+        err.contains("unknown pad_mode `drums`")
+            && err.contains("hardware, beat_jump, loop_roll, slicer"),
+        "{err}"
+    );
+}
+
+#[test]
+fn pad_mode_on_a_master_action_uses_the_side_as_scope() {
+    let head = "[controller]\nname = \"X\"\nport = \"X\"\n\n[[input]]\n";
+    let ok = format!(
+        "{head}midi = {{ note = 1, channel = 1 }}\naction = \"sampler.play_3\"\nside = \"right\"\npad_mode = \"slicer\""
+    );
+    let mapping = parse_mapping("ok.toml", &ok).unwrap();
+    let binding = mapping.inputs[0];
+    assert_eq!(binding.target, Target::Global, "the action stays global");
+    assert_eq!(binding.pad_mode, Some(PadMode::Slicer));
+    assert_eq!(binding.side(), Some(Side::Right));
+    // A side without a pad mode on a master action is still an error.
+    let err = pad_mode_error(
+        "midi = { note = 1, channel = 1 }\naction = \"sampler.play_3\"\nside = \"right\"",
+    );
+    assert!(err.contains("takes no `deck` or `side`"), "{err}");
+}
+
+#[test]
+fn pad_mode_on_a_deck_binding_scopes_to_its_side() {
+    let head = "[controller]\nname = \"X\"\nport = \"X\"\n\n[[input]]\n";
+    let text = format!(
+        "{head}midi = {{ note = 1, channel = 1 }}\naction = \"deck.beat_jump_1\"\ndeck = 4\npad_mode = \"beat_jump\""
+    );
+    let binding = parse_mapping("ok.toml", &text).unwrap().inputs[0];
+    assert_eq!(binding.pad_mode, Some(PadMode::BeatJump));
+    assert_eq!(binding.side(), Some(Side::Right));
 }

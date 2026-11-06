@@ -895,3 +895,99 @@ fn held_jog_touch_and_hotcue_release_on_the_pressed_deck() {
         )]
     );
 }
+
+/// Left pads: beat jump 1 on note 20 in beat-jump mode, loop roll 1 on the same note in
+/// loop-roll mode; mode buttons on notes 21 and 22; sampler pad 1 on note 23 in slicer
+/// mode, scoped to the left side.
+const PAD_MAP: &str = r#"
+[[input]]
+midi = { note = 21, channel = 1 }
+action = "pads.mode_beat_jump"
+side = "left"
+
+[[input]]
+midi = { note = 22, channel = 1 }
+action = "pads.mode_loop_roll"
+side = "left"
+
+[[input]]
+midi = { note = 20, channel = 1 }
+action = "deck.beat_jump_1"
+side = "left"
+pad_mode = "beat_jump"
+
+[[input]]
+midi = { note = 20, channel = 1 }
+action = "deck.loop_roll_1"
+side = "left"
+pad_mode = "loop_roll"
+
+[[input]]
+midi = { note = 23, channel = 1 }
+action = "sampler.play_1"
+side = "left"
+pad_mode = "slicer"
+"#;
+
+fn pad_runtime() -> Runtime {
+    Runtime::new(parse_mapping("test.toml", &format!("{MAP}{PAD_MAP}")).unwrap())
+}
+
+fn resolved_actions(rig: &Rig) -> Vec<Action> {
+    rig.runtime
+        .last_resolved()
+        .iter()
+        .flat_map(|(_, resolved)| resolved.iter().map(|&(action, _)| action))
+        .collect()
+}
+
+#[test]
+fn pad_mode_condition_selects_the_binding() {
+    let mut rig = Rig::new();
+    rig.runtime = pad_runtime();
+    rig.runtime.attach(&mut rig.engine, &mut rig.out);
+    // Hardware mode (the start): the pad drives nothing.
+    rig.batch(&[on(0, 20), off(0, 20)]);
+    assert!(resolved_actions(&rig).is_empty());
+    rig.batch(&[on(0, 21)]);
+    rig.batch(&[on(0, 20), off(0, 20)]);
+    let jump = Action::new(
+        actions::ActionKind::BeatJump(engine::HotcueSlot::ALL[0]),
+        actions::Target::Deck(d(0)),
+    )
+    .unwrap();
+    assert_eq!(resolved_actions(&rig), [jump, jump]);
+    rig.batch(&[on(0, 22)]);
+    rig.batch(&[on(0, 20), off(0, 20)]);
+    let roll = Action::new(
+        actions::ActionKind::LoopRoll(engine::HotcueSlot::ALL[0]),
+        actions::Target::Deck(d(0)),
+    )
+    .unwrap();
+    assert_eq!(resolved_actions(&rig), [roll, roll]);
+    // The sampler pad is scoped to slicer mode, which the left side is not in.
+    rig.batch(&[on(0, 23)]);
+    assert!(resolved_actions(&rig).is_empty());
+}
+
+#[test]
+fn release_after_a_pad_mode_change_reaches_the_pressed_action() {
+    let mut rig = Rig::new();
+    rig.runtime = pad_runtime();
+    rig.runtime.attach(&mut rig.engine, &mut rig.out);
+    rig.batch(&[on(0, 22)]);
+    rig.batch(&[on(0, 20)]);
+    // The mode changes while the pad is held.
+    rig.batch(&[on(0, 21)]);
+    rig.batch(&[off(0, 20)]);
+    let roll = Action::new(
+        actions::ActionKind::LoopRoll(engine::HotcueSlot::ALL[0]),
+        actions::Target::Deck(d(0)),
+    )
+    .unwrap();
+    assert_eq!(
+        rig.runtime.last_resolved()[0].1,
+        [(roll, Input::Release)],
+        "the release ends the roll, not a beat jump"
+    );
+}
