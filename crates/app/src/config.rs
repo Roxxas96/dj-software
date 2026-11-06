@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, anyhow};
 use toml::{Table, Value};
 
+use engine::EffectKind;
+
 use crate::format::safe;
 
 /// How many sampler pads (and pad-size entries) there are.
@@ -21,6 +23,8 @@ const ROLL_RANGE: (f64, f64) = (1.0 / 32.0, 64.0);
 pub struct Config {
     /// Whether the crossfader acts; off, every channel plays at full level.
     pub crossfader: bool,
+    /// The effect in each of the three effect slots.
+    pub fx_slots: [EffectKind; 3],
     pub sampler: SamplerConfig,
     /// Beats for the beat jump pads, when the file sets them.
     pub beat_jump_pads: Option<[f64; PADS]>,
@@ -34,6 +38,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             crossfader: true,
+            fx_slots: [EffectKind::Echo, EffectKind::Reverb, EffectKind::Flanger],
             sampler: SamplerConfig::default(),
             beat_jump_pads: None,
             beat_jump_shift_pads: None,
@@ -135,6 +140,14 @@ fn parse(text: &str, file: &str, home: Option<&Path>) -> anyhow::Result<Config> 
                 }
             }
             "sampler" => config.sampler = parse_sampler(section(file, name, value)?, file, home)?,
+            "fx" => {
+                for (key, value) in section(file, name, value)? {
+                    match key.as_str() {
+                        "slots" => config.fx_slots = parse_fx_slots(value, file)?,
+                        _ => return Err(unknown(file, "fx", key)),
+                    }
+                }
+            }
             "beat_jump" => {
                 for (key, value) in section(file, name, value)? {
                     let path = format!("beat_jump.{key}");
@@ -230,6 +243,37 @@ fn sizes(
         out[i] = beats;
     }
     Ok(out)
+}
+
+fn parse_fx_slots(value: &Value, file: &str) -> anyhow::Result<[EffectKind; 3]> {
+    let items = value
+        .as_array()
+        .ok_or_else(|| invalid(file, "fx.slots", "expected an array of 3 effect ids"))?;
+    if items.len() != 3 {
+        return Err(invalid(
+            file,
+            "fx.slots",
+            format!("expected exactly 3 effect ids, got {}", items.len()),
+        ));
+    }
+    let mut slots = [EffectKind::Echo; 3];
+    for (i, item) in items.iter().enumerate() {
+        let at = format!("fx.slots[{i}]");
+        let id = item
+            .as_str()
+            .ok_or_else(|| invalid(file, &at, "expected an effect id string"))?;
+        slots[i] = EffectKind::from_id(id).ok_or_else(|| {
+            invalid(
+                file,
+                &at,
+                format!(
+                    "unknown effect `{}`, expected echo, reverb, flanger or filter",
+                    safe(id)
+                ),
+            )
+        })?;
+    }
+    Ok(slots)
 }
 
 fn parse_sampler(table: &Table, file: &str, home: Option<&Path>) -> anyhow::Result<SamplerConfig> {
@@ -335,6 +379,9 @@ mod tests {
 [mixer]
 crossfader = true            # false: the crossfader is ignored, every channel at full level
 
+[fx]
+slots = ["echo", "reverb", "flanger"]   # also "filter"; exactly 3
+
 [sampler]
 volume = 1.0                 # 0 to 1
 pads = [
@@ -394,6 +441,35 @@ pads = [0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8]
         assert_eq!(
             config.loop_roll_pads,
             Some([0.0625, 0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0])
+        );
+    }
+
+    #[test]
+    fn fx_slots_parse_and_reject_unknown_ids() {
+        assert_eq!(
+            parse_text("").unwrap().fx_slots,
+            [EffectKind::Echo, EffectKind::Reverb, EffectKind::Flanger]
+        );
+        let config = parse_text("[fx]\nslots = [\"echo\", \"reverb\", \"filter\"]").unwrap();
+        assert_eq!(
+            config.fx_slots,
+            [EffectKind::Echo, EffectKind::Reverb, EffectKind::Filter]
+        );
+        assert!(
+            error_of("[fx]\nslots = [\"echo\", \"wobble\", \"filter\"]")
+                .starts_with("config.toml: fx.slots[1]: unknown effect `wobble`")
+        );
+        assert_eq!(
+            error_of("[fx]\nslots = [\"echo\"]"),
+            "config.toml: fx.slots: expected exactly 3 effect ids, got 1"
+        );
+        assert_eq!(
+            error_of("[fx]\nslots = [\"echo\", 1, \"filter\"]"),
+            "config.toml: fx.slots[1]: expected an effect id string"
+        );
+        assert_eq!(
+            error_of("[fx]\nmode = 1"),
+            "config.toml: fx.mode: unknown key"
         );
     }
 

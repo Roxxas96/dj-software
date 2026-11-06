@@ -414,6 +414,26 @@ midi = { channel = 1, note = 0x40 }
 action = "deck.slip_toggle"
 side = "left"
 
+# KEY LOCK (SHIFT + KEY LOCK, note 0x60, is the tempo range above)
+[[input]]
+midi = { channel = 1, note = 0x1A }
+action = "deck.keylock_toggle"
+side = "left"
+
+# FX 1, 2 and 3 switch the effect slots of the side's deck on and off. SHIFT + FX
+# (notes 0x63-0x65) stay unbound: effect parameters are not mapped.
+[[input]]
+midi = { channel = 5, notes = [0x47, 0x49] }
+action = "deck.fx_toggle_{n}"
+side = "left"
+
+# FX LEVEL: the knob also sends 0x04/0x24 and 0x06/0x26 with the same value; only the
+# first pair is bound.
+[[input]]
+midi = { channel = 5, cc14 = [0x02, 0x22] }
+action = "deck.fx_level"
+side = "left"
+
 # Pads: one `notes` range binds a whole bank, and `{n}` in the action is the pad number
 # (1-8) counted from the range start. Every software mode binds the HOT CUE bank
 # (0x00-0x07), its SHIFT bank (0x08-0x0F), the SAMPLER bank (0x30-0x37) and its SHIFT
@@ -665,6 +685,26 @@ midi = { channel = 2, note = 0x40 }
 action = "deck.slip_toggle"
 side = "right"
 
+# KEY LOCK (SHIFT + KEY LOCK, note 0x60, is the tempo range above)
+[[input]]
+midi = { channel = 2, note = 0x1A }
+action = "deck.keylock_toggle"
+side = "right"
+
+# FX 1, 2 and 3 switch the effect slots of the side's deck on and off. SHIFT + FX
+# (notes 0x63-0x65) stay unbound: effect parameters are not mapped.
+[[input]]
+midi = { channel = 6, notes = [0x47, 0x49] }
+action = "deck.fx_toggle_{n}"
+side = "right"
+
+# FX LEVEL: the knob also sends 0x04/0x24 and 0x06/0x26 with the same value; only the
+# first pair is bound.
+[[input]]
+midi = { channel = 6, cc14 = [0x02, 0x22] }
+action = "deck.fx_level"
+side = "right"
+
 # Hardware mode: HOT CUE pads set or jump to hotcues, SHIFT + HOT CUE pads delete them
 [[input]]
 midi = { channel = 9, notes = [0x00, 0x07] }
@@ -788,7 +828,6 @@ off = 0
 #
 #   SHIFT+SYNC             note 0x5C
 #   SHIFT+PLAY             note 0x47
-#   KEY LOCK               note 0x1A
 #   channel fader + SHIFT  (fader start) notes 0x52 / 0x66, with the fader's cc14
 #
 #   Pads: channel 8 (0x97) left, channel 9 (0x98) right. HOT CUE (0x00-0x07, SHIFT
@@ -797,10 +836,9 @@ off = 0
 #     The FX FADE and PAD SCRATCH pad steps also recorded firmware-generated messages
 #     (notes 0x4D/0x4C/0x4A at a constant 127, cc 0x22): those are not pads.
 #
-#   FX buttons 1/2/3: channel 5 (0x94) left, channel 6 (0x95) right, notes 0x47/0x48/0x49
-#     (SHIFT 0x63/0x64/0x65)
-#   FX level: cc14 0x02/0x22 on channel 5 (0xB4) left, channel 6 (0xB5) right; also
-#     sends 0x04/0x24 and 0x06/0x26 (FX slots 2 and 3)
+#   SHIFT + FX buttons 1/2/3: channel 5 (0x94) left, channel 6 (0x95) right, notes
+#     0x63/0x64/0x65 (FX 1/2/3 and the FX LEVEL cc14 0x02/0x22 are mapped; the knob's
+#     0x04/0x24 and 0x06/0x26 repeat its value and are left unbound)
 #
 #   Global, channel 7 (0x96/0xB6):
 #     MASTER level         cc14 0x08/0x28   (applied by the SB3 itself, see [[init]])

@@ -148,6 +148,10 @@ pub enum ActionKind {
     /// Slicer pad `slot`: held, plays that slice.
     Slice(HotcueSlot),
     SlipToggle,
+    KeylockToggle,
+    /// Turns effect slot N (0 to 2) of the deck's channel on or off.
+    FxToggle(u8),
+    FxLevel,
     /// Plays sampler slot `slot` (the sampler has as many slots as there are pads).
     SamplerPlay(HotcueSlot),
     SamplerStop(HotcueSlot),
@@ -225,6 +229,9 @@ const SLICE_IDS: [&str; 8] = [
     "deck.slice_8",
 ];
 
+/// Ids of [`ActionKind::FxToggle`], by effect slot.
+const FX_TOGGLE_IDS: [&str; 3] = ["deck.fx_toggle_1", "deck.fx_toggle_2", "deck.fx_toggle_3"];
+
 /// Ids of [`ActionKind::SamplerPlay`], by slot index.
 const SAMPLER_PLAY_IDS: [&str; 8] = [
     "sampler.play_1",
@@ -251,8 +258,8 @@ const SAMPLER_STOP_IDS: [&str; 8] = [
 
 impl ActionKind {
     /// Every kind: each slot family (hotcues, beat jumps, rolls, slices, sampler) once per slot.
-    pub const ALL: [ActionKind; 111] = {
-        let mut all = [ActionKind::PlayPause; 111];
+    pub const ALL: [ActionKind; 116] = {
+        let mut all = [ActionKind::PlayPause; 116];
         let fixed = [
             ActionKind::PlayPause,
             ActionKind::Cue,
@@ -301,6 +308,11 @@ impl ActionKind {
             ActionKind::PadMode(PadMode::LoopRoll),
             ActionKind::PadMode(PadMode::Slicer),
             ActionKind::SlipToggle,
+            ActionKind::KeylockToggle,
+            ActionKind::FxToggle(0),
+            ActionKind::FxToggle(1),
+            ActionKind::FxToggle(2),
+            ActionKind::FxLevel,
         ];
         let mut i = 0;
         while i < fixed.len() {
@@ -380,6 +392,9 @@ impl ActionKind {
             ActionKind::LoopRoll(slot) => LOOP_ROLL_IDS[slot.index()],
             ActionKind::Slice(slot) => SLICE_IDS[slot.index()],
             ActionKind::SlipToggle => "deck.slip_toggle",
+            ActionKind::KeylockToggle => "deck.keylock_toggle",
+            ActionKind::FxToggle(slot) => FX_TOGGLE_IDS[slot as usize],
+            ActionKind::FxLevel => "deck.fx_level",
             ActionKind::SamplerPlay(slot) => SAMPLER_PLAY_IDS[slot.index()],
             ActionKind::SamplerStop(slot) => SAMPLER_STOP_IDS[slot.index()],
         }
@@ -431,6 +446,9 @@ impl ActionKind {
             | ActionKind::LoopRoll(_)
             | ActionKind::Slice(_)
             | ActionKind::SlipToggle
+            | ActionKind::KeylockToggle
+            | ActionKind::FxToggle(_)
+            | ActionKind::FxLevel
             | ActionKind::LoadSelected => Scope::Deck,
             ActionKind::Crossfader
             | ActionKind::MasterLevel
@@ -458,6 +476,7 @@ impl ActionKind {
                 | ActionKind::EqLow
                 | ActionKind::Filter
                 | ActionKind::Fader
+                | ActionKind::FxLevel
                 | ActionKind::Crossfader
                 | ActionKind::MasterLevel
                 | ActionKind::HeadphoneLevel
@@ -576,6 +595,9 @@ pub enum Action {
     LoopRoll(DeckId, HotcueSlot),
     Slice(DeckId, HotcueSlot),
     SlipToggle(DeckId),
+    KeylockToggle(DeckId),
+    FxToggle(DeckId, u8),
+    FxLevel(DeckId),
     SamplerPlay(HotcueSlot),
     SamplerStop(HotcueSlot),
 }
@@ -635,6 +657,9 @@ impl Action {
             (K::LoopRoll(slot), Target::Deck(d)) => Action::LoopRoll(d, slot),
             (K::Slice(slot), Target::Deck(d)) => Action::Slice(d, slot),
             (K::SlipToggle, Target::Deck(d)) => Action::SlipToggle(d),
+            (K::KeylockToggle, Target::Deck(d)) => Action::KeylockToggle(d),
+            (K::FxToggle(n), Target::Deck(d)) => Action::FxToggle(d, n),
+            (K::FxLevel, Target::Deck(d)) => Action::FxLevel(d),
             (K::SamplerPlay(slot), Target::Global) => Action::SamplerPlay(slot),
             (K::SamplerStop(slot), Target::Global) => Action::SamplerStop(slot),
             _ => return None,
@@ -703,6 +728,9 @@ impl Action {
             Action::LoopRoll(_, slot) => ActionKind::LoopRoll(*slot),
             Action::Slice(_, slot) => ActionKind::Slice(*slot),
             Action::SlipToggle(_) => ActionKind::SlipToggle,
+            Action::KeylockToggle(_) => ActionKind::KeylockToggle,
+            Action::FxToggle(_, n) => ActionKind::FxToggle(*n),
+            Action::FxLevel(_) => ActionKind::FxLevel,
             Action::SamplerPlay(slot) => ActionKind::SamplerPlay(*slot),
             Action::SamplerStop(slot) => ActionKind::SamplerStop(*slot),
         }
@@ -749,7 +777,10 @@ impl Action {
             | Action::BeatJumpShift(d, _)
             | Action::LoopRoll(d, _)
             | Action::Slice(d, _)
-            | Action::SlipToggle(d) => Target::Deck(d),
+            | Action::SlipToggle(d)
+            | Action::KeylockToggle(d)
+            | Action::FxToggle(d, _)
+            | Action::FxLevel(d) => Target::Deck(d),
             Action::Crossfader
             | Action::MasterLevel
             | Action::HeadphoneLevel

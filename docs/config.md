@@ -1,6 +1,6 @@
 # config.toml
 
-Settings for the mixer, the sampler and the performance pad sizes. Every section and key is
+Settings for the mixer, the effects, the sampler and the performance pad sizes. Every section and key is
 optional; a key left out keeps its default, and so does a missing file.
 
 ## Location
@@ -20,6 +20,7 @@ optional; a key left out keeps its default, and so does a missing file.
 | Key                  | Default                                      | Meaning |
 | -------------------- | -------------------------------------------- | ------- |
 | `mixer.crossfader`   | `true`                                       | `false`: the crossfader is ignored and every channel plays at full level |
+| `fx.slots`           | `["echo", "reverb", "flanger"]`            | The effect in each of the 3 effect slots (FX 1, 2 and 3 on the controller); exactly 3 of `echo`, `reverb`, `flanger`, `filter`. Every deck's channel has the same 3 slots |
 | `sampler.volume`     | `1.0`                                        | Sampler level, 0 to 1, on the same curve as the master level (0.5 is about −12 dB) |
 | `sampler.pads`       | none (all pads empty)                        | Up to 8 entries for pads 1 to 8, each `{ file = "..." }` (an absolute path, or one starting with `~/`) or `{ track = <library track id> }` or `{}` (an empty pad, so a later pad can be set alone); fewer entries leave the other pads empty |
 | `beat_jump.pads`     | `[-4, 4, -8, 8, -16, 16, -32, 32]`           | Beats the beat jump pads move the playhead; exactly 8, each non-zero with `abs <= 512` |
@@ -34,6 +35,9 @@ by `--library`, otherwise the default library if it exists.
 ```toml
 [mixer]
 crossfader = true            # false: the crossfader is ignored, every channel at full level
+
+[fx]
+slots = ["echo", "reverb", "flanger"]   # also "filter"; exactly 3
 
 [sampler]
 volume = 1.0                 # 0 to 1

@@ -746,7 +746,11 @@ impl LibraryMode {
     }
 
     /// The browser line, then one line per loaded deck.
-    pub fn status_lines(&self, engine: &EngineController) -> Vec<String> {
+    pub fn status_lines(
+        &self,
+        engine: &EngineController,
+        fx_slots: &[engine::EffectKind; 3],
+    ) -> Vec<String> {
         let mut lines = vec![browser_line(
             self.browser.as_ref(),
             self.notation,
@@ -756,7 +760,13 @@ impl LibraryMode {
             let snap = engine.deck(deck);
             if snap.loaded {
                 let track = self.decks[deck.index()].as_ref().map(|t| &t.row);
-                lines.push(deck_status(deck, &snap, track));
+                lines.push(deck_status(
+                    deck,
+                    &snap,
+                    track,
+                    fx_slots,
+                    &engine.channel(deck),
+                ));
             }
         }
         lines
@@ -893,9 +903,19 @@ fn browser_line(
 }
 
 /// A deck's line: time, BPM at the current tempo once analyzed, and the track.
-fn deck_status(deck: DeckId, snap: &DeckSnapshot, track: Option<&TrackRow>) -> String {
+fn deck_status(
+    deck: DeckId,
+    snap: &DeckSnapshot,
+    track: Option<&TrackRow>,
+    fx_slots: &[engine::EffectKind; 3],
+    channel: &engine::ChannelSnapshot,
+) -> String {
     let mark = if snap.playing { '>' } else { ' ' };
-    let mut line = format!("{mark}{}", crate::play::deck_line(deck, snap));
+    let mut line = format!(
+        "{mark}{}{}",
+        crate::play::deck_line(deck, snap),
+        crate::play::fx_suffix(fx_slots, channel)
+    );
     if let Some(track) = track {
         if let Some(bpm) = track.bpm {
             line.push_str(&format!("  {} BPM", bpm_text(bpm * snap.tempo_ratio)));
@@ -952,6 +972,11 @@ mod tests {
 
     #[test]
     fn deck_status_scales_bpm_by_tempo() {
+        const SLOTS: [engine::EffectKind; 3] = [engine::EffectKind::Echo; 3];
+        const CH: engine::ChannelSnapshot = engine::ChannelSnapshot {
+            fx_enabled: [false; 3],
+            fx_amount: 0.5,
+        };
         let snap = DeckSnapshot {
             loaded: true,
             playing: true,
@@ -965,12 +990,12 @@ mod tests {
         };
         let deck = DeckId::new(2).unwrap();
         assert_eq!(
-            deck_status(deck, &snap, Some(&row())),
+            deck_status(deck, &snap, Some(&row()), &SLOTS, &CH),
             ">Deck 3  01:05 / 03:20  134.40 BPM  Artist – Title"
         );
         let unanalyzed = TrackRow { bpm: None, ..row() };
         assert_eq!(
-            deck_status(deck, &snap, Some(&unanalyzed)),
+            deck_status(deck, &snap, Some(&unanalyzed), &SLOTS, &CH),
             ">Deck 3  01:05 / 03:20  Artist – Title"
         );
     }

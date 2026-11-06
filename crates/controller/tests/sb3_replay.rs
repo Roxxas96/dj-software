@@ -306,6 +306,7 @@ fn table() -> Vec<(&'static str, Layer, Action)> {
         ("deck1.play", Main, Action::PlayPause(d(1))),
         ("deck1.cue", Main, Action::Cue(d(1))),
         ("deck1.cue.shift", Main, Action::ReturnToStart(d(1))),
+        ("deck1.key_lock", Main, Action::KeylockToggle(d(1))),
         ("deck1.key_lock.shift", Main, Action::TempoRangeNext(d(1))),
         ("deck1.tempo", Main, Action::Tempo(d(1))),
         ("deck1.shift", Main, Action::Shift(l)),
@@ -317,10 +318,15 @@ fn table() -> Vec<(&'static str, Layer, Action)> {
         ("channel1.filter", Main, Action::Filter(d(1))),
         ("channel1.fader", Main, Action::Fader(d(1))),
         ("channel1.pfl", Main, Action::PflToggle(d(1))),
+        ("fx.left.1", Main, Action::FxToggle(d(1), 0)),
+        ("fx.left.2", Main, Action::FxToggle(d(1), 1)),
+        ("fx.left.3", Main, Action::FxToggle(d(1), 2)),
+        ("fx.left.level", Main, Action::FxLevel(d(1))),
         // Right deck, deck 2.
         ("deck2.play", Main, Action::PlayPause(d(2))),
         ("deck2.cue", Main, Action::Cue(d(2))),
         ("deck2.cue.shift", Main, Action::ReturnToStart(d(2))),
+        ("deck2.key_lock", Main, Action::KeylockToggle(d(2))),
         ("deck2.key_lock.shift", Main, Action::TempoRangeNext(d(2))),
         ("deck2.tempo", Main, Action::Tempo(d(2))),
         ("deck2.shift", Main, Action::Shift(r)),
@@ -332,10 +338,15 @@ fn table() -> Vec<(&'static str, Layer, Action)> {
         ("channel2.filter", Main, Action::Filter(d(2))),
         ("channel2.fader", Main, Action::Fader(d(2))),
         ("channel2.pfl", Main, Action::PflToggle(d(2))),
+        ("fx.right.1", Main, Action::FxToggle(d(2), 0)),
+        ("fx.right.2", Main, Action::FxToggle(d(2), 1)),
+        ("fx.right.3", Main, Action::FxToggle(d(2), 2)),
+        ("fx.right.level", Main, Action::FxLevel(d(2))),
         // Left deck, deck 3 (software layer).
         ("deck3.play", Alt(l), Action::PlayPause(d(3))),
         ("deck3.cue", Alt(l), Action::Cue(d(3))),
         ("deck3.cue.shift", Alt(l), Action::ReturnToStart(d(3))),
+        ("deck3.key_lock", Alt(l), Action::KeylockToggle(d(3))),
         ("deck3.key_lock.shift", Alt(l), Action::TempoRangeNext(d(3))),
         ("deck3.tempo", Alt(l), Action::Tempo(d(3))),
         ("deck3.shift", Alt(l), Action::Shift(l)),
@@ -351,6 +362,7 @@ fn table() -> Vec<(&'static str, Layer, Action)> {
         ("deck4.play", Alt(r), Action::PlayPause(d(4))),
         ("deck4.cue", Alt(r), Action::Cue(d(4))),
         ("deck4.cue.shift", Alt(r), Action::ReturnToStart(d(4))),
+        ("deck4.key_lock", Alt(r), Action::KeylockToggle(d(4))),
         ("deck4.key_lock.shift", Alt(r), Action::TempoRangeNext(d(4))),
         ("deck4.tempo", Alt(r), Action::Tempo(d(4))),
         ("deck4.shift", Alt(r), Action::Shift(r)),
@@ -1873,4 +1885,87 @@ fn shift_vinyl_toggles_slip() {
     rig.press("deck1.vinyl.shift");
     assert!(rig.engine.deck(d(3)).slip);
     assert!(!rig.engine.deck(d(1)).slip);
+}
+
+#[test]
+fn fx_buttons_toggle_the_side_deck_effects() {
+    let mut rig = Rig::attached();
+    assert_eq!(rig.press("fx.left.1"), [Action::FxToggle(d(1), 0); 2]);
+    assert_eq!(rig.press("fx.left.3")[0], Action::FxToggle(d(1), 2));
+    assert_eq!(rig.engine.channel(d(1)).fx_enabled, [true, false, true]);
+    assert_eq!(rig.press("fx.right.2")[0], Action::FxToggle(d(2), 1));
+    assert_eq!(rig.engine.channel(d(2)).fx_enabled, [false, true, false]);
+    assert_eq!(rig.engine.channel(d(3)).fx_enabled, [false; 3]);
+    // Pressing again switches the effect off.
+    rig.press("fx.left.1");
+    assert_eq!(rig.engine.channel(d(1)).fx_enabled, [false, false, true]);
+    // SHIFT + FX is unbound.
+    assert!(rig.press("fx.left.1.shift").is_empty());
+    assert_eq!(rig.engine.channel(d(1)).fx_enabled, [false, false, true]);
+}
+
+#[test]
+fn fx_level_drives_the_side_deck_amount() {
+    let mut rig = Rig::attached();
+    let moved = rig.cc14("fx.left.level", 0, 0);
+    let moved_up = rig.cc14("fx.left.level", 127, 127);
+    assert!(
+        moved
+            .iter()
+            .chain(&moved_up)
+            .all(|a| *a == Action::FxLevel(d(1))),
+        "{moved:?} {moved_up:?}"
+    );
+    assert!(!moved_up.is_empty());
+    assert!((rig.engine.channel(d(1)).fx_amount - 1.0).abs() < 0.01);
+    rig.cc14("fx.right.level", 0, 0);
+    rig.cc14("fx.right.level", 32, 0);
+    assert!((rig.engine.channel(d(2)).fx_amount - 0.25).abs() < 0.01);
+    assert!((rig.engine.channel(d(1)).fx_amount - 1.0).abs() < 0.01);
+}
+
+#[test]
+fn fx_stays_with_its_deck_after_deck_switch() {
+    let mut rig = Rig::attached();
+    rig.press("fx.left.1");
+    rig.cc14("fx.left.level", 0, 0);
+    rig.cc14("fx.left.level", 96, 0);
+    let amount = rig.engine.channel(d(1)).fx_amount;
+    assert!(amount > 0.7, "{amount}");
+
+    rig.press("deck1.deck_select");
+    assert_eq!(rig.press("fx.left.2")[0], Action::FxToggle(d(3), 1));
+    assert_eq!(rig.engine.channel(d(3)).fx_enabled, [false, true, false]);
+    // Deck 1 keeps its effect and amount.
+    assert_eq!(rig.engine.channel(d(1)).fx_enabled, [true, false, false]);
+    assert_eq!(rig.engine.channel(d(1)).fx_amount, amount);
+    // Deck 3's amount is still the default: the knob must reach it first.
+    let moved = rig.cc14("fx.left.level", 96, 0);
+    assert!(moved.is_empty(), "no jump to deck 3: {moved:?}");
+    assert_eq!(rig.engine.channel(d(3)).fx_amount, 0.5);
+}
+
+#[test]
+fn key_lock_toggles_keylock_and_shift_key_lock_still_changes_range() {
+    let mut rig = Rig::attached();
+    assert_eq!(
+        rig.press("deck1.key_lock"),
+        [Action::KeylockToggle(d(1)); 2]
+    );
+    assert!(rig.engine.deck(d(1)).keylock);
+    assert_eq!(rig.press("deck2.key_lock")[0], Action::KeylockToggle(d(2)));
+    assert!(rig.engine.deck(d(2)).keylock);
+    rig.press("deck1.key_lock");
+    assert!(!rig.engine.deck(d(1)).keylock);
+
+    let before = rig.runtime.state().deck(d(1)).tempo_range;
+    assert_eq!(
+        rig.press("deck1.key_lock.shift")[0],
+        Action::TempoRangeNext(d(1))
+    );
+    assert_ne!(rig.runtime.state().deck(d(1)).tempo_range, before);
+    assert!(
+        !rig.engine.deck(d(1)).keylock,
+        "SHIFT + KEY LOCK left keylock alone"
+    );
 }

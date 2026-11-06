@@ -36,6 +36,7 @@ enum Update {
     Value(ValueTarget, f32),
     TempoRange(DeckId, TempoRange),
     Pfl(DeckId, bool),
+    FxOn(DeckId, usize, bool),
 }
 
 /// Performs `action` for `input` on `engine`, and records the result in `state` when the
@@ -131,6 +132,18 @@ pub fn apply(
             let slip = !engine.deck(d).slip;
             (deck(d, DeckCommand::SetSlip(slip)), Update::None)
         }
+        (Action::KeylockToggle(d), Input::Press) => {
+            let keylock = !engine.deck(d).keylock;
+            (deck(d, DeckCommand::SetKeylock(keylock)), Update::None)
+        }
+        (Action::FxToggle(d, n), Input::Press) if n < 3 => {
+            let slot = usize::from(n);
+            let on = !state.deck(d).fx_on[slot];
+            (
+                Command::Channel(d, ChannelCommand::FxEnabled(slot, on)),
+                Update::FxOn(d, slot, on),
+            )
+        }
         (Action::SamplerPlay(slot), Input::Press) => (
             Command::Sampler(SamplerCommand::Play(slot.index())),
             Update::None,
@@ -219,6 +232,7 @@ pub fn apply(
         Update::Value(target, v) => set_value(state, target, v),
         Update::TempoRange(d, range) => state.deck_mut(d).tempo_range = range,
         Update::Pfl(d, on) => state.deck_mut(d).pfl = on,
+        Update::FxOn(d, slot, on) => state.deck_mut(d).fx_on[slot] = on,
     }
     ApplyResult::Sent(1)
 }
@@ -289,6 +303,7 @@ fn absolute_command(action: Action, v: f32) -> Option<Command> {
         Action::EqLow(d) => channel(d, ChannelCommand::EqLow(v)),
         Action::Filter(d) => channel(d, ChannelCommand::Filter(v)),
         Action::Fader(d) => channel(d, ChannelCommand::Fader(v)),
+        Action::FxLevel(d) => channel(d, ChannelCommand::FxAmount(v)),
         Action::Crossfader => master(MasterCommand::Crossfader(v)),
         Action::MasterLevel => master(MasterCommand::MasterLevel(v)),
         Action::HeadphoneLevel => master(MasterCommand::HeadphoneLevel(v)),
