@@ -196,6 +196,18 @@ fn render_does_not_allocate() {
         DeckCommand::JogTouch(true),
         DeckCommand::SetSlip(false),
         DeckCommand::JogTouch(false),
+        // Deliberate jumps drop a running ghost; a paused scratch never starts one.
+        DeckCommand::SetSlip(true),
+        DeckCommand::HotcuePress(slot(4)),
+        DeckCommand::Seek(30_000.0),
+        DeckCommand::HotcueRelease(slot(4)),
+        DeckCommand::JogTouch(true),
+        DeckCommand::JogSearch { turns: 0.05 },
+        DeckCommand::JogTouch(false),
+        DeckCommand::Pause,
+        DeckCommand::JogTouch(true),
+        DeckCommand::JogTouch(false),
+        DeckCommand::Play,
     ] {
         c.send(Command::Deck(decks[0], cmd)).unwrap();
         render_blocks(10);

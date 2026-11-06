@@ -292,7 +292,7 @@ fn load_resets_slip_ghost() {
 }
 
 #[test]
-fn slip_hotcue_out_of_a_loop_returns_into_it() {
+fn slip_hotcue_out_of_a_loop_leaves_it() {
     // The loop is active before slip is on, so it is not the slipping action.
     let (mut c, mut r, id) = setup(10.0 * BEAT, false);
     step(&mut c, &mut r, id, DeckCommand::AutoLoop);
@@ -305,15 +305,85 @@ fn slip_hotcue_out_of_a_loop_returns_into_it() {
     );
     step(&mut c, &mut r, id, DeckCommand::HotcuePress(slot(1)));
     assert!(!c.deck(id).loop_active, "the jump left the loop");
+    // The loop is gone, so the ghost continues linearly past its end.
+    let g0 = ghost(&c, id);
+    assert!((10.0 * BEAT..14.0 * BEAT).contains(&g0));
     render(&mut r, 5 * SR as usize);
     let g = ghost(&c, id);
-    assert!((10.0 * BEAT..14.0 * BEAT).contains(&g), "{g}");
+    assert!((g - (g0 + 5.0 * f64::from(SR))).abs() < 1e-6, "{g}");
     step(&mut c, &mut r, id, DeckCommand::HotcueRelease(slot(1)));
     let s = c.deck(id);
-    assert!(s.loop_active, "the return puts the loop back");
-    assert_eq!(
-        (s.loop_in, s.loop_out),
-        (Some(10.0 * BEAT), Some(14.0 * BEAT))
+    assert!(!s.loop_active, "the return never turns the loop back on");
+    assert!((s.position_frames - (g + 1.0)).abs() <= 1e-6);
+}
+
+#[test]
+fn a_loop_exited_during_a_scratch_stays_off() {
+    let (mut c, mut r, id) = setup(10.0 * BEAT, false);
+    step(&mut c, &mut r, id, DeckCommand::AutoLoop);
+    step(&mut c, &mut r, id, DeckCommand::SetSlip(true));
+    step(&mut c, &mut r, id, DeckCommand::JogTouch(true));
+    step(&mut c, &mut r, id, top(-0.2));
+    render(&mut r, 3 * SR as usize);
+    assert!((10.0 * BEAT..14.0 * BEAT).contains(&ghost(&c, id)), "wraps");
+    step(&mut c, &mut r, id, DeckCommand::ReloopExit);
+    assert!(!c.deck(id).loop_active);
+    let g1 = ghost(&c, id);
+    render(&mut r, SR as usize);
+    step(&mut c, &mut r, id, DeckCommand::JogTouch(false));
+    let s = c.deck(id);
+    assert!(!s.loop_active, "the loop stays off");
+    let expected = g1 + 1.0 + f64::from(SR);
+    assert!(expected > 14.0 * BEAT, "the ghost went on past the loop");
+    assert!(
+        (s.position_frames - expected).abs() <= 1e-6,
+        "{}",
+        s.position_frames
     );
-    assert!((s.position_frames - g - 1.0).abs() <= 1.0);
+}
+
+#[test]
+fn paused_scratch_does_not_slip() {
+    let (mut c, mut r, id) = setup(100_000.0, true);
+    step(&mut c, &mut r, id, DeckCommand::Pause);
+    let start = position(&c, id);
+    step(&mut c, &mut r, id, DeckCommand::JogTouch(true));
+    assert_eq!(c.deck(id).ghost_frames, None);
+    step(&mut c, &mut r, id, top(0.5));
+    render(&mut r, SR as usize);
+    step(&mut c, &mut r, id, DeckCommand::JogTouch(false));
+    let expected = start + 0.5 * 1.8 * f64::from(SR);
+    let pos = position(&c, id);
+    assert!((pos - expected).abs() <= 1.0, "{pos} vs {expected}");
+    assert!(!c.deck(id).playing);
+}
+
+#[test]
+fn deliberate_jumps_drop_the_ghost() {
+    // A seek during a held hotcue: the seek stands and the release does not return.
+    let (mut c, mut r, id) = setup(100_000.0, true);
+    step(
+        &mut c,
+        &mut r,
+        id,
+        DeckCommand::SetHotcue(slot(1), Some(5000.0)),
+    );
+    step(&mut c, &mut r, id, DeckCommand::HotcuePress(slot(1)));
+    assert!(c.deck(id).ghost_frames.is_some());
+    step(&mut c, &mut r, id, DeckCommand::Seek(200_000.0));
+    assert_eq!(c.deck(id).ghost_frames, None);
+    render(&mut r, 1000);
+    step(&mut c, &mut r, id, DeckCommand::HotcueRelease(slot(1)));
+    assert_eq!(position(&c, id), 200_000.0 + 1002.0);
+    assert!(c.deck(id).playing);
+
+    // A search during a scratch: the release stays where the scratch left the record.
+    step(&mut c, &mut r, id, DeckCommand::JogTouch(true));
+    assert!(c.deck(id).ghost_frames.is_some());
+    step(&mut c, &mut r, id, DeckCommand::JogSearch { turns: 0.1 });
+    assert_eq!(c.deck(id).ghost_frames, None);
+    render(&mut r, SR as usize);
+    let held = position(&c, id);
+    step(&mut c, &mut r, id, DeckCommand::JogTouch(false));
+    assert!((position(&c, id) - held - 1.0).abs() < 1e-6);
 }

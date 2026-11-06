@@ -1,5 +1,5 @@
 //! Slip mode of a deck: a ghost playhead keeps moving at normal speed during a scratch,
-//! loop or held hotcue, and the playhead returns to it when the action ends.
+//! loop, held hotcue, roll or slice, and the playhead returns to it when the action ends.
 
 use super::{Deck, looping};
 use crate::HotcueSlot;
@@ -9,119 +9,192 @@ use crate::HotcueSlot;
 pub(super) struct Ghost {
     /// In track frames.
     pub(super) position: f64,
-    /// The normal loop the ghost wraps in: the one active when it began. Returning to the
-    /// ghost puts that loop back.
-    pub(super) bounds: Option<(f64, f64)>,
-    /// What began the ghost; only its end returns to the ghost.
+    /// The action the ghost belongs to; only its end returns to the ghost.
     pub(super) owner: SlipOwner,
+    /// The ghost wraps in the active normal loop: one was active when it began and has
+    /// not been exited since. A loop exited during the slip is gone for the ghost too.
+    pub(super) wraps: bool,
 }
 
 /// The action a ghost belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SlipOwner {
-    /// The jog wheel's top is held in vinyl mode.
+    /// The jog wheel's top is held in vinyl mode on a playing deck.
     Scratch,
     /// A normal loop is active.
     Loop,
     /// A hotcue pad is held after a jump.
     Hotcue(HotcueSlot),
-    /// A held pad that always slips (loop roll, slicer); ended by [`Deck::slip_end`].
-    Pad,
+    /// A loop roll pad is held; always slips.
+    #[cfg_attr(not(test), expect(dead_code, reason = "loop roll comes with Task 3"))]
+    Roll,
+    /// A slicer pad is held; always slips.
+    #[cfg_attr(not(test), expect(dead_code, reason = "the slicer comes with Task 3"))]
+    Slice,
+}
+
+impl SlipOwner {
+    /// A roll or slice: slips whether slip mode is on or not.
+    fn forced(self) -> bool {
+        matches!(self, Self::Roll | Self::Slice)
+    }
 }
 
 impl Deck {
+    /// Turning slip off drops a running ghost, except a held roll's or slice's.
     pub(super) fn set_slip(&mut self, on: bool) {
         self.slip = on;
-        if !on {
+        if !on && self.ghost.is_some_and(|g| !g.owner.forced()) {
             self.ghost = None;
         }
     }
 
-    /// Starts the ghost at the playhead when slip is on or `forced`, unless a ghost is
-    /// already running. The ghost wraps in the normal loop active now, if any.
-    pub(super) fn slip_begin(&mut self, forced: bool) {
-        if self.ghost.is_some() || !(self.slip || forced) || self.track.is_none() {
-            return;
+    /// Starts a ghost for `owner` at the playhead when slip is on or `forced`, and returns
+    /// whether `owner` now holds a ghost. One ghost runs at a time: while one runs, a
+    /// forced begin takes it over as it is (it still is where the track would be) and any
+    /// other begin does nothing.
+    pub(super) fn slip_begin(&mut self, owner: SlipOwner, forced: bool) -> bool {
+        if let Some(ghost) = &mut self.ghost {
+            if forced {
+                ghost.owner = owner;
+            }
+            return forced;
+        }
+        if !(self.slip || forced) || self.track.is_none() {
+            return false;
         }
         self.ghost = Some(Ghost {
             position: self.position,
-            bounds: self.active_loop(),
-            owner: SlipOwner::Pad,
+            owner,
+            wraps: self.active_loop().is_some(),
         });
+        true
     }
 
-    /// Moves the playhead to the ghost and drops the ghost. A ghost that wrapped in a loop
-    /// returns into that loop, active; otherwise a loop the return lands outside of exits.
-    pub(super) fn slip_end(&mut self) {
-        let Some(ghost) = self.ghost.take() else {
-            return;
-        };
-        self.position = ghost.position;
-        match ghost.bounds {
-            Some(bounds) if self.active_loop() != Some(bounds) => {
-                (self.loop_in, self.loop_out) = (Some(bounds.0), Some(bounds.1));
-                self.loop_active = true;
-            }
-            Some(_) => {}
-            None => self.exit_loop_if_outside(self.position),
-        }
-    }
-
-    /// Begins a ghost for `owner` (slip on only). A hotcue takes over a ghost of a loop or
-    /// of another hotcue, so its release returns where the track would be.
-    pub(super) fn slip_begin_for(&mut self, owner: SlipOwner) {
-        if !self.slip {
-            return;
-        }
-        if let Some(ghost) = &mut self.ghost {
-            if matches!(owner, SlipOwner::Hotcue(_))
-                && matches!(ghost.owner, SlipOwner::Loop | SlipOwner::Hotcue(_))
-            {
-                ghost.owner = owner;
-            }
-            return;
-        }
-        self.slip_begin(false);
-        if let Some(ghost) = &mut self.ghost {
-            ghost.owner = owner;
-        }
-    }
-
-    /// Ends the ghost if `owner` began it.
-    pub(super) fn slip_end_for(&mut self, owner: SlipOwner) {
+    /// If `owner` holds the ghost, moves the playhead to it and drops it. Loops are left as
+    /// they are: a ghost that wraps already lives in the active loop.
+    pub(super) fn slip_end(&mut self, owner: SlipOwner) {
         if self.ghost.is_some_and(|g| g.owner == owner) {
-            self.slip_end();
-        }
-    }
-
-    /// A jump left the active loop: the loop's own ghost is dropped, so the jump stands.
-    pub(super) fn slip_loop_jumped_out(&mut self) {
-        if self.ghost.is_some_and(|g| g.owner == SlipOwner::Loop) {
+            if let Some(position) = self.ghost_frames() {
+                self.position = position;
+            }
             self.ghost = None;
         }
     }
 
-    /// The active loop changed from `before` to its current bounds: a ghost wrapping in it
-    /// follows.
-    pub(super) fn slip_loop_resized(&mut self, before: Option<(f64, f64)>) {
-        let after = self.active_loop();
-        if let Some(ghost) = &mut self.ghost
-            && before.is_some()
-            && ghost.bounds == before
-        {
-            ghost.bounds = after;
+    /// A deliberate jump wins over any slip: the ghost is dropped.
+    pub(super) fn slip_drop(&mut self) {
+        self.ghost = None;
+    }
+
+    /// The normal loop was deactivated, by request or by a jump outside it. The ghost stops
+    /// wrapping; a slipped loop's ghost returns on request and is dropped after a jump.
+    pub(super) fn slip_loop_exited(&mut self, by_jump: bool) {
+        let Some(ghost) = &mut self.ghost else {
+            return;
+        };
+        ghost.wraps = false;
+        if ghost.owner == SlipOwner::Loop {
+            if by_jump {
+                self.ghost = None;
+            } else {
+                self.slip_end(SlipOwner::Loop);
+            }
         }
     }
 
-    /// The ghost's position wrapped into its loop, as published.
-    pub(super) fn ghost_frames(&self) -> Option<f64> {
+    /// The loop the ghost wraps in now, if any.
+    pub(super) fn ghost_bounds(&self) -> Option<(f64, f64)> {
         self.ghost
-            .map(|g| looping::wrap_position(g.position, g.bounds, 1.0))
+            .filter(|g| g.wraps)
+            .and_then(|_| self.active_loop())
+    }
+
+    /// The ghost's position wrapped into its loop, as published and returned to.
+    pub(super) fn ghost_frames(&self) -> Option<f64> {
+        let bounds = self.ghost_bounds();
+        self.ghost
+            .map(|g| looping::wrap_position(g.position, bounds, 1.0))
     }
 }
 
-/// Moves `ghost` by `step` track frames, wrapping in its loop like the playhead and
+/// Moves `ghost` by `step` track frames, wrapping in `bounds` like the playhead and
 /// holding at the track's `end`.
-pub(super) fn advance(ghost: &mut Ghost, step: f64, end: f64) {
-    ghost.position = (looping::wrap_position(ghost.position, ghost.bounds, step) + step).min(end);
+pub(super) fn advance(ghost: &mut Ghost, bounds: Option<(f64, f64)>, step: f64, end: f64) {
+    ghost.position = (looping::wrap_position(ghost.position, bounds, step) + step).min(end);
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::{DeckCommand, TrackBuffer, TrackMemory};
+
+    const SR: u32 = 44_100;
+
+    /// A deck playing a silent 100 000-frame track from 50 000, slip on, record touched.
+    fn scratching_deck() -> Deck {
+        let track = Arc::new(TrackBuffer::new(SR, vec![0.0; 200_000]).unwrap());
+        let mut deck = Deck::default();
+        for cmd in [
+            DeckCommand::Load {
+                track,
+                memory: TrackMemory::default(),
+            },
+            DeckCommand::Seek(50_000.0),
+            DeckCommand::SetSlip(true),
+            DeckCommand::Play,
+            DeckCommand::JogTouch(true),
+        ] {
+            assert!(deck.apply(cmd).is_none());
+        }
+        deck
+    }
+
+    fn render(deck: &mut Deck, frames: usize) {
+        let mut out = vec![0.0; frames * 2];
+        deck.render_add(&mut out, SR);
+    }
+
+    #[test]
+    fn a_forced_begin_takes_over_the_running_ghost() {
+        let mut deck = scratching_deck();
+        render(&mut deck, 1000);
+        let ghost = deck.ghost.unwrap();
+        assert_eq!(
+            (ghost.owner, ghost.position),
+            (SlipOwner::Scratch, 51_000.0)
+        );
+        assert!(deck.slip_begin(SlipOwner::Roll, true));
+        let ghost = deck.ghost.unwrap();
+        assert_eq!((ghost.owner, ghost.position), (SlipOwner::Roll, 51_000.0));
+        // A non-forced begin while a ghost runs changes nothing.
+        assert!(!deck.slip_begin(SlipOwner::Loop, false));
+        assert_eq!(deck.ghost.unwrap().owner, SlipOwner::Roll);
+    }
+
+    #[test]
+    fn only_the_owner_ends_the_ghost() {
+        let mut deck = scratching_deck();
+        assert!(deck.slip_begin(SlipOwner::Slice, true));
+        render(&mut deck, 1000);
+        let _ = deck.apply(DeckCommand::JogTouch(false));
+        deck.slip_end(SlipOwner::Scratch);
+        assert_eq!(deck.position, 50_000.0, "a non-owner leaves the playhead");
+        assert!(deck.ghost.is_some());
+        deck.slip_end(SlipOwner::Slice);
+        assert_eq!(deck.position, 51_000.0);
+        assert_eq!(deck.ghost, None);
+    }
+
+    #[test]
+    fn slip_off_keeps_a_forced_ghost() {
+        let mut deck = scratching_deck();
+        let _ = deck.apply(DeckCommand::SetSlip(false));
+        assert_eq!(deck.ghost, None, "the scratch's ghost is dropped");
+        assert!(deck.slip_begin(SlipOwner::Roll, true));
+        let _ = deck.apply(DeckCommand::SetSlip(false));
+        assert_eq!(deck.ghost.map(|g| g.owner), Some(SlipOwner::Roll));
+    }
 }
