@@ -45,7 +45,7 @@ impl Deck {
         if self.jog_touched && self.vinyl && self.track.is_some() {
             self.scratch = Some(0.0);
             if self.plays_for_real() {
-                self.slip_begin(SlipOwner::Scratch, false);
+                self.slip_begin(SlipOwner::Scratch);
             }
         } else {
             self.slip_end(SlipOwner::Scratch);

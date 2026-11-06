@@ -22,9 +22,8 @@ impl Deck {
         };
         // With slip on, a jump while playing lasts as long as the pad is held. Any other
         // jump wins over a running slip.
-        let slipping = self.playing
-            && self.preview.is_none()
-            && self.slip_begin(SlipOwner::Hotcue(slot), false);
+        let slipping =
+            self.playing && self.preview.is_none() && self.slip_begin(SlipOwner::Hotcue(slot));
         if !slipping {
             self.slip_drop();
         }

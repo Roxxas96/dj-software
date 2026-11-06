@@ -4,6 +4,7 @@ mod beat_jump;
 mod hotcue;
 mod jog;
 mod looping;
+mod roll;
 mod slip;
 
 use crate::{DeckCommand, DeckId, DeckSnapshot, Grid, HOTCUES, TempoRange, TrackBuffer};
@@ -45,6 +46,9 @@ pub(crate) struct Deck {
     slip: bool,
     /// Where the track would be without the slipping action, while one lasts.
     ghost: Option<slip::Ghost>,
+    /// A held loop roll or slice and its roll loop, which the playhead wraps in instead of
+    /// the normal loop.
+    roll: Option<roll::Roll>,
     /// How many `Load`s were applied.
     load_seq: u64,
 }
@@ -73,6 +77,7 @@ impl Default for Deck {
             pending_sync: None,
             slip: false,
             ghost: None,
+            roll: None,
             load_seq: 0,
         }
     }
@@ -146,6 +151,10 @@ impl Deck {
             DeckCommand::LoopDouble => self.loop_resize(2.0),
             DeckCommand::ReloopExit => self.reloop_exit(),
             DeckCommand::BeatJump { beats } => self.beat_jump(beats),
+            DeckCommand::RollPress { beats } => self.roll_press(beats),
+            DeckCommand::RollRelease { beats } => self.roll_release(beats),
+            DeckCommand::SlicePress(slice) => self.slice_press(slice),
+            DeckCommand::SliceRelease(slice) => self.slice_release(slice),
             DeckCommand::SetVinyl(on) => self.set_vinyl(on),
             DeckCommand::SetSlip(on) => self.set_slip(on),
             DeckCommand::JogTouch(touched) => self.jog_touch(touched),
@@ -178,6 +187,7 @@ impl Deck {
         self.bend = 0.0;
         self.pending_sync = None;
         self.ghost = None;
+        self.roll = None;
     }
 
     fn play(&mut self) {
@@ -353,7 +363,12 @@ impl Deck {
         if self.tempo_ratio() <= 0.0 {
             return;
         }
-        let bounds = self.active_loop();
+        // A held roll or slice wraps the playhead in its roll loop instead.
+        let bounds = if self.roll.is_some() {
+            self.roll_bounds()
+        } else {
+            self.active_loop()
+        };
 
         for frame in frames {
             let step = rate * (1.0 + self.bend);
@@ -392,6 +407,8 @@ impl Deck {
             jog_touched: self.jog_touched,
             slip: self.slip,
             ghost_frames: self.ghost_frames(),
+            roll_active: self.roll.is_some(),
+            slicer_block_beat: self.slicer_block_beat(),
             load_seq: self.load_seq,
         }
     }

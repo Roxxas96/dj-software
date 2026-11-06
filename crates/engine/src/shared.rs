@@ -34,6 +34,12 @@ pub struct DeckSnapshot {
     pub slip: bool,
     /// While slipping, where the track would be, in track frames.
     pub ghost_frames: Option<f64>,
+    /// A loop roll or slice is held and the playhead wraps in its roll loop.
+    pub roll_active: bool,
+    /// The first beat, counted from the grid's first beat, of the 8-beat block the slicer
+    /// pads play: the block of where the track would be, held while a slice is. `None`
+    /// without a grid.
+    pub slicer_block_beat: Option<f64>,
     /// How many `Load`s the deck has applied. In a snapshot from
     /// [`EngineController::deck_consistent`](crate::EngineController::deck_consistent)
     /// every field is from the same block as this count.
@@ -62,6 +68,8 @@ impl Default for DeckSnapshot {
             jog_touched: false,
             slip: false,
             ghost_frames: None,
+            roll_active: false,
+            slicer_block_beat: None,
             load_seq: 0,
         }
     }
@@ -164,6 +172,8 @@ struct DeckShared {
     jog_touched: AtomicBool,
     slip: AtomicBool,
     ghost_frames: AtomicU64,
+    roll_active: AtomicBool,
+    slicer_block_beat: AtomicU64,
     load_seq: AtomicU64,
 }
 
@@ -221,6 +231,9 @@ impl DeckShared {
         self.slip.store(s.slip, Ordering::Relaxed);
         self.ghost_frames
             .store(opt_bits(s.ghost_frames), Ordering::Relaxed);
+        self.roll_active.store(s.roll_active, Ordering::Relaxed);
+        self.slicer_block_beat
+            .store(opt_bits(s.slicer_block_beat), Ordering::Relaxed);
         self.load_seq.store(s.load_seq, Ordering::Relaxed);
     }
 
@@ -272,6 +285,8 @@ impl DeckShared {
             jog_touched: self.jog_touched.load(Ordering::Relaxed),
             slip: self.slip.load(Ordering::Relaxed),
             ghost_frames: bits_opt(self.ghost_frames.load(Ordering::Relaxed)),
+            roll_active: self.roll_active.load(Ordering::Relaxed),
+            slicer_block_beat: bits_opt(self.slicer_block_beat.load(Ordering::Relaxed)),
             load_seq: self.load_seq.load(Ordering::Relaxed),
         }
     }

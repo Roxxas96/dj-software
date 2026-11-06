@@ -91,6 +91,29 @@ pub enum DeckCommand {
         /// Signed distance in beats.
         beats: f64,
     },
+    /// Loop roll pad down: with a grid on a deck playing for real, loops `beats` beats from
+    /// the playhead (a *roll loop*, separate from the normal loop) and always slips. A
+    /// press while another roll or slice is held replaces it and keeps its ghost. Ignored
+    /// for a `beats` that is not finite and positive.
+    RollPress {
+        /// Roll length in beats.
+        beats: f64,
+    },
+    /// Loop roll pad up: ends the roll and returns to the ghost, but only if the held roll
+    /// was started by a press of this same `beats`.
+    RollRelease {
+        /// Length in beats of the pad released.
+        beats: f64,
+    },
+    /// Slicer pad `0..=7` down: with a grid on a deck playing for real, loops beat
+    /// `block + slice` of the current 8-beat block (see
+    /// [`DeckSnapshot::slicer_block_beat`](crate::DeckSnapshot::slicer_block_beat)) as a
+    /// 1-beat roll loop, and always slips. A press while a slice is held moves the loop
+    /// to the new slice of the same block; any other press replaces a held roll.
+    SlicePress(u8),
+    /// Slicer pad up: ends the slice and returns to the ghost, but only if this slice is
+    /// the one held.
+    SliceRelease(u8),
     /// Turns vinyl mode on or off: with it on, touching the jog wheel's top scratches. On
     /// for a new deck and kept across loads.
     SetVinyl(bool),
@@ -99,9 +122,10 @@ pub enum DeckCommand {
     /// release, so the hotcue is momentary) end where the track would have been: a silent
     /// ghost playhead keeps moving at the deck's tempo, nudge included, and the playhead
     /// returns to it. A scratch slips only on a deck playing for real, and a deliberate jump
-    /// (seek, cue, search, a hotcue that does not slip) drops the ghost. Turning slip off
-    /// drops a running ghost and leaves the playhead where it is. Off for a new deck and
-    /// kept across loads; `Load` drops the ghost.
+    /// (seek, cue, search, a hotcue that does not slip) drops the ghost and ends a held roll
+    /// or slice. Turning slip off drops a running ghost, except a held roll's or slice's,
+    /// and leaves the playhead where it is. Off for a new deck and kept across loads;
+    /// `Load` drops the ghost.
     SetSlip(bool),
     /// Jog wheel top touched or released. With vinyl on, a touch holds the record: normal
     /// motion stops and the deck follows the platter until release, which resumes playback
