@@ -296,6 +296,7 @@ fn render_does_not_allocate() {
         SamplerCommand::Play(0),
         SamplerCommand::Stop(0),
         SamplerCommand::Play(99),
+        SamplerCommand::Set(99, Some(ramp_track(44_100, 100))),
     ] {
         c.send(Command::Sampler(cmd)).unwrap();
         render_blocks(2);

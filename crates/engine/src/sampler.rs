@@ -49,11 +49,15 @@ impl Sampler {
     }
 
     /// Applies `cmd` and returns a replaced buffer for the renderer to discard. An
-    /// out-of-range slot and a non-finite volume are ignored.
+    /// out-of-range slot and a non-finite volume are ignored (an out-of-range `Set` returns
+    /// its own buffer).
     pub(crate) fn apply(&mut self, cmd: SamplerCommand) -> Option<Arc<TrackBuffer>> {
         match cmd {
             SamplerCommand::Set(index, buffer) => {
-                let slot = self.slots.get_mut(index)?;
+                // Out of range: hand the incoming buffer back so it is not freed here.
+                let Some(slot) = self.slots.get_mut(index) else {
+                    return buffer;
+                };
                 slot.playing = false;
                 slot.position = 0.0;
                 std::mem::replace(&mut slot.buffer, buffer)
