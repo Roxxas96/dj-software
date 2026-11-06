@@ -143,7 +143,7 @@ impl FxSlot {
     fn set_enabled(&mut self, enabled: bool) {
         if enabled && !self.active() {
             // Off for a while: do not replay what was left in the buffers.
-            self.effect.set_kind(self.kind);
+            self.effect.clear_active();
             self.applied_amount = f32::NAN;
         }
         self.on.target = if enabled { 1.0 } else { 0.0 };
