@@ -18,7 +18,7 @@ use controller::capture::{
 use controller::mapping::{Mapping, Resolved};
 use controller::{
     Connection, MidiMessage, OutputPort, PortError, PresenceChange, Runtime, TimedMidi, clock,
-    input_port_names, open_input, open_output, output_port_names,
+    input_port_names, open_input, open_output, open_raw_input, output_port_names,
 };
 use engine::{EngineConfig, engine};
 
@@ -128,6 +128,34 @@ pub fn monitor(port: Option<&str>) -> anyhow::Result<()> {
             Ok(timed) => {
                 let ms = timed.micros.saturating_sub(started) / 1000;
                 println!("{ms:>8} ms  {}", timed.message);
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    Ok(())
+}
+
+/// `open-jockey midi monitor --raw`: every message as hex bytes, SysEx and clock
+/// included, until Ctrl-C.
+pub fn monitor_raw(port: Option<&str>) -> anyhow::Result<()> {
+    let inputs = input_port_names().context("listing MIDI inputs")?;
+    let wanted = choose_port(port, &inputs)?;
+
+    let interrupted = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&interrupted);
+    ctrlc::set_handler(move || flag.store(true, Ordering::Relaxed))
+        .context("installing the Ctrl-C handler")?;
+
+    let (tx, rx) = channel();
+    let started = clock::now_micros();
+    let input = open_raw_input(&wanted, tx).context("opening MIDI input")?;
+    println!("Monitoring {} raw (Ctrl-C to stop)", input.name());
+    while !interrupted.load(Ordering::Relaxed) {
+        match rx.recv_timeout(POLL) {
+            Ok((micros, bytes)) => {
+                let ms = micros.saturating_sub(started) / 1000;
+                println!("{ms:>8} ms  {}", hex(&bytes));
             }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
