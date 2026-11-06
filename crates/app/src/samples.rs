@@ -46,12 +46,24 @@ impl fmt::Display for SampleError {
     }
 }
 
+/// A loaded sample.
+#[derive(Debug)]
+pub struct Sample {
+    pub buffer: Arc<TrackBuffer>,
+    /// Decoding stopped early, so the sample may be incomplete.
+    pub truncated: bool,
+}
+
+/// The longest sample's frame count at the highest sample rate checked before decoding
+/// (192 kHz), plus one frame so a sample just over the limit is seen as such.
+const MAX_PREFIX_FRAMES: usize = (MAX_SAMPLE_SECONDS as usize) * 192_000 + 1;
+
 /// Decodes every configured pad; a result's number is the pad's 0-based index. A `track` is
-/// read through `library`.
+/// read through `library`. A sample too long is refused without decoding all of it.
 pub fn load(
     config: &SamplerConfig,
     library: Option<&Reader>,
-) -> Vec<(usize, Result<Arc<TrackBuffer>, SampleError>)> {
+) -> Vec<(usize, Result<Sample, SampleError>)> {
     config
         .pads
         .iter()
@@ -66,34 +78,62 @@ pub fn load(
         .collect()
 }
 
+/// The report for a pad whose sample was loaded but may be incomplete.
+pub fn truncated_line(index: usize, source: &PadSource) -> String {
+    format!(
+        "{} (loaded anyway)",
+        failure_line_with(index, source, "the file ended early")
+    )
+}
+
 /// The report for a pad that failed: `sampler pad N (<file or track>): <reason>`.
 pub fn failure_line(index: usize, source: &PadSource, error: &SampleError) -> String {
+    failure_line_with(index, source, error)
+}
+
+fn failure_line_with(index: usize, source: &PadSource, reason: impl fmt::Display) -> String {
     let what = match source {
         PadSource::File(path) => safe(path.display()),
         PadSource::Track(id) => format!("track {id}"),
     };
-    format!("sampler pad {} ({what}): {error}", index + 1)
+    format!("sampler pad {} ({what}): {reason}", index + 1)
 }
 
-fn load_track(id: i64, library: Option<&Reader>) -> Result<Arc<TrackBuffer>, SampleError> {
+fn load_track(id: i64, library: Option<&Reader>) -> Result<Sample, SampleError> {
     let library = library.ok_or(SampleError::NoLibrary)?;
     let details = library
         .track(id)
         .map_err(|e| SampleError::Library(e.to_string()))?
         .ok_or(SampleError::UnknownTrack)?;
+    // The stored length refuses a long track before any decoding.
+    if let (Some(frames), Some(rate)) = (details.row.duration_frames, details.row.sample_rate)
+        && rate > 0
+    {
+        too_long(frames as f64, rate)?;
+    }
     load_file(&details.path)
 }
 
-fn load_file(path: &Path) -> Result<Arc<TrackBuffer>, SampleError> {
-    if !path.is_file() {
-        return Err(SampleError::MissingFile);
-    }
-    let decoded = decode::decode_file(path).map_err(|e| SampleError::Decode(e.to_string()))?;
-    let seconds = decoded.track.frames() as f64 / f64::from(decoded.track.sample_rate());
+/// Fails if `frames` at `rate` is longer than [`MAX_SAMPLE_SECONDS`].
+fn too_long(frames: f64, rate: u32) -> Result<(), SampleError> {
+    let seconds = frames / f64::from(rate);
     if seconds > MAX_SAMPLE_SECONDS {
         return Err(SampleError::TooLong(seconds));
     }
-    Ok(Arc::new(decoded.track))
+    Ok(())
+}
+
+fn load_file(path: &Path) -> Result<Sample, SampleError> {
+    if !path.is_file() {
+        return Err(SampleError::MissingFile);
+    }
+    let decoded = decode::decode_prefix_checked(path, MAX_PREFIX_FRAMES)
+        .map_err(|e| SampleError::Decode(e.to_string()))?;
+    too_long(decoded.track.frames() as f64, decoded.track.sample_rate())?;
+    Ok(Sample {
+        buffer: Arc::new(decoded.track),
+        truncated: decoded.truncated,
+    })
 }
 
 #[cfg(test)]
@@ -146,7 +186,7 @@ mod tests {
         };
         let loaded = load(&config, Some(&reader));
         assert_eq!(loaded.len(), 4);
-        let buffer = loaded[0].1.as_ref().unwrap();
+        let buffer = &loaded[0].1.as_ref().unwrap().buffer;
         assert_eq!(buffer.frames(), 2_000);
         assert_eq!(buffer.sample_rate(), 8_000);
 
@@ -170,5 +210,53 @@ mod tests {
         // A track id with no library at all.
         let no_library = load(&config, None);
         assert!(matches!(no_library[3].1, Err(SampleError::NoLibrary)));
+    }
+
+    #[test]
+    fn a_long_library_track_is_refused_without_decoding() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = library::Library::open(&dir.path().join("library.sqlite3")).unwrap();
+        // The file does not exist: a decode (or even the file check) would say so instead.
+        lib.writer()
+            .submit_wait(library::WriteOp::Raw(vec![library::RawStatement {
+                sql: "INSERT INTO tracks(id, path, fingerprint, duration_frames, sample_rate, \
+                      added_at) VALUES (5, '/nowhere/mix.wav', x'00', 100000000, 44100, 0)"
+                    .into(),
+                params: vec![],
+            }]))
+            .unwrap();
+        let reader = lib.reader().unwrap();
+        let config = SamplerConfig {
+            volume: 1.0,
+            pads: vec![PadSource::Track(5)],
+        };
+        let loaded = load(&config, Some(&reader));
+        let error = loaded[0].1.as_ref().unwrap_err();
+        assert!(matches!(error, SampleError::TooLong(_)), "{error}");
+        assert!(
+            error.to_string().contains("2267.6 s is too long"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_truncated_sample_is_reported_but_loaded() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cut.wav");
+        write_wav(&path, 1.0);
+        // The header still declares 1 s of audio, but the file ends after half of it.
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::write(&path, &bytes[..44 + 8_000]).unwrap();
+        let config = SamplerConfig {
+            volume: 1.0,
+            pads: vec![PadSource::File(path)],
+        };
+        let loaded = load(&config, None);
+        let sample = loaded[0].1.as_ref().unwrap();
+        assert!(sample.truncated);
+        assert!(sample.buffer.frames() > 0);
+        let line = truncated_line(0, &config.pads[0]);
+        assert!(line.starts_with("sampler pad 1 ("), "{line}");
+        assert!(line.contains("the file ended early"), "{line}");
     }
 }

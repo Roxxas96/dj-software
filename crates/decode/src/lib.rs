@@ -85,6 +85,17 @@ pub fn decode_prefix(path: &Path, max_frames: usize) -> Result<TrackBuffer, Deco
     decode(path, Some(max_frames)).map(|d| d.track)
 }
 
+/// [`decode_prefix`] that also reports whether decoding ended early (see
+/// [`Decoded::truncated`]; the shortfall against the declared length is not checked, since
+/// the prefix is cut short on purpose).
+///
+/// # Errors
+///
+/// As [`decode_file`].
+pub fn decode_prefix_checked(path: &Path, max_frames: usize) -> Result<Decoded, DecodeError> {
+    decode(path, Some(max_frames))
+}
+
 /// The decode loop shared by [`decode_file`] and [`decode_prefix`]; `limit` caps the
 /// number of frames returned.
 fn decode(path: &Path, limit: Option<usize>) -> Result<Decoded, DecodeError> {
