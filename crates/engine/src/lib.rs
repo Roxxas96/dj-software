@@ -21,6 +21,9 @@ pub use command::{
     XfaderAssign,
 };
 pub use controller::{CommandQueueFull, EngineController};
+pub use dsp::fx::EffectKind;
+#[doc(hidden)]
+pub use dsp::fx::{EffectForTests, effect_for_tests};
 pub use ids::DeckId;
 pub use memory::{Grid, HOTCUES, HotcueSlot, TrackMemory};
 pub use renderer::EngineRenderer;
