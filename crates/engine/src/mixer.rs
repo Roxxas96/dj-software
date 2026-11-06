@@ -1,6 +1,6 @@
 //! Four-channel DJ mixer: channel strips, crossfader, master and headphone buses.
 //!
-//! Signal flow per channel: deck → trim → EQ → filter → PFL tap → fader → crossfader →
+//! Signal flow per channel: deck → trim → EQ → filter → effects → PFL tap → fader → crossfader →
 //! master sum → master level → clamp to `[-1, 1]`. The sampler's output joins the master
 //! sum after the channels. Headphones get
 //! `lerp(cue_sum, master_pre_clamp, mix) * headphone_level`, clamped, where `cue_sum` is the
@@ -11,14 +11,22 @@
 //! bypassed inside its center deadzone; engaging or releasing it crossfades between dry and
 //! filtered signal across one block.
 //!
+//! Each channel runs three effect slots in order after the filter. A slot that is off (and
+//! done fading) is skipped entirely, so the channel is then bit-identical to one without
+//! effects. An enabled slot mixes `out = x + (wet − x) × amount`; the Filter kind is always
+//! fully wet and uses the amount as its cutoff. Switching a slot crossfades over one block.
+//!
 //! The curve functions are public so the UI can show the same values the engine applies.
 
 use std::f32::consts::FRAC_PI_2;
 
 use crate::dsp::filter::Filter;
+use crate::dsp::fx::Effect;
 use crate::dsp::isolator::Isolator;
 use crate::dsp::smooth::Ramp;
-use crate::{ChannelCommand, DeckId, MasterCommand, Meters, XfaderAssign};
+use crate::{
+    ChannelCommand, ChannelSnapshot, DeckId, EffectKind, MasterCommand, Meters, XfaderAssign,
+};
 
 const CHANNELS: usize = DeckId::ALL.len();
 
@@ -74,6 +82,55 @@ fn strip_gain(assign: XfaderAssign, crossfader: Option<f32>) -> f32 {
     crossfader.map_or(1.0, |position| side_gain(assign, position))
 }
 
+const FX_SLOTS: usize = 3;
+const DEFAULT_FX_AMOUNT: f32 = 0.5;
+/// The kinds the slots start with.
+const DEFAULT_FX_KINDS: [EffectKind; FX_SLOTS] =
+    [EffectKind::Echo, EffectKind::Reverb, EffectKind::Flanger];
+
+#[derive(Debug)]
+struct FxSlot {
+    effect: Effect,
+    kind: EffectKind,
+    /// 1.0 when the slot is on; ramped so toggling does not click.
+    on: Ramp,
+    /// The amount last given to the effect (only the Filter kind uses it); NaN when stale.
+    applied_amount: f32,
+}
+
+impl FxSlot {
+    fn new(kind: EffectKind, sample_rate: u32) -> Self {
+        let mut effect = Effect::new(sample_rate);
+        effect.set_kind(kind);
+        Self {
+            effect,
+            kind,
+            on: Ramp::new(0.0),
+            applied_amount: f32::NAN,
+        }
+    }
+
+    /// Whether the slot affects the signal in the coming block.
+    fn active(&self) -> bool {
+        self.on.current != 0.0 || self.on.target != 0.0
+    }
+
+    fn set_kind(&mut self, kind: EffectKind) {
+        self.kind = kind;
+        self.effect.set_kind(kind);
+        self.applied_amount = f32::NAN;
+    }
+
+    fn set_enabled(&mut self, enabled: bool) {
+        if enabled && !self.active() {
+            // Off for a while: do not replay what was left in the buffers.
+            self.effect.set_kind(self.kind);
+            self.applied_amount = f32::NAN;
+        }
+        self.on.target = if enabled { 1.0 } else { 0.0 };
+    }
+}
+
 #[derive(Debug)]
 struct ChannelStrip {
     trim: Ramp,
@@ -87,6 +144,10 @@ struct ChannelStrip {
     assign: XfaderAssign,
     /// Crossfader gain for this channel's side.
     xfade: Ramp,
+    fx: [FxSlot; FX_SLOTS],
+    fx_amount: Ramp,
+    /// One beat in output frames, 0 without a grid.
+    beat_frames: f64,
 }
 
 impl ChannelStrip {
@@ -100,6 +161,9 @@ impl ChannelStrip {
             pfl: Ramp::new(0.0),
             assign,
             xfade: Ramp::new(strip_gain(assign, Some(crossfader))),
+            fx: DEFAULT_FX_KINDS.map(|kind| FxSlot::new(kind, sample_rate)),
+            fx_amount: Ramp::new(DEFAULT_FX_AMOUNT),
+            beat_frames: 0.0,
         }
     }
 
@@ -158,6 +222,14 @@ impl Mixer {
             ChannelCommand::Filter(v) if v.is_finite() => strip.filter.set_position(v),
             ChannelCommand::Fader(v) if v.is_finite() => strip.fader.target = fader_gain(v),
             ChannelCommand::Pfl(on) => strip.pfl.target = if on { 1.0 } else { 0.0 },
+            ChannelCommand::FxEnabled(slot, enabled) => {
+                if let Some(slot) = strip.fx.get_mut(slot) {
+                    slot.set_enabled(enabled);
+                }
+            }
+            ChannelCommand::FxAmount(v) if v.is_finite() => {
+                strip.fx_amount.target = v.clamp(0.0, 1.0);
+            }
             ChannelCommand::XfaderAssign(assign) => {
                 strip.assign = assign;
                 strip.xfade.target = strip_gain(assign, crossfader);
@@ -167,7 +239,8 @@ impl Mixer {
             | ChannelCommand::EqMid(_)
             | ChannelCommand::EqHigh(_)
             | ChannelCommand::Filter(_)
-            | ChannelCommand::Fader(_) => {}
+            | ChannelCommand::Fader(_)
+            | ChannelCommand::FxAmount(_) => {}
         }
     }
 
@@ -190,10 +263,31 @@ impl Mixer {
             MasterCommand::HeadphoneMix(v) if v.is_finite() => {
                 self.headphone_mix.target = v.clamp(0.0, 1.0);
             }
-            MasterCommand::Crossfader(_)
+            MasterCommand::FxSlot(slot, kind) if slot < FX_SLOTS => {
+                for strip in &mut self.channels {
+                    strip.fx[slot].set_kind(kind);
+                }
+            }
+            MasterCommand::FxSlot(..)
+            | MasterCommand::Crossfader(_)
             | MasterCommand::MasterLevel(_)
             | MasterCommand::HeadphoneLevel(_)
             | MasterCommand::HeadphoneMix(_) => {}
+        }
+    }
+
+    /// Sets the length of a beat of `deck`'s grid in output frames (0 without a grid), for
+    /// the tempo-synced effects.
+    pub(crate) fn set_beat_frames(&mut self, deck: DeckId, frames: f64) {
+        self.channels[deck.index()].beat_frames = frames;
+    }
+
+    /// The channel's state for display.
+    pub(crate) fn channel_snapshot(&self, id: DeckId) -> ChannelSnapshot {
+        let strip = &self.channels[id.index()];
+        ChannelSnapshot {
+            fx_enabled: strip.fx.each_ref().map(|slot| slot.on.target != 0.0),
+            fx_amount: strip.fx_amount.target,
         }
     }
 
@@ -242,6 +336,20 @@ impl Mixer {
             let fader = strip.fader.block(frames);
             let pfl = strip.pfl.block(frames);
             let xfade = strip.xfade.block(frames);
+            let beat_frames = strip.beat_frames;
+            let fx_active = strip.fx.each_ref().map(FxSlot::active);
+            let fx_amount_target = strip.fx_amount.target;
+            for (slot, &active) in strip.fx.iter_mut().zip(&fx_active) {
+                if active
+                    && slot.kind == EffectKind::Filter
+                    && slot.applied_amount != fx_amount_target
+                {
+                    slot.effect.set_amount(fx_amount_target);
+                    slot.applied_amount = fx_amount_target;
+                }
+            }
+            let fx_amount = strip.fx_amount.block(frames);
+            let fx_on = strip.fx.each_mut().map(|slot| slot.on.block(frames));
             let input = input[..frames * 2].as_chunks::<2>().0;
             for (i, ((x, m), h)) in input
                 .iter()
@@ -257,6 +365,20 @@ impl Mixer {
                         let filtered = strip.filter.process(ch, pre_fader);
                         pre_fader += (filtered - pre_fader) * wet.at(i);
                     }
+                    for (slot, (&active, on)) in
+                        strip.fx.iter_mut().zip(fx_active.iter().zip(&fx_on))
+                    {
+                        if !active {
+                            continue;
+                        }
+                        let wet = slot.effect.process(ch, pre_fader, beat_frames);
+                        let mix = if slot.kind == EffectKind::Filter {
+                            on.at(i)
+                        } else {
+                            on.at(i) * fx_amount.at(i)
+                        };
+                        pre_fader += (wet - pre_fader) * mix;
+                    }
                     h[ch] += pre_fader * pfl;
                     let post_fader = pre_fader * fader;
                     *peak = peak.max(post_fader.abs());
@@ -265,6 +387,11 @@ impl Mixer {
             }
             strip.isolator.flush_denormals();
             strip.filter.flush_denormals();
+            for (slot, &active) in strip.fx.iter_mut().zip(&fx_active) {
+                if active {
+                    slot.effect.flush_denormals();
+                }
+            }
         }
 
         let master_level = self.master_level.block(frames);

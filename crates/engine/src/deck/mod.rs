@@ -347,6 +347,19 @@ impl Deck {
         self.track.as_ref().map_or(0, |t| t.frames())
     }
 
+    /// One beat of the grid in output frames at `output_rate`, at the current tempo; 0
+    /// without a loaded track and grid, or when stopped at tempo 0.
+    pub(crate) fn beat_frames(&self, output_rate: u32) -> f64 {
+        let (Some(grid), Some(track)) = (self.grid, &self.track) else {
+            return 0.0;
+        };
+        let ratio = self.tempo_ratio();
+        if ratio <= 0.0 {
+            return 0.0;
+        }
+        grid.beat_period_frames * f64::from(output_rate) / f64::from(track.sample_rate()) / ratio
+    }
+
     fn tempo_ratio(&self) -> f64 {
         let offset = (f64::from(self.tempo_slider) - 0.5) * 2.0 * self.tempo_range.fraction();
         (1.0 + offset).max(0.0)

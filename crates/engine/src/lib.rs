@@ -28,7 +28,7 @@ pub use ids::DeckId;
 pub use memory::{Grid, HOTCUES, HotcueSlot, TrackMemory};
 pub use renderer::EngineRenderer;
 pub use sampler::{SAMPLER_SLOTS, SamplerSnapshot};
-pub use shared::{DeckSnapshot, Meters};
+pub use shared::{ChannelSnapshot, DeckSnapshot, Meters};
 pub use track::{TrackBuffer, TrackError};
 
 /// Capacity of the command queue (controller to renderer).

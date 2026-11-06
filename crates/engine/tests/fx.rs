@@ -181,3 +181,31 @@ fn effects_stay_finite_on_full_scale_noise() {
         }
     }
 }
+
+#[test]
+fn a_tiny_beat_length_falls_back_to_120_bpm() {
+    for beat in [0.0, 0.5, 1e-300, -3.0, f64::NAN] {
+        let mut fx = effect_for_tests(SR, EffectKind::Flanger);
+        for i in 0..2000 {
+            let x = (i as f32 * 0.05).sin();
+            for ch in 0..2 {
+                let y = fx.process(ch, x, beat);
+                assert!(y.is_finite(), "beat {beat}: {y}");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_non_finite_filter_amount_means_zero() {
+    for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let mut a = effect_for_tests(SR, EffectKind::Filter);
+        let mut b = effect_for_tests(SR, EffectKind::Filter);
+        a.set_amount(bad);
+        b.set_amount(0.0);
+        for i in 0..500 {
+            let x = (i as f32 * 0.3).sin();
+            assert_eq!(a.process(0, x, BEAT), b.process(0, x, BEAT));
+        }
+    }
+}

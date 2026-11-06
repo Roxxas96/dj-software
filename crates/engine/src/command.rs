@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{DeckId, Grid, HotcueSlot, TrackBuffer, TrackMemory};
+use crate::{DeckId, EffectKind, Grid, HotcueSlot, TrackBuffer, TrackMemory};
 
 /// A message from the controller to the audio thread.
 #[derive(Debug, Clone)]
@@ -208,6 +208,12 @@ pub enum ChannelCommand {
     /// Sends the pre-fader signal to the headphone cue bus.
     Pfl(bool),
     XfaderAssign(XfaderAssign),
+    /// Turns effect slot `0..=2` on or off, crossfading over one block. A slot index `>= 3`
+    /// is ignored. Turning a slot on from off starts the effect from clear state.
+    FxEnabled(usize, bool),
+    /// The channel's effect amount in `[0, 1]` (clamped, 0.5 for a new engine): the dry/wet
+    /// of all its effects, or the cutoff of a Filter slot (which is always fully wet).
+    FxAmount(f32),
 }
 
 /// Which side of the crossfader a channel follows.
@@ -233,6 +239,9 @@ pub enum MasterCommand {
     /// crossfader gain is 1.0 whatever its assignment or the crossfader position; turning
     /// it on again restores the gains from the current position.
     CrossfaderEnabled(bool),
+    /// Sets the kind of effect slot `0..=2` on every channel and clears its state (the new
+    /// engine runs Echo, Reverb and Flanger). A slot index `>= 3` is ignored.
+    FxSlot(usize, EffectKind),
 }
 
 /// Sampler commands. A slot index `>= SAMPLER_SLOTS` is ignored.

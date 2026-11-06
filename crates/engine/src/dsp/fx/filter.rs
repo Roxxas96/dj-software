@@ -26,7 +26,11 @@ impl SweepFilter {
 
     /// Exponential sweep from 20 kHz (amount 0) to 200 Hz (amount 1).
     pub(super) fn set_amount(&mut self, amount: f32) {
-        let t = amount.clamp(0.0, 1.0);
+        let t = if amount.is_finite() {
+            amount.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         let hz = TOP_HZ * (BOTTOM_HZ / TOP_HZ).powf(t);
         self.coeffs = Coeffs::low_pass(hz, Q, self.sample_rate);
     }

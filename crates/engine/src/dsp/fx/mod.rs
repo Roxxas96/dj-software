@@ -78,7 +78,8 @@ impl Effect {
         self.filter.clear();
     }
 
-    /// The Filter kind's cutoff follows `amount` (0 to 1); the other kinds ignore it.
+    /// The Filter kind's cutoff follows `amount` (0 to 1, a non-finite value counts as 0);
+    /// the other kinds ignore it. Recomputes coefficients: call when the amount changes.
     pub(crate) fn set_amount(&mut self, amount: f32) {
         self.filter.set_amount(amount);
     }
@@ -87,7 +88,7 @@ impl Effect {
     /// in output frames. Call both channels of a frame in order.
     #[inline]
     pub(crate) fn process(&mut self, ch: usize, x: f32, beat_frames: f64) -> f32 {
-        let beat = if beat_frames.is_finite() && beat_frames > 0.0 {
+        let beat = if beat_frames.is_finite() && beat_frames >= 1.0 {
             beat_frames
         } else {
             FALLBACK_BEAT_SECONDS * self.echo.sample_rate()

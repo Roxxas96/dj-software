@@ -5,8 +5,8 @@ use std::sync::Arc;
 use assert_no_alloc::{AllocDisabler, assert_no_alloc};
 use common::ramp_track;
 use engine::{
-    ChannelCommand, Command, DeckCommand, DeckId, EngineConfig, Grid, HotcueSlot, JogSurface,
-    MasterCommand, SamplerCommand, TrackMemory, XfaderAssign, engine,
+    ChannelCommand, Command, DeckCommand, DeckId, EffectKind, EngineConfig, Grid, HotcueSlot,
+    JogSurface, MasterCommand, SamplerCommand, TrackMemory, XfaderAssign, engine,
 };
 
 #[global_allocator]
@@ -46,7 +46,7 @@ fn render_does_not_allocate() {
     }
     drop(first);
     // Built up front: allocating it inside the guarded section would abort the test.
-    let replacement = ramp_track(44_100, 200_000);
+    let replacement = ramp_track(44_100, 400_000);
     let sample = ramp_track(44_100, 8_000);
     let mut master = vec![0.0; BLOCK_FRAMES * 2];
     let mut headphones = vec![0.0; BLOCK_FRAMES * 2];
@@ -299,6 +299,47 @@ fn render_does_not_allocate() {
         c.send(Command::Channel(decks[0], cmd)).unwrap();
         render_blocks(2);
     }
+    // Every effect command, then a render with all three slots on, on all four channels.
+    for cmd in [
+        MasterCommand::FxSlot(0, EffectKind::Reverb),
+        MasterCommand::FxSlot(1, EffectKind::Filter),
+        MasterCommand::FxSlot(2, EffectKind::Flanger),
+        MasterCommand::FxSlot(7, EffectKind::Echo),
+        MasterCommand::FxSlot(0, EffectKind::Echo),
+        MasterCommand::FxSlot(1, EffectKind::Reverb),
+    ] {
+        c.send(Command::Master(cmd)).unwrap();
+        render_blocks(1);
+    }
+    let all: Vec<DeckId> = (0..4).map(|i| DeckId::new(i).unwrap()).collect();
+    for &id in &all {
+        for cmd in [
+            ChannelCommand::FxAmount(0.8),
+            ChannelCommand::FxAmount(f32::NAN),
+            ChannelCommand::FxEnabled(9, true),
+            ChannelCommand::FxEnabled(0, true),
+            ChannelCommand::FxEnabled(1, true),
+            ChannelCommand::FxEnabled(2, true),
+        ] {
+            c.send(Command::Channel(id, cmd)).unwrap();
+            render_blocks(1);
+        }
+    }
+    render_blocks(6);
+    c.send(Command::Master(MasterCommand::FxSlot(
+        1,
+        EffectKind::Filter,
+    )))
+    .unwrap();
+    render_blocks(3);
+    assert_eq!(c.channel(all[3]).fx_enabled, [true; 3]);
+    for &id in &all {
+        for slot in 0..3 {
+            c.send(Command::Channel(id, ChannelCommand::FxEnabled(slot, false)))
+                .unwrap();
+        }
+    }
+    render_blocks(3);
     for cmd in [
         MasterCommand::Crossfader(0.2),
         MasterCommand::MasterLevel(0.9),
