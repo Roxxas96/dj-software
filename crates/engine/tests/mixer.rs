@@ -6,8 +6,8 @@ use approx::assert_abs_diff_eq;
 use common::{SETTLE_FRAMES, SETTLED_EPSILON, constant_track, render};
 use engine::mixer::{crossfader_gains, fader_gain, trim_gain};
 use engine::{
-    ChannelCommand, Command, DeckCommand, DeckId, EngineConfig, EngineController, EngineRenderer,
-    MasterCommand, XfaderAssign, engine,
+    ChannelCommand, Command, DeckCommand, DeckId, EffectKind, EngineConfig, EngineController,
+    EngineRenderer, MasterCommand, TrackBuffer, XfaderAssign, engine,
 };
 
 const SR: u32 = 44_100;
@@ -343,4 +343,176 @@ fn crossfader_disabled_plays_every_channel_at_full_level() {
     render(&mut r, BLOCK);
     let (m, _) = render(&mut r, 1024);
     assert_all_near(&m, SIGNAL);
+}
+
+/// Loads a 0.1 s burst of `SIGNAL` followed by silence on deck `index` and starts it.
+fn play_burst(c: &mut EngineController, index: usize) {
+    let id = deck(index);
+    let mut samples = vec![0.0; 100_000 * 2];
+    samples[..4410 * 2].fill(SIGNAL);
+    c.send(Command::Deck(
+        id,
+        DeckCommand::Load {
+            track: std::sync::Arc::new(TrackBuffer::new(SR, samples).unwrap()),
+            memory: engine::TrackMemory::default(),
+        },
+    ))
+    .unwrap();
+    c.send(Command::Deck(id, DeckCommand::Play)).unwrap();
+}
+
+fn fx_enabled(c: &mut EngineController, index: usize, slot: usize, on: bool) {
+    channel(c, index, ChannelCommand::FxEnabled(slot, on));
+}
+
+/// Energy of the left channel in `frames` (a range of stereo frames).
+fn energy(samples: &[f32], frames: std::ops::Range<usize>) -> f32 {
+    frames.map(|i| samples[i * 2].abs()).sum()
+}
+
+#[test]
+fn enabled_echo_is_heard_after_the_filter_and_before_the_fader() {
+    // The echo of the burst comes back half a beat (0.25 s at the 120 BPM fallback) later.
+    let echo = 11_025;
+    let run = |on: bool| {
+        let (mut c, mut r) = setup();
+        channel(&mut c, 0, ChannelCommand::Fader(0.0));
+        channel(&mut c, 0, ChannelCommand::Pfl(true));
+        master(&mut c, MasterCommand::HeadphoneMix(0.0));
+        fx_enabled(&mut c, 0, 0, on);
+        settle(&mut r);
+        play_burst(&mut c, 0);
+        let (m, h) = render(&mut r, 20_000);
+        assert!(m.iter().all(|&s| s == 0.0), "the fader is closed");
+        (c, h)
+    };
+    let (_, off) = run(false);
+    let (_, on) = run(true);
+    assert!(energy(&off, echo + 500..echo + 3500) < 1e-2);
+    assert!(energy(&on, echo + 500..echo + 3500) > 100.0);
+}
+
+#[test]
+fn fx_off_is_bit_identical_to_plan_5_output() {
+    let run = |touch: bool| {
+        let (mut c, mut r) = setup();
+        if touch {
+            master(&mut c, MasterCommand::FxSlot(0, EffectKind::Filter));
+            master(&mut c, MasterCommand::FxSlot(1, EffectKind::Echo));
+            channel(&mut c, 0, ChannelCommand::FxAmount(1.0));
+            channel(&mut c, 0, ChannelCommand::FxEnabled(7, true));
+            channel(&mut c, 0, ChannelCommand::FxAmount(f32::NAN));
+            channel(&mut c, 0, ChannelCommand::FxEnabled(0, true));
+            channel(&mut c, 0, ChannelCommand::FxEnabled(0, false));
+        }
+        channel(&mut c, 0, ChannelCommand::Pfl(true));
+        play_burst(&mut c, 0);
+        render(&mut r, 8000);
+        render(&mut r, 8000)
+    };
+    // Enabling then disabling before any audio plays leaves no trace.
+    assert_eq!(run(true), run(false));
+}
+
+#[test]
+fn toggling_fx_does_not_click() {
+    for kind in [
+        EffectKind::Echo,
+        EffectKind::Reverb,
+        EffectKind::Flanger,
+        EffectKind::Filter,
+    ] {
+        let (mut c, mut r) = setup();
+        master(&mut c, MasterCommand::MasterLevel(1.0));
+        channel(&mut c, 0, ChannelCommand::XfaderAssign(XfaderAssign::Thru));
+        master(&mut c, MasterCommand::FxSlot(0, kind));
+        channel(&mut c, 0, ChannelCommand::FxAmount(1.0));
+        settle(&mut r);
+        play(&mut c, 0);
+        settle_playback(&mut r);
+        for on in [true, false, true] {
+            fx_enabled(&mut c, 0, 0, on);
+            let (m, _) = render(&mut r, BLOCK * 2);
+            let jump = m
+                .iter()
+                .step_by(2)
+                .collect::<Vec<_>>()
+                .windows(2)
+                .map(|w| (w[1] - w[0]).abs())
+                .fold(0.0, f32::max);
+            assert!(jump < 0.05, "{kind:?} on={on}: jump {jump}");
+        }
+    }
+}
+
+#[test]
+fn fx_slot_kind_applies_to_every_channel() {
+    // Reverb on slot 0 of every channel: a burst leaves a tail at the PFL bus.
+    let (mut c, mut r) = setup();
+    master(&mut c, MasterCommand::FxSlot(0, EffectKind::Reverb));
+    master(&mut c, MasterCommand::FxSlot(9, EffectKind::Reverb));
+    master(&mut c, MasterCommand::HeadphoneMix(0.0));
+    for index in 0..4 {
+        channel(&mut c, index, ChannelCommand::Pfl(true));
+        channel(&mut c, index, ChannelCommand::FxAmount(1.0));
+        fx_enabled(&mut c, index, 0, true);
+    }
+    settle(&mut r);
+    // With the default echo, nothing is heard 0.1 s after the burst ends; reverb is.
+    for index in 0..4 {
+        play_burst(&mut c, index);
+    }
+    let (_, h) = render(&mut r, 20_000);
+    assert!(energy(&h, 9000..10_000) > 1.0);
+    for index in 0..4 {
+        let (mut c, mut r) = setup();
+        channel(&mut c, index, ChannelCommand::Pfl(true));
+        channel(&mut c, index, ChannelCommand::FxAmount(1.0));
+        fx_enabled(&mut c, index, 0, true);
+        settle(&mut r);
+        play_burst(&mut c, index);
+        let (_, h) = render(&mut r, 20_000);
+        // Echo (the default kind) is silent between the burst and its echo at 11025.
+        assert!(energy(&h, 9000..10_000) < 1e-2, "deck {index}");
+    }
+}
+
+#[test]
+fn several_slots_stack() {
+    // Echo on slot 0 and reverb on slot 1 each add to a burst's tail at full amount.
+    let tail = |slots: &[usize]| {
+        let (mut c, mut r) = setup();
+        channel(&mut c, 0, ChannelCommand::Pfl(true));
+        channel(&mut c, 0, ChannelCommand::FxAmount(1.0));
+        for &slot in slots {
+            fx_enabled(&mut c, 0, slot, true);
+        }
+        settle(&mut r);
+        play_burst(&mut c, 0);
+        let (_, h) = render(&mut r, 30_000);
+        energy(&h, 5000..30_000)
+    };
+    let (none, echo, reverb, both) = (tail(&[]), tail(&[0]), tail(&[1]), tail(&[0, 1]));
+    assert!(none < 1e-2);
+    assert!(echo > 50.0 && reverb > 50.0);
+    // Reverb runs on the echo's output: neither slot alone gives that tail.
+    assert!(both > 50.0, "{both}");
+    assert!(
+        (both - echo).abs() > 5.0 && (both - reverb).abs() > 5.0,
+        "{none} {echo} {reverb} {both}"
+    );
+}
+
+#[test]
+fn fx_state_is_published() {
+    let (mut c, mut r) = setup();
+    assert_eq!(c.channel(deck(1)).fx_enabled, [false; 3]);
+    assert_eq!(c.channel(deck(1)).fx_amount, 0.5);
+    fx_enabled(&mut c, 1, 2, true);
+    channel(&mut c, 1, ChannelCommand::FxAmount(2.0));
+    render(&mut r, BLOCK);
+    let snapshot = c.channel(deck(1));
+    assert_eq!(snapshot.fx_enabled, [false, false, true]);
+    assert_eq!(snapshot.fx_amount, 1.0);
+    assert_eq!(c.channel(deck(0)).fx_enabled, [false; 3]);
 }

@@ -70,6 +70,10 @@ impl EngineRenderer {
         let mut meters = Meters::default();
         for (master, headphones) in master.chunks_mut(chunk).zip(headphones.chunks_mut(chunk)) {
             self.resolve_pending_syncs();
+            for (id, deck) in DeckId::ALL.into_iter().zip(&self.decks) {
+                self.mixer
+                    .set_beat_frames(id, deck.beat_frames(self.config.sample_rate));
+            }
             let inputs = self.mixer.inputs(master.len());
             for (deck, input) in self.decks.iter_mut().zip(inputs) {
                 deck.render_add(input, self.config.sample_rate);
@@ -169,7 +173,8 @@ impl EngineRenderer {
 
     fn publish(&self) {
         for (id, deck) in DeckId::ALL.into_iter().zip(&self.decks) {
-            self.shared.store_deck(id, &deck.snapshot());
+            self.shared
+                .store_deck(id, &deck.snapshot(), &self.mixer.channel_snapshot(id));
         }
         self.shared.store_sampler(&self.sampler.snapshot());
     }

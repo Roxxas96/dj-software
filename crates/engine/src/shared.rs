@@ -78,6 +78,25 @@ impl Default for DeckSnapshot {
     }
 }
 
+/// A channel strip's state as last published by the renderer, for the status line. It is
+/// published inside the same seqlock window as the channel's deck snapshot.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChannelSnapshot {
+    /// Which of the three effect slots are on.
+    pub fx_enabled: [bool; 3],
+    /// The effect amount in `[0, 1]`.
+    pub fx_amount: f32,
+}
+
+impl Default for ChannelSnapshot {
+    fn default() -> Self {
+        Self {
+            fx_enabled: [false; 3],
+            fx_amount: 0.5,
+        }
+    }
+}
+
 /// Peak absolute sample values of the last rendered block, for metering.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Meters {
@@ -112,8 +131,17 @@ pub(crate) struct Shared {
 }
 
 impl Shared {
-    pub(crate) fn store_deck(&self, id: DeckId, snapshot: &DeckSnapshot) {
-        self.decks[id.index()].store(snapshot);
+    pub(crate) fn store_deck(
+        &self,
+        id: DeckId,
+        snapshot: &DeckSnapshot,
+        channel: &ChannelSnapshot,
+    ) {
+        self.decks[id.index()].store(snapshot, channel);
+    }
+
+    pub(crate) fn load_channel(&self, id: DeckId) -> ChannelSnapshot {
+        self.decks[id.index()].load_channel()
     }
 
     pub(crate) fn load_deck(&self, id: DeckId) -> DeckSnapshot {
@@ -195,6 +223,8 @@ struct DeckShared {
     roll_active: AtomicBool,
     slicer_block_beat: AtomicU64,
     load_seq: AtomicU64,
+    fx_enabled: [AtomicBool; 3],
+    fx_amount: AtomicU32,
 }
 
 fn opt_bits(v: Option<f64>) -> u64 {
@@ -207,14 +237,33 @@ fn bits_opt(bits: u64) -> Option<f64> {
 
 impl DeckShared {
     /// Publishes `s`. Only the renderer calls this, so the sequence has one writer.
-    fn store(&self, s: &DeckSnapshot) {
+    fn store(&self, s: &DeckSnapshot, channel: &ChannelSnapshot) {
         let seq = self.seq.load(Ordering::Relaxed);
         self.seq.store(seq.wrapping_add(1), Ordering::Relaxed);
         // The odd sequence is visible before any field store.
         fence(Ordering::Release);
         self.store_fields(s);
+        self.store_channel(channel);
         // Every field store is visible before the even sequence.
         self.seq.store(seq.wrapping_add(2), Ordering::Release);
+    }
+
+    fn store_channel(&self, c: &ChannelSnapshot) {
+        for (atomic, on) in self.fx_enabled.iter().zip(c.fx_enabled) {
+            atomic.store(on, Ordering::Relaxed);
+        }
+        self.fx_amount
+            .store(c.fx_amount.to_bits(), Ordering::Relaxed);
+    }
+
+    fn load_channel(&self) -> ChannelSnapshot {
+        ChannelSnapshot {
+            fx_enabled: self
+                .fx_enabled
+                .each_ref()
+                .map(|a| a.load(Ordering::Relaxed)),
+            fx_amount: f32::from_bits(self.fx_amount.load(Ordering::Relaxed)),
+        }
     }
 
     fn store_fields(&self, s: &DeckSnapshot) {
@@ -334,7 +383,7 @@ mod tests {
     #[test]
     fn a_read_during_a_store_is_not_consistent() {
         let deck = DeckShared::default();
-        deck.store(&numbered(3));
+        deck.store(&numbered(3), &ChannelSnapshot::default());
         assert_eq!(deck.load_consistent(), Some(numbered(3)));
         // The renderer is in the middle of a store: odd sequence, fields half written.
         let seq = deck.seq.load(Ordering::Relaxed);
@@ -360,7 +409,7 @@ mod tests {
             let deck = Arc::clone(&deck);
             std::thread::spawn(move || {
                 for n in 0..200_000 {
-                    deck.store(&numbered(n));
+                    deck.store(&numbered(n), &ChannelSnapshot::default());
                 }
             })
         };

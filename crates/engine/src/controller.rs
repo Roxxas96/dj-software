@@ -4,7 +4,7 @@ use rtrb::{Consumer, Producer};
 use thiserror::Error;
 
 use crate::shared::Shared;
-use crate::{Command, DeckId, DeckSnapshot, Meters, SamplerSnapshot, TrackBuffer};
+use crate::{ChannelSnapshot, Command, DeckId, DeckSnapshot, Meters, SamplerSnapshot, TrackBuffer};
 
 /// The command queue to the audio thread is full; the command was not sent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -74,6 +74,11 @@ impl EngineController {
     /// [`EngineController::deck`] is enough for display.
     pub fn deck_consistent(&self, id: DeckId) -> Option<DeckSnapshot> {
         self.shared.load_deck_consistent(id)
+    }
+
+    /// The channel's published mixer state as of the last rendered block (for display).
+    pub fn channel(&self, id: DeckId) -> ChannelSnapshot {
+        self.shared.load_channel(id)
     }
 
     /// Peak levels of the last rendered block.
