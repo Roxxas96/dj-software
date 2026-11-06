@@ -229,3 +229,26 @@ fn keylock_off_by_default_and_kept_across_load() {
     render(&mut r, 1);
     assert!(!c.deck(deck()).keylock);
 }
+
+/// Renders a sine at the original tempo with or without keylock, nudged after 4096 frames.
+fn nudge_at_ratio_one(keylock: bool) -> (Vec<f32>, f64) {
+    let (mut c, mut r) = setup(sine_track(440.0, None, 3.0), 0.5, keylock);
+    send(&mut c, DeckCommand::Play);
+    let (mut out, _) = render(&mut r, 4096);
+    send(
+        &mut c,
+        DeckCommand::Jog {
+            turns: 0.05,
+            surface: JogSurface::Ring,
+        },
+    );
+    out.extend(render(&mut r, SR as usize).0);
+    (out, c.deck(deck()).position_frames)
+}
+
+#[test]
+fn nudge_at_ratio_one_keeps_keylock_bypassed() {
+    // The bypass follows the tempo alone: a nudge at the original tempo bends the
+    // resampled path (like vinyl) and never switches to the stretcher and back.
+    assert!(nudge_at_ratio_one(true) == nudge_at_ratio_one(false));
+}

@@ -9,8 +9,8 @@ use signalsmith_stretch::Stretch;
 use super::{Deck, jog, read_frame, slip};
 use crate::TrackBuffer;
 
-/// Speed factors (tempo ratio times the nudge bend) this close to 1.0 play without the
-/// stretcher, as at the original tempo.
+/// Tempo ratios this close to 1.0 play without the stretcher, as at the original tempo. The
+/// nudge bend never counts, so a nudge never switches between the paths.
 const BYPASS_EPSILON: f64 = 1e-4;
 /// Highest tempo ratio, at the ±100 % range: input buffers are sized for it.
 const MAX_TEMPO_RATIO: usize = 2;
@@ -147,10 +147,12 @@ impl Deck {
         }
     }
 
-    /// Whether a playing, not scratching deck at `speed` (tempo ratio times the bend) plays
-    /// through the stretcher.
-    pub(super) fn stretches(&self, speed: f64) -> bool {
-        self.keylock && self.stretcher.is_some() && (speed - 1.0).abs() >= BYPASS_EPSILON
+    /// Whether a playing, not scratching deck plays through the stretcher: decided by the
+    /// tempo ratio alone, so a nudge bends whichever path runs.
+    pub(super) fn stretches(&self) -> bool {
+        self.keylock
+            && self.stretcher.is_some()
+            && (self.tempo_ratio() - 1.0).abs() >= BYPASS_EPSILON
     }
 
     /// Forgets where the last stretched block ended: the deck played without the
