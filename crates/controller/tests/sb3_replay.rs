@@ -4,14 +4,14 @@
 
 use std::sync::Arc;
 
-use actions::{Action, Side};
+use actions::{Action, PadMode, Side};
 use controller::builtin::load_mapping_from;
 use controller::capture::{Control, Fixture, parse_fixture};
 use controller::mapping::Mapping;
 use controller::{BatchStats, MidiMessage, MidiOut, Runtime, TimedMidi};
 use engine::{
     Command, DeckCommand, DeckId, EngineConfig, EngineController, EngineRenderer, Grid, HotcueSlot,
-    TrackBuffer, engine,
+    SamplerCommand, TrackBuffer, engine,
 };
 
 const CAPTURE: &str = include_str!("../../../controllers/ddj-sb3/capture.toml");
@@ -396,6 +396,47 @@ fn performance_table() -> Vec<(&'static str, Layer, Action)> {
         ("deck1.auto_loop.shift", Main, Action::ReloopExit(d(1))),
         ("deck1.jog_touch", Main, Action::JogTouch(d(1))),
         ("deck1.jog_outer", Main, Action::JogRing(d(1))),
+        ("deck1.vinyl.shift", Main, Action::SlipToggle(d(1))),
+        (
+            "deck1.mode_hot_cue",
+            Main,
+            Action::PadMode(l, PadMode::Hardware),
+        ),
+        (
+            "deck1.mode_fx_fade",
+            Main,
+            Action::PadMode(l, PadMode::Hardware),
+        ),
+        (
+            "deck1.mode_pad_scratch",
+            Main,
+            Action::PadMode(l, PadMode::Hardware),
+        ),
+        (
+            "deck1.mode_sampler",
+            Main,
+            Action::PadMode(l, PadMode::Hardware),
+        ),
+        (
+            "deck1.mode_sampler.shift",
+            Main,
+            Action::PadMode(l, PadMode::Hardware),
+        ),
+        (
+            "deck1.mode_hot_cue.shift",
+            Main,
+            Action::PadMode(l, PadMode::BeatJump),
+        ),
+        (
+            "deck1.mode_fx_fade.shift",
+            Main,
+            Action::PadMode(l, PadMode::LoopRoll),
+        ),
+        (
+            "deck1.mode_pad_scratch.shift",
+            Main,
+            Action::PadMode(l, PadMode::Slicer),
+        ),
         // Deck 2.
         ("deck2.sync", Main, Action::Sync(d(2))),
         ("deck2.vinyl", Main, Action::VinylToggle(d(2))),
@@ -407,6 +448,47 @@ fn performance_table() -> Vec<(&'static str, Layer, Action)> {
         ("deck2.auto_loop.shift", Main, Action::ReloopExit(d(2))),
         ("deck2.jog_touch", Main, Action::JogTouch(d(2))),
         ("deck2.jog_outer", Main, Action::JogRing(d(2))),
+        ("deck2.vinyl.shift", Main, Action::SlipToggle(d(2))),
+        (
+            "deck2.mode_hot_cue",
+            Main,
+            Action::PadMode(r, PadMode::Hardware),
+        ),
+        (
+            "deck2.mode_fx_fade",
+            Main,
+            Action::PadMode(r, PadMode::Hardware),
+        ),
+        (
+            "deck2.mode_pad_scratch",
+            Main,
+            Action::PadMode(r, PadMode::Hardware),
+        ),
+        (
+            "deck2.mode_sampler",
+            Main,
+            Action::PadMode(r, PadMode::Hardware),
+        ),
+        (
+            "deck2.mode_sampler.shift",
+            Main,
+            Action::PadMode(r, PadMode::Hardware),
+        ),
+        (
+            "deck2.mode_hot_cue.shift",
+            Main,
+            Action::PadMode(r, PadMode::BeatJump),
+        ),
+        (
+            "deck2.mode_fx_fade.shift",
+            Main,
+            Action::PadMode(r, PadMode::LoopRoll),
+        ),
+        (
+            "deck2.mode_pad_scratch.shift",
+            Main,
+            Action::PadMode(r, PadMode::Slicer),
+        ),
         // Deck 3.
         ("deck3.sync", Alt(l), Action::Sync(d(3))),
         ("deck3.vinyl", Alt(l), Action::VinylToggle(d(3))),
@@ -418,6 +500,7 @@ fn performance_table() -> Vec<(&'static str, Layer, Action)> {
         ("deck3.auto_loop.shift", Alt(l), Action::ReloopExit(d(3))),
         ("deck3.jog_touch", Alt(l), Action::JogTouch(d(3))),
         ("deck3.jog_outer", Alt(l), Action::JogRing(d(3))),
+        ("deck3.vinyl.shift", Alt(l), Action::SlipToggle(d(3))),
         // Deck 4.
         ("deck4.sync", Alt(r), Action::Sync(d(4))),
         ("deck4.vinyl", Alt(r), Action::VinylToggle(d(4))),
@@ -429,12 +512,13 @@ fn performance_table() -> Vec<(&'static str, Layer, Action)> {
         ("deck4.auto_loop.shift", Alt(r), Action::ReloopExit(d(4))),
         ("deck4.jog_touch", Alt(r), Action::JogTouch(d(4))),
         ("deck4.jog_outer", Alt(r), Action::JogRing(d(4))),
+        ("deck4.vinyl.shift", Alt(r), Action::SlipToggle(d(4))),
     ]
 }
 
 /// Controls that send several kinds of messages (jog tops also send a touch and firmware
 /// ring noise, pads are one note each): their own tests check what they drive.
-const MULTI_MESSAGE_CONTROLS: [&str; 8] = [
+const MULTI_MESSAGE_CONTROLS: [&str; 23] = [
     "deck1.jog_top",
     "deck1.jog_top.shift",
     "deck1.pads_hot_cue",
@@ -443,6 +527,21 @@ const MULTI_MESSAGE_CONTROLS: [&str; 8] = [
     "deck2.jog_top.shift",
     "deck2.pads_hot_cue",
     "deck2.pads_hot_cue.shift",
+    "deck1.pads_sampler",
+    "deck2.pads_sampler",
+    "pads.left.beat_jump",
+    "pads.left.beat_jump.shift",
+    "pads.left.loop_roll",
+    "pads.left.loop_roll.shift",
+    "pads.left.slicer",
+    "pads.left.slicer.shift",
+    "pads.right.beat_jump",
+    "pads.right.beat_jump.shift",
+    "pads.right.loop_roll",
+    "pads.right.loop_roll.shift",
+    "pads.right.slicer",
+    "pads.right.slicer.shift",
+    "pads.right.sampler.shift",
 ];
 
 /// Mapped controls that do nothing on a fresh rig (no playing master, no grid, no loop):
@@ -465,6 +564,23 @@ const NEEDS_SETUP: [&str; 16] = [
     "deck3.auto_loop.shift",
     "deck4.auto_loop.shift",
 ];
+
+/// The same pad note on the left side's pad channel (channel 8).
+fn left_pad(msg: MidiMessage) -> MidiMessage {
+    match msg {
+        MidiMessage::NoteOn { note, velocity, .. } => MidiMessage::NoteOn {
+            channel: 7,
+            note,
+            velocity,
+        },
+        MidiMessage::NoteOff { note, velocity, .. } => MidiMessage::NoteOff {
+            channel: 7,
+            note,
+            velocity,
+        },
+        other => other,
+    }
+}
 
 fn deck_select(side: Side) -> &'static str {
     match side {
@@ -511,12 +627,19 @@ fn every_binding_is_in_the_table() {
     // The reverse check: each `[[input]]` of the mapping listens to a message some
     // control of the table sends, so no binding escapes the replay test.
     let fixture = fixture();
-    let sent: Vec<MidiMessage> = table()
+    let mut sent: Vec<MidiMessage> = table()
         .iter()
         .map(|(id, _, _)| *id)
         .chain(MULTI_MESSAGE_CONTROLS)
         .flat_map(|id| replay_messages(fixture.control(id).unwrap()))
         .collect();
+    // The left SHIFT + SAMPLER pads were captured on the unshifted notes (see the mapping);
+    // the right side's shifted notes stand in for them on channel 8.
+    sent.extend(
+        replay_messages(fixture.control("pads.right.sampler.shift").unwrap())
+            .into_iter()
+            .map(left_pad),
+    );
     let mapping = mapping();
     for (i, binding) in mapping.inputs.iter().enumerate() {
         assert!(
@@ -1317,4 +1440,370 @@ fn cue_held_across_deck_switch_then_shift_lift_ends_the_held_preview() {
     );
     assert_eq!(snap.position_frames, 10_000.0, "back at the cue point");
     assert_eq!(rig.engine.deck(d(3)), deck3_before, "deck 3 is unchanged");
+}
+
+/// Sets the mode of `side` with its captured SHIFT mode buttons (`n` is deck 1 or 2).
+fn set_mode(rig: &mut Rig, side: Side, mode: PadMode) {
+    let n = if side == Side::Left { 1 } else { 2 };
+    let id = match mode {
+        PadMode::Hardware => format!("deck{n}.mode_hot_cue"),
+        PadMode::BeatJump => format!("deck{n}.mode_hot_cue.shift"),
+        PadMode::LoopRoll => format!("deck{n}.mode_fx_fade.shift"),
+        PadMode::Slicer => format!("deck{n}.mode_pad_scratch.shift"),
+    };
+    rig.press(&id);
+    assert_eq!(rig.runtime.state().side(side).pad_mode, mode, "{id}");
+}
+
+/// Starts `deck` playing from `at` with a 120 BPM grid (a beat is 22 050 frames).
+fn play_from(rig: &mut Rig, deck: usize, at: f64) {
+    rig.set_grid(deck, 120.0);
+    rig.deck_command(deck, DeckCommand::Seek(at));
+    rig.deck_command(deck, DeckCommand::Play);
+    assert!(rig.engine.deck(d(deck)).playing);
+}
+
+const BEAT: f64 = 22_050.0;
+
+#[test]
+fn mode_buttons_set_the_side_pad_mode() {
+    let mut rig = Rig::attached();
+    for (side, n) in [(Side::Left, 1), (Side::Right, 2)] {
+        let other = if side == Side::Left {
+            Side::Right
+        } else {
+            Side::Left
+        };
+        for (id, mode) in [
+            ("mode_hot_cue.shift", PadMode::BeatJump),
+            ("mode_hot_cue", PadMode::Hardware),
+            ("mode_fx_fade.shift", PadMode::LoopRoll),
+            ("mode_fx_fade", PadMode::Hardware),
+            ("mode_pad_scratch.shift", PadMode::Slicer),
+            ("mode_pad_scratch", PadMode::Hardware),
+            ("mode_hot_cue.shift", PadMode::BeatJump),
+            ("mode_sampler", PadMode::Hardware),
+            ("mode_pad_scratch.shift", PadMode::Slicer),
+            ("mode_sampler.shift", PadMode::Hardware),
+        ] {
+            let actions = rig.press(&format!("deck{n}.{id}"));
+            assert_eq!(
+                actions,
+                [Action::PadMode(side, mode), Action::PadMode(side, mode)]
+            );
+            assert_eq!(
+                rig.runtime.state().side(side).pad_mode,
+                mode,
+                "deck{n}.{id}"
+            );
+            assert_eq!(
+                rig.runtime.state().side(other).pad_mode,
+                PadMode::Hardware,
+                "the other side keeps its mode"
+            );
+        }
+    }
+}
+
+#[test]
+fn beat_jump_pads_jump_by_the_configured_beats() {
+    let mut rig = Rig::attached();
+    rig.set_grid(1, 120.0);
+    rig.set_grid(2, 120.0);
+    rig.deck_command(1, DeckCommand::Seek(200_000.0));
+
+    // In the hardware mode the same note sets a hotcue instead.
+    rig.pad("pads.left.beat_jump", 1, 127);
+    rig.pad("pads.left.beat_jump", 1, 0);
+    assert_eq!(rig.engine.deck(d(1)).position_frames, 200_000.0);
+    assert!(rig.engine.deck(d(1)).hotcues[1].is_some());
+
+    set_mode(&mut rig, Side::Left, PadMode::BeatJump);
+    // Pad 2 is +4 beats, pad 1 -4 beats, SHIFT + pad 1 -1 beat, SHIFT + pad 6 +4 beats.
+    for (id, index, beats) in [
+        ("pads.left.beat_jump", 1, 4.0),
+        ("pads.left.beat_jump", 0, -4.0),
+        ("pads.left.beat_jump.shift", 0, -1.0),
+        ("pads.left.beat_jump.shift", 5, 4.0),
+    ] {
+        let before = rig.engine.deck(d(1)).position_frames;
+        let pressed = rig.pad(id, index, 127);
+        let expected = if id.ends_with("shift") {
+            Action::BeatJumpShift(d(1), slot(index + 1))
+        } else {
+            Action::BeatJump(d(1), slot(index + 1))
+        };
+        assert_eq!(pressed, [expected], "{id} {index}");
+        rig.pad(id, index, 0);
+        let after = rig.engine.deck(d(1)).position_frames;
+        assert_eq!(after - before, beats * BEAT, "{id} {index}");
+    }
+    assert_eq!(
+        rig.engine.deck(d(2)).position_frames,
+        0.0,
+        "deck 2 is untouched"
+    );
+
+    // The right side has its own mode and drives deck 2.
+    set_mode(&mut rig, Side::Right, PadMode::BeatJump);
+    rig.pad("pads.right.beat_jump", 3, 127);
+    assert_eq!(rig.engine.deck(d(2)).position_frames, 8.0 * BEAT);
+}
+
+#[test]
+fn shift_mode_reads_the_sampler_bank_too() {
+    // The SB3 keeps sending the notes of its last hardware mode, so with the pads in the
+    // SAMPLER bank (0x30-0x37, SHIFT 0x38-0x3F) a software mode still reads them: they
+    // act as that mode, not as samples. The right side's captures are on that bank.
+    let mut rig = Rig::attached();
+    for i in 0..8 {
+        let buffer = Arc::new(TrackBuffer::new(SAMPLE_RATE, vec![0.1; 441_000 * 2]).unwrap());
+        rig.engine
+            .send(Command::Sampler(SamplerCommand::Set(i, Some(buffer))))
+            .unwrap();
+    }
+    rig.set_grid(1, 120.0);
+    rig.set_grid(2, 120.0);
+    rig.deck_command(1, DeckCommand::Seek(200_000.0));
+    rig.deck_command(2, DeckCommand::Seek(200_000.0));
+
+    // Hardware mode: the sampler bank plays samples.
+    assert_eq!(
+        rig.pad("deck1.pads_sampler", 1, 127),
+        [Action::SamplerPlay(slot(2))]
+    );
+    assert!(rig.engine.sampler().playing[1]);
+    rig.pad("deck1.pads_sampler", 1, 0);
+
+    // Beat jump: pad 2 jumps +4 beats, SHIFT + pad 1 -1 beat; no sample plays.
+    set_mode(&mut rig, Side::Left, PadMode::BeatJump);
+    rig.batch(&[note(7, 0x39, 127), note(7, 0x39, 0)]);
+    assert_eq!(rig.engine.deck(d(1)).position_frames, 200_000.0 + BEAT);
+    assert_eq!(
+        rig.pad("deck1.pads_sampler", 1, 127),
+        [Action::BeatJump(d(1), slot(2))]
+    );
+    assert_eq!(
+        rig.engine.deck(d(1)).position_frames,
+        200_000.0 + 5.0 * BEAT
+    );
+    let shifted = rig.batch(&[note(7, 0x38, 127)]).0;
+    assert_eq!(shifted, [Action::BeatJumpShift(d(1), slot(1))]);
+    assert_eq!(
+        rig.engine.deck(d(1)).position_frames,
+        200_000.0 + 4.0 * BEAT
+    );
+    assert!(!rig.engine.sampler().playing[0], "no sample plays");
+
+    // The right side's captured sampler-bank pads, in each software mode.
+    set_mode(&mut rig, Side::Right, PadMode::BeatJump);
+    assert_eq!(
+        rig.pad("pads.right.beat_jump", 3, 127),
+        [Action::BeatJump(d(2), slot(4))]
+    );
+    assert_eq!(
+        rig.engine.deck(d(2)).position_frames,
+        200_000.0 + 8.0 * BEAT
+    );
+    assert_eq!(
+        rig.pad("pads.right.beat_jump.shift", 7, 127),
+        [Action::BeatJumpShift(d(2), slot(8))]
+    );
+    play_from(&mut rig, 2, 100_000.0);
+    set_mode(&mut rig, Side::Right, PadMode::LoopRoll);
+    assert_eq!(
+        rig.pad("pads.right.loop_roll", 4, 127),
+        [Action::LoopRoll(d(2), slot(5))]
+    );
+    assert!(rig.engine.deck(d(2)).roll_active);
+    assert_eq!(
+        rig.pad("pads.right.loop_roll.shift", 4, 0),
+        [Action::LoopRoll(d(2), slot(5))]
+    );
+    assert!(!rig.engine.deck(d(2)).roll_active);
+    set_mode(&mut rig, Side::Right, PadMode::Slicer);
+    assert_eq!(
+        rig.pad("pads.right.slicer", 2, 127),
+        [Action::Slice(d(2), slot(3))]
+    );
+    assert!(rig.engine.deck(d(2)).roll_active);
+    rig.pad("pads.right.slicer", 2, 0);
+    assert!(!rig.engine.deck(d(2)).roll_active);
+
+    // SHIFT + SAMPLER (TRANS) is a hardware mode: the bank plays samples again.
+    rig.press("deck1.mode_sampler.shift");
+    assert_eq!(
+        rig.pad("deck1.pads_sampler", 0, 127),
+        [Action::SamplerPlay(slot(1))]
+    );
+    assert!(rig.engine.sampler().playing[0]);
+}
+
+#[test]
+fn roll_pads_roll_and_slip_back() {
+    let mut rig = Rig::attached();
+    play_from(&mut rig, 1, 100_000.0);
+    set_mode(&mut rig, Side::Left, PadMode::LoopRoll);
+
+    // Pad 5 rolls one beat; the playhead stays inside it while the ghost moves on.
+    let pressed = rig.pad("pads.left.loop_roll", 4, 127);
+    assert_eq!(pressed, [Action::LoopRoll(d(1), slot(5))]);
+    for _ in 0..200 {
+        rig.render();
+    }
+    let rolling = rig.engine.deck(d(1));
+    assert!(rolling.roll_active, "the roll is held");
+    assert!(rolling.position_frames < 100_000.0 + 2.0 * BEAT, "looping");
+    let ghost = rolling.ghost_frames.expect("the ghost keeps moving");
+    assert!(ghost > 100_000.0 + 4.0 * BEAT);
+
+    let released = rig.pad("pads.left.loop_roll", 4, 0);
+    assert_eq!(released, [Action::LoopRoll(d(1), slot(5))]);
+    let after = rig.engine.deck(d(1));
+    assert!(!after.roll_active);
+    assert!(
+        after.position_frames >= ghost,
+        "back where the track would be: {} vs {ghost}",
+        after.position_frames
+    );
+
+    // The shifted bank rolls too, and a release on the other bank's note still pairs.
+    rig.pad("pads.left.loop_roll.shift", 6, 127);
+    assert!(rig.engine.deck(d(1)).roll_active);
+    let released = rig.pad("pads.left.loop_roll", 6, 0);
+    assert_eq!(released, [Action::LoopRoll(d(1), slot(7))]);
+    assert!(!rig.engine.deck(d(1)).roll_active);
+
+    // Hardware mode ignores the roll bindings.
+    set_mode(&mut rig, Side::Left, PadMode::Hardware);
+    rig.pad("pads.left.loop_roll", 4, 127);
+    assert!(!rig.engine.deck(d(1)).roll_active);
+}
+
+#[test]
+fn slicer_pads_repeat_and_slip_back() {
+    let mut rig = Rig::attached();
+    play_from(&mut rig, 1, 100_000.0);
+    set_mode(&mut rig, Side::Left, PadMode::Slicer);
+
+    let pressed = rig.pad("pads.left.slicer", 2, 127);
+    assert_eq!(pressed, [Action::Slice(d(1), slot(3))]);
+    for _ in 0..200 {
+        rig.render();
+    }
+    let slicing = rig.engine.deck(d(1));
+    assert!(slicing.roll_active, "the slice is held");
+    let block = slicing.slicer_block_beat.expect("a grid gives a block");
+    let start = (block + 2.0) * BEAT;
+    assert!(
+        (start..start + BEAT).contains(&slicing.position_frames),
+        "inside beat 3 of the block: {} vs {start}",
+        slicing.position_frames
+    );
+    let ghost = slicing.ghost_frames.expect("the ghost keeps moving");
+
+    let released = rig.pad("pads.left.slicer", 2, 0);
+    assert_eq!(released, [Action::Slice(d(1), slot(3))]);
+    let after = rig.engine.deck(d(1));
+    assert!(!after.roll_active);
+    assert!(after.position_frames >= ghost, "back on the ghost");
+
+    // A release on the shifted bank's note pairs with the press too.
+    rig.pad("pads.left.slicer", 5, 127);
+    assert!(rig.engine.deck(d(1)).roll_active);
+    let released = rig.pad("pads.left.slicer.shift", 5, 0);
+    assert_eq!(released, [Action::Slice(d(1), slot(6))]);
+    assert!(!rig.engine.deck(d(1)).roll_active);
+}
+
+#[test]
+fn held_roll_and_slice_release_on_the_pressed_deck() {
+    for (mode, id, press_roll) in [
+        (PadMode::LoopRoll, "pads.left.loop_roll", true),
+        (PadMode::Slicer, "pads.left.slicer", false),
+    ] {
+        let mut rig = Rig::attached();
+        play_from(&mut rig, 1, 100_000.0);
+        set_mode(&mut rig, Side::Left, mode);
+        rig.pad(id, 4, 127);
+        assert!(rig.engine.deck(d(1)).roll_active, "{id}");
+        let deck3_before = rig.engine.deck(d(3));
+
+        // DECK moves the side to deck 3 while the pad is held; the release is deck 1's.
+        rig.press("deck1.deck_select");
+        assert_eq!(rig.runtime.state().side(Side::Left).active_deck, d(3));
+        for _ in 0..50 {
+            rig.render();
+        }
+        let released = rig.pad(id, 4, 0);
+        let expected = if press_roll {
+            Action::LoopRoll(d(1), slot(5))
+        } else {
+            Action::Slice(d(1), slot(5))
+        };
+        assert_eq!(released, [expected], "{id}");
+        let snap = rig.engine.deck(d(1));
+        assert!(!snap.roll_active, "{id}: deck 1 slipped back");
+        assert_eq!(
+            rig.engine.deck(d(3)),
+            deck3_before,
+            "{id}: deck 3 is unchanged"
+        );
+    }
+}
+
+#[test]
+fn sampler_pads_play_and_shift_stops() {
+    let mut rig = Rig::attached();
+    for i in 0..8 {
+        let buffer = Arc::new(TrackBuffer::new(SAMPLE_RATE, vec![0.1; 441_000 * 2]).unwrap());
+        rig.engine
+            .send(Command::Sampler(SamplerCommand::Set(i, Some(buffer))))
+            .unwrap();
+    }
+    rig.render();
+
+    // Hardware mode: both sides' SAMPLER pads play sample N.
+    for (id, shift_id) in [
+        ("deck1.pads_sampler", None),
+        ("deck2.pads_sampler", Some("pads.right.sampler.shift")),
+    ] {
+        for n in 1..=8 {
+            let pressed = rig.pad(id, n - 1, 127);
+            assert_eq!(pressed, [Action::SamplerPlay(slot(n))], "{id} {n}");
+            assert!(rig.engine.sampler().playing[n - 1], "{id} {n} plays");
+            rig.pad(id, n - 1, 0);
+            assert!(rig.engine.sampler().playing[n - 1], "release keeps playing");
+
+            // SHIFT + pad N stops it (the left bank is built from the right capture).
+            let stopped = match shift_id {
+                Some(shift) => rig.pad(shift, n - 1, 127),
+                None => rig.batch(&[note(7, 0x38 + (n as u8 - 1), 127)]).0,
+            };
+            assert_eq!(stopped, [Action::SamplerStop(slot(n))], "{id} {n}");
+            assert!(!rig.engine.sampler().playing[n - 1], "{id} {n} stops");
+        }
+    }
+}
+
+#[test]
+fn shift_vinyl_toggles_slip() {
+    let mut rig = Rig::attached();
+    assert!(!rig.engine.deck(d(1)).slip);
+    assert_eq!(
+        rig.press("deck1.vinyl.shift"),
+        [Action::SlipToggle(d(1)); 2]
+    );
+    assert!(rig.engine.deck(d(1)).slip, "SHIFT + VINYL turns slip on");
+    rig.press("deck1.vinyl.shift");
+    assert!(!rig.engine.deck(d(1)).slip, "and off again");
+
+    // The right side drives deck 2, and DECK moves the left side to deck 3.
+    rig.press("deck2.vinyl.shift");
+    assert!(rig.engine.deck(d(2)).slip);
+    assert!(!rig.engine.deck(d(1)).slip);
+    rig.press("deck1.deck_select");
+    rig.press("deck1.vinyl.shift");
+    assert!(rig.engine.deck(d(3)).slip);
+    assert!(!rig.engine.deck(d(1)).slip);
 }

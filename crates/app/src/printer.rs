@@ -61,11 +61,6 @@ impl Printer {
         let _ = self.thread.join();
     }
 
-    /// One status line.
-    pub fn status(&self, text: String) {
-        self.status_lines(vec![text]);
-    }
-
     /// Several status lines, top to bottom.
     pub fn status_lines(&self, lines: Vec<String>) {
         if !self.status_pending.swap(true, Ordering::Relaxed) {

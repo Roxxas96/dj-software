@@ -317,6 +317,47 @@ does not bind the grid actions.
 A `side` target on a deck state follows the deck the side shows, so one LED always shows the
 state of the visible deck.
 
+## Pad modes
+
+A controller whose pads cannot be switched from the software (or whose firmware modes cannot
+be changed) keeps each side's *pad mode* in the app. Bind the mode buttons to `pads.mode_*`
+(they take a `side`), and give the pad bindings a `pad_mode` so only the side's current mode
+applies. The DDJ-SB3 does it like this (shortened to the left side; pad notes on channel 8):
+
+```toml
+[[input]]
+midi = { channel = 1, note = 0x69 }      # SHIFT + HOT CUE
+action = "pads.mode_beat_jump"
+side = "left"
+
+[[input]]
+midi = { channel = 1, note = 0x1B }      # HOT CUE
+action = "pads.mode_hardware"
+side = "left"
+
+[[input]]
+midi = { channel = 8, note = 0x00 }
+action = "deck.hotcue_1"
+side = "left"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 8, note = 0x01 }
+action = "deck.beat_jump_2"
+side = "left"
+pad_mode = "beat_jump"
+
+# The sampler is global; side only scopes pad_mode.
+[[input]]
+midi = { channel = 8, note = 0x30 }
+action = "sampler.play_1"
+side = "left"
+pad_mode = "hardware"
+```
+
+A held pad (`deck.loop_roll_N`, `deck.slice_N`) should also be bound on the shifted note of
+the same pad, so a release that arrives after SHIFT went down still ends it.
+
 ## Layers and deck switching
 
 Many controllers have a four-deck layout with two sets of controls. There are two ways a

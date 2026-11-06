@@ -76,4 +76,34 @@ where a paused deck plays. The jog wheels are engine commands as well (`JogTouch
 `JogSearch`): scratching, nudging and search run on the audio thread, and the control side
 only turns controller steps into platter turns using the mapping's `jog_steps_per_turn`.
 
+## Slip, the sampler and software pad modes
+
+**Slip.** With slip on, a scratch, a normal loop or a hotcue jump while playing keeps a
+silent *ghost* playhead moving at the deck's tempo; when the gesture ends the playhead
+returns to the ghost, so the track lands where it would have been. Loop rolls and slicer
+pads always slip. The ghost lives in the deck (`DeckSnapshot::ghost_frames`), and a
+deliberate jump (seek, cue, search) drops it. A roll or slice is a separate roll loop: the
+normal loop commands are ignored while one is held.
+
+**Sampler.** The engine has eight one-shot sampler slots (`SamplerCommand`) mixed into the
+master bus after the channels, so the headphone master mix hears them too. A slot holds a
+shared decoded buffer; playing it restarts it from the start and it stops at the end.
+Samples are decoded by the app before the controller attaches (up to 60 s each) and sent
+with `Set`, so the audio thread never allocates or frees. The sampler is global, not per
+deck: both sides' SAMPLER pads play the same eight samples. `EngineController::sampler()`
+shows which slots play, for the status line.
+
+**Software pad modes.** The SB3 does not switch its pads for the SHIFT pad modes (beat
+jump, loop roll, slicer): its pads keep sending the notes of the last hardware mode. So
+each side's pad mode lives in `ControlState` (`SideControl::pad_mode`), set by `pads.mode_*`
+actions, and a mapping binding's `pad_mode` condition only fires while the binding's side
+is in that mode. A master action such as `sampler.play_N` may carry a `side` that only
+scopes the condition. A held roll or slice keeps its release on the deck that got the
+press, even after a DECK switch, and a release on the shifted sibling note pairs with the
+press (`ActionKind::hold_partner`).
+
+**config.toml.** `play` reads the per-user `config.toml` ([config.md](config.md)) before the
+controller attaches: the crossfader switch, the sampler files and volume, and the beat jump
+and loop roll size tables, which are written into `ControlState`.
+
 Controllers are documented in [`controllers/`](controllers/): the [mapping reference](controllers/mapping-reference.md) and [adding a controller](controllers/adding-a-controller.md).

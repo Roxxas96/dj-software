@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 use std::time::{Duration, Instant};
 
+use actions::{ControlState, PadMode, Side};
 use anyhow::{Context, anyhow};
 use audio_io::{
     AudioError, OutputRouting, OutputStream, RoutingError, StreamError, StreamErrorKind,
@@ -15,7 +16,7 @@ use audio_io::{
 use controller::{Connection, PresenceChange, Runtime, TimedMidi, clock};
 use engine::{
     ChannelCommand, Command, DeckCommand, DeckId, DeckSnapshot, EngineController, MasterCommand,
-    SamplerCommand, engine,
+    SamplerCommand, SamplerSnapshot, engine,
 };
 
 use crate::config::{Config, PadSource};
@@ -205,7 +206,8 @@ fn format_time(seconds: f64) -> String {
     format!("{:02}:{:02}", total / 60, total % 60)
 }
 
-/// A deck's time, then `loop N` while it loops and `vinyl off` when its jog only nudges.
+/// A deck's time, then `loop N` while it loops, `slip` while slip mode is on, `roll` while a
+/// roll or slice is held, and `vinyl off` when its jog only nudges.
 pub(crate) fn deck_line(deck: DeckId, snapshot: &DeckSnapshot) -> String {
     let rate = f64::from(snapshot.track_sample_rate.max(1));
     let duration = snapshot.duration_frames as f64 / rate;
@@ -219,10 +221,56 @@ pub(crate) fn deck_line(deck: DeckId, snapshot: &DeckSnapshot) -> String {
     if snapshot.loop_active {
         line.push_str(&format!("  loop {}", loop_text(snapshot.loop_beats)));
     }
+    if snapshot.slip {
+        line.push_str("  slip");
+    }
+    if snapshot.roll_active {
+        line.push_str("  roll");
+    }
     if !snapshot.vinyl {
         line.push_str("  vinyl off");
     }
     line
+}
+
+/// The pad modes that are not `hardware`, as `left: beat jump   right: slicer`; `None` while
+/// both sides are in the hardware mode. The SB3 has no mode lights, so this is where a
+/// software pad mode shows.
+pub(crate) fn pad_mode_line(state: &ControlState) -> Option<String> {
+    let modes: Vec<String> = [(Side::Left, "left"), (Side::Right, "right")]
+        .into_iter()
+        .filter_map(|(side, name)| {
+            let mode = match state.side(side).pad_mode {
+                PadMode::Hardware => return None,
+                PadMode::BeatJump => "beat jump",
+                PadMode::LoopRoll => "loop roll",
+                PadMode::Slicer => "slicer",
+            };
+            Some(format!("{name}: {mode}"))
+        })
+        .collect();
+    (!modes.is_empty()).then(|| modes.join("   "))
+}
+
+/// `sampler: 2 5` listing the playing slots (from 1); `None` while none plays.
+pub(crate) fn sampler_line(sampler: &SamplerSnapshot) -> Option<String> {
+    let slots: Vec<String> = sampler
+        .playing
+        .iter()
+        .enumerate()
+        .filter(|(_, playing)| **playing)
+        .map(|(index, _)| (index + 1).to_string())
+        .collect();
+    (!slots.is_empty()).then(|| format!("sampler: {}", slots.join(" ")))
+}
+
+/// The status lines a controller session adds after the deck lines: the software pad modes
+/// and the playing sampler slots, when there is something to show.
+fn extra_status(state: &ControlState, engine: &EngineController) -> Vec<String> {
+    pad_mode_line(state)
+        .into_iter()
+        .chain(sampler_line(&engine.sampler()))
+        .collect()
 }
 
 /// A loop length in beats: `4`, `1.5`, a fraction of a beat as `1/4` or `3/4` (down to
@@ -641,10 +689,16 @@ fn control_loop(
             }
             stream_errors = errors;
             match &library {
-                Some(library) => printer.status_lines(library.status_lines(engine)),
+                Some(library) => {
+                    let mut lines = library.status_lines(engine);
+                    lines.extend(extra_status(runtime.state(), engine));
+                    printer.status_lines(lines);
+                }
                 None => {
                     let snapshots = DeckId::ALL.map(|id| (id, engine.deck(id)));
-                    printer.status(decks_line(&snapshots));
+                    let mut lines = vec![decks_line(&snapshots)];
+                    lines.extend(extra_status(runtime.state(), engine));
+                    printer.status_lines(lines);
                 }
             }
         }
@@ -828,6 +882,55 @@ mod tests {
             deck_line(deck, &vinyl_off),
             "Deck 1  01:05 / 03:20  loop 2  vinyl off"
         );
+    }
+
+    #[test]
+    fn deck_line_shows_slip_and_roll() {
+        let deck = DeckId::new(0).unwrap();
+        let snapshot = DeckSnapshot {
+            loaded: true,
+            position_frames: 44_100.0 * 65.0,
+            duration_frames: 44_100 * 200,
+            track_sample_rate: 44_100,
+            ..DeckSnapshot::default()
+        };
+        let slip = DeckSnapshot {
+            slip: true,
+            ..snapshot
+        };
+        assert_eq!(deck_line(deck, &slip), "Deck 1  01:05 / 03:20  slip");
+        let rolling = DeckSnapshot {
+            roll_active: true,
+            loop_active: true,
+            loop_beats: 2.0,
+            ..slip
+        };
+        assert_eq!(
+            deck_line(deck, &rolling),
+            "Deck 1  01:05 / 03:20  loop 2  slip  roll"
+        );
+    }
+
+    #[test]
+    fn pad_mode_and_sampler_lines_show_only_when_active() {
+        let mut state = ControlState::default();
+        assert_eq!(pad_mode_line(&state), None);
+        state.side_mut(Side::Left).pad_mode = PadMode::BeatJump;
+        assert_eq!(pad_mode_line(&state).as_deref(), Some("left: beat jump"));
+        state.side_mut(Side::Right).pad_mode = PadMode::LoopRoll;
+        assert_eq!(
+            pad_mode_line(&state).as_deref(),
+            Some("left: beat jump   right: loop roll")
+        );
+        state.side_mut(Side::Left).pad_mode = PadMode::Hardware;
+        state.side_mut(Side::Right).pad_mode = PadMode::Slicer;
+        assert_eq!(pad_mode_line(&state).as_deref(), Some("right: slicer"));
+
+        let mut sampler = SamplerSnapshot::default();
+        assert_eq!(sampler_line(&sampler), None);
+        sampler.playing[1] = true;
+        sampler.playing[4] = true;
+        assert_eq!(sampler_line(&sampler).as_deref(), Some("sampler: 2 5"));
     }
 
     #[test]
