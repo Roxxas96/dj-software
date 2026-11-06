@@ -1,0 +1,64 @@
+# config.toml
+
+Settings for the mixer, the sampler and the performance pad sizes. Every section and key is
+optional; a key left out keeps its default, and so does a missing file.
+
+## Location
+
+`open-jockey play` reads `config.toml` from the per-user configuration folder:
+
+| OS      | Path                                                     |
+| ------- | -------------------------------------------------------- |
+| macOS   | `~/Library/Application Support/open-jockey/config.toml`  |
+| Linux   | `~/.config/open-jockey/config.toml`                      |
+| Windows | `%APPDATA%\open-jockey\config.toml`                      |
+
+`play --config <PATH>` reads another file instead (and then the file must exist).
+
+## Keys
+
+| Key                  | Default                                      | Meaning |
+| -------------------- | -------------------------------------------- | ------- |
+| `mixer.crossfader`   | `true`                                       | `false`: the crossfader is ignored and every channel plays at full level |
+| `sampler.volume`     | `1.0`                                        | Sampler level, 0 to 1 |
+| `sampler.pads`       | none (all pads empty)                        | Up to 8 entries for pads 1 to 8, each `{ file = "..." }` (an absolute path, or one starting with `~/`) or `{ track = <library track id> }`; fewer entries leave the other pads empty |
+| `beat_jump.pads`     | `[-4, 4, -8, 8, -16, 16, -32, 32]`           | Beats the beat jump pads move the playhead; exactly 8, each non-zero with `abs <= 512` |
+| `beat_jump.shift_pads` | `[-1, 1, -2, 2, -4, 4, -64, 64]`           | The same with SHIFT held |
+| `loop_roll.pads`     | `[0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8]`     | Beats the loop roll pads roll; exactly 8, each from 1/32 to 64 |
+
+A sample is at most 60 seconds long. A `track` id is looked up in the library: the one opened
+by `--library`, otherwise the default library if it exists.
+
+## Example
+
+```toml
+[mixer]
+crossfader = true            # false: the crossfader is ignored, every channel at full level
+
+[sampler]
+volume = 1.0                 # 0 to 1
+pads = [
+  { file = "~/Samples/airhorn.wav" },
+  { track = 1234 },
+]
+
+[beat_jump]
+pads = [-4, 4, -8, 8, -16, 16, -32, 32]
+shift_pads = [-1, 1, -2, 2, -4, 4, -64, 64]
+
+[loop_roll]
+pads = [0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8]
+```
+
+## Errors
+
+An invalid file stops `play` before any audio or MIDI device is opened, with a message of the
+form `<file>: <key>: <problem>`, for example
+`config.toml: beat_jump.pads: expected exactly 8 numbers, got 3`. Unknown keys, wrong types,
+wrong lengths, out-of-range values, a pad with both or neither of `file` and `track` and more
+than 8 pads are all errors.
+
+A sample that cannot be loaded does not stop `play`: it is reported at startup as
+`sampler pad N (<file or track>): <reason>` and that pad stays empty. The reasons are a
+missing file, a decode error, an unknown track id, a track id with no library, and a sample
+longer than 60 seconds.

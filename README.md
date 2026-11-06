@@ -33,6 +33,7 @@ confidence value. See [docs/library.md](docs/library.md) for details and known l
 New controllers are welcome, see [CONTRIBUTING.md](CONTRIBUTING.md) and
 [Adding a controller](docs/controllers/adding-a-controller.md). The mapping file format is in the
 [mapping reference](docs/controllers/mapping-reference.md).
+Mixer, sampler and pad-size settings are in [docs/config.md](docs/config.md).
 
 ## Building from source
 

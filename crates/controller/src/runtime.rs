@@ -92,6 +92,12 @@ impl Runtime {
         &self.state
     }
 
+    /// Mutable access to the control state, for settings made at startup (such as the pad
+    /// size tables), which are not engine values and so involve no soft takeover.
+    pub fn control_state_mut(&mut self) -> &mut ControlState {
+        &mut self.state
+    }
+
     /// The controller attached: applies the `[[init]]` actions and sends every LED.
     ///
     /// On the first attach soft takeover starts disarmed: nothing is known about where the

@@ -1,5 +1,6 @@
 //! Command-line entry point: argument parsing and dispatch.
 
+mod config;
 mod console;
 mod format;
 mod led_scan;
@@ -9,6 +10,7 @@ mod library_mode;
 mod midi_cmd;
 mod play;
 mod printer;
+mod samples;
 
 #[cfg(test)]
 use std::path::Path;
