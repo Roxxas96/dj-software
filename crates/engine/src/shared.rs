@@ -30,6 +30,10 @@ pub struct DeckSnapshot {
     pub vinyl: bool,
     /// The jog wheel's top is touched.
     pub jog_touched: bool,
+    /// Slip mode is on.
+    pub slip: bool,
+    /// While slipping, where the track would be, in track frames.
+    pub ghost_frames: Option<f64>,
     /// How many `Load`s the deck has applied. In a snapshot from
     /// [`EngineController::deck_consistent`](crate::EngineController::deck_consistent)
     /// every field is from the same block as this count.
@@ -56,6 +60,8 @@ impl Default for DeckSnapshot {
             loop_beats: 4.0,
             vinyl: true,
             jog_touched: false,
+            slip: false,
+            ghost_frames: None,
             load_seq: 0,
         }
     }
@@ -156,6 +162,8 @@ struct DeckShared {
     loop_beats: AtomicU64,
     vinyl: AtomicBool,
     jog_touched: AtomicBool,
+    slip: AtomicBool,
+    ghost_frames: AtomicU64,
     load_seq: AtomicU64,
 }
 
@@ -210,6 +218,9 @@ impl DeckShared {
             .store(s.loop_beats.to_bits(), Ordering::Relaxed);
         self.vinyl.store(s.vinyl, Ordering::Relaxed);
         self.jog_touched.store(s.jog_touched, Ordering::Relaxed);
+        self.slip.store(s.slip, Ordering::Relaxed);
+        self.ghost_frames
+            .store(opt_bits(s.ghost_frames), Ordering::Relaxed);
         self.load_seq.store(s.load_seq, Ordering::Relaxed);
     }
 
@@ -259,6 +270,8 @@ impl DeckShared {
             loop_beats: f64::from_bits(self.loop_beats.load(Ordering::Relaxed)),
             vinyl: self.vinyl.load(Ordering::Relaxed),
             jog_touched: self.jog_touched.load(Ordering::Relaxed),
+            slip: self.slip.load(Ordering::Relaxed),
+            ghost_frames: bits_opt(self.ghost_frames.load(Ordering::Relaxed)),
             load_seq: self.load_seq.load(Ordering::Relaxed),
         }
     }

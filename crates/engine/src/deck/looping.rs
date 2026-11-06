@@ -1,6 +1,7 @@
 //! Loop behavior of a deck.
 
 use super::Deck;
+use super::slip::SlipOwner;
 
 /// Length in beats of an auto loop until it is halved or doubled.
 pub(super) const DEFAULT_LOOP_BEATS: f64 = 4.0;
@@ -16,9 +17,10 @@ impl Deck {
         if self.track.is_none() {
             return;
         }
+        // Leaving a slipped loop returns first, so loop-in lands where the track is heard.
+        self.exit_loop();
         self.loop_in = Some(self.position);
         self.loop_out = None;
-        self.loop_active = false;
     }
 
     pub(super) fn loop_out_press(&mut self) {
@@ -28,6 +30,9 @@ impl Deck {
         if let Some(start) = self.loop_in
             && self.position - start >= MIN_LOOP_FRAMES
         {
+            if !self.loop_active {
+                self.slip_begin_for(SlipOwner::Loop);
+            }
             self.loop_out = Some(self.position);
             self.loop_active = true;
         }
@@ -35,7 +40,7 @@ impl Deck {
 
     pub(super) fn auto_loop(&mut self) {
         if self.loop_active {
-            self.loop_active = false;
+            self.exit_loop();
             return;
         }
         let Some(grid) = self.grid else {
@@ -44,6 +49,7 @@ impl Deck {
         if self.track.is_none() {
             return;
         }
+        self.slip_begin_for(SlipOwner::Loop);
         let beat = (grid.beats_at(self.position) + 1e-6).floor();
         let start = (grid.first_beat_frames + beat * grid.beat_period_frames).max(0.0);
         self.loop_in = Some(start);
@@ -57,6 +63,7 @@ impl Deck {
     /// [`MIN_LOOP_BEATS`, `MAX_LOOP_BEATS`] beats; without one it stops changing once the
     /// loop length in beats does.
     pub(super) fn loop_resize(&mut self, factor: f64) {
+        let before = self.active_loop();
         let beats = self.loop_beats;
         self.loop_beats = (beats * factor).clamp(MIN_LOOP_BEATS, MAX_LOOP_BEATS);
         if !self.loop_active {
@@ -83,23 +90,35 @@ impl Deck {
             None => resized,
         };
         self.loop_out = Some(start + resized.max(MIN_LOOP_FRAMES));
+        self.slip_loop_resized(before);
     }
 
     pub(super) fn reloop_exit(&mut self) {
         if self.loop_active {
-            self.loop_active = false;
+            self.exit_loop();
         } else if let (Some(start), Some(_)) = (self.loop_in, self.loop_out) {
+            self.slip_begin_for(SlipOwner::Loop);
             self.position = start;
             self.loop_active = true;
         }
     }
 
-    /// A jump to `point` outside the active loop leaves the loop.
+    /// Deactivates the loop on request; a slipped loop returns to its ghost.
+    fn exit_loop(&mut self) {
+        if self.loop_active {
+            self.loop_active = false;
+            self.slip_end_for(SlipOwner::Loop);
+        }
+    }
+
+    /// A jump to `point` outside the active loop leaves the loop. The jump wins over a
+    /// slipped loop: its ghost is dropped.
     pub(super) fn exit_loop_if_outside(&mut self, point: f64) {
         if let (true, Some(start), Some(end)) = (self.loop_active, self.loop_in, self.loop_out)
             && !(start..end).contains(&point)
         {
             self.loop_active = false;
+            self.slip_loop_jumped_out();
         }
     }
 

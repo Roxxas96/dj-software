@@ -3,6 +3,7 @@
 //! All seconds are at the track's own rate and the original tempo.
 
 use super::Deck;
+use super::slip::SlipOwner;
 use crate::JogSurface;
 
 /// Track seconds per platter turn while scratching or moving a paused deck (33⅓ rpm).
@@ -37,10 +38,14 @@ impl Deck {
         self.start_scratch_if_held();
     }
 
-    /// A held top in vinyl mode holds the record where the playhead is.
+    /// A held top in vinyl mode holds the record where the playhead is. With slip on, the
+    /// scratch lasts as long as the hold and then returns to where the track would be.
     fn start_scratch_if_held(&mut self) {
         if self.jog_touched && self.vinyl && self.track.is_some() {
             self.scratch = Some(0.0);
+            self.slip_begin_for(SlipOwner::Scratch);
+        } else {
+            self.slip_end_for(SlipOwner::Scratch);
         }
     }
 

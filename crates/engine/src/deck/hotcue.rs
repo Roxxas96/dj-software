@@ -1,6 +1,7 @@
 //! Hotcue behavior of a deck.
 
 use super::Deck;
+use super::slip::SlipOwner;
 use crate::HotcueSlot;
 
 /// What the held button that started a preview was.
@@ -19,6 +20,10 @@ impl Deck {
             self.hotcues[slot.index()] = Some(self.position);
             return;
         };
+        // With slip on, a jump while playing lasts as long as the pad is held.
+        if self.playing && self.preview.is_none() {
+            self.slip_begin_for(SlipOwner::Hotcue(slot));
+        }
         self.position = point;
         self.exit_loop_if_outside(point);
         self.pending_sync = None;
@@ -33,6 +38,7 @@ impl Deck {
     }
 
     pub(super) fn hotcue_release(&mut self, slot: HotcueSlot) {
+        self.slip_end_for(SlipOwner::Hotcue(slot));
         if self.preview == Some(PreviewSource::Hotcue(slot))
             && let Some(point) = self.hotcues[slot.index()]
         {
