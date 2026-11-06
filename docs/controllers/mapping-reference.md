@@ -230,12 +230,65 @@ browser actions).
 | `modifier.shift` | side | button | Press and release track whether SHIFT is held on that side. |
 | `browser.scroll` | none | relative | Move the cursor of the focused browser pane by the steps sent (positive is down). It stops at the first and last rows. |
 | `browser.toggle_focus` | none | button | Press to switch the browser between the tree (playlists, folders, all tracks) and the track list. |
+| `pads.mode_hardware` | side | button | Press to set the side's pad mode to hardware (the controller's own pad modes); no sound changes by itself. |
+| `pads.mode_beat_jump` | side | button | Press to set the side's pad mode to beat jump (beat jump); no sound changes by itself. |
+| `pads.mode_loop_roll` | side | button | Press to set the side's pad mode to loop roll (loop roll); no sound changes by itself. |
+| `pads.mode_slicer` | side | button | Press to set the side's pad mode to slicer (the slicer); no sound changes by itself. |
+| `deck.beat_jump_1` | deck | button | Press to jump the playhead by the size of beat jump pad 1 (default -4, 4, -8, 8, -16, 16, -32, 32 beats for pads 1 to 8). Needs a beatgrid; the jump stops at the track's start and end. |
+| `deck.beat_jump_2` | deck | button | Press to jump the playhead by the size of beat jump pad 2 (default -4, 4, -8, 8, -16, 16, -32, 32 beats for pads 1 to 8). Needs a beatgrid; the jump stops at the track's start and end. |
+| `deck.beat_jump_3` | deck | button | Press to jump the playhead by the size of beat jump pad 3 (default -4, 4, -8, 8, -16, 16, -32, 32 beats for pads 1 to 8). Needs a beatgrid; the jump stops at the track's start and end. |
+| `deck.beat_jump_4` | deck | button | Press to jump the playhead by the size of beat jump pad 4 (default -4, 4, -8, 8, -16, 16, -32, 32 beats for pads 1 to 8). Needs a beatgrid; the jump stops at the track's start and end. |
+| `deck.beat_jump_5` | deck | button | Press to jump the playhead by the size of beat jump pad 5 (default -4, 4, -8, 8, -16, 16, -32, 32 beats for pads 1 to 8). Needs a beatgrid; the jump stops at the track's start and end. |
+| `deck.beat_jump_6` | deck | button | Press to jump the playhead by the size of beat jump pad 6 (default -4, 4, -8, 8, -16, 16, -32, 32 beats for pads 1 to 8). Needs a beatgrid; the jump stops at the track's start and end. |
+| `deck.beat_jump_7` | deck | button | Press to jump the playhead by the size of beat jump pad 7 (default -4, 4, -8, 8, -16, 16, -32, 32 beats for pads 1 to 8). Needs a beatgrid; the jump stops at the track's start and end. |
+| `deck.beat_jump_8` | deck | button | Press to jump the playhead by the size of beat jump pad 8 (default -4, 4, -8, 8, -16, 16, -32, 32 beats for pads 1 to 8). Needs a beatgrid; the jump stops at the track's start and end. |
+| `deck.beat_jump_shift_1` | deck | button | Press to jump the playhead by the size of shifted beat jump pad 1 (default -1, 1, -2, 2, -4, 4, -64, 64 beats for pads 1 to 8). Needs a beatgrid. |
+| `deck.beat_jump_shift_2` | deck | button | Press to jump the playhead by the size of shifted beat jump pad 2 (default -1, 1, -2, 2, -4, 4, -64, 64 beats for pads 1 to 8). Needs a beatgrid. |
+| `deck.beat_jump_shift_3` | deck | button | Press to jump the playhead by the size of shifted beat jump pad 3 (default -1, 1, -2, 2, -4, 4, -64, 64 beats for pads 1 to 8). Needs a beatgrid. |
+| `deck.beat_jump_shift_4` | deck | button | Press to jump the playhead by the size of shifted beat jump pad 4 (default -1, 1, -2, 2, -4, 4, -64, 64 beats for pads 1 to 8). Needs a beatgrid. |
+| `deck.beat_jump_shift_5` | deck | button | Press to jump the playhead by the size of shifted beat jump pad 5 (default -1, 1, -2, 2, -4, 4, -64, 64 beats for pads 1 to 8). Needs a beatgrid. |
+| `deck.beat_jump_shift_6` | deck | button | Press to jump the playhead by the size of shifted beat jump pad 6 (default -1, 1, -2, 2, -4, 4, -64, 64 beats for pads 1 to 8). Needs a beatgrid. |
+| `deck.beat_jump_shift_7` | deck | button | Press to jump the playhead by the size of shifted beat jump pad 7 (default -1, 1, -2, 2, -4, 4, -64, 64 beats for pads 1 to 8). Needs a beatgrid. |
+| `deck.beat_jump_shift_8` | deck | button | Press to jump the playhead by the size of shifted beat jump pad 8 (default -1, 1, -2, 2, -4, 4, -64, 64 beats for pads 1 to 8). Needs a beatgrid. |
+| `deck.loop_roll_1` | deck | button | Hold to roll a loop of the size of loop roll pad 1 (default 1/16, 1/8, 1/4, 1/2, 1, 2, 4, 8 beats for pads 1 to 8); release to end the roll, after which the track continues from where it would have been. Needs a beatgrid. |
+| `deck.loop_roll_2` | deck | button | Hold to roll a loop of the size of loop roll pad 2 (default 1/16, 1/8, 1/4, 1/2, 1, 2, 4, 8 beats for pads 1 to 8); release to end the roll, after which the track continues from where it would have been. Needs a beatgrid. |
+| `deck.loop_roll_3` | deck | button | Hold to roll a loop of the size of loop roll pad 3 (default 1/16, 1/8, 1/4, 1/2, 1, 2, 4, 8 beats for pads 1 to 8); release to end the roll, after which the track continues from where it would have been. Needs a beatgrid. |
+| `deck.loop_roll_4` | deck | button | Hold to roll a loop of the size of loop roll pad 4 (default 1/16, 1/8, 1/4, 1/2, 1, 2, 4, 8 beats for pads 1 to 8); release to end the roll, after which the track continues from where it would have been. Needs a beatgrid. |
+| `deck.loop_roll_5` | deck | button | Hold to roll a loop of the size of loop roll pad 5 (default 1/16, 1/8, 1/4, 1/2, 1, 2, 4, 8 beats for pads 1 to 8); release to end the roll, after which the track continues from where it would have been. Needs a beatgrid. |
+| `deck.loop_roll_6` | deck | button | Hold to roll a loop of the size of loop roll pad 6 (default 1/16, 1/8, 1/4, 1/2, 1, 2, 4, 8 beats for pads 1 to 8); release to end the roll, after which the track continues from where it would have been. Needs a beatgrid. |
+| `deck.loop_roll_7` | deck | button | Hold to roll a loop of the size of loop roll pad 7 (default 1/16, 1/8, 1/4, 1/2, 1, 2, 4, 8 beats for pads 1 to 8); release to end the roll, after which the track continues from where it would have been. Needs a beatgrid. |
+| `deck.loop_roll_8` | deck | button | Hold to roll a loop of the size of loop roll pad 8 (default 1/16, 1/8, 1/4, 1/2, 1, 2, 4, 8 beats for pads 1 to 8); release to end the roll, after which the track continues from where it would have been. Needs a beatgrid. |
+| `deck.slice_1` | deck | button | Hold to play slice 1 of the 8-beat block around where the track would be; release to return to the track. Needs a beatgrid. |
+| `deck.slice_2` | deck | button | Hold to play slice 2 of the 8-beat block around where the track would be; release to return to the track. Needs a beatgrid. |
+| `deck.slice_3` | deck | button | Hold to play slice 3 of the 8-beat block around where the track would be; release to return to the track. Needs a beatgrid. |
+| `deck.slice_4` | deck | button | Hold to play slice 4 of the 8-beat block around where the track would be; release to return to the track. Needs a beatgrid. |
+| `deck.slice_5` | deck | button | Hold to play slice 5 of the 8-beat block around where the track would be; release to return to the track. Needs a beatgrid. |
+| `deck.slice_6` | deck | button | Hold to play slice 6 of the 8-beat block around where the track would be; release to return to the track. Needs a beatgrid. |
+| `deck.slice_7` | deck | button | Hold to play slice 7 of the 8-beat block around where the track would be; release to return to the track. Needs a beatgrid. |
+| `deck.slice_8` | deck | button | Hold to play slice 8 of the 8-beat block around where the track would be; release to return to the track. Needs a beatgrid. |
+| `deck.slip_toggle` | deck | button | Press to turn slip mode on or off. In slip mode, scratching, loops, hotcue holds, rolls and slices run on a ghost playhead, and the track rejoins where it would have been. |
+| `sampler.play_1` | none | button | Press to play sampler slot 1 from the start, restarting it if it is playing. An empty slot does nothing. |
+| `sampler.play_2` | none | button | Press to play sampler slot 2 from the start, restarting it if it is playing. An empty slot does nothing. |
+| `sampler.play_3` | none | button | Press to play sampler slot 3 from the start, restarting it if it is playing. An empty slot does nothing. |
+| `sampler.play_4` | none | button | Press to play sampler slot 4 from the start, restarting it if it is playing. An empty slot does nothing. |
+| `sampler.play_5` | none | button | Press to play sampler slot 5 from the start, restarting it if it is playing. An empty slot does nothing. |
+| `sampler.play_6` | none | button | Press to play sampler slot 6 from the start, restarting it if it is playing. An empty slot does nothing. |
+| `sampler.play_7` | none | button | Press to play sampler slot 7 from the start, restarting it if it is playing. An empty slot does nothing. |
+| `sampler.play_8` | none | button | Press to play sampler slot 8 from the start, restarting it if it is playing. An empty slot does nothing. |
+| `sampler.stop_1` | none | button | Press to stop sampler slot 1. |
+| `sampler.stop_2` | none | button | Press to stop sampler slot 2. |
+| `sampler.stop_3` | none | button | Press to stop sampler slot 3. |
+| `sampler.stop_4` | none | button | Press to stop sampler slot 4. |
+| `sampler.stop_5` | none | button | Press to stop sampler slot 5. |
+| `sampler.stop_6` | none | button | Press to stop sampler slot 6. |
+| `sampler.stop_7` | none | button | Press to stop sampler slot 7. |
+| `sampler.stop_8` | none | button | Press to stop sampler slot 8. |
 
 Relative steps that arrive together (a fast turn of an encoder) are added up and applied as one
 move; a button press or release in between keeps the steps on each side of it apart.
 
 Only "absolute" actions can be used in `[[init]]`. `soft_takeover` has an effect only on absolute bindings, and `invert` flips absolute values (or negates relative steps).
-Button actions ignore releases, except `deck.cue`, `deck.hotcue_1` to `deck.hotcue_8`, `deck.jog_touch`, `deck.jog_release` and `modifier.shift`, and `deck.return_to_start` and `deck.hotcue_delete_1` to `deck.hotcue_delete_8`, whose release ends a CUE or pad hold of the same deck (`deck.return_to_start` a CUE preview, `deck.hotcue_delete_N` a preview of pad N). A controller that sends a different note with SHIFT held sends the release there when SHIFT goes down during the hold, so binding the shifted note to these actions keeps that hold from sticking.
+Button actions ignore releases, except `deck.cue`, `deck.hotcue_1` to `deck.hotcue_8`, `deck.loop_roll_1` to `deck.loop_roll_8`, `deck.slice_1` to `deck.slice_8`, `deck.jog_touch`, `deck.jog_release` and `modifier.shift`, and `deck.return_to_start` and `deck.hotcue_delete_1` to `deck.hotcue_delete_8`, whose release ends a CUE or pad hold of the same deck (`deck.return_to_start` a CUE preview, `deck.hotcue_delete_N` a preview of pad N). A controller that sends a different note with SHIFT held sends the release there when SHIFT goes down during the hold, so binding the shifted note to these actions keeps that hold from sticking. A roll or slice pad can be bound to the shifted note as well as the plain one: a release on either ends the held roll or slice of the same kind on the deck that pad press went to.
 
 Jog wheel actions turn the steps a wheel sends into platter turns using the `jog_steps_per_turn` key of `[controller]`, which jog bindings (`deck.jog_top`, `deck.jog_ring`, `deck.jog_search`) require: a mapping that binds one without it fails to load.
 
