@@ -139,19 +139,18 @@ Crossfader: `mixer.crossfader = false` in `config.toml` makes the crossfader do 
 
 ### Hands-on check (plan 5)
 
-To do with the owner's SB3 and a `config.toml` holding two or three samples
-(`play --library --controller ddj-sb3`, master on the laptop speakers):
+Done by the owner on 2026-11-06 with their SB3 on macOS and a `config.toml` holding a few
+of their samples (`play --library --controller ddj-sb3`, master on the laptop speakers).
+Everything worked:
 
-- [ ] Sampler: SAMPLER pads play from start to end, again restarts, SHIFT + pad stops; a
-  missing file is reported at startup.
-- [ ] Beat jump: pads jump -4/4/-8/8/-16/16/-32/32, SHIFT + pads -1/1/-2/2/-4/4/-64/64;
-  a size changed in `config.toml` applies after a restart.
-- [ ] Loop roll: after HOT CUE, the pads roll 1/16 to 8 beats; the release lands in time.
-- [ ] Slicer: after HOT CUE, the pads repeat beats of the current bar; the release lands in
-  time.
-- [ ] Slip: SHIFT + VINYL; with slip on, scratch, loop or hotcue, then let go: playback
-  lands where the track would have been.
-- [ ] Crossfader: with `crossfader = false`, moving it changes nothing.
+- [x] Sampler: SAMPLER pads play from start to end, again restarts, SHIFT + pad stops, on
+  both sides (this confirms the left SHIFT + pad notes 0x38-0x3F).
+- [x] Beat jump: the pads and SHIFT + pads jump by the default sizes; a size changed in
+  `config.toml` applies after a restart.
+- [x] Loop roll and slicer (after HOT CUE): the pads roll and repeat, and the release lands
+  in time.
+- [x] Slip: with slip on, a scratch, loop or hotcue lands where the track would have been.
+- [x] Crossfader: with `crossfader = false`, moving it changes nothing.
 
 ## LEDs
 
