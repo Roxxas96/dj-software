@@ -3,6 +3,7 @@ use std::sync::Arc;
 mod beat_jump;
 mod hotcue;
 mod jog;
+mod keylock;
 mod looping;
 mod roll;
 mod slip;
@@ -46,6 +47,11 @@ pub(crate) struct Deck {
     slip: bool,
     /// Where the track would be without the slipping action, while one lasts.
     ghost: Option<slip::Ghost>,
+    /// Keylock is on. Kept across loads.
+    keylock: bool,
+    /// The time-stretcher keylock plays through; `None` for a deck built without one,
+    /// which then always plays resampled.
+    stretcher: Option<keylock::Stretcher>,
     /// A held loop roll or slice and its roll loop, which the playhead wraps in instead of
     /// the normal loop.
     roll: Option<roll::Roll>,
@@ -77,6 +83,8 @@ impl Default for Deck {
             pending_sync: None,
             slip: false,
             ghost: None,
+            keylock: false,
+            stretcher: None,
             roll: None,
             load_seq: 0,
         }
@@ -84,6 +92,15 @@ impl Default for Deck {
 }
 
 impl Deck {
+    /// A deck with a keylock stretcher for `output_rate` and blocks of up to
+    /// `max_block_frames`. Allocates: call it off the audio thread.
+    pub(crate) fn new(output_rate: u32, max_block_frames: usize) -> Self {
+        Self {
+            stretcher: Some(keylock::Stretcher::new(output_rate, max_block_frames)),
+            ..Self::default()
+        }
+    }
+
     /// Applies `cmd` and returns the track it replaced, if any. The caller must not drop
     /// that track on the audio thread.
     #[must_use]
@@ -165,6 +182,7 @@ impl Deck {
             DeckCommand::SliceRelease(slice) => self.slice_release(slice),
             DeckCommand::SetVinyl(on) => self.set_vinyl(on),
             DeckCommand::SetSlip(on) => self.set_slip(on),
+            DeckCommand::SetKeylock(on) => self.set_keylock(on),
             DeckCommand::JogTouch(touched) => self.jog_touch(touched),
             DeckCommand::Jog { turns, surface } if turns.is_finite() => self.jog(turns, surface),
             DeckCommand::JogSearch { turns } if turns.is_finite() => self.jog_search(turns),
@@ -334,8 +352,33 @@ impl Deck {
         (1.0 + offset).max(0.0)
     }
 
+    /// The bounds the playhead wraps in: a held roll's or slice's roll loop, else the
+    /// active normal loop.
+    fn play_bounds(&self) -> Option<(f64, f64)> {
+        if self.roll.is_some() {
+            self.roll_bounds()
+        } else {
+            self.active_loop()
+        }
+    }
+
     /// Adds this deck's output to the interleaved stereo `out` and advances the playhead.
     pub(crate) fn render_add(&mut self, out: &mut [f32], output_sample_rate: u32) {
+        // Keylock stretches a deck playing on its own; scratching, a paused deck and the
+        // original tempo play resampled.
+        if self.scratch.is_none()
+            && self.playing
+            && self.tempo_ratio() > 0.0
+            && self.stretches(self.tempo_ratio() * (1.0 + self.bend))
+            // A clone of the deck's own track: it is never the last one, so never freed here.
+            && let Some(track) = self.track.clone()
+        {
+            let step = f64::from(track.sample_rate()) / f64::from(output_sample_rate);
+            let bounds = self.play_bounds();
+            self.render_stretched(out, &track, output_sample_rate, step, bounds);
+            return;
+        }
+        self.keylock_bypassed();
         let Some(track) = self.track.as_deref() else {
             return;
         };
@@ -383,27 +426,20 @@ impl Deck {
         if self.tempo_ratio() <= 0.0 {
             return;
         }
-        // A held roll or slice wraps the playhead in its roll loop instead.
-        let bounds = if self.roll.is_some() {
-            self.roll_bounds()
-        } else {
-            self.active_loop()
-        };
+        let bounds = self.play_bounds();
 
         for frame in frames {
             let step = rate * (1.0 + self.bend);
-            self.position = looping::wrap_position(self.position, bounds, step);
-            if self.position >= end {
-                self.position = end;
+            let Some(sound) = read_frame(track, &mut self.position, bounds, step) else {
                 self.pause();
                 return;
-            }
-            add_frame(frame, track, self.position);
+            };
+            frame[0] += sound[0];
+            frame[1] += sound[1];
             if ghost_moves && let Some(ghost) = &mut self.ghost {
                 slip::advance(ghost, ghost_bounds, step, end);
             }
             self.bend *= decay;
-            self.position += step;
         }
     }
 
@@ -426,12 +462,34 @@ impl Deck {
             vinyl: self.vinyl,
             jog_touched: self.jog_touched,
             slip: self.slip,
+            keylock: self.keylock,
             ghost_frames: self.ghost_frames(),
             roll_active: self.roll.is_some(),
             slicer_block_beat: self.slicer_block_beat(),
             load_seq: self.load_seq,
         }
     }
+}
+
+/// The playing source reader, shared by the normal path and keylock: wraps `position` in
+/// `bounds`, returns the track's sound there and moves it on by `step`. At the track's end
+/// it holds `position` there and returns `None`.
+fn read_frame(
+    track: &TrackBuffer,
+    position: &mut f64,
+    bounds: Option<(f64, f64)>,
+    step: f64,
+) -> Option<[f32; 2]> {
+    let end = track.frames() as f64;
+    *position = looping::wrap_position(*position, bounds, step);
+    if *position >= end {
+        *position = end;
+        return None;
+    }
+    let mut sound = [0.0; 2];
+    add_frame(&mut sound, track, *position);
+    *position += step;
+    Some(sound)
 }
 
 /// Adds the track's sound at `position` (in `[0, frames]`) to `frame`, interpolating

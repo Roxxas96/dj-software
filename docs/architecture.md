@@ -102,6 +102,27 @@ scopes the condition. A held roll or slice keeps its release on the deck that go
 press, even after a DECK switch, and a release on the shifted sibling note pairs with the
 press (`ActionKind::hold_partner`).
 
+**Keylock.** With keylock on (`DeckCommand::SetKeylock`, kept across loads), a deck at a
+tempo other than the original plays through its own Signalsmith Stretch time-stretcher
+(the C++ library, through the `signalsmith-stretch` crate; the cheaper preset, stereo, at
+the output rate). Each deck's stretcher and its interleaved buffers are built with the
+renderer, before it moves to the audio thread. For a block of `n` output frames the deck
+reads `n × tempo × (1 + nudge bend)` source frames (rounded, the remainder carried to the
+next block) at the original pitch through the same reader as the normal path, so loops,
+rolls and the slip ghost wrap as usual, and the playhead advances by exactly those frames.
+Scratching, a paused deck and the original tempo (within 1e-4) play resampled, without
+the stretcher. After a discontinuity (a jump of any kind, a load, a slip return, a change
+of the loop or roll the playhead wraps in, keylock switched on, or a switch from the
+resampled path) the stretcher is reset, fed `input_latency` frames from the playhead with
+`seek`, and its output latency is rendered and discarded, so the next block starts at the
+playhead at full level, with no tail of the old audio. Loop and roll wraps are not
+discontinuities: the input stream wraps and the stretcher smooths it. The stretcher holds
+about its input latency plus its output latency of source ahead of what is heard (2205 +
+3969 frames, about 140 ms, at 44.1 kHz); latency is not reported in the snapshot. After a restart
+what is heard is at the playhead; a later tempo change lets them drift apart by up to the
+output latency (about 90 ms) times the change in tempo ratio, about 9 ms for a 10 % move.
+A restart costs about one millisecond of the audio callback.
+
 **config.toml.** `play` reads the per-user `config.toml` ([config.md](config.md)) before the
 controller attaches: the crossfader switch, the sampler files and volume, and the beat jump
 and loop roll size tables, which are written into `ControlState`.

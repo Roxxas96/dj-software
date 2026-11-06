@@ -253,10 +253,35 @@ fn render_does_not_allocate() {
         DeckCommand::SlicePress(1),
         DeckCommand::Seek(40_000.0),
         DeckCommand::SliceRelease(1),
+        // Keylock on a playing deck: stretched blocks, a jump, a short loop that wraps, a
+        // nudge, a bypass at the original tempo and a toggle.
+        DeckCommand::Play,
+        DeckCommand::SetKeylock(true),
+        DeckCommand::Seek(5_000.0),
+        DeckCommand::HotcuePress(slot(5)),
+        DeckCommand::HotcuePress(slot(5)),
+        DeckCommand::HotcueRelease(slot(5)),
+        DeckCommand::LoopHalve,
+        DeckCommand::LoopHalve,
+        DeckCommand::LoopHalve,
+        DeckCommand::LoopHalve,
+        DeckCommand::LoopHalve,
+        DeckCommand::LoopHalve,
+        DeckCommand::AutoLoop,
+        DeckCommand::AutoLoop,
+        DeckCommand::Jog {
+            turns: 0.1,
+            surface: JogSurface::Ring,
+        },
+        DeckCommand::SetTempoSlider(0.5),
+        DeckCommand::SetTempoSlider(0.7),
+        DeckCommand::SetKeylock(false),
+        DeckCommand::SetKeylock(true),
     ] {
         c.send(Command::Deck(decks[0], cmd)).unwrap();
         render_blocks(10);
     }
+    assert!(c.deck(decks[0]).keylock);
     for cmd in [
         ChannelCommand::Trim(0.7),
         ChannelCommand::EqLow(0.2),
