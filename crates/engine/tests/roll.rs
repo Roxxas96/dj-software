@@ -90,6 +90,36 @@ fn roll_loops_then_slips_back() {
 }
 
 #[test]
+fn roll_snaps_to_the_grid() {
+    // The grid's first beat is at frame 1 000; the playhead is 2.6 beats past it.
+    let first = 1000.0;
+    for (beats, loop_start) in [(1.0, 2.0), (0.5, 2.5), (0.25, 2.5)] {
+        let grid = Grid::from_bpm(120.0, first, SR);
+        let (mut c, mut r, id) = setup_with(load_with(grid), first + 2.6 * BEAT);
+        let start = position(&c, id);
+        step(&mut c, &mut r, id, press(beats));
+        assert_eq!(
+            ghost(&c, id),
+            start + 1.0,
+            "the ghost starts at the playhead"
+        );
+        assert_eq!(position(&c, id), start + 1.0, "the playhead does not jump");
+        // Play on to the roll's end, snapped down to a multiple of its length from the
+        // first beat, and the same distance again past it: the playhead wraps to its start.
+        let to_end = first + (loop_start + beats) * BEAT - (start + 1.0);
+        let frames = to_end.ceil() + (0.1 * BEAT).floor();
+        render(&mut r, frames as usize);
+        assert_eq!(
+            position(&c, id),
+            start + 1.0 + frames - beats * BEAT,
+            "{beats} beats"
+        );
+        step(&mut c, &mut r, id, release(beats));
+        assert!(!c.deck(id).roll_active);
+    }
+}
+
+#[test]
 fn roll_keeps_a_normal_loop_intact() {
     let (mut c, mut r, id) = setup(30_000.0);
     step(&mut c, &mut r, id, DeckCommand::AutoLoop);
@@ -97,12 +127,13 @@ fn roll_keeps_a_normal_loop_intact() {
     assert_eq!(c.deck(id).loop_out, Some(loop_out));
     let start = position(&c, id);
     step(&mut c, &mut r, id, press(0.25));
-    // Two seconds: the playhead wraps in the quarter-beat roll, the ghost in the loop.
+    // Two seconds: the playhead wraps in the quarter-beat roll, snapped down to quarter
+    // beat 5 (27 562.5 to 33 075), the ghost in the loop.
     render(&mut r, 2 * SR as usize);
     let s = c.deck(id);
     assert!(s.loop_active);
     assert_eq!((s.loop_in, s.loop_out), (Some(loop_in), Some(loop_out)));
-    assert!((start..start + BEAT / 4.0).contains(&s.position_frames));
+    assert!((5.0 * BEAT / 4.0..6.0 * BEAT / 4.0).contains(&s.position_frames));
     let expected = loop_in + (start + 1.0 + 2.0 * f64::from(SR) - loop_in) % (4.0 * BEAT);
     assert_eq!(ghost(&c, id), expected);
     step(&mut c, &mut r, id, release(0.25));
@@ -387,7 +418,8 @@ fn phase_sync_during_a_roll_keeps_the_normal_loop() {
         (deck, DeckCommand::Play),
         (deck, DeckCommand::AutoLoop),
         (deck, DeckCommand::Seek(7.5 * BEAT)),
-        (deck, press(2.0)),
+        // A 16-beat roll snaps to beats 0 to 16, so it reaches past loop-out.
+        (deck, press(16.0)),
     ] {
         c.send(Command::Deck(id, cmd)).unwrap();
     }

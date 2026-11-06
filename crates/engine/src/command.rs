@@ -93,12 +93,14 @@ pub enum DeckCommand {
         /// Signed distance in beats.
         beats: f64,
     },
-    /// Loop roll pad down: with a grid on a deck playing for real, loops `beats` beats from
-    /// the playhead (a *roll loop*, separate from the normal loop) and always slips. A
-    /// press while another roll or slice is held replaces it and keeps its ghost. Ignored
-    /// for a `beats` that is not finite and positive. While a roll or slice is held, the
-    /// normal loop's commands (`LoopIn` to `ReloopExit`) are ignored; ending it over a
-    /// slipped loop that is still active hands the ghost back to that loop.
+    /// Loop roll pad down: with a grid on a deck playing for real, loops `beats` beats (a
+    /// *roll loop*, separate from the normal loop) and always slips. The loop starts at the
+    /// playhead snapped down to a multiple of `beats` counted from the grid's first beat;
+    /// the playhead does not move and the ghost starts at it. A press while another roll or
+    /// slice is held replaces it and keeps its ghost. Ignored for a `beats` that is not
+    /// finite and positive. While a roll or slice is held, the normal loop's commands
+    /// (`LoopIn` to `ReloopExit`) are ignored; ending it over a slipped loop that is still
+    /// active hands the ghost back to that loop.
     RollPress {
         /// Roll length in beats.
         beats: f64,

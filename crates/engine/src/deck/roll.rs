@@ -8,8 +8,8 @@ use crate::Grid;
 
 /// Slicer pads, and so beats in a slicer block.
 pub(super) const SLICES: u8 = 8;
-/// Beats past which a playhead counts as on the next beat, so a position a rounding error
-/// short of a block boundary still lands in the new block.
+/// Beats (or roll lengths) past which a playhead counts as on the next one, so a position
+/// a rounding error short of a block or roll boundary still lands in the new one.
 const BEAT_EPSILON: f64 = 1e-6;
 
 /// The pad holding a roll loop.
@@ -33,7 +33,10 @@ pub(super) struct Roll {
 }
 
 impl Deck {
-    /// Starts a roll loop of `beats` beats at the playhead, replacing a held roll or slice.
+    /// Starts a roll loop of `beats` beats, replacing a held roll or slice. The loop starts
+    /// at the playhead snapped down to a multiple of its length counted from the grid's
+    /// first beat (a quantized roll); the playhead does not move and the ghost starts where
+    /// it is.
     pub(super) fn roll_press(&mut self, beats: f64) {
         let Some(grid) = self.roll_grid() else {
             return;
@@ -42,11 +45,13 @@ impl Deck {
         if !(length.is_finite() && length > 0.0) {
             return;
         }
+        let rolls = (self.position - grid.first_beat_frames) / length;
+        let start = grid.first_beat_frames + (rolls + BEAT_EPSILON).floor() * length;
         self.slip_begin(SlipOwner::Roll);
         self.roll = Some(Roll {
             pad: RollPad::Roll(beats),
-            start: self.position,
-            end: self.position + length.max(MIN_LOOP_FRAMES),
+            start,
+            end: start + length.max(MIN_LOOP_FRAMES),
         });
     }
 
