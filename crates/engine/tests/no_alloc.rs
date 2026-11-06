@@ -208,6 +208,18 @@ fn render_does_not_allocate() {
         DeckCommand::JogTouch(true),
         DeckCommand::JogTouch(false),
         DeckCommand::Play,
+        // Beat jumps: plain, clamped, ignored, with a loop and with a running ghost.
+        DeckCommand::BeatJump { beats: 4.0 },
+        DeckCommand::BeatJump { beats: -1000.0 },
+        DeckCommand::BeatJump { beats: f64::NAN },
+        DeckCommand::Seek(60_000.0),
+        DeckCommand::AutoLoop,
+        DeckCommand::BeatJump { beats: 2.0 },
+        DeckCommand::BeatJump { beats: -1000.0 },
+        DeckCommand::AutoLoop,
+        DeckCommand::BeatJump { beats: 1.0 },
+        DeckCommand::ReloopExit,
+        DeckCommand::ReloopExit,
     ] {
         c.send(Command::Deck(decks[0], cmd)).unwrap();
         render_blocks(10);

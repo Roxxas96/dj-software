@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+mod beat_jump;
 mod hotcue;
 mod jog;
 mod looping;
@@ -144,6 +145,7 @@ impl Deck {
             DeckCommand::LoopHalve => self.loop_resize(0.5),
             DeckCommand::LoopDouble => self.loop_resize(2.0),
             DeckCommand::ReloopExit => self.reloop_exit(),
+            DeckCommand::BeatJump { beats } => self.beat_jump(beats),
             DeckCommand::SetVinyl(on) => self.set_vinyl(on),
             DeckCommand::SetSlip(on) => self.set_slip(on),
             DeckCommand::JogTouch(touched) => self.jog_touch(touched),
