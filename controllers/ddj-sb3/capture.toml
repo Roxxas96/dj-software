@@ -1803,3 +1803,237 @@ messages = [
   { status = 0x91, data1 = 0x3F, first = 127, min = 0, max = 127 }, # NoteOn ch2 note 63
   { status = 0x96, data1 = 0x59, first = 127, min = 0, max = 127 }, # NoteOn ch7 note 89
 ]
+
+[[control]]
+id = "pads.left.beat_jump"
+kind = "pads"
+messages = [
+  { status = 0x97, data1 = 0x00, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 0
+  { status = 0x97, data1 = 0x01, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 1
+  { status = 0x97, data1 = 0x02, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 2
+  { status = 0x97, data1 = 0x03, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 3
+  { status = 0x97, data1 = 0x04, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 4
+  { status = 0x97, data1 = 0x05, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 5
+  { status = 0x97, data1 = 0x06, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 6
+  { status = 0x97, data1 = 0x07, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 7
+]
+led = false
+
+[[control]]
+id = "pads.left.beat_jump.shift"
+kind = "pads"
+messages = [
+  { status = 0x97, data1 = 0x08, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 8
+  { status = 0x97, data1 = 0x09, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 9
+  { status = 0x97, data1 = 0x0A, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 10
+  { status = 0x97, data1 = 0x0B, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 11
+  { status = 0x97, data1 = 0x0C, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 12
+  { status = 0x97, data1 = 0x0D, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 13
+  { status = 0x97, data1 = 0x0E, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 14
+  { status = 0x97, data1 = 0x0F, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 15
+]
+
+[[control]]
+id = "pads.left.loop_roll"
+kind = "pads"
+messages = [
+  { status = 0x97, data1 = 0x00, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 0
+  { status = 0x97, data1 = 0x01, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 1
+  { status = 0x97, data1 = 0x02, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 2
+  { status = 0x97, data1 = 0x03, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 3
+  { status = 0x97, data1 = 0x04, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 4
+  { status = 0x97, data1 = 0x05, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 5
+  { status = 0x97, data1 = 0x06, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 6
+  { status = 0x97, data1 = 0x07, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 7
+]
+led = false
+
+[[control]]
+id = "pads.left.loop_roll.shift"
+kind = "pads"
+messages = [
+  { status = 0x97, data1 = 0x08, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 8
+  { status = 0x97, data1 = 0x09, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 9
+  { status = 0x97, data1 = 0x0A, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 10
+  { status = 0x97, data1 = 0x0B, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 11
+  { status = 0x97, data1 = 0x0C, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 12
+  { status = 0x97, data1 = 0x0D, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 13
+  { status = 0x97, data1 = 0x0E, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 14
+  { status = 0x97, data1 = 0x0F, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 15
+]
+
+[[control]]
+id = "pads.left.slicer"
+kind = "pads"
+messages = [
+  { status = 0x97, data1 = 0x00, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 0
+  { status = 0x97, data1 = 0x01, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 1
+  { status = 0x97, data1 = 0x02, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 2
+  { status = 0x97, data1 = 0x03, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 3
+  { status = 0x97, data1 = 0x04, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 4
+  { status = 0x97, data1 = 0x05, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 5
+  { status = 0x97, data1 = 0x06, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 6
+  { status = 0x97, data1 = 0x07, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 7
+]
+led = false
+
+[[control]]
+id = "pads.left.slicer.shift"
+kind = "pads"
+messages = [
+  { status = 0x97, data1 = 0x08, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 8
+  { status = 0x97, data1 = 0x09, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 9
+  { status = 0x97, data1 = 0x0A, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 10
+  { status = 0x97, data1 = 0x0B, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 11
+  { status = 0x97, data1 = 0x0C, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 12
+  { status = 0x97, data1 = 0x0D, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 13
+  { status = 0x97, data1 = 0x0E, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 14
+  { status = 0x97, data1 = 0x0F, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 15
+]
+
+[[control]]
+id = "pads.left.trans"
+kind = "pads"
+messages = [
+  { status = 0x97, data1 = 0x70, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 112
+  { status = 0x97, data1 = 0x71, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 113
+  { status = 0x97, data1 = 0x72, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 114
+  { status = 0x97, data1 = 0x73, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 115
+  { status = 0x97, data1 = 0x74, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 116
+  { status = 0x97, data1 = 0x75, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 117
+  { status = 0x97, data1 = 0x76, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 118
+  { status = 0x97, data1 = 0x77, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 119
+]
+led = true
+led_values_vary = false
+
+[[control]]
+id = "pads.left.sampler.shift"
+kind = "pads"
+messages = [
+  { status = 0x97, data1 = 0x30, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 48
+  { status = 0x97, data1 = 0x31, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 49
+  { status = 0x97, data1 = 0x32, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 50
+  { status = 0x97, data1 = 0x33, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 51
+  { status = 0x97, data1 = 0x34, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 52
+  { status = 0x97, data1 = 0x35, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 53
+  { status = 0x97, data1 = 0x36, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 54
+  { status = 0x97, data1 = 0x37, first = 127, min = 0, max = 127 }, # NoteOn ch8 note 55
+]
+
+[[control]]
+id = "pads.right.beat_jump"
+kind = "pads"
+messages = [
+  { status = 0x98, data1 = 0x30, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 48
+  { status = 0x98, data1 = 0x31, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 49
+  { status = 0x98, data1 = 0x32, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 50
+  { status = 0x98, data1 = 0x33, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 51
+  { status = 0x98, data1 = 0x34, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 52
+  { status = 0x98, data1 = 0x35, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 53
+  { status = 0x98, data1 = 0x36, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 54
+  { status = 0x98, data1 = 0x37, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 55
+]
+led = false
+
+[[control]]
+id = "pads.right.beat_jump.shift"
+kind = "pads"
+messages = [
+  { status = 0x98, data1 = 0x38, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 56
+  { status = 0x98, data1 = 0x39, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 57
+  { status = 0x98, data1 = 0x3A, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 58
+  { status = 0x98, data1 = 0x3B, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 59
+  { status = 0x98, data1 = 0x3C, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 60
+  { status = 0x98, data1 = 0x3D, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 61
+  { status = 0x98, data1 = 0x3E, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 62
+  { status = 0x98, data1 = 0x3F, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 63
+]
+
+[[control]]
+id = "pads.right.loop_roll"
+kind = "pads"
+messages = [
+  { status = 0x98, data1 = 0x30, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 48
+  { status = 0x98, data1 = 0x31, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 49
+  { status = 0x98, data1 = 0x32, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 50
+  { status = 0x98, data1 = 0x33, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 51
+  { status = 0x98, data1 = 0x34, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 52
+  { status = 0x98, data1 = 0x35, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 53
+  { status = 0x98, data1 = 0x36, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 54
+  { status = 0x98, data1 = 0x37, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 55
+]
+led = false
+
+[[control]]
+id = "pads.right.loop_roll.shift"
+kind = "pads"
+messages = [
+  { status = 0x98, data1 = 0x38, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 56
+  { status = 0x98, data1 = 0x39, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 57
+  { status = 0x98, data1 = 0x3A, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 58
+  { status = 0x98, data1 = 0x3B, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 59
+  { status = 0x98, data1 = 0x3C, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 60
+  { status = 0x98, data1 = 0x3D, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 61
+  { status = 0x98, data1 = 0x3E, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 62
+  { status = 0x98, data1 = 0x3F, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 63
+]
+
+[[control]]
+id = "pads.right.slicer"
+kind = "pads"
+messages = [
+  { status = 0x98, data1 = 0x30, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 48
+  { status = 0x98, data1 = 0x31, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 49
+  { status = 0x98, data1 = 0x32, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 50
+  { status = 0x98, data1 = 0x33, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 51
+  { status = 0x98, data1 = 0x34, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 52
+  { status = 0x98, data1 = 0x35, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 53
+  { status = 0x98, data1 = 0x36, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 54
+  { status = 0x98, data1 = 0x37, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 55
+]
+led = false
+
+[[control]]
+id = "pads.right.slicer.shift"
+kind = "pads"
+messages = [
+  { status = 0x98, data1 = 0x38, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 56
+  { status = 0x98, data1 = 0x39, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 57
+  { status = 0x98, data1 = 0x3A, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 58
+  { status = 0x98, data1 = 0x3B, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 59
+  { status = 0x98, data1 = 0x3C, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 60
+  { status = 0x98, data1 = 0x3D, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 61
+  { status = 0x98, data1 = 0x3E, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 62
+  { status = 0x98, data1 = 0x3F, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 63
+]
+
+[[control]]
+id = "pads.right.trans"
+kind = "pads"
+messages = [
+  { status = 0x98, data1 = 0x70, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 112
+  { status = 0x98, data1 = 0x71, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 113
+  { status = 0x98, data1 = 0x72, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 114
+  { status = 0x98, data1 = 0x73, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 115
+  { status = 0x98, data1 = 0x74, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 116
+  { status = 0x98, data1 = 0x75, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 117
+  { status = 0x98, data1 = 0x76, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 118
+  { status = 0x98, data1 = 0x77, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 119
+]
+led = true
+led_values_vary = false
+
+[[control]]
+id = "pads.right.sampler.shift"
+kind = "pads"
+messages = [
+  { status = 0x98, data1 = 0x38, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 56
+  { status = 0x98, data1 = 0x39, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 57
+  { status = 0x98, data1 = 0x3A, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 58
+  { status = 0x98, data1 = 0x3B, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 59
+  { status = 0x98, data1 = 0x3C, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 60
+  { status = 0x98, data1 = 0x3D, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 61
+  { status = 0x98, data1 = 0x3E, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 62
+  { status = 0x98, data1 = 0x3F, first = 127, min = 0, max = 127 }, # NoteOn ch9 note 63
+]

@@ -124,6 +124,33 @@ The capture tells the builder whether the firmware modes reuse the normal contro
 - **Cross-platform.** Builds and tests run on macOS, Windows and Linux. CI has no audio or MIDI devices.
 - **Mapping and config errors** are reported at startup with the file, the key and the problem.
 
+## What the capture found (2026-11-06)
+
+**The SHIFT pad modes are tracked in software.**
+- The SB3 sends SHIFT + HOT CUE (`90 69`), SHIFT + FX FADE (`6B`) and SHIFT + PAD SCRATCH (`6D`), with the right side on channel 2. Its pads keep sending the notes of the last unshifted mode, and its mode lights do not change.
+- The SB3 ignored everything sent to it in our tests:
+  - the initialization SysEx Mixxx sends (`F0 00 20 7F 03 01 F7`);
+  - mode-light replies;
+  - the PLAY and CUE lights.
+
+  Only the headphone MASTER light responds.
+- The owner checked VirtualDJ: SHIFT + HOT CUE, FX FADE or PAD SCRATCH does not blink there either. VirtualDJ switches the mode in its own window.
+- So the app does what VirtualDJ does:
+  - each side remembers its pad mode from the mode buttons;
+  - the pad notes of the current hardware mode are read through that remembered mode;
+  - mapping bindings get a pad-mode condition.
+
+**Caveat (documented for the owner):** if a side was in FX FADE or PAD SCRATCH before a SHIFT mode was chosen, the SB3 keeps running its own routine on those pads. The safe habit is to pick HOT CUE or SAMPLER first, then the SHIFT mode.
+
+**TRANS (SHIFT + SAMPLER) is a real hardware mode.** Its pads send notes `0x70`-`0x77` (left `0x97`, right `0x98`).
+
+**The firmware modes reuse normal controls** (`controllers/ddj-sb3/firmware-modes.txt`, condensed from a raw recording made with a track playing):
+- FX FADE moves the channel's filter (`B6 17/37` left) and fader (`B0 13/33`).
+- TRANS cuts the channel fader.
+- PAD SCRATCH sends jog touch (`90 36`), a jog CC `B0 22` that is not bound yet, and HOT CUE pad notes as its start points.
+
+**SHIFT + pads in SAMPLER mode** send `0x38`-`0x3F`; their unshifted notes are `0x30`-`0x37`.
+
 ## Settled after the builder check (my calls)
 
 - **The capture is plan 5's first step.** Engine work (config, sampler, beat jump, roll, slicer, slip) can start without it. The bindings for the SHIFT pad modes and SHIFT + pads are written only once the capture exists: their note numbers are not known yet.
