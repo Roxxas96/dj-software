@@ -1753,6 +1753,73 @@ fn held_roll_and_slice_release_on_the_pressed_deck() {
 }
 
 #[test]
+fn roll_or_slice_released_after_a_mode_change_with_shift_still_ends() {
+    for (mode, id) in [
+        (PadMode::LoopRoll, "pads.left.loop_roll"),
+        (PadMode::Slicer, "pads.left.slicer"),
+    ] {
+        let mut rig = Rig::attached();
+        play_from(&mut rig, 1, 100_000.0);
+        set_mode(&mut rig, Side::Left, mode);
+        rig.pad(id, 4, 127);
+        assert!(rig.engine.deck(d(1)).roll_active, "{id}");
+
+        // SHIFT + HOT CUE switches the side to beat jump while the pad is held; the pad
+        // then sends its note-off on the shifted note, where only the beat jump binding's
+        // condition holds. The held press still gets its release.
+        rig.button("deck1.shift", 127);
+        rig.press("deck1.mode_hot_cue.shift");
+        assert_eq!(
+            rig.runtime.state().side(Side::Left).pad_mode,
+            PadMode::BeatJump
+        );
+        let before = rig.engine.deck(d(1)).position_frames;
+        rig.pad(&format!("{id}.shift"), 4, 0);
+        rig.button("deck1.shift", 0);
+        let snap = rig.engine.deck(d(1));
+        assert!(!snap.roll_active, "{id}: the hold ended");
+        assert!(
+            snap.position_frames > before,
+            "{id}: slipped back, no beat jump backwards"
+        );
+    }
+}
+
+#[test]
+fn roll_or_slice_released_on_the_shifted_sibling_after_a_deck_switch() {
+    for (mode, id) in [
+        (PadMode::LoopRoll, "pads.left.loop_roll"),
+        (PadMode::Slicer, "pads.left.slicer"),
+    ] {
+        let mut rig = Rig::attached();
+        play_from(&mut rig, 1, 100_000.0);
+        set_mode(&mut rig, Side::Left, mode);
+        rig.pad(id, 4, 127);
+        assert!(rig.engine.deck(d(1)).roll_active, "{id}");
+        let deck3_before = rig.engine.deck(d(3));
+
+        // DECK moves the side to deck 3, then SHIFT + HOT CUE switches it to beat jump and
+        // the pad is released with SHIFT down: the release is deck 1's, and deck 3 gets
+        // neither a release nor a beat jump.
+        rig.press("deck1.deck_select");
+        assert_eq!(rig.runtime.state().side(Side::Left).active_deck, d(3));
+        rig.button("deck1.shift", 127);
+        rig.press("deck1.mode_hot_cue.shift");
+        rig.pad(&format!("{id}.shift"), 4, 0);
+        rig.button("deck1.shift", 0);
+        assert!(
+            !rig.engine.deck(d(1)).roll_active,
+            "{id}: deck 1 slipped back"
+        );
+        assert_eq!(
+            rig.engine.deck(d(3)),
+            deck3_before,
+            "{id}: deck 3 is unchanged"
+        );
+    }
+}
+
+#[test]
 fn sampler_pads_play_and_shift_stops() {
     let mut rig = Rig::attached();
     for i in 0..8 {
