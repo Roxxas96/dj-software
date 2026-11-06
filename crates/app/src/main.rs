@@ -57,6 +57,9 @@ enum MidiCommand {
         /// `ddj-sb3`, or a mapping file); the port comes from the mapping
         #[arg(long, value_name = "NAME|PATH", conflicts_with = "port")]
         controller: Option<String>,
+        /// Show every message as raw hex bytes, SysEx and clock included
+        #[arg(long, conflicts_with = "controller")]
+        raw: bool,
     },
     /// Guided capture of every control's MIDI messages into a TOML fixture
     Capture {
@@ -127,8 +130,13 @@ fn main() -> ExitCode {
         }
         Sub::Library(args) => library_cmd::run(&args),
         Sub::Midi(MidiCommand::Ports) => midi_cmd::ports(),
-        Sub::Midi(MidiCommand::Monitor { port, controller }) => match controller {
+        Sub::Midi(MidiCommand::Monitor {
+            port,
+            controller,
+            raw,
+        }) => match controller {
             Some(controller) => midi_cmd::monitor_controller(&controller),
+            None if raw => midi_cmd::monitor_raw(port.as_deref()),
             None => midi_cmd::monitor(port.as_deref()),
         },
         Sub::Midi(MidiCommand::Capture {
@@ -225,7 +233,9 @@ mod tests {
             .unwrap()
             .command
         {
-            Sub::Midi(MidiCommand::Monitor { port, controller }) => {
+            Sub::Midi(MidiCommand::Monitor {
+                port, controller, ..
+            }) => {
                 assert_eq!(port.as_deref(), Some("DDJ"));
                 assert_eq!(controller, None);
             }
@@ -235,7 +245,8 @@ mod tests {
             parse(&["open-jockey", "midi", "monitor"]).unwrap().command,
             Sub::Midi(MidiCommand::Monitor {
                 port: None,
-                controller: None
+                controller: None,
+                raw: false
             })
         ));
     }
@@ -273,7 +284,9 @@ mod tests {
             .unwrap()
             .command
         {
-            Sub::Midi(MidiCommand::Monitor { port, controller }) => {
+            Sub::Midi(MidiCommand::Monitor {
+                port, controller, ..
+            }) => {
                 assert_eq!(port, None);
                 assert_eq!(controller.as_deref(), Some("ddj-sb3"));
             }

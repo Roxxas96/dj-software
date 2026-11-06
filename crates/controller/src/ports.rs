@@ -113,6 +113,44 @@ pub fn open_input(name_contains: &str, tx: Sender<TimedMidi>) -> Result<InputPor
     })
 }
 
+/// Opens the first input whose name contains `name_contains`, like [`open_input`], but
+/// forwards every message as raw bytes, SysEx, clock and active sensing included.
+/// For exploring a controller; regular code uses [`open_input`].
+pub fn open_raw_input(
+    name_contains: &str,
+    tx: Sender<(u64, Vec<u8>)>,
+) -> Result<InputPort, PortError> {
+    let mut input = MidiInput::new(CLIENT_NAME).map_err(backend)?;
+    input.ignore(Ignore::None);
+    let ports = input.ports();
+    let names = ports
+        .iter()
+        .map(|p| input.port_name(p).map_err(backend))
+        .collect::<Result<Vec<_>, _>>()?;
+    let Some(i) = find_match(&names, name_contains) else {
+        return Err(PortError::NotFound {
+            kind: "input",
+            wanted: name_contains.to_owned(),
+            available: names,
+        });
+    };
+    let name = names[i].clone();
+    let connection = input
+        .connect(
+            &ports[i],
+            "open-jockey-raw-in",
+            move |_backend_micros, bytes, _| {
+                let _ = tx.send((clock::now_micros(), bytes.to_vec()));
+            },
+            (),
+        )
+        .map_err(backend)?;
+    Ok(InputPort {
+        _connection: connection,
+        name,
+    })
+}
+
 /// An open MIDI output.
 pub struct OutputPort {
     connection: MidiOutputConnection,
