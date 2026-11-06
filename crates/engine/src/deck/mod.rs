@@ -114,6 +114,7 @@ impl Deck {
             }
             DeckCommand::SetTempoRange(range) => self.tempo_range = range,
             DeckCommand::Seek(frames) if frames.is_finite() => {
+                self.slip_drop();
                 self.position = frames.clamp(0.0, self.frames() as f64);
                 self.exit_loop_if_outside(self.position);
                 self.pending_sync = None;
@@ -204,6 +205,7 @@ impl Deck {
         }
         if self.playing {
             if self.preview.is_none() {
+                self.slip_drop();
                 self.position = self.cue;
                 self.exit_loop_if_outside(self.cue);
                 self.playing = false;
@@ -227,6 +229,7 @@ impl Deck {
     fn end_preview(&mut self, point: f64) {
         self.preview = None;
         if !self.play_latched {
+            self.slip_drop();
             self.position = point;
             self.exit_loop_if_outside(point);
             self.playing = false;
@@ -311,6 +314,7 @@ impl Deck {
         let decay = (-1.0 / (jog::NUDGE_DECAY_SECONDS * f64::from(output_sample_rate))).exp();
         // The ghost moves at normal speed whenever the deck plays for real.
         let ghost_moves = self.plays_for_real();
+        let ghost_bounds = self.ghost_bounds();
 
         if let Some(mut pending) = self.scratch {
             // An empty track has no frame to scratch over.
@@ -324,7 +328,7 @@ impl Deck {
                 // The nudge bend keeps fading under the hand, as the ghost hears it.
                 if ghost_moves {
                     if let Some(ghost) = &mut self.ghost {
-                        slip::advance(ghost, rate * (1.0 + self.bend), end);
+                        slip::advance(ghost, ghost_bounds, rate * (1.0 + self.bend), end);
                     }
                     self.bend *= decay;
                 }
@@ -359,7 +363,7 @@ impl Deck {
             }
             add_frame(frame, track, self.position);
             if ghost_moves && let Some(ghost) = &mut self.ghost {
-                slip::advance(ghost, step, end);
+                slip::advance(ghost, ghost_bounds, step, end);
             }
             self.bend *= decay;
             self.position += step;

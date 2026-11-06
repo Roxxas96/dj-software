@@ -90,8 +90,10 @@ pub enum DeckCommand {
     /// normal loop (activation to exit) and a hotcue jump while playing (pad press to
     /// release, so the hotcue is momentary) end where the track would have been: a silent
     /// ghost playhead keeps moving at the deck's tempo, nudge included, and the playhead
-    /// returns to it. Turning slip off drops a running ghost and leaves the playhead where
-    /// it is. Off for a new deck and kept across loads; `Load` drops the ghost.
+    /// returns to it. A scratch slips only on a deck playing for real, and a deliberate jump
+    /// (seek, cue, search, a hotcue that does not slip) drops the ghost. Turning slip off
+    /// drops a running ghost and leaves the playhead where it is. Off for a new deck and
+    /// kept across loads; `Load` drops the ghost.
     SetSlip(bool),
     /// Jog wheel top touched or released. With vinyl on, a touch holds the record: normal
     /// motion stops and the deck follows the platter until release, which resumes playback

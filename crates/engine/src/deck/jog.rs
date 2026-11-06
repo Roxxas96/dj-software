@@ -38,14 +38,17 @@ impl Deck {
         self.start_scratch_if_held();
     }
 
-    /// A held top in vinyl mode holds the record where the playhead is. With slip on, the
-    /// scratch lasts as long as the hold and then returns to where the track would be.
+    /// A held top in vinyl mode holds the record where the playhead is. With slip on, a
+    /// scratch of a deck playing for real lasts as long as the hold and then returns to
+    /// where the track would be; a paused deck is positioned as without slip.
     fn start_scratch_if_held(&mut self) {
         if self.jog_touched && self.vinyl && self.track.is_some() {
             self.scratch = Some(0.0);
-            self.slip_begin_for(SlipOwner::Scratch);
+            if self.plays_for_real() {
+                self.slip_begin(SlipOwner::Scratch, false);
+            }
         } else {
-            self.slip_end_for(SlipOwner::Scratch);
+            self.slip_end(SlipOwner::Scratch);
         }
     }
 
@@ -80,8 +83,9 @@ impl Deck {
     }
 
     /// Moves the playhead by `frames`, clamped to the track, leaving a loop it lands
-    /// outside of.
+    /// outside of. A deliberate jump: it drops a running slip ghost.
     fn jump_by(&mut self, frames: f64) {
+        self.slip_drop();
         self.position = (self.position + frames).clamp(0.0, self.frames() as f64);
         self.exit_loop_if_outside(self.position);
     }
