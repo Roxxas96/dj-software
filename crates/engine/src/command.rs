@@ -94,7 +94,9 @@ pub enum DeckCommand {
     /// Loop roll pad down: with a grid on a deck playing for real, loops `beats` beats from
     /// the playhead (a *roll loop*, separate from the normal loop) and always slips. A
     /// press while another roll or slice is held replaces it and keeps its ghost. Ignored
-    /// for a `beats` that is not finite and positive.
+    /// for a `beats` that is not finite and positive. While a roll or slice is held, the
+    /// normal loop's commands (`LoopIn` to `ReloopExit`) are ignored; ending it over a
+    /// slipped loop that is still active hands the ghost back to that loop.
     RollPress {
         /// Roll length in beats.
         beats: f64,
@@ -109,7 +111,8 @@ pub enum DeckCommand {
     /// `block + slice` of the current 8-beat block (see
     /// [`DeckSnapshot::slicer_block_beat`](crate::DeckSnapshot::slicer_block_beat)) as a
     /// 1-beat roll loop, and always slips. A press while a slice is held moves the loop
-    /// to the new slice of the same block; any other press replaces a held roll.
+    /// to the new slice of the same block; any other press replaces a held roll. A slice
+    /// with no part inside the track is ignored.
     SlicePress(u8),
     /// Slicer pad up: ends the slice and returns to the ghost, but only if this slice is
     /// the one held.

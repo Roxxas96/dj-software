@@ -144,6 +144,14 @@ impl Deck {
             DeckCommand::SetHotcue(slot, Some(frames)) if frames.is_finite() => {
                 self.hotcue_set(slot, Some(frames));
             }
+            // A held roll or slice owns the playhead: the normal loop's buttons wait.
+            DeckCommand::LoopIn
+            | DeckCommand::LoopOut
+            | DeckCommand::AutoLoop
+            | DeckCommand::LoopHalve
+            | DeckCommand::LoopDouble
+            | DeckCommand::ReloopExit
+                if self.roll.is_some() => {}
             DeckCommand::LoopIn => self.loop_in_press(),
             DeckCommand::LoopOut => self.loop_out_press(),
             DeckCommand::AutoLoop => self.auto_loop(),
@@ -290,7 +298,8 @@ impl Deck {
 
     /// Moves the playhead by at most half a beat so that its beat position has the same
     /// fraction as `target_beats`. A move that lands outside the active loop exits the loop,
-    /// like any deliberate jump.
+    /// like any deliberate jump; during a roll the check is on the ghost, which the loop
+    /// holds then.
     pub(crate) fn align_phase(&mut self, target_beats: f64) {
         let Some(grid) = self.grid else {
             return;
@@ -302,7 +311,12 @@ impl Deck {
         }
         self.position =
             (self.position + beats * grid.beat_period_frames).clamp(0.0, self.frames() as f64);
-        self.exit_loop_if_outside(self.position);
+        // During a roll the normal loop holds the ghost, not the playhead.
+        let held = match self.ghost_frames() {
+            Some(ghost) if self.roll.is_some() => ghost,
+            _ => self.position,
+        };
+        self.exit_loop_if_outside(held);
     }
 
     fn frames(&self) -> usize {

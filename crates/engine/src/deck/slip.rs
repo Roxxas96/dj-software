@@ -11,6 +11,8 @@ pub(super) struct Ghost {
     pub(super) position: f64,
     /// The action the ghost belongs to; only its end returns to the ghost.
     pub(super) owner: SlipOwner,
+    /// The owner a roll or slice took the ghost over from, if it was not a roll or slice.
+    pub(super) prior: Option<SlipOwner>,
     /// The ghost wraps in the active normal loop: one was active when it began and has
     /// not been exited since. A loop exited during the slip is gone for the ghost too.
     pub(super) wraps: bool,
@@ -55,6 +57,9 @@ impl Deck {
         let forced = owner.forced();
         if let Some(ghost) = &mut self.ghost {
             if forced {
+                if !ghost.owner.forced() {
+                    ghost.prior = Some(ghost.owner);
+                }
                 ghost.owner = owner;
             }
             return forced;
@@ -65,18 +70,32 @@ impl Deck {
         self.ghost = Some(Ghost {
             position: self.position,
             owner,
+            prior: None,
             wraps: self.active_loop().is_some(),
         });
         true
     }
 
     /// If `owner` holds the ghost, moves the playhead to it and drops it. Loops are left as
-    /// they are: a ghost that wraps already lives in the active loop.
+    /// they are: a ghost that wraps already lives in the active loop. A roll or slice that
+    /// took the ghost over from a slipped loop that is still active hands it back instead,
+    /// and the playhead lands in the loop where the looping playhead would be.
     pub(super) fn slip_end(&mut self, owner: SlipOwner) {
-        if self.ghost.is_some_and(|g| g.owner == owner) {
-            if let Some(position) = self.ghost_frames() {
-                self.position = position;
-            }
+        let Some(ghost) = self.ghost.filter(|g| g.owner == owner) else {
+            return;
+        };
+        let Some(position) = self.ghost_frames() else {
+            return;
+        };
+        if ghost.prior == Some(SlipOwner::Loop) && self.loop_active {
+            self.position = looping::wrap_position(position, self.active_loop(), 1.0);
+            self.ghost = Some(Ghost {
+                owner: SlipOwner::Loop,
+                prior: None,
+                ..ghost
+            });
+        } else {
+            self.position = position;
             self.ghost = None;
         }
     }
