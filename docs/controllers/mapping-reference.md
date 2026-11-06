@@ -105,6 +105,27 @@ Exactly one of these, plus `channel` (1-16):
 | `{ channel = 1, cc = 0x0D }` | Control change with that controller number. |
 | `{ channel = 7, cc14 = [0x08, 0x28] }` | A 14-bit control change: the first number carries the high 7 bits, the second the low 7 bits. Gives finer steps than a plain `cc`. |
 | `{ channel = 1, pitchbend = true }` | Pitch bend (14-bit). |
+| `{ channel = 8, notes = [0x00, 0x07] }` | A range of notes, first to last inclusive (`[[input]]` only). See below. |
+
+##### Note ranges
+
+A `notes` range stands for one `[[input]]` per note, in order, and is expanded when the
+file loads. Every key of the binding is copied unchanged to each one, except that `{n}`
+in the `action` is replaced by the position in the range, counting from 1:
+
+```toml
+[[input]]
+midi = { channel = 8, notes = [0x00, 0x07] }
+action = "deck.loop_roll_{n}"     # deck.loop_roll_1 on note 0x00 ... deck.loop_roll_8 on 0x07
+side = "left"
+pad_mode = "loop_roll"
+```
+
+The expanded bindings take the range's place in the file, in note order. `notes` can't be
+combined with `note`, `cc`, `cc14` or `pitchbend`, and `{n}` is only allowed in a binding
+with `notes`. A reversed range, a note outside 0-127 and an expanded action id that does
+not exist are load errors; an error in an expanded binding is reported as
+`input[3] (note 0x05)`, with the position of the `[[input]]` in the file.
 
 #### Value kinds
 

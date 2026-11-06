@@ -146,7 +146,8 @@ pub fn parse_mapping(name: &str, text: &str) -> Result<Mapping, MappingError> {
             ))),
         })
         .transpose()?;
-    let inputs = each(raw.input, "input", input_binding).map_err(error)?;
+    let inputs =
+        read_all(expand_note_ranges(raw.input).map_err(error)?, input_binding).map_err(error)?;
     let uses_jog = inputs.iter().any(|binding| {
         matches!(
             binding.kind,
@@ -182,17 +183,103 @@ fn each<R, T>(
 where
     R: for<'de> Deserialize<'de>,
 {
-    values
+    let labeled = values
         .into_iter()
         .enumerate()
-        .map(|(i, value)| {
+        .map(|(i, value)| (format!("{what}[{i}]"), value))
+        .collect();
+    read_all(labeled, validate)
+}
+
+/// Reads and validates bindings that already carry their error label.
+fn read_all<R, T>(
+    values: Vec<(String, toml::Value)>,
+    validate: impl Fn(R) -> Result<T, String>,
+) -> Result<Vec<T>, String>
+where
+    R: for<'de> Deserialize<'de>,
+{
+    values
+        .into_iter()
+        .map(|(label, value)| {
             value
                 .try_into::<R>()
                 .map_err(|e| e.to_string().trim_end().to_owned())
                 .and_then(&validate)
-                .map_err(|e| format!("{what}[{i}]: {e}"))
+                .map_err(|e| format!("{label}: {e}"))
         })
         .collect()
+}
+
+/// The most notes a `notes` range can span.
+const MAX_RANGE_NOTES: i64 = 128;
+
+/// Expands every `midi = { notes = [first, last] }` binding into one binding per note, in
+/// order, replacing `{n}` in the action id with 1..=count. The result is labeled for errors:
+/// `input[i]`, or `input[i] (note 0x03)` for an expanded binding.
+fn expand_note_ranges(values: Vec<toml::Value>) -> Result<Vec<(String, toml::Value)>, String> {
+    let mut expanded = Vec::with_capacity(values.len());
+    for (i, value) in values.into_iter().enumerate() {
+        let label = format!("input[{i}]");
+        let has_notes = value.get("midi").is_some_and(|m| m.get("notes").is_some());
+        let action_has_n = value
+            .get("action")
+            .and_then(toml::Value::as_str)
+            .is_some_and(|action| action.contains("{n}"));
+        if !has_notes {
+            if action_has_n {
+                return Err(format!("{label}: `{{n}}` in the action needs `midi.notes`"));
+            }
+            expanded.push((label, value));
+            continue;
+        }
+        let fail = |problem: String| format!("{label}: {problem}");
+        let mut table = value;
+        let midi = table
+            .get_mut("midi")
+            .and_then(toml::Value::as_table_mut)
+            .ok_or_else(|| fail("`midi` must be a table".into()))?;
+        let notes = midi.remove("notes").expect("checked above");
+        if ["note", "cc", "cc14", "pitchbend"]
+            .iter()
+            .any(|key| midi.contains_key(*key))
+        {
+            return Err(fail(
+                "`notes` can't be combined with `note`, `cc`, `cc14` or `pitchbend`".into(),
+            ));
+        }
+        let ends = notes
+            .as_array()
+            .filter(|a| a.len() == 2)
+            .and_then(|a| Some([a[0].as_integer()?, a[1].as_integer()?]))
+            .ok_or_else(|| fail("`notes` takes two integers, [first, last]".into()))?;
+        let first = midi_number("notes first", ends[0]).map_err(fail)?;
+        let last = midi_number("notes last", ends[1]).map_err(fail)?;
+        if first > last {
+            return Err(fail(format!(
+                "notes range 0x{first:02X}-0x{last:02X} is reversed"
+            )));
+        }
+        let count = i64::from(last) - i64::from(first) + 1;
+        if count > MAX_RANGE_NOTES {
+            return Err(fail(format!(
+                "notes range spans {count} notes, more than {MAX_RANGE_NOTES}"
+            )));
+        }
+        for (n, note) in (1..).zip(first..=last) {
+            let mut binding = table.clone();
+            binding["midi"]
+                .as_table_mut()
+                .expect("checked above")
+                .insert("note".to_owned(), toml::Value::Integer(i64::from(note)));
+            if let Some(action) = binding.get("action").and_then(toml::Value::as_str) {
+                let action = action.replace("{n}", &n.to_string());
+                binding["action"] = toml::Value::String(action);
+            }
+            expanded.push((format!("{label} (note 0x{note:02X})"), binding));
+        }
+    }
+    Ok(expanded)
 }
 
 #[derive(Deserialize)]
