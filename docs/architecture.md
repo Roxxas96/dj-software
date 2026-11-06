@@ -110,8 +110,10 @@ renderer, before it moves to the audio thread. For a block of `n` output frames 
 reads `n × tempo × (1 + nudge bend)` source frames (rounded, the remainder carried to the
 next block) at the original pitch through the same reader as the normal path, so loops,
 rolls and the slip ghost wrap as usual, and the playhead advances by exactly those frames.
-Scratching, a paused deck and the original tempo (within 1e-4) play resampled, without
-the stretcher. After a discontinuity (a jump of any kind, a load, a slip return, a change
+Scratching, a paused deck and the original tempo (a tempo ratio within 1e-4 of 1) play
+resampled, without the stretcher. The nudge bend never decides the path: it bends
+whichever one runs (at the original tempo the resampled step, so a nudge there bends the
+pitch briefly, as on vinyl), so a nudge never restarts the stretcher. After a discontinuity (a jump of any kind, a load, a slip return, a change
 of the loop or roll the playhead wraps in, keylock switched on, or a switch from the
 resampled path) the stretcher is reset, fed `input_latency` frames from the playhead with
 `seek`, and its output latency is rendered and discarded, so the next block starts at the
@@ -122,11 +124,17 @@ about its input latency plus its output latency of source ahead of what is heard
 what is heard is at the playhead; a later tempo change lets them drift apart by up to the
 output latency (about 90 ms) times the change in tempo ratio, about 9 ms for a 10 % move.
 A restart costs about one millisecond of the audio callback.
+`crates/engine/tests/no_alloc.rs` only sees Rust allocations; the C++ Signalsmith
+stretcher is trusted on its documented real-time behavior: it allocates only when
+constructed, never in `process`, `seek` or `reset`.
 
 **Effects.** Every channel has three effect slots (`ChannelCommand::FxEnabled`) sharing one
 amount (`ChannelCommand::FxAmount`); the effect in each slot is a master setting
 (`MasterCommand::FxSlot`, an `EffectKind`), which `play` sends at startup from `[fx] slots`
-in `config.toml`. The actions `deck.fx_toggle_1` to `_3` and `deck.fx_level` drive the
+in `config.toml`. Echo and reverb follow a DJ mixer's dry/wet curve (dry
+`min(1, 2(1 − a))`, wet `min(1, 2a)`: the dry stays at unity up to mid amount), the
+flanger crossfades by the amount, and the filter's amount is its cutoff. The actions
+`deck.fx_toggle_1` to `_3` and `deck.fx_level` drive the
 side's deck, and `deck.keylock_toggle` flips `DeckCommand::SetKeylock` from the snapshot.
 The app tracks the slots it switched in `DeckControl::fx_on` and the amount in
 `DeckControl::fx_level` (the soft takeover value).
