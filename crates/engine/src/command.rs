@@ -83,6 +83,14 @@ pub enum DeckCommand {
     LoopDouble,
     /// Exits an active loop. Otherwise, with both points set, jumps to loop-in and loops.
     ReloopExit,
+    /// Jumps the playhead by `beats` beats of the grid (negative goes back), clamped to the
+    /// track. An active normal loop moves with it while it stays inside the track, else it
+    /// is exited; a running slip ghost moves by the same amount; a pending phase sync is
+    /// dropped. Ignored without a grid or for a non-finite `beats`.
+    BeatJump {
+        /// Signed distance in beats.
+        beats: f64,
+    },
     /// Turns vinyl mode on or off: with it on, touching the jog wheel's top scratches. On
     /// for a new deck and kept across loads.
     SetVinyl(bool),
