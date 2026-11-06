@@ -3,6 +3,7 @@ use std::sync::Arc;
 mod hotcue;
 mod jog;
 mod looping;
+mod slip;
 
 use crate::{DeckCommand, DeckId, DeckSnapshot, Grid, HOTCUES, TempoRange, TrackBuffer};
 
@@ -38,6 +39,11 @@ pub(crate) struct Deck {
     bend: f64,
     /// A phase sync waiting for this deck to play: the master and the beat ratio.
     pending_sync: Option<(DeckId, f64)>,
+    /// Scratches, loops and hotcue jumps return to where the track would be. Kept across
+    /// loads.
+    slip: bool,
+    /// Where the track would be without the slipping action, while one lasts.
+    ghost: Option<slip::Ghost>,
     /// How many `Load`s were applied.
     load_seq: u64,
 }
@@ -64,6 +70,8 @@ impl Default for Deck {
             scratch: None,
             bend: 0.0,
             pending_sync: None,
+            slip: false,
+            ghost: None,
             load_seq: 0,
         }
     }
@@ -136,6 +144,7 @@ impl Deck {
             DeckCommand::LoopDouble => self.loop_resize(2.0),
             DeckCommand::ReloopExit => self.reloop_exit(),
             DeckCommand::SetVinyl(on) => self.set_vinyl(on),
+            DeckCommand::SetSlip(on) => self.set_slip(on),
             DeckCommand::JogTouch(touched) => self.jog_touch(touched),
             DeckCommand::Jog { turns, surface } if turns.is_finite() => self.jog(turns, surface),
             DeckCommand::JogSearch { turns } if turns.is_finite() => self.jog_search(turns),
@@ -165,6 +174,7 @@ impl Deck {
         self.scratch = None;
         self.bend = 0.0;
         self.pending_sync = None;
+        self.ghost = None;
     }
 
     fn play(&mut self) {
@@ -296,6 +306,11 @@ impl Deck {
         };
         let end = track.frames() as f64;
         let frames = out.as_chunks_mut::<2>().0;
+        let rate =
+            self.tempo_ratio() * f64::from(track.sample_rate()) / f64::from(output_sample_rate);
+        let decay = (-1.0 / (jog::NUDGE_DECAY_SECONDS * f64::from(output_sample_rate))).exp();
+        // The ghost moves at normal speed whenever the deck plays for real.
+        let ghost_moves = self.plays_for_real();
 
         if let Some(mut pending) = self.scratch {
             // An empty track has no frame to scratch over.
@@ -306,6 +321,13 @@ impl Deck {
             // and holds at the ends instead of pausing. A record held still is silent.
             let lag = jog::SCRATCH_LAG_SECONDS * f64::from(output_sample_rate);
             for frame in frames {
+                // The nudge bend keeps fading under the hand, as the ghost hears it.
+                if ghost_moves {
+                    if let Some(ghost) = &mut self.ghost {
+                        slip::advance(ghost, rate * (1.0 + self.bend), end);
+                    }
+                    self.bend *= decay;
+                }
                 let speed = (pending / lag).clamp(-jog::SCRATCH_MAX_SPEED, jog::SCRATCH_MAX_SPEED);
                 if speed.abs() >= jog::SCRATCH_STILL_SPEED {
                     add_frame(frame, track, self.position);
@@ -325,9 +347,6 @@ impl Deck {
         if self.tempo_ratio() <= 0.0 {
             return;
         }
-        let rate =
-            self.tempo_ratio() * f64::from(track.sample_rate()) / f64::from(output_sample_rate);
-        let decay = (-1.0 / (jog::NUDGE_DECAY_SECONDS * f64::from(output_sample_rate))).exp();
         let bounds = self.active_loop();
 
         for frame in frames {
@@ -339,6 +358,9 @@ impl Deck {
                 return;
             }
             add_frame(frame, track, self.position);
+            if ghost_moves && let Some(ghost) = &mut self.ghost {
+                slip::advance(ghost, step, end);
+            }
             self.bend *= decay;
             self.position += step;
         }
@@ -362,6 +384,8 @@ impl Deck {
             loop_beats: self.loop_beats,
             vinyl: self.vinyl,
             jog_touched: self.jog_touched,
+            slip: self.slip,
+            ghost_frames: self.ghost_frames(),
             load_seq: self.load_seq,
         }
     }

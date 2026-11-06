@@ -168,6 +168,34 @@ fn render_does_not_allocate() {
         DeckCommand::JogSearch { turns: -0.05 },
         DeckCommand::SetVinyl(false),
         DeckCommand::SetVinyl(true),
+        // Slip on a playing deck: a scratch, a loop and a hotcue each return to the ghost.
+        DeckCommand::Play,
+        DeckCommand::SetSlip(true),
+        DeckCommand::JogTouch(true),
+        DeckCommand::Jog {
+            turns: -0.3,
+            surface: JogSurface::Top,
+        },
+        DeckCommand::JogTouch(false),
+        DeckCommand::AutoLoop,
+        DeckCommand::JogTouch(true),
+        DeckCommand::JogTouch(false),
+        DeckCommand::LoopHalve,
+        DeckCommand::AutoLoop,
+        DeckCommand::SetHotcue(slot(4), Some(3000.0)),
+        DeckCommand::HotcuePress(slot(4)),
+        DeckCommand::Jog {
+            turns: 0.1,
+            surface: JogSurface::Ring,
+        },
+        DeckCommand::HotcueRelease(slot(4)),
+        DeckCommand::LoopIn,
+        DeckCommand::LoopOut,
+        DeckCommand::ReloopExit,
+        DeckCommand::ReloopExit,
+        DeckCommand::JogTouch(true),
+        DeckCommand::SetSlip(false),
+        DeckCommand::JogTouch(false),
     ] {
         c.send(Command::Deck(decks[0], cmd)).unwrap();
         render_blocks(10);

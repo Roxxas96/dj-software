@@ -86,6 +86,13 @@ pub enum DeckCommand {
     /// Turns vinyl mode on or off: with it on, touching the jog wheel's top scratches. On
     /// for a new deck and kept across loads.
     SetVinyl(bool),
+    /// Turns slip mode on or off. While it is on, a scratch (vinyl touch to release), a
+    /// normal loop (activation to exit) and a hotcue jump while playing (pad press to
+    /// release, so the hotcue is momentary) end where the track would have been: a silent
+    /// ghost playhead keeps moving at the deck's tempo, nudge included, and the playhead
+    /// returns to it. Turning slip off drops a running ghost and leaves the playhead where
+    /// it is. Off for a new deck and kept across loads; `Load` drops the ghost.
+    SetSlip(bool),
     /// Jog wheel top touched or released. With vinyl on, a touch holds the record: normal
     /// motion stops and the deck follows the platter until release, which resumes playback
     /// if the deck is playing.
