@@ -203,3 +203,61 @@ fn play_latched_during_a_preview_resolves_the_sync() {
     assert!(c.deck(deck).playing);
     assert!(phase_error(&c, deck, master, 1.0) < 1e-6);
 }
+
+#[test]
+fn slipped_loop_returns_in_phase_after_a_sync() {
+    let (mut c, mut r, master, deck) = setup(grid());
+    send(&mut c, deck, DeckCommand::SetSlip(true));
+    send(&mut c, deck, DeckCommand::Play);
+    send(&mut c, deck, DeckCommand::AutoLoop);
+    render(&mut r, BLOCK);
+    assert!(c.deck(deck).ghost_frames.is_some(), "the loop slips");
+    sync(&mut c, deck, master, 1.0);
+    render(&mut r, BLOCK);
+    assert!(c.deck(deck).loop_active, "the sync stays inside the loop");
+
+    // Exiting returns to the ghost, which the sync moved along with the playhead.
+    send(&mut c, deck, DeckCommand::AutoLoop);
+    render(&mut r, BLOCK);
+    assert!(!c.deck(deck).loop_active);
+    assert!(c.deck(deck).ghost_frames.is_none());
+    let error = phase_error(&c, deck, master, 1.0);
+    assert!(error < 1e-6, "phase error {error}");
+}
+
+#[test]
+fn pending_sync_moves_the_slip_ghost_too() {
+    let (mut c, mut r, master, deck) = setup(grid());
+    send(&mut c, deck, DeckCommand::SetSlip(true));
+    send(&mut c, deck, DeckCommand::AutoLoop);
+    sync(&mut c, deck, master, 1.0);
+    render(&mut r, BLOCK);
+    assert!(c.deck(deck).ghost_frames.is_some(), "the loop slips");
+
+    // The sync waits for PLAY, then aligns the playhead and the ghost.
+    send(&mut c, deck, DeckCommand::Play);
+    render(&mut r, BLOCK);
+    send(&mut c, deck, DeckCommand::AutoLoop);
+    render(&mut r, BLOCK);
+    assert!(c.deck(deck).ghost_frames.is_none());
+    let error = phase_error(&c, deck, master, 1.0);
+    assert!(error < 1e-6, "phase error {error}");
+}
+
+#[test]
+fn held_roll_returns_in_phase_after_a_sync() {
+    let (mut c, mut r, master, deck) = setup(grid());
+    send(&mut c, deck, DeckCommand::Play);
+    render(&mut r, BLOCK);
+    send(&mut c, deck, DeckCommand::RollPress { beats: 1.0 });
+    render(&mut r, BLOCK);
+    assert!(c.deck(deck).roll_active);
+    sync(&mut c, deck, master, 1.0);
+    render(&mut r, BLOCK);
+
+    send(&mut c, deck, DeckCommand::RollRelease { beats: 1.0 });
+    render(&mut r, BLOCK);
+    assert!(!c.deck(deck).roll_active);
+    let error = phase_error(&c, deck, master, 1.0);
+    assert!(error < 1e-6, "phase error {error}");
+}

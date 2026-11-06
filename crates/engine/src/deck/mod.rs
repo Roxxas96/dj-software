@@ -297,22 +297,28 @@ impl Deck {
     }
 
     /// Moves the playhead by at most half a beat so that its beat position has the same
-    /// fraction as `target_beats`. A move that lands outside the active loop exits the loop,
-    /// like any deliberate jump; during a roll the check is on the ghost, which the loop
-    /// holds then.
+    /// fraction as `target_beats`. A running slip ghost moves by the same amount (clamped to
+    /// the track, like a beat jump), so the return stays in phase. A move that lands outside
+    /// the active loop exits the loop, like any deliberate jump; during a roll the check is
+    /// on the ghost, which the loop holds then.
     pub(crate) fn align_phase(&mut self, target_beats: f64) {
         let Some(grid) = self.grid else {
             return;
         };
         let diff = target_beats - grid.beats_at(self.position);
-        let beats = diff - diff.round();
-        if !beats.is_finite() {
+        let delta = (diff - diff.round()) * grid.beat_period_frames;
+        if !delta.is_finite() {
             return;
         }
-        self.position =
-            (self.position + beats * grid.beat_period_frames).clamp(0.0, self.frames() as f64);
+        let end = self.frames() as f64;
+        // The ghost's place in its loop is read before the loop can exit.
+        let ghost = self.ghost_frames().map(|g| (g + delta).clamp(0.0, end));
+        self.position = (self.position + delta).clamp(0.0, end);
+        if let (Some(ghost), Some(slot)) = (ghost, self.ghost.as_mut()) {
+            slot.position = ghost;
+        }
         // During a roll the normal loop holds the ghost, not the playhead.
-        let held = match self.ghost_frames() {
+        let held = match ghost {
             Some(ghost) if self.roll.is_some() => ghost,
             _ => self.position,
         };
