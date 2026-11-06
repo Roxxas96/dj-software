@@ -233,6 +233,14 @@ fn render_does_not_allocate() {
         DeckCommand::SliceRelease(2),
         DeckCommand::SliceRelease(6),
         DeckCommand::AutoLoop,
+        // A roll over a slipped loop hands the ghost back; loop buttons wait meanwhile.
+        DeckCommand::SetSlip(true),
+        DeckCommand::AutoLoop,
+        DeckCommand::RollPress { beats: 0.25 },
+        DeckCommand::LoopIn,
+        DeckCommand::RollRelease { beats: 0.25 },
+        DeckCommand::ReloopExit,
+        DeckCommand::SetSlip(false),
         // A jump ends a held pad.
         DeckCommand::SlicePress(1),
         DeckCommand::Seek(40_000.0),

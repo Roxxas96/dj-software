@@ -279,3 +279,161 @@ fn beat_jump_moves_a_held_roll() {
     step(&mut c, &mut r, id, release(1.0));
     assert_eq!(position(&c, id), start + 1003.0 + 5.0 * BEAT);
 }
+
+#[test]
+fn slice_past_the_end_is_ignored() {
+    // 600 000 frames end in beat 27: slice 4 of block 24 starts past the end.
+    let (mut c, mut r, id) = setup(26.5 * BEAT);
+    assert_eq!(c.deck(id).slicer_block_beat, Some(24.0));
+    let start = position(&c, id);
+    step(&mut c, &mut r, id, DeckCommand::SlicePress(4));
+    let s = c.deck(id);
+    assert!(!s.roll_active);
+    assert_eq!(s.ghost_frames, None);
+    assert!(s.playing);
+    assert_eq!(s.position_frames, start + 1.0);
+    // Slice 3 still has part of its beat in the track.
+    step(&mut c, &mut r, id, DeckCommand::SlicePress(3));
+    assert!(c.deck(id).roll_active);
+
+    // Before the first beat, a slice that ends at or before frame 0 is ignored too.
+    let (mut c, mut r, id) = setup_with(load_with(Grid::from_bpm(120.0, 100_000.0, SR)), 0.0);
+    assert_eq!(c.deck(id).slicer_block_beat, Some(-8.0));
+    step(&mut c, &mut r, id, DeckCommand::SlicePress(0));
+    let s = c.deck(id);
+    assert!(!s.roll_active);
+    assert_eq!(s.position_frames, 2.0);
+    step(&mut c, &mut r, id, DeckCommand::SlicePress(3));
+    assert!(c.deck(id).roll_active);
+    assert_eq!(position(&c, id), 1.0, "the slice starts at frame 0");
+}
+
+#[test]
+fn roll_hands_a_slipped_loop_its_ghost_back() {
+    let (mut c, mut r, id) = setup(10.0 * BEAT + 100.0);
+    step(&mut c, &mut r, id, DeckCommand::SetSlip(true));
+    let start = position(&c, id);
+    step(&mut c, &mut r, id, DeckCommand::AutoLoop);
+    let (loop_in, loop_out) = (10.0 * BEAT, 14.0 * BEAT);
+    assert_eq!(c.deck(id).loop_out, Some(loop_out));
+    render(&mut r, SR as usize);
+    step(&mut c, &mut r, id, press(0.5));
+    render(&mut r, SR as usize);
+    step(&mut c, &mut r, id, release(0.5));
+    let s = c.deck(id);
+    assert!(!s.roll_active);
+    assert!(s.loop_active);
+    assert!(s.ghost_frames.is_some(), "the loop keeps its ghost");
+    assert!((loop_in..loop_out).contains(&s.position_frames));
+    render(&mut r, SR as usize);
+    step(&mut c, &mut r, id, DeckCommand::ReloopExit);
+    let s = c.deck(id);
+    assert!(!s.loop_active);
+    assert_eq!(s.ghost_frames, None);
+    assert_eq!(s.position_frames, start + 4.0 + 3.0 * f64::from(SR));
+}
+
+#[test]
+fn loop_buttons_wait_during_a_roll() {
+    let (mut c, mut r, id) = setup(100_000.0);
+    let start = position(&c, id);
+    step(&mut c, &mut r, id, press(1.0));
+    for cmd in [
+        DeckCommand::LoopIn,
+        DeckCommand::LoopOut,
+        DeckCommand::AutoLoop,
+        DeckCommand::LoopHalve,
+        DeckCommand::LoopDouble,
+        DeckCommand::ReloopExit,
+    ] {
+        step(&mut c, &mut r, id, cmd);
+        let s = c.deck(id);
+        assert!(s.roll_active);
+        assert_eq!((s.loop_in, s.loop_out, s.loop_active), (None, None, false));
+        assert_eq!(s.loop_beats, 4.0);
+    }
+    step(&mut c, &mut r, id, release(1.0));
+    assert_eq!(position(&c, id), start + 8.0);
+}
+
+#[test]
+fn beat_jump_back_past_the_start_keeps_rolling() {
+    let (mut c, mut r, id) = setup(10_000.0);
+    step(&mut c, &mut r, id, press(1.0));
+    step(&mut c, &mut r, id, DeckCommand::BeatJump { beats: -32.0 });
+    let s = c.deck(id);
+    assert!(s.roll_active);
+    assert_eq!(s.position_frames, 1.0);
+    render(&mut r, 2 * BEAT as usize);
+    assert!(
+        position(&c, id) < BEAT,
+        "the playhead stays in the moved roll"
+    );
+}
+
+#[test]
+fn phase_sync_during_a_roll_keeps_the_normal_loop() {
+    let (mut c, mut r) = engine(EngineConfig {
+        sample_rate: SR,
+        max_block_frames: 512,
+    });
+    let (master, deck) = (DeckId::new(0).unwrap(), DeckId::new(1).unwrap());
+    for (id, cmd) in [
+        (master, load()),
+        (deck, load()),
+        (master, DeckCommand::Seek(4.5 * BEAT)),
+        (deck, DeckCommand::Seek(4.75 * BEAT)),
+        (master, DeckCommand::Play),
+        (deck, DeckCommand::Play),
+        (deck, DeckCommand::AutoLoop),
+        (deck, DeckCommand::Seek(7.5 * BEAT)),
+        (deck, press(2.0)),
+    ] {
+        c.send(Command::Deck(id, cmd)).unwrap();
+    }
+    render(&mut r, 3 * BEAT as usize / 4);
+    let s = c.deck(deck);
+    assert_eq!(
+        (s.loop_in, s.loop_out),
+        (Some(4.0 * BEAT), Some(8.0 * BEAT))
+    );
+    assert!(
+        s.position_frames > 8.0 * BEAT,
+        "the roll plays past loop-out"
+    );
+    c.send(Command::PhaseSync {
+        deck,
+        master,
+        beat_ratio: 1.0,
+    })
+    .unwrap();
+    render(&mut r, 1);
+    let s = c.deck(deck);
+    assert!(s.roll_active);
+    assert!(s.loop_active, "the ghost, not the roll, is in the loop");
+}
+
+#[test]
+fn slice_inside_a_normal_loop_is_exact() {
+    let (mut c, mut r, id) = setup(9.25 * BEAT);
+    let start = position(&c, id);
+    step(&mut c, &mut r, id, DeckCommand::AutoLoop);
+    let (loop_in, loop_out) = (9.0 * BEAT, 13.0 * BEAT);
+    assert_eq!(c.deck(id).loop_out, Some(loop_out));
+    // Slice 5 of block 8 is beat 13, past loop-out; the loop stays as it is.
+    step(&mut c, &mut r, id, DeckCommand::SlicePress(5));
+    assert_eq!(position(&c, id), 13.0 * BEAT + 1.0);
+    // Four beats: the slice repeats four times, the ghost goes once round the loop.
+    render(&mut r, 4 * BEAT as usize);
+    let s = c.deck(id);
+    assert_eq!(s.position_frames, 13.0 * BEAT + 1.0);
+    assert_eq!(s.ghost_frames, Some(start + 2.0));
+    assert_eq!(
+        (s.loop_in, s.loop_out, s.loop_active),
+        (Some(loop_in), Some(loop_out), true)
+    );
+    step(&mut c, &mut r, id, DeckCommand::SliceRelease(5));
+    let s = c.deck(id);
+    assert!(s.loop_active);
+    assert_eq!(s.position_frames, start + 3.0);
+}

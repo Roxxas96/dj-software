@@ -71,13 +71,18 @@ impl Deck {
         };
         let period = grid.beat_period_frames;
         let start = grid.first_beat_frames + (block + f64::from(slice)) * period;
+        let end = start + period.max(MIN_LOOP_FRAMES);
+        // A slice with nothing of the track in it would leave the playhead at an end.
+        if start >= self.frames() as f64 || end <= 0.0 {
+            return;
+        }
         self.slip_begin(SlipOwner::Slice);
         self.roll = Some(Roll {
             pad: RollPad::Slice { slice, block },
             start,
-            end: start + period.max(MIN_LOOP_FRAMES),
+            end,
         });
-        self.position = start.clamp(0.0, self.frames() as f64);
+        self.position = start.max(0.0);
         self.pending_sync = None;
     }
 
