@@ -156,7 +156,6 @@ fn decode(path: &Path) -> anyhow::Result<Arc<engine::TrackBuffer>> {
 fn load_samples(
     config: &Config,
     library: Option<&LibraryMode>,
-    library_mode: bool,
 ) -> anyhow::Result<Vec<(usize, Arc<engine::TrackBuffer>)>> {
     let pads = &config.sampler.pads;
     let uses_tracks = pads.iter().any(|p| matches!(p, PadSource::Track(_)));
@@ -166,8 +165,6 @@ fn load_samples(
         None
     } else if let Some(library) = library {
         Some(library.reader().context("reading the library")?)
-    } else if library_mode {
-        None
     } else {
         let path = crate::library_cmd::db_path(None)?;
         if path.is_file() {
@@ -182,7 +179,12 @@ fn load_samples(
     let mut loaded = Vec::new();
     for (index, result) in crate::samples::load(&config.sampler, reader.as_ref()) {
         match result {
-            Ok(buffer) => loaded.push((index, buffer)),
+            Ok(sample) => {
+                if sample.truncated {
+                    eprintln!("{}", crate::samples::truncated_line(index, &pads[index]));
+                }
+                loaded.push((index, sample.buffer));
+            }
             Err(error) => eprintln!(
                 "{}",
                 crate::samples::failure_line(index, &pads[index], &error)
@@ -271,7 +273,7 @@ pub fn play(args: &PlayArgs) -> anyhow::Result<()> {
         .library
         .then(|| LibraryMode::start(args.library_db.as_deref()))
         .transpose()?;
-    let samples = load_samples(&config, library.as_ref(), args.library)?;
+    let samples = load_samples(&config, library.as_ref())?;
     let track = args.track.as_deref().map(decode).transpose()?;
     let cue_track = args.cue_track.as_deref().map(decode).transpose()?;
     let deck3_track = args.deck3.as_deref().map(decode).transpose()?;

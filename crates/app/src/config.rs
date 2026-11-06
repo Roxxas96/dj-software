@@ -108,7 +108,15 @@ fn invalid(file: &str, key: &str, problem: impl std::fmt::Display) -> anyhow::Er
 
 /// Parses `text`; `file` names it in errors and `home` is what `~/` stands for.
 fn parse(text: &str, file: &str, home: Option<&Path>) -> anyhow::Result<Config> {
-    let root: Table = toml::from_str(text).map_err(|e| anyhow!("{file}: {}", safe(e.message())))?;
+    let root: Table = toml::from_str(text).map_err(|e| {
+        let line = e
+            .span()
+            .map(|span| text[..span.start.min(text.len())].matches('\n').count() + 1);
+        match line {
+            Some(line) => anyhow!("{file}: line {line}: {}", safe(e.message())),
+            None => anyhow!("{file}: {}", safe(e.message())),
+        }
+    })?;
     let mut config = Config::default();
     for (name, value) in &root {
         match name.as_str() {
@@ -454,7 +462,8 @@ pads = [0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8]
             let error = error_of(text);
             assert!(error.starts_with(expected), "{text:?}: {error}");
         }
-        assert!(error_of("[mixer").starts_with("config.toml: "));
+        let e = error_of("[mixer]\n\ncrossfader = \"open");
+        assert!(e.starts_with("config.toml: line 3: "), "{e}");
     }
 
     #[test]
