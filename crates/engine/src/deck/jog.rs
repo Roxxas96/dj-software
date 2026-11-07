@@ -53,6 +53,7 @@ impl Deck {
     }
 
     fn begin_scratch(&mut self) {
+        self.backspin = None;
         self.scratch = Some(0.0);
         if self.plays_for_real() {
             self.slip_begin(SlipOwner::Scratch);

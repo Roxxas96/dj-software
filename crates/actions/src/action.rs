@@ -137,6 +137,18 @@ pub enum ActionKind {
     JogTop,
     JogRing,
     JogSearch,
+    /// The jog platter as a scratch surface: scratches a touched deck even with vinyl off.
+    JogScratch,
+    /// A backspin of `ControlState::backspin_short` seconds.
+    BackspinShort,
+    /// A backspin of `ControlState::backspin_long` seconds.
+    BackspinLong,
+    /// With no normal loop active, an auto loop of 1 beat.
+    LoopFade1,
+    /// With no normal loop active, an auto loop of 4 beats.
+    LoopFade4,
+    /// Exits an active normal loop; otherwise nothing.
+    LoopExit,
     /// Sets the side's [`PadMode`]; no engine command.
     PadMode(PadMode),
     /// Beat jump pad `slot`, by the size in `ControlState::beat_jump_pads`.
@@ -258,8 +270,8 @@ const SAMPLER_STOP_IDS: [&str; 8] = [
 
 impl ActionKind {
     /// Every kind: each slot family (hotcues, beat jumps, rolls, slices, sampler) once per slot.
-    pub const ALL: [ActionKind; 116] = {
-        let mut all = [ActionKind::PlayPause; 116];
+    pub const ALL: [ActionKind; 122] = {
+        let mut all = [ActionKind::PlayPause; 122];
         let fixed = [
             ActionKind::PlayPause,
             ActionKind::Cue,
@@ -303,6 +315,12 @@ impl ActionKind {
             ActionKind::JogTop,
             ActionKind::JogRing,
             ActionKind::JogSearch,
+            ActionKind::JogScratch,
+            ActionKind::BackspinShort,
+            ActionKind::BackspinLong,
+            ActionKind::LoopFade1,
+            ActionKind::LoopFade4,
+            ActionKind::LoopExit,
             ActionKind::PadMode(PadMode::Hardware),
             ActionKind::PadMode(PadMode::BeatJump),
             ActionKind::PadMode(PadMode::LoopRoll),
@@ -383,6 +401,12 @@ impl ActionKind {
             ActionKind::JogTop => "deck.jog_top",
             ActionKind::JogRing => "deck.jog_ring",
             ActionKind::JogSearch => "deck.jog_search",
+            ActionKind::JogScratch => "deck.jog_scratch",
+            ActionKind::BackspinShort => "deck.backspin_short",
+            ActionKind::BackspinLong => "deck.backspin_long",
+            ActionKind::LoopFade1 => "deck.loop_fade_1",
+            ActionKind::LoopFade4 => "deck.loop_fade_4",
+            ActionKind::LoopExit => "deck.loop_exit",
             ActionKind::PadMode(PadMode::Hardware) => "pads.mode_hardware",
             ActionKind::PadMode(PadMode::BeatJump) => "pads.mode_beat_jump",
             ActionKind::PadMode(PadMode::LoopRoll) => "pads.mode_loop_roll",
@@ -439,6 +463,12 @@ impl ActionKind {
             | ActionKind::JogTop
             | ActionKind::JogRing
             | ActionKind::JogSearch
+            | ActionKind::JogScratch
+            | ActionKind::BackspinShort
+            | ActionKind::BackspinLong
+            | ActionKind::LoopFade1
+            | ActionKind::LoopFade4
+            | ActionKind::LoopExit
             | ActionKind::Hotcue(_)
             | ActionKind::HotcueDelete(_)
             | ActionKind::BeatJump(_)
@@ -488,6 +518,7 @@ impl ActionKind {
                 | ActionKind::JogTop
                 | ActionKind::JogRing
                 | ActionKind::JogSearch
+                | ActionKind::JogScratch
         );
         match kind {
             InputKind::Button => !absolute && !relative,
@@ -589,6 +620,12 @@ pub enum Action {
     JogTop(DeckId),
     JogRing(DeckId),
     JogSearch(DeckId),
+    JogScratch(DeckId),
+    BackspinShort(DeckId),
+    BackspinLong(DeckId),
+    LoopFade1(DeckId),
+    LoopFade4(DeckId),
+    LoopExit(DeckId),
     PadMode(Side, PadMode),
     BeatJump(DeckId, HotcueSlot),
     BeatJumpShift(DeckId, HotcueSlot),
@@ -651,6 +688,12 @@ impl Action {
             (K::JogTop, Target::Deck(d)) => Action::JogTop(d),
             (K::JogRing, Target::Deck(d)) => Action::JogRing(d),
             (K::JogSearch, Target::Deck(d)) => Action::JogSearch(d),
+            (K::JogScratch, Target::Deck(d)) => Action::JogScratch(d),
+            (K::BackspinShort, Target::Deck(d)) => Action::BackspinShort(d),
+            (K::BackspinLong, Target::Deck(d)) => Action::BackspinLong(d),
+            (K::LoopFade1, Target::Deck(d)) => Action::LoopFade1(d),
+            (K::LoopFade4, Target::Deck(d)) => Action::LoopFade4(d),
+            (K::LoopExit, Target::Deck(d)) => Action::LoopExit(d),
             (K::PadMode(mode), Target::Side(s)) => Action::PadMode(s, mode),
             (K::BeatJump(slot), Target::Deck(d)) => Action::BeatJump(d, slot),
             (K::BeatJumpShift(slot), Target::Deck(d)) => Action::BeatJumpShift(d, slot),
@@ -722,6 +765,12 @@ impl Action {
             Action::JogTop(_) => ActionKind::JogTop,
             Action::JogRing(_) => ActionKind::JogRing,
             Action::JogSearch(_) => ActionKind::JogSearch,
+            Action::JogScratch(_) => ActionKind::JogScratch,
+            Action::BackspinShort(_) => ActionKind::BackspinShort,
+            Action::BackspinLong(_) => ActionKind::BackspinLong,
+            Action::LoopFade1(_) => ActionKind::LoopFade1,
+            Action::LoopFade4(_) => ActionKind::LoopFade4,
+            Action::LoopExit(_) => ActionKind::LoopExit,
             Action::PadMode(_, mode) => ActionKind::PadMode(*mode),
             Action::BeatJump(_, slot) => ActionKind::BeatJump(*slot),
             Action::BeatJumpShift(_, slot) => ActionKind::BeatJumpShift(*slot),
@@ -773,6 +822,12 @@ impl Action {
             | Action::JogTop(d)
             | Action::JogRing(d)
             | Action::JogSearch(d)
+            | Action::JogScratch(d)
+            | Action::BackspinShort(d)
+            | Action::BackspinLong(d)
+            | Action::LoopFade1(d)
+            | Action::LoopFade4(d)
+            | Action::LoopExit(d)
             | Action::BeatJump(d, _)
             | Action::BeatJumpShift(d, _)
             | Action::LoopRoll(d, _)

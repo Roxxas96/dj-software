@@ -32,6 +32,10 @@ pub struct Config {
     pub beat_jump_shift_pads: Option<[f64; PADS]>,
     /// Beats for the loop roll pads, when the file sets them.
     pub loop_roll_pads: Option<[f64; PADS]>,
+    /// Seconds of the short backspin, when the file sets it.
+    pub backspin_short: Option<f64>,
+    /// Seconds of the long backspin, when the file sets it.
+    pub backspin_long: Option<f64>,
 }
 
 impl Default for Config {
@@ -43,6 +47,8 @@ impl Default for Config {
             beat_jump_pads: None,
             beat_jump_shift_pads: None,
             loop_roll_pads: None,
+            backspin_short: None,
+            backspin_long: None,
         }
     }
 }
@@ -174,6 +180,20 @@ fn parse(text: &str, file: &str, home: Option<&Path>) -> anyhow::Result<Config> 
                     }
                 }
             }
+            "backspin" => {
+                for (key, value) in section(file, name, value)? {
+                    let path = format!("backspin.{key}");
+                    let seconds = match key.as_str() {
+                        "short" | "long" => backspin_seconds(file, &path, value)?,
+                        _ => return Err(unknown(file, "backspin", key)),
+                    };
+                    if key == "short" {
+                        config.backspin_short = Some(seconds);
+                    } else {
+                        config.backspin_long = Some(seconds);
+                    }
+                }
+            }
             _ => return Err(invalid(file, name, "unknown key")),
         }
     }
@@ -216,6 +236,24 @@ fn roll_beats(beats: f64) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// The range of a backspin length, in seconds.
+const BACKSPIN_RANGE: (f64, f64) = (0.2, 10.0);
+
+fn backspin_seconds(file: &str, key: &str, value: &Value) -> anyhow::Result<f64> {
+    let seconds = number(value).ok_or_else(|| invalid(file, key, "expected a number"))?;
+    if !(BACKSPIN_RANGE.0..=BACKSPIN_RANGE.1).contains(&seconds) {
+        return Err(invalid(
+            file,
+            key,
+            format!(
+                "expected seconds from {} to {}",
+                BACKSPIN_RANGE.0, BACKSPIN_RANGE.1
+            ),
+        ));
+    }
+    Ok(seconds)
 }
 
 /// Exactly 8 numbers, each accepted by `check`.
@@ -395,6 +433,10 @@ shift_pads = [-1, 1, -2, 2, -4, 4, -64, 64]
 
 [loop_roll]
 pads = [0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8]
+
+[backspin]
+short = 1.0
+long = 2.0
 "#;
 
     fn home() -> PathBuf {
@@ -442,6 +484,44 @@ pads = [0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8]
             config.loop_roll_pads,
             Some([0.0625, 0.125, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0])
         );
+        assert_eq!(config.backspin_short, Some(1.0));
+        assert_eq!(config.backspin_long, Some(2.0));
+    }
+
+    #[test]
+    fn backspin_config_parses_and_rejects_out_of_range() {
+        let config = parse_text("[backspin]\nshort = 0.5\nlong = 10").unwrap();
+        assert_eq!(
+            (config.backspin_short, config.backspin_long),
+            (Some(0.5), Some(10.0))
+        );
+        let config = parse_text("[backspin]\nlong = 0.2").unwrap();
+        assert_eq!(
+            (config.backspin_short, config.backspin_long),
+            (None, Some(0.2))
+        );
+        assert_eq!(parse_text("").unwrap().backspin_short, None);
+        for (text, expected) in [
+            (
+                "[backspin]\nshort = 0.1",
+                "config.toml: backspin.short: expected seconds from 0.2 to 10",
+            ),
+            (
+                "[backspin]\nlong = 11",
+                "config.toml: backspin.long: expected seconds from 0.2 to 10",
+            ),
+            (
+                "[backspin]\nlong = \"a\"",
+                "config.toml: backspin.long: expected a number",
+            ),
+            (
+                "[backspin]\nmedium = 1",
+                "config.toml: backspin.medium: unknown key",
+            ),
+        ] {
+            let error = error_of(text);
+            assert!(error.starts_with(expected), "{text:?}: {error}");
+        }
     }
 
     #[test]

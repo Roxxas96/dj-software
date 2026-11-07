@@ -110,6 +110,10 @@ pub struct ControlState {
     pub beat_jump_shift_pads: [f64; 8],
     /// Beats the loop roll pads 1 to 8 roll.
     pub loop_roll_pads: [f64; 8],
+    /// Seconds of the short backspin action. The config sets it.
+    pub backspin_short: f64,
+    /// Seconds of the long backspin action. The config sets it.
+    pub backspin_long: f64,
 }
 
 /// The default [`ControlState::beat_jump_pads`].
@@ -150,6 +154,8 @@ impl Default for ControlState {
             beat_jump_pads: DEFAULT_BEAT_JUMP_PADS,
             beat_jump_shift_pads: DEFAULT_BEAT_JUMP_SHIFT_PADS,
             loop_roll_pads: DEFAULT_LOOP_ROLL_PADS,
+            backspin_short: 1.0,
+            backspin_long: 2.0,
         }
     }
 }

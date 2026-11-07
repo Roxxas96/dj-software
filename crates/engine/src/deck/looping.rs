@@ -43,6 +43,20 @@ impl Deck {
             self.exit_loop();
             return;
         }
+        self.start_auto_loop();
+    }
+
+    /// An auto loop of exactly `beats` beats, which becomes the loop length. An active loop
+    /// is left alone.
+    pub(super) fn auto_loop_beats(&mut self, beats: f64) {
+        if self.loop_active || self.grid.is_none() || self.track.is_none() {
+            return;
+        }
+        self.loop_beats = beats.clamp(MIN_LOOP_BEATS, MAX_LOOP_BEATS);
+        self.start_auto_loop();
+    }
+
+    fn start_auto_loop(&mut self) {
         let Some(grid) = self.grid else {
             return;
         };
@@ -102,7 +116,7 @@ impl Deck {
     }
 
     /// Deactivates the loop on request; a slipped loop returns to its ghost.
-    fn exit_loop(&mut self) {
+    pub(super) fn exit_loop(&mut self) {
         if self.loop_active {
             self.loop_active = false;
             self.slip_loop_exited(false);

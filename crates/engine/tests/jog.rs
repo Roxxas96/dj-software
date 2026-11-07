@@ -441,6 +441,23 @@ fn backspin_on_a_paused_deck_does_nothing() {
 }
 
 #[test]
+fn a_platter_jog_cancels_a_running_backspin() {
+    let (mut c, mut r, id) = setup();
+    step(&mut c, &mut r, id, DeckCommand::Seek(200_000.0));
+    step(&mut c, &mut r, id, DeckCommand::Play);
+    step(&mut c, &mut r, id, DeckCommand::SetVinyl(false));
+    step(&mut c, &mut r, id, DeckCommand::JogTouch(true));
+    step(&mut c, &mut r, id, DeckCommand::Backspin { seconds: 2.0 });
+    assert!(c.deck(id).backspinning);
+    let jog = DeckCommand::Jog {
+        turns: 0.1,
+        surface: JogSurface::Platter,
+    };
+    step(&mut c, &mut r, id, jog);
+    assert!(!c.deck(id).backspinning);
+}
+
+#[test]
 fn backspin_is_cancelled_by_a_touch() {
     let (mut c, mut r, id) = setup();
     step(&mut c, &mut r, id, DeckCommand::Seek(200_000.0));
