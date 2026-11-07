@@ -23,8 +23,8 @@ pub struct DeckControl {
     /// track loads.
     pub scratch_anchor: Option<f64>,
     /// Which stems the app left on, by `Stem::index`. The engine turns every stem on at
-    /// each load, so this resets when the app sees a load: see
-    /// [`ControlState::sync_loads`].
+    /// each load, so a stem press first resets this to all on when the deck's `load_seq` has
+    /// moved past `stems_load_seq` (the only reset; nothing else reads the flags).
     pub stems_on: [bool; 4],
     /// The deck's `load_seq` when `stems_on` last matched the engine.
     pub stems_load_seq: u64,
@@ -178,19 +178,6 @@ impl Default for ControlState {
 }
 
 impl ControlState {
-    /// Resets the stem pad flags of every deck whose engine `load_seq` moved since they
-    /// were last matched: the engine turns every stem on at a load, and this mirrors it.
-    /// The runtime tick calls it with the snapshots' `load_seq`; a stem press also calls
-    /// it for its own deck, so a press right after a load never starts from stale flags.
-    pub fn sync_loads(&mut self, load_seqs: [u64; 4]) {
-        for (deck, seq) in self.decks.iter_mut().zip(load_seqs) {
-            if deck.stems_load_seq != seq {
-                deck.stems_load_seq = seq;
-                deck.stems_on = [true; 4];
-            }
-        }
-    }
-
     pub fn deck(&self, id: DeckId) -> &DeckControl {
         &self.decks[id.index()]
     }
