@@ -530,7 +530,11 @@ fn performance_table() -> Vec<(&'static str, Layer, Action)> {
 
 /// Controls that send several kinds of messages (jog tops also send a touch and firmware
 /// ring noise, pads are one note each): their own tests check what they drive.
-const MULTI_MESSAGE_CONTROLS: [&str; 23] = [
+const MULTI_MESSAGE_CONTROLS: [&str; 27] = [
+    "deck1.pads_fx_fade",
+    "deck1.pads_pad_scratch",
+    "deck2.pads_fx_fade",
+    "deck2.pads_pad_scratch",
     "deck1.jog_top",
     "deck1.jog_top.shift",
     "deck1.pads_hot_cue",
@@ -1968,4 +1972,60 @@ fn key_lock_toggles_keylock_and_shift_key_lock_still_changes_range() {
         !rig.engine.deck(d(1)).keylock,
         "SHIFT + KEY LOCK left keylock alone"
     );
+}
+
+/// What each message of the captured FX FADE and PAD SCRATCH pad steps drives, in the
+/// order the capture lists them: the pads' own notes and the firmware's messages (the
+/// routine's loop notes and its JOG_VINYL scratch). `0x4D` (LOOP_FADE_LOOP) is unbound.
+fn firmware_pad_rows(deck: DeckId) -> Vec<(&'static str, Vec<Action>)> {
+    let fx_fade = vec![
+        vec![],                            // pad 1 (filter sweep: fader/filter messages)
+        vec![],                            // pad 2
+        vec![Action::LoopExit(deck)],      // pad 3
+        vec![],                            // 0x4D LOOP_FADE_LOOP
+        vec![Action::LoopFade1(deck)],     // 0x4C LOOP_FADE_SEL_1
+        vec![Action::BackspinShort(deck)], // pad 4
+        vec![Action::JogScratch(deck)],    // cc 0x22 JOG_VINYL
+        vec![Action::JogTouch(deck)],      // jog touch
+        vec![],                            // pad 5
+        vec![],                            // pad 6
+        vec![Action::LoopExit(deck)],      // pad 7
+        vec![Action::LoopFade4(deck)],     // 0x4A LOOP_FADE_SEL_4
+        vec![Action::BackspinLong(deck)],  // pad 8
+    ];
+    let pad_scratch = vec![
+        vec![],                              // pad 1
+        vec![Action::JogTouch(deck)],        // jog touch
+        vec![Action::Hotcue(deck, slot(1))], // HOT CUE pad 1
+        vec![Action::JogScratch(deck)],      // cc 0x22 JOG_VINYL
+    ];
+    let (fx, ps) = if deck == d(1) {
+        ("deck1.pads_fx_fade", "deck1.pads_pad_scratch")
+    } else {
+        ("deck2.pads_fx_fade", "deck2.pads_pad_scratch")
+    };
+    let mut rows: Vec<(&'static str, Vec<Action>)> = fx_fade.into_iter().map(|a| (fx, a)).collect();
+    rows.extend(pad_scratch.into_iter().map(|a| (ps, a)));
+    rows
+}
+
+#[test]
+fn firmware_pad_messages_drive_their_actions() {
+    for deck in [d(1), d(2)] {
+        let rows = firmware_pad_rows(deck);
+        let mut index = std::collections::HashMap::<&str, usize>::new();
+        for (id, expected) in rows {
+            let i = index.entry(id).or_insert(0);
+            let mut rig = Rig::attached();
+            let m = rig.control(id).messages[*i];
+            let channel = m.status & 0x0F;
+            let msg = match m.status & 0xF0 {
+                0x90 => note(channel, m.data1, m.max),
+                _ => cc(channel, m.data1, m.max),
+            };
+            let (actions, _) = rig.batch(&[msg]);
+            assert_eq!(actions, expected, "`{id}` message {i} ({msg:?})");
+            *i += 1;
+        }
+    }
 }

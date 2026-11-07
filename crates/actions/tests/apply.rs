@@ -1442,17 +1442,11 @@ fn loop_fade_starts_a_loop_only_when_none_is_active() {
     let mut rig = Rig::new();
     rig.load_grid(0, 120.0, true);
     let loop_beats = |rig: &Rig| rig.c.deck(d(0)).loop_beats;
-    assert_eq!(
-        rig.apply(deck_action(ActionKind::LoopFade1, 0), Input::Press),
-        ApplyResult::Sent(1)
-    );
+    rig.apply(deck_action(ActionKind::LoopFade1, 0), Input::Press);
     assert!(rig.c.deck(d(0)).loop_active);
     assert_eq!(loop_beats(&rig), 1.0);
-    // With a loop active, neither fade does anything.
-    assert_eq!(
-        rig.apply(deck_action(ActionKind::LoopFade4, 0), Input::Press),
-        ApplyResult::Sent(0)
-    );
+    // With a loop active, the engine ignores the other fade: the loop and its size stay.
+    rig.apply(deck_action(ActionKind::LoopFade4, 0), Input::Press);
     assert!(rig.c.deck(d(0)).loop_active);
     assert_eq!(loop_beats(&rig), 1.0);
     rig.apply(deck_action(ActionKind::LoopExit, 0), Input::Press);
@@ -1463,14 +1457,37 @@ fn loop_fade_starts_a_loop_only_when_none_is_active() {
 }
 
 #[test]
+fn loop_exit_then_fade_in_one_batch_replaces_the_djs_loop() {
+    // FX FADE pad 3 sends its own note (loop_exit) and then LOOP_FADE_SEL_1 within a
+    // millisecond, so both are applied before the engine renders: neither may decide from
+    // a snapshot that predates the other.
+    let mut rig = Rig::new();
+    rig.load_grid(0, 120.0, true);
+    rig.apply(deck_action(ActionKind::LoopDouble, 0), Input::Press);
+    rig.apply(deck_action(ActionKind::AutoLoop, 0), Input::Press);
+    assert!(rig.c.deck(d(0)).loop_active);
+    assert_ne!(rig.c.deck(d(0)).loop_beats, 1.0);
+    for kind in [ActionKind::LoopExit, ActionKind::LoopFade1] {
+        let result = apply(
+            &deck_action(kind, 0),
+            Input::Press,
+            0,
+            &mut rig.state,
+            &mut rig.c,
+        );
+        assert_eq!(result, ApplyResult::Sent(1), "{kind:?}");
+    }
+    rig.render(1);
+    assert!(rig.c.deck(d(0)).loop_active);
+    assert_eq!(rig.c.deck(d(0)).loop_beats, 1.0);
+}
+
+#[test]
 fn loop_exit_without_a_loop_does_nothing() {
     let mut rig = Rig::new();
     rig.load_grid(0, 120.0, true);
     let before = rig.c.deck(d(0));
-    assert_eq!(
-        rig.apply(deck_action(ActionKind::LoopExit, 0), Input::Press),
-        ApplyResult::Sent(0)
-    );
+    rig.apply(deck_action(ActionKind::LoopExit, 0), Input::Press);
     let after = rig.c.deck(d(0));
     assert!(!after.loop_active);
     assert_eq!(after.loop_beats, before.loop_beats);

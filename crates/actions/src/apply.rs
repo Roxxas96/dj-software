@@ -196,24 +196,16 @@ pub fn apply(
             let seconds = state.backspin_long;
             (deck(d, DeckCommand::Backspin { seconds }), Update::None)
         }
+        // No snapshot pre-checks: the engine ignores AutoLoopBeats while a loop is active
+        // and LoopExit without one, so an FX FADE pad 3/7 press followed by its loop note
+        // in the same batch always acts on the engine's current state.
         (Action::LoopFade1(d), Input::Press) => {
-            if engine.deck(d).loop_active {
-                return ApplyResult::Sent(0);
-            }
             (deck(d, DeckCommand::AutoLoopBeats(1.0)), Update::None)
         }
         (Action::LoopFade4(d), Input::Press) => {
-            if engine.deck(d).loop_active {
-                return ApplyResult::Sent(0);
-            }
             (deck(d, DeckCommand::AutoLoopBeats(4.0)), Update::None)
         }
-        (Action::LoopExit(d), Input::Press) => {
-            if !engine.deck(d).loop_active {
-                return ApplyResult::Sent(0);
-            }
-            (deck(d, DeckCommand::LoopExit), Update::None)
-        }
+        (Action::LoopExit(d), Input::Press) => (deck(d, DeckCommand::LoopExit), Update::None),
         (Action::Sync(d), Input::Press) => return sync(d, state, engine),
         (Action::TempoRangeNext(d), Input::Press) => {
             let next = next_range(state.deck(d).tempo_range);

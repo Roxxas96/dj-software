@@ -341,6 +341,62 @@ action = "deck.jog_search"
 side = "left"
 value = "relative_offset"
 
+# Firmware routines. In FX FADE and PAD SCRATCH the SB3 runs its own routines on the pads
+# and sends, besides the pad notes, messages of its own (VirtualDJ's names below). The
+# routines also move the fader and FILTER (bound above) and end by sending their physical
+# positions, so the deck ends where the controls are. Recorded in firmware-modes.txt and
+# firmware-modes-2.txt on the left side; the right side is bound the same.
+# LOOP_FADE_LOOP (note 0x4D) stays unbound: the SB3 also sends it when TRANS is selected
+# and during the backspin, so it would start loops nobody asked for.
+
+# JOG_VINYL: the routines' scratch, whatever VINYL says (PAD SCRATCH, the backspin nudge)
+[[input]]
+midi = { channel = 1, cc = 0x22 }
+action = "deck.jog_scratch"
+side = "left"
+value = "relative_offset"
+
+# LOOP_FADE_SEL_1: sent after FX FADE pad 3's first press
+[[input]]
+midi = { channel = 1, note = 0x4C }
+action = "deck.loop_fade_1"
+side = "left"
+
+# LOOP_FADE_SEL_4: sent after FX FADE pad 7's first press; the SB3 then shrinks the loop
+# with its own 1/2X presses (note 0x12, bound above)
+[[input]]
+midi = { channel = 1, note = 0x4A }
+action = "deck.loop_fade_4"
+side = "left"
+
+# FX FADE pads 3 and 7: each press first exits a loop, so the second press ends the
+# routine's loop (on the deck it started on, even after DECK) and the first press, which
+# the SB3 follows with its LOOP_FADE_SEL note, replaces any loop the DJ had on
+[[input]]
+midi = { channel = 8, note = 0x12 }
+action = "deck.loop_exit"
+side = "left"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 8, note = 0x16 }
+action = "deck.loop_exit"
+side = "left"
+pad_mode = "hardware"
+
+# FX FADE pad 4: short backspin; pad 8: long backspin (lengths in config.toml)
+[[input]]
+midi = { channel = 8, note = 0x13 }
+action = "deck.backspin_short"
+side = "left"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 8, note = 0x17 }
+action = "deck.backspin_long"
+side = "left"
+pad_mode = "hardware"
+
 # Pad modes. The SB3 has hardware pad modes (HOT CUE, FX FADE, PAD SCRATCH, SAMPLER) that
 # decide which notes the pads send; software pad modes decide what the app does with them.
 # Each side has its own software mode, set by the buttons below, and the pad bindings
@@ -627,6 +683,62 @@ action = "deck.jog_search"
 side = "right"
 value = "relative_offset"
 
+# Firmware routines. In FX FADE and PAD SCRATCH the SB3 runs its own routines on the pads
+# and sends, besides the pad notes, messages of its own (VirtualDJ's names below). The
+# routines also move the fader and FILTER (bound above) and end by sending their physical
+# positions, so the deck ends where the controls are. Recorded in firmware-modes.txt and
+# firmware-modes-2.txt on the left side; the right side is bound by symmetry (channel 2, pads on channel 9), as the capture shows the same messages there.
+# LOOP_FADE_LOOP (note 0x4D) stays unbound: the SB3 also sends it when TRANS is selected
+# and during the backspin, so it would start loops nobody asked for.
+
+# JOG_VINYL: the routines' scratch, whatever VINYL says (PAD SCRATCH, the backspin nudge)
+[[input]]
+midi = { channel = 2, cc = 0x22 }
+action = "deck.jog_scratch"
+side = "right"
+value = "relative_offset"
+
+# LOOP_FADE_SEL_1: sent after FX FADE pad 3's first press
+[[input]]
+midi = { channel = 2, note = 0x4C }
+action = "deck.loop_fade_1"
+side = "right"
+
+# LOOP_FADE_SEL_4: sent after FX FADE pad 7's first press; the SB3 then shrinks the loop
+# with its own 1/2X presses (note 0x12, bound above)
+[[input]]
+midi = { channel = 2, note = 0x4A }
+action = "deck.loop_fade_4"
+side = "right"
+
+# FX FADE pads 3 and 7: each press first exits a loop, so the second press ends the
+# routine's loop (on the deck it started on, even after DECK) and the first press, which
+# the SB3 follows with its LOOP_FADE_SEL note, replaces any loop the DJ had on
+[[input]]
+midi = { channel = 9, note = 0x12 }
+action = "deck.loop_exit"
+side = "right"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 9, note = 0x16 }
+action = "deck.loop_exit"
+side = "right"
+pad_mode = "hardware"
+
+# FX FADE pad 4: short backspin; pad 8: long backspin (lengths in config.toml)
+[[input]]
+midi = { channel = 9, note = 0x13 }
+action = "deck.backspin_short"
+side = "right"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 9, note = 0x17 }
+action = "deck.backspin_long"
+side = "right"
+pad_mode = "hardware"
+
 # Pad mode buttons. HOT CUE, FX FADE, PAD SCRATCH and SAMPLER (and SHIFT + SAMPLER,
 # TRANS) leave the pads to the controller's own modes; the SHIFT variants of the other
 # three pick a software pad mode.
@@ -831,10 +943,10 @@ off = 0
 #   channel fader + SHIFT  (fader start) notes 0x52 / 0x66, with the fader's cc14
 #
 #   Pads: channel 8 (0x97) left, channel 9 (0x98) right. HOT CUE (0x00-0x07, SHIFT
-#     0x08-0x0F) and SAMPLER (0x30-0x37, SHIFT 0x38-0x3F) are mapped; the others, notes:
-#     FX FADE 0x10-0x17, PAD SCRATCH 0x20-0x27.
-#     The FX FADE and PAD SCRATCH pad steps also recorded firmware-generated messages
-#     (notes 0x4D/0x4C/0x4A at a constant 127, cc 0x22): those are not pads.
+#     0x08-0x0F), SAMPLER (0x30-0x37, SHIFT 0x38-0x3F) and FX FADE pads 3/4/7/8 are
+#     mapped; the others run firmware routines through bound messages and stay unbound:
+#     FX FADE 0x10/0x11/0x14/0x15, PAD SCRATCH 0x20-0x27, TRANS from 0x70 (pad 1).
+#     Firmware message LOOP_FADE_LOOP note 0x4D (see the firmware routines above).
 #
 #   SHIFT + FX buttons 1/2/3: channel 5 (0x94) left, channel 6 (0x95) right, notes
 #     0x63/0x64/0x65 (FX 1/2/3 and the FX LEVEL cc14 0x02/0x22 are mapped; the knob's

@@ -342,3 +342,17 @@ Note { channel: 5, note: 71 } | FxToggle(0) | Side(Right) | None | None
 Note { channel: 5, note: 72 } | FxToggle(1) | Side(Right) | None | None
 Note { channel: 5, note: 73 } | FxToggle(2) | Side(Right) | None | None
 Cc14 { channel: 5, msb: 2, lsb: 34 } | FxLevel | Side(Right) | None | None
+Cc { channel: 0, cc: 34 } | JogScratch | Side(Left) | None | None
+Note { channel: 0, note: 76 } | LoopFade1 | Side(Left) | None | None
+Note { channel: 0, note: 74 } | LoopFade4 | Side(Left) | None | None
+Note { channel: 7, note: 18 } | LoopExit | Side(Left) | Some(Hardware) | None
+Note { channel: 7, note: 22 } | LoopExit | Side(Left) | Some(Hardware) | None
+Note { channel: 7, note: 19 } | BackspinShort | Side(Left) | Some(Hardware) | None
+Note { channel: 7, note: 23 } | BackspinLong | Side(Left) | Some(Hardware) | None
+Cc { channel: 1, cc: 34 } | JogScratch | Side(Right) | None | None
+Note { channel: 1, note: 76 } | LoopFade1 | Side(Right) | None | None
+Note { channel: 1, note: 74 } | LoopFade4 | Side(Right) | None | None
+Note { channel: 8, note: 18 } | LoopExit | Side(Right) | Some(Hardware) | None
+Note { channel: 8, note: 22 } | LoopExit | Side(Right) | Some(Hardware) | None
+Note { channel: 8, note: 19 } | BackspinShort | Side(Right) | Some(Hardware) | None
+Note { channel: 8, note: 23 } | BackspinLong | Side(Right) | Some(Hardware) | None

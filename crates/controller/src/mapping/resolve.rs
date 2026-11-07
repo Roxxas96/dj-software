@@ -33,6 +33,10 @@ pub struct Resolver {
     sources: HashMap<MidiSource, SourceMemory>,
     /// The active deck per side as of the last message, to arm takeover on a switch.
     seen_active: Option<[DeckId; 2]>,
+    /// Per side, the deck a fade loop (`deck.loop_fade_N`) was last started on, until a
+    /// `deck.loop_exit` of that side ends it there: the SB3's FX FADE pads toggle their
+    /// routine, and the second press must reach the deck of the first even after DECK.
+    fade_loops: [Option<DeckId>; 2],
     takeover: Takeover,
 }
 
@@ -60,6 +64,7 @@ impl Resolver {
             cc14: HashMap::new(),
             sources: HashMap::new(),
             seen_active: None,
+            fade_loops: [None; 2],
             takeover: Takeover::new(),
         }
     }
@@ -83,6 +88,7 @@ impl Resolver {
         self.held.clear();
         self.cc14.clear();
         self.sources.clear();
+        self.fade_loops = [None; 2];
     }
 
     /// Forgets every held press and returns the actions they resolved to, so the caller
@@ -147,9 +153,12 @@ impl Resolver {
             if !conditions_hold(&binding, state) {
                 continue;
             }
-            let Some(action) = resolve_action(&binding, state) else {
+            let Some(mut action) = resolve_action(&binding, state) else {
                 continue;
             };
+            if binding.value == ValueKind::Button && button_pressed(raw) {
+                action = self.follow_fade_loop(&binding, action);
+            }
             let input = match binding.value {
                 ValueKind::Button => {
                     if button_pressed(raw) {
@@ -227,6 +236,28 @@ impl Resolver {
             .map(|(&j, _)| j)
             .min()?;
         self.held.remove(&i)
+    }
+
+    /// Ties a side's fade loop to its deck: a `deck.loop_fade_N` press records the deck it
+    /// went to, and the side's next `deck.loop_exit` press goes to that deck (whatever the
+    /// side shows now) and clears the record.
+    fn follow_fade_loop(&mut self, binding: &InputBinding, action: Action) -> Action {
+        // Only side bindings follow: a binding to a fixed deck goes where it says.
+        let Target::Side(side) = binding.target else {
+            return action;
+        };
+        let slot = &mut self.fade_loops[usize::from(side == Side::Right)];
+        match action {
+            Action::LoopFade1(deck) | Action::LoopFade4(deck) => {
+                *slot = Some(deck);
+                action
+            }
+            Action::LoopExit(_) => match slot.take() {
+                Some(deck) => Action::LoopExit(deck),
+                None => action,
+            },
+            _ => action,
+        }
     }
 
     /// Arms takeover for decks that became active on their side since the last message.

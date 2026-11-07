@@ -7,8 +7,12 @@ Files in this directory:
   `open-jockey midi capture`. It is the only source of the MIDI values in the mapping.
 - `checklist.toml`: the steps of that capture.
 
+- `firmware-modes.txt`, `firmware-modes-2.txt`: MIDI monitor recordings of the SB3's own
+  pad routines (FX FADE, PAD SCRATCH, TRANS), used as test fixtures.
+
 Every binding in the mapping is replayed from the capture by
-`crates/controller/tests/sb3_replay.rs`.
+`crates/controller/tests/sb3_replay.rs`, and the recorded routines are replayed in time
+by `crates/controller/tests/sb3_firmware_replay.rs`.
 
 ## Using it
 
@@ -88,6 +92,7 @@ point you set is remembered and comes back when the track is loaded again. See
 | pads in loop roll mode | hold to roll `loop_roll.pads` beats (default 1/16 to 8), slip back on release |
 | pads in slicer mode | hold to repeat beat 1-8 of the current 8-beat bar, slip back on release |
 | SHIFT + VINYL | slip mode on/off |
+| FX FADE, PAD SCRATCH and TRANS pads | the SB3's own routines (see below) |
 
 The MASTER and HEADPHONES level knobs send MIDI, but the SB3 applies them in its own
 audio interface, so they are left unbound and the software levels are set to full when
@@ -167,6 +172,47 @@ ddj-sb3`). Everything worked:
   deck after DECK.
 - [x] Config: `[fx] slots` changes the slot effects after a restart.
 
+## The SB3's own pad routines
+
+In FX FADE, PAD SCRATCH and TRANS (SHIFT + SAMPLER) the SB3 runs routines of its own on
+the pads: it moves the fader and the FILTER itself, touches and turns a virtual jog, and
+sends a few notes of its own. The app follows those messages, so the routines work as on
+VirtualDJ:
+
+- **FX FADE pads 1, 2, 5, 6:** the SB3 sweeps the FILTER and fades the fader.
+- **FX FADE pad 3 (pad 7):** the first press starts a 1-beat (4-beat) loop while the fader
+  falls; the SB3 shrinks pad 7's loop with its own 1/2X presses. The second press ends the
+  loop. A loop the DJ had on is replaced by the routine's. If DECK was pressed in between,
+  the second press still ends the loop on the deck it started on.
+- **FX FADE pad 4 (pad 8):** a backspin of `backspin.short` (`backspin.long`) seconds,
+  1 s and 2 s by default (`docs/config.md`).
+- **PAD SCRATCH pads:** the first message sets hotcue 1 where the deck is; the SB3 then
+  keeps jumping back to it and scratching (a jog that scratches whatever VINYL says).
+- **TRANS pads:** the SB3 cuts the fader in rhythm.
+
+When a routine ends, the deck is where the physical controls are: the SB3 sends the real
+fader and FILTER positions at the start and end of every routine, no loop is left on,
+nothing spins and the jog is not left touched. The routines act on the deck the side
+shows, like every other control. A loop the DJ ends with AUTO LOOP meanwhile is not
+restarted by the pad's second press.
+
+Known limit: do not press DECK while a routine runs. The SB3 sends the fader's real
+position when the routine ends, and that message goes to the deck the side shows by then.
+So if DECK was pressed during, say, FX FADE pad 3, the routine's deck can be left with its
+fader where the routine put it (possibly closed), and the newly shown deck's fader takes
+the message only once soft takeover picks it up. Move that deck's fader to bring it back.
+Only the fade loop itself follows its deck (see pad 3 above).
+
+The SB3 sends its own jog touch and a small backward nudge with some FX FADE pad 4/8
+presses, within a millisecond of the pad. The engine treats jog touches and moves within
+50 ms of a backspin's start as part of it, so they neither block nor stop the spin; a
+touch after that stops it as usual.
+
+`LOOP_FADE_LOOP` (note 0x4D) is left unbound: the SB3 also sends it when TRANS is chosen
+and during the backspin. The firmware messages were recorded on the left side only; the
+right side is bound by symmetry (channel 2, pads on channel 9), which the capture
+confirms for the same messages.
+
 ## LEDs
 
 Only the headphone MASTER LED is driven. An LED scan of all 16 channels (note-on, with
@@ -191,8 +237,8 @@ must be picked up again (soft takeover).
 
 ## Not mapped yet
 
-SHIFT + SYNC, the FX FADE and PAD SCRATCH pad routines (and the TRANS pads, notes
-0x70-0x77), SHIFT + the FX buttons (effect parameters) and fader start: they need actions from later plans. The MIDI
+SHIFT + SYNC, SHIFT + the FX buttons (effect parameters) and fader start: they need
+actions from later plans. The MIDI
 messages these unmapped controls send are listed in a comment at the end of
 `mapping.toml`.
 
