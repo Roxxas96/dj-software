@@ -35,6 +35,11 @@ impl Deck {
     pub(super) fn jog_touch(&mut self, touched: bool) {
         self.jog_touched = touched;
         if touched {
+            self.touched_at = Some(self.clock);
+            // A touch right at a spin's start is the spin's own: it keeps the platter.
+            if self.backspin_in_grace() {
+                return;
+            }
             self.backspin = None;
         }
         self.scratch = None;
@@ -61,6 +66,10 @@ impl Deck {
     }
 
     pub(super) fn jog(&mut self, turns: f64, surface: JogSurface) {
+        // Top and platter moves right at a spin's start are the spin's own nudge.
+        if surface != JogSurface::Ring && self.backspin_in_grace() {
+            return;
+        }
         // The platter scratches a touched deck even with vinyl off; the scratch then ends
         // on the touch release like any other.
         if surface == JogSurface::Platter

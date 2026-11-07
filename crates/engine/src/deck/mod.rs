@@ -60,6 +60,12 @@ pub(crate) struct Deck {
     load_seq: u64,
     /// A running backspin.
     backspin: Option<backspin::Backspin>,
+    /// Output frames this deck has rendered: the deck's clock.
+    clock: u64,
+    /// The output sample rate, to turn times into clock frames.
+    output_rate: u32,
+    /// The clock when the jog was last touched.
+    touched_at: Option<u64>,
 }
 
 impl Default for Deck {
@@ -91,6 +97,9 @@ impl Default for Deck {
             roll: None,
             load_seq: 0,
             backspin: None,
+            clock: 0,
+            output_rate: 44_100,
+            touched_at: None,
         }
     }
 }
@@ -101,6 +110,7 @@ impl Deck {
     pub(crate) fn new(output_rate: u32, max_block_frames: usize) -> Self {
         Self {
             stretcher: Some(keylock::Stretcher::new(output_rate, max_block_frames)),
+            output_rate,
             ..Self::default()
         }
     }
@@ -224,6 +234,7 @@ impl Deck {
         self.loop_out = None;
         self.loop_active = false;
         self.jog_touched = false;
+        self.touched_at = None;
         self.scratch = None;
         self.bend = 0.0;
         self.pending_sync = None;
@@ -394,6 +405,7 @@ impl Deck {
 
     /// Adds this deck's output to the interleaved stereo `out` and advances the playhead.
     pub(crate) fn render_add(&mut self, out: &mut [f32], output_sample_rate: u32) {
+        self.clock = self.clock.wrapping_add((out.len() / 2) as u64);
         // Keylock stretches a deck playing on its own; scratching, a paused deck and the
         // original tempo play resampled.
         if self.scratch.is_none()
