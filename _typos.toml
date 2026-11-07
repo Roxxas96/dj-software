@@ -5,3 +5,5 @@ extend-exclude = ["crates/decode/tests/fixtures/"]
 # MP4 box fourcc ("trak" = track box)
 trak = "trak"
 anull = "anull"
+# torch.arange in the stems export wrapper (docs/stems-backend.md)
+arange = "arange"
