@@ -189,6 +189,10 @@ fn ids_round_trip_for_every_action() {
         "deck.fx_toggle_2",
         "deck.fx_toggle_3",
         "deck.fx_level",
+        "deck.stem_toggle_vocals",
+        "deck.stem_toggle_instruments",
+        "deck.stem_toggle_bass",
+        "deck.stem_toggle_rhythm",
         "sampler.play_1",
         "sampler.play_2",
         "sampler.play_3",
@@ -238,7 +242,7 @@ fn ids_round_trip_for_every_action() {
         .into_iter()
         .filter(|k| k.takes_release())
         .collect();
-    assert_eq!(ActionKind::ALL.len(), 125);
+    assert_eq!(ActionKind::ALL.len(), 129);
     let hotcue = |n| ActionKind::Hotcue(HotcueSlot::new(n).unwrap());
     let hotcue_delete = |n| ActionKind::HotcueDelete(HotcueSlot::new(n).unwrap());
     let mut expected_release = vec![
@@ -1354,6 +1358,63 @@ fn fx_toggles_track_state_and_send() {
     let third = deck_action(ActionKind::FxToggle(2), 2);
     rig.apply(third, Input::Press);
     assert_eq!(rig.c.channel(d(2)).fx_enabled, [false, false, true]);
+}
+
+#[test]
+fn stem_toggles_flip_and_send() {
+    let mut rig = Rig::new();
+    assert_eq!(rig.state.deck(d(0)).stems_on, [true; 4]);
+    for (i, stem) in engine::Stem::ALL.into_iter().enumerate() {
+        let kind = ActionKind::StemToggle(stem);
+        assert!(kind.accepts(InputKind::Button));
+        assert!(!kind.takes_release());
+        let action = deck_action(kind, 0);
+        assert_eq!(rig.apply(action, Input::Press), ApplyResult::Sent(1));
+        assert!(!rig.state.deck(d(0)).stems_on[i]);
+        assert_eq!(rig.apply(action, Input::Release), ApplyResult::Ignored);
+        assert_eq!(rig.apply(action, Input::Press), ApplyResult::Sent(1));
+        assert_eq!(rig.state.deck(d(0)).stems_on, [true; 4]);
+        assert_eq!(rig.state.deck(d(1)).stems_on, [true; 4]);
+    }
+}
+
+#[test]
+fn stem_flags_reset_on_load() {
+    let mut rig = Rig::new();
+    let bass = deck_action(ActionKind::StemToggle(engine::Stem::Bass), 0);
+    rig.apply(bass, Input::Press);
+    assert_eq!(rig.state.deck(d(0)).stems_on, [true, true, false, true]);
+    // A new load: the engine turns every stem back on, and the next press starts from all on.
+    let track = Arc::new(TrackBuffer::new(SR, vec![0.5; 2000 * 2]).unwrap());
+    rig.c
+        .send(engine::Command::Deck(
+            d(0),
+            engine::DeckCommand::Load {
+                track,
+                memory: engine::TrackMemory::default(),
+            },
+        ))
+        .unwrap();
+    rig.render(1);
+    rig.state
+        .sync_loads(DeckId::ALL.map(|id| rig.c.deck(id).load_seq));
+    assert_eq!(rig.state.deck(d(0)).stems_on, [true; 4]);
+    // Pressing right after a load, without a tick in between, resets first as well.
+    rig.apply(bass, Input::Press);
+    assert_eq!(rig.state.deck(d(0)).stems_on, [true, true, false, true]);
+    rig.c
+        .send(engine::Command::Deck(
+            d(0),
+            engine::DeckCommand::Load {
+                track: Arc::new(TrackBuffer::new(SR, vec![0.5; 2000 * 2]).unwrap()),
+                memory: engine::TrackMemory::default(),
+            },
+        ))
+        .unwrap();
+    rig.render(1);
+    let vocals = deck_action(ActionKind::StemToggle(engine::Stem::Vocals), 0);
+    rig.apply(vocals, Input::Press);
+    assert_eq!(rig.state.deck(d(0)).stems_on, [false, true, true, true]);
 }
 
 #[test]

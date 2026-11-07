@@ -37,6 +37,7 @@ enum Update {
     TempoRange(DeckId, TempoRange),
     Pfl(DeckId, bool),
     FxOn(DeckId, usize, bool),
+    StemOn(DeckId, engine::Stem, bool),
 }
 
 /// Performs `action` for `input` on `engine`, and records the result in `state` when the
@@ -142,6 +143,20 @@ pub fn apply(
             (
                 Command::Channel(d, ChannelCommand::FxEnabled(slot, on)),
                 Update::FxOn(d, slot, on),
+            )
+        }
+        (Action::StemToggle(d, stem), Input::Press) => {
+            // The engine turned every stem on at its last load; mirror that first.
+            let seq = engine.deck(d).load_seq;
+            let control = state.deck_mut(d);
+            if control.stems_load_seq != seq {
+                control.stems_load_seq = seq;
+                control.stems_on = [true; 4];
+            }
+            let on = !control.stems_on[stem.index()];
+            (
+                deck(d, DeckCommand::StemOn(stem, on)),
+                Update::StemOn(d, stem, on),
             )
         }
         (Action::SamplerPlay(slot), Input::Press) => (
@@ -269,6 +284,7 @@ pub fn apply(
         Update::TempoRange(d, range) => state.deck_mut(d).tempo_range = range,
         Update::Pfl(d, on) => state.deck_mut(d).pfl = on,
         Update::FxOn(d, slot, on) => state.deck_mut(d).fx_on[slot] = on,
+        Update::StemOn(d, stem, on) => state.deck_mut(d).stems_on[stem.index()] = on,
     }
     ApplyResult::Sent(1)
 }
