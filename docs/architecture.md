@@ -102,6 +102,21 @@ scopes the condition. A held roll or slice keeps its release on the deck that go
 press, even after a DECK switch, and a release on the shifted sibling note pairs with the
 press (`ActionKind::hold_partner`).
 
+**Firmware pad routines.** In its FX FADE, PAD SCRATCH and TRANS modes the SB3 performs
+routines itself and sends ordinary-looking messages: fader and FILTER moves, jog touches,
+a platter jog (`deck.jog_scratch`, `JogSurface::Platter`, which scratches a touched deck
+whatever the vinyl flag says) and loop notes. The engine adds what the SB3 cannot send:
+`DeckCommand::Backspin` (a reverse ramp from 3x speed to 0, then forward again; jog
+touches and top/platter moves within 50 ms of its start, measured on the deck's clock of
+rendered output frames, belong to it, and a scratch begun in the 50 ms before is taken
+over) and
+`AutoLoopBeats` / `LoopExit` for the fade loops. `deck.loop_exit` and `deck.loop_fade_N`
+rely on the engine's guards rather than the snapshot, because a pad note and its loop note
+arrive within a millisecond, before the engine has rendered. The resolver ties a side's
+fade loop to its deck: the side's next `deck.loop_exit` press goes to the deck its last
+`deck.loop_fade_N` started on, even after a DECK switch. The recorded routines are
+replayed in time by `crates/controller/tests/sb3_firmware_replay.rs`.
+
 **Keylock.** With keylock on (`DeckCommand::SetKeylock`, kept across loads), a deck at a
 tempo other than the original plays through its own Signalsmith Stretch time-stretcher
 (the C++ library, through the `signalsmith-stretch` crate; the cheaper preset, stereo, at

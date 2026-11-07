@@ -239,9 +239,9 @@ browser actions).
 | `deck.jog_scratch` | deck | relative | Platter scratch: like `deck.jog_top`, but a touched deck is scratched even with vinyl mode off, and a running backspin is cancelled. |
 | `deck.backspin_short` | deck | button | Backspin of the playing deck, `backspin.short` seconds from `config.toml` (default 1 s). |
 | `deck.backspin_long` | deck | button | Backspin of the playing deck, `backspin.long` seconds (default 2 s). |
-| `deck.loop_fade_1` | deck | button | With no normal loop active, loops 1 beat from the last beat. Does nothing while a loop is on. |
-| `deck.loop_fade_4` | deck | button | With no normal loop active, loops 4 beats from the last beat. Does nothing while a loop is on. |
-| `deck.loop_exit` | deck | button | Leaves a normal loop. Does nothing if none is on, and never reloops. |
+| `deck.loop_fade_1` | deck | button | With no normal loop active, loops 1 beat from the last beat and sets the auto-loop size to 1 beat (the next `deck.auto_loop` uses it). Does nothing while a loop is on. |
+| `deck.loop_fade_4` | deck | button | With no normal loop active, loops 4 beats from the last beat and sets the auto-loop size to 4 beats (the next `deck.auto_loop` uses it). Does nothing while a loop is on. |
+| `deck.loop_exit` | deck | button | Leaves a normal loop. Does nothing if none is on, and never reloops. With a `side` binding, the side's first press after a `deck.loop_fade_N` press goes to the deck that fade loop started on, even after a deck switch. |
 | `channel.trim` | deck | absolute | Channel gain (TRIM). |
 | `channel.eq_high` | deck | absolute | High EQ. |
 | `channel.eq_mid` | deck | absolute | Mid EQ. |
