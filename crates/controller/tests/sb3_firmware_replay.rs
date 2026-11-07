@@ -394,17 +394,19 @@ fn trans_cuts_and_restores_the_fader() {
 }
 
 #[test]
-fn pad_scratch_scratches_from_hotcue_1() {
-    pad_scratch_from_hotcue_1(true);
+fn pad_scratch_returns_to_where_the_routine_started() {
+    pad_scratch_from_the_playhead(true);
 }
 
 /// The routine's jog scratches through the platter whatever VINYL says.
 #[test]
-fn pad_scratch_scratches_from_hotcue_1_with_vinyl_off() {
-    pad_scratch_from_hotcue_1(false);
+fn pad_scratch_returns_to_where_the_routine_started_with_vinyl_off() {
+    pad_scratch_from_the_playhead(false);
 }
 
-fn pad_scratch_from_hotcue_1(vinyl: bool) {
+/// The routine's pads anchor the deck where it is, and the firmware's repeated HOT CUE 1
+/// presses return there; no hotcue is ever set.
+fn pad_scratch_from_the_playhead(vinyl: bool) {
     let messages = segment(PAD_SCRATCH);
     let mut rig = Rig::playing(PAD_SCRATCH.0);
     for deck in [d(1), d(3)] {
@@ -429,31 +431,33 @@ fn pad_scratch_from_hotcue_1(vinyl: bool) {
         .0;
     let (before, held): (Vec<_>, Vec<_>) = messages.iter().partition(|(ms, _)| *ms < first);
     rig.play(&before, |_, _| {});
-    assert_eq!(rig.deck(1).hotcues[0], None);
+    assert_eq!(rig.runtime.state().deck(d(1)).scratch_anchor, None);
     rig.advance_to(first);
     let at_press = rig.deck(1).position_frames;
-    let mut cue = None;
+    let mut anchor = None;
     let mut furthest = 0.0f64;
     rig.play(&held, |rig, ms| {
         let deck = rig.deck(1);
-        let hotcue = deck.hotcues[0].expect("hotcue 1 is set at the first message");
-        let cue = *cue.get_or_insert(hotcue);
-        assert_eq!(hotcue, cue, "hotcue 1 moved at {ms} ms");
-        furthest = furthest.max((deck.position_frames - cue).abs());
+        assert_eq!(deck.hotcues, [None; 8], "a hotcue was set at {ms} ms");
+        let stored = rig.runtime.state().deck(d(1)).scratch_anchor;
+        let anchor = *anchor.get_or_insert(stored.expect("the anchor is set at the first pad"));
+        assert_eq!(stored, Some(anchor), "the anchor moved at {ms} ms");
+        furthest = furthest.max((deck.position_frames - anchor).abs());
     });
-    let cue = cue.unwrap();
+    let anchor = anchor.unwrap();
     assert!(
-        (cue - at_press).abs() < 0.05 * f64::from(SAMPLE_RATE),
-        "hotcue 1 at {cue}, pressed at {at_press}"
+        (anchor - at_press).abs() < 0.05 * f64::from(SAMPLE_RATE),
+        "anchored at {anchor}, pressed at {at_press}"
     );
     assert!(
         furthest < 0.5 * f64::from(SAMPLE_RATE),
-        "the playhead strayed {furthest} frames from hotcue 1"
+        "the playhead strayed {furthest} frames from the anchor"
     );
-    // After the release the deck plays on from the cue.
+    // After the release the deck plays on.
     let end = rig.now_ms;
+    let released_at = rig.deck(1).position_frames;
     rig.advance_to(end + 2_000);
-    assert!(rig.seconds(1) - cue / f64::from(SAMPLE_RATE) > 1.5);
+    assert!(rig.deck(1).position_frames - released_at > 1.5 * f64::from(SAMPLE_RATE));
     assert_left_as_the_controls_are(&rig);
 }
 

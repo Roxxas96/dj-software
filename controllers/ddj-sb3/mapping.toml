@@ -409,9 +409,12 @@ pad_mode = "hardware"
 #   loop_roll  SHIFT + FX FADE; the pads are held, and bound on the shifted notes too so
 #              a release after SHIFT went down still ends the roll
 #   slicer     SHIFT + PAD SCRATCH; held pads, as for loop_roll
+#   pad_scratch  PAD SCRATCH; the firmware's routine: its pads (0x20-0x27) store the
+#              deck's scratch anchor and its repeated HOT CUE 1 note returns to it, so
+#              the routine never touches hotcues
 # Press HOT CUE or SAMPLER before choosing a software mode: while the SB3 is in FX FADE or
 # PAD SCRATCH it runs its own routine on the pads and sends other notes. HOT CUE, FX FADE,
-# PAD SCRATCH, SAMPLER and SHIFT + SAMPLER (TRANS) all go back to the hardware mode. The
+# SAMPLER and SHIFT + SAMPLER (TRANS) go back to the hardware mode. The
 # SB3 does not light the mode buttons for this, so the status line shows the mode.
 # Capture note: the left SHIFT + SAMPLER pads were captured on 0x30-0x37 (the unshifted
 # notes); the right side sent 0x38-0x3F, and the left side is bound the same.
@@ -431,7 +434,7 @@ side = "left"
 # PAD SCRATCH
 [[input]]
 midi = { channel = 1, note = 0x20 }
-action = "pads.mode_hardware"
+action = "pads.mode_pad_scratch"
 side = "left"
 
 # SAMPLER
@@ -507,6 +510,22 @@ midi = { channel = 8, notes = [0x08, 0x0F] }
 action = "deck.hotcue_delete_{n}"
 side = "left"
 pad_mode = "hardware"
+
+# PAD SCRATCH mode: the routine's pads (0x20-0x27) set the deck's scratch anchor, and the
+# HOT CUE 1 note the SB3 repeats about every beat during the routine returns to it. The
+# routine sends a pad note before its first HOT CUE 1, so that first return is a no-op.
+# Hotcues stay on the hardware mode: the routine never sets or uses them.
+[[input]]
+midi = { channel = 8, notes = [0x20, 0x27] }
+action = "deck.scratch_anchor_set"
+side = "left"
+pad_mode = "pad_scratch"
+
+[[input]]
+midi = { channel = 8, note = 0x00 }
+action = "deck.scratch_anchor_return"
+side = "left"
+pad_mode = "pad_scratch"
 
 # Hardware mode: SAMPLER pads play samples and SHIFT + SAMPLER pads stop them (the
 # sampler is shared, so both sides play the same samples)
@@ -740,8 +759,8 @@ action = "deck.backspin_long"
 side = "right"
 pad_mode = "hardware"
 
-# Pad mode buttons. HOT CUE, FX FADE, PAD SCRATCH and SAMPLER (and SHIFT + SAMPLER,
-# TRANS) leave the pads to the controller's own modes; the SHIFT variants of the other
+# Pad mode buttons. HOT CUE, FX FADE and SAMPLER (and SHIFT + SAMPLER, TRANS) leave
+# the pads to the controller's own modes and PAD SCRATCH picks the pad scratch mode; the SHIFT variants of the other
 # three pick a software pad mode.
 
 # HOT CUE
@@ -759,7 +778,7 @@ side = "right"
 # PAD SCRATCH
 [[input]]
 midi = { channel = 2, note = 0x20 }
-action = "pads.mode_hardware"
+action = "pads.mode_pad_scratch"
 side = "right"
 
 # SAMPLER
@@ -830,6 +849,22 @@ midi = { channel = 9, notes = [0x08, 0x0F] }
 action = "deck.hotcue_delete_{n}"
 side = "right"
 pad_mode = "hardware"
+
+# PAD SCRATCH mode: the routine's pads (0x20-0x27) set the deck's scratch anchor, and the
+# HOT CUE 1 note the SB3 repeats about every beat during the routine returns to it. The
+# routine sends a pad note before its first HOT CUE 1, so that first return is a no-op.
+# Hotcues stay on the hardware mode: the routine never sets or uses them.
+[[input]]
+midi = { channel = 9, notes = [0x20, 0x27] }
+action = "deck.scratch_anchor_set"
+side = "right"
+pad_mode = "pad_scratch"
+
+[[input]]
+midi = { channel = 9, note = 0x00 }
+action = "deck.scratch_anchor_return"
+side = "right"
+pad_mode = "pad_scratch"
 
 # Hardware mode: SAMPLER pads play samples and SHIFT + SAMPLER pads stop them (the
 # sampler is shared, so both sides play the same samples)

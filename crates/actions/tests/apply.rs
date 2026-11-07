@@ -146,6 +146,8 @@ fn ids_round_trip_for_every_action() {
         "deck.jog_scratch",
         "deck.backspin_short",
         "deck.backspin_long",
+        "deck.scratch_anchor_set",
+        "deck.scratch_anchor_return",
         "deck.loop_fade_1",
         "deck.loop_fade_4",
         "deck.loop_exit",
@@ -207,6 +209,7 @@ fn ids_round_trip_for_every_action() {
         "pads.mode_beat_jump",
         "pads.mode_loop_roll",
         "pads.mode_slicer",
+        "pads.mode_pad_scratch",
     ];
     let ids: HashSet<_> = ActionKind::ALL.iter().map(|k| k.id()).collect();
     assert_eq!(ids, expected.into_iter().collect::<HashSet<_>>());
@@ -235,7 +238,7 @@ fn ids_round_trip_for_every_action() {
         .into_iter()
         .filter(|k| k.takes_release())
         .collect();
-    assert_eq!(ActionKind::ALL.len(), 122);
+    assert_eq!(ActionKind::ALL.len(), 125);
     let hotcue = |n| ActionKind::Hotcue(HotcueSlot::new(n).unwrap());
     let hotcue_delete = |n| ActionKind::HotcueDelete(HotcueSlot::new(n).unwrap());
     let mut expected_release = vec![
@@ -1498,4 +1501,72 @@ fn loop_exit_without_a_loop_does_nothing() {
         rig.apply(deck_action(ActionKind::LoopExit, 0), Input::Press);
         assert!(!rig.c.deck(d(0)).loop_active);
     }
+}
+
+fn seek(rig: &mut Rig, frames: f64) {
+    rig.c
+        .send(engine::Command::Deck(
+            d(0),
+            engine::DeckCommand::Seek(frames),
+        ))
+        .unwrap();
+    rig.render(1);
+}
+
+#[test]
+fn pad_scratch_mode_is_a_pad_mode() {
+    use actions::PadMode;
+    assert_eq!(PadMode::PadScratch.id(), "pad_scratch");
+    assert_eq!(PadMode::from_id("pad_scratch"), Some(PadMode::PadScratch));
+    let mut rig = Rig::new();
+    let action = Action::new(
+        ActionKind::from_id("pads.mode_pad_scratch").unwrap(),
+        Target::Side(Side::Right),
+    )
+    .unwrap();
+    assert_eq!(rig.apply(action, Input::Press), ApplyResult::Sent(0));
+    assert_eq!(rig.state.side(Side::Right).pad_mode, PadMode::PadScratch);
+}
+
+#[test]
+fn scratch_anchor_set_stores_the_playhead() {
+    let mut rig = Rig::new();
+    seek(&mut rig, 50_000.0);
+    assert_eq!(rig.state.deck(d(0)).scratch_anchor, None);
+    let set = deck_action(ActionKind::ScratchAnchorSet, 0);
+    assert_eq!(rig.apply(set, Input::Press), ApplyResult::Sent(0));
+    assert_eq!(rig.state.deck(d(0)).scratch_anchor, Some(50_000.0));
+    assert_eq!(rig.state.deck(d(1)).scratch_anchor, None);
+    assert_eq!(rig.apply(set, Input::Release), ApplyResult::Ignored);
+    // A later press moves the anchor.
+    seek(&mut rig, 80_000.0);
+    rig.apply(set, Input::Press);
+    assert_eq!(rig.state.deck(d(0)).scratch_anchor, Some(80_000.0));
+}
+
+#[test]
+fn scratch_anchor_return_seeks_to_the_anchor() {
+    let mut rig = Rig::new();
+    seek(&mut rig, 50_000.0);
+    rig.apply(deck_action(ActionKind::ScratchAnchorSet, 0), Input::Press);
+    seek(&mut rig, 120_000.0);
+    let back = deck_action(ActionKind::ScratchAnchorReturn, 0);
+    assert_eq!(rig.apply(back, Input::Press), ApplyResult::Sent(1));
+    assert_eq!(rig.c.deck(d(0)).position_frames, 50_000.0);
+    assert_eq!(rig.state.deck(d(0)).scratch_anchor, Some(50_000.0));
+    assert_eq!(rig.apply(back, Input::Release), ApplyResult::Ignored);
+}
+
+#[test]
+fn scratch_anchor_return_without_an_anchor_sets_it_here() {
+    let mut rig = Rig::new();
+    seek(&mut rig, 70_000.0);
+    let back = deck_action(ActionKind::ScratchAnchorReturn, 0);
+    assert_eq!(rig.apply(back, Input::Press), ApplyResult::Sent(0));
+    assert_eq!(rig.state.deck(d(0)).scratch_anchor, Some(70_000.0));
+    assert_eq!(rig.c.deck(d(0)).position_frames, 70_000.0);
+    // The anchor is now there to return to.
+    seek(&mut rig, 10_000.0);
+    assert_eq!(rig.apply(back, Input::Press), ApplyResult::Sent(1));
+    assert_eq!(rig.c.deck(d(0)).position_frames, 70_000.0);
 }

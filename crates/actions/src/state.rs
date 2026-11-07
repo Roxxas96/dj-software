@@ -19,6 +19,9 @@ pub struct DeckControl {
     pub fx_level: f32,
     /// Which effect slots the app turned on.
     pub fx_on: [bool; 3],
+    /// Where `deck.scratch_anchor_return` seeks to, in track frames. Not cleared when a
+    /// track loads.
+    pub scratch_anchor: Option<f64>,
 }
 
 impl Default for DeckControl {
@@ -36,6 +39,7 @@ impl Default for DeckControl {
             fader: 1.0,
             fx_level: 0.5,
             fx_on: [false; 3],
+            scratch_anchor: None,
         }
     }
 }
@@ -49,15 +53,19 @@ pub enum PadMode {
     BeatJump,
     LoopRoll,
     Slicer,
+    /// The SB3's PAD SCRATCH routine: its pads set the deck's scratch anchor and its
+    /// repeated HOT CUE 1 presses return to it.
+    PadScratch,
 }
 
 impl PadMode {
     /// Every mode.
-    pub const ALL: [PadMode; 4] = [
+    pub const ALL: [PadMode; 5] = [
         PadMode::Hardware,
         PadMode::BeatJump,
         PadMode::LoopRoll,
         PadMode::Slicer,
+        PadMode::PadScratch,
     ];
 
     /// The id used in mapping files.
@@ -67,6 +75,7 @@ impl PadMode {
             PadMode::BeatJump => "beat_jump",
             PadMode::LoopRoll => "loop_roll",
             PadMode::Slicer => "slicer",
+            PadMode::PadScratch => "pad_scratch",
         }
     }
 

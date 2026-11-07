@@ -83,7 +83,7 @@ It is not applied again after a reconnect, so values you set meanwhile are kept.
 | `side` | `"left"` or `"right"`: whatever deck that side shows now (see [Layers](#layers-and-deck-switching)). Use `deck` or `side`, never both. |
 | `shift` | `true` or `false`: only fire while SHIFT of the binding's side is held, or not held. For master and browser actions, any side's SHIFT counts. |
 | `active_deck` | 1-4: only fire while the binding's side shows this deck. Must be a deck on the binding's side. |
-| `pad_mode` | `"hardware"`, `"beat_jump"`, `"loop_roll"` or `"slicer"`: only fire while the binding's side has its performance pads in this mode. Needs a side: a `side`, or a `deck` (that deck's side). A master action takes `side` only together with `pad_mode`, where it just scopes the condition and the action stays global (for example `sampler.play_3` with `side = "left"`); `pad_mode` on a master action without `side` is a load error (`pad_mode needs a side`), and so is `side` on a master action without `pad_mode`. A press keeps its release even if the pad mode changes while it is held. |
+| `pad_mode` | `"hardware"`, `"beat_jump"`, `"loop_roll"`, `"slicer"` or `"pad_scratch"`: only fire while the binding's side has its performance pads in this mode. Needs a side: a `side`, or a `deck` (that deck's side). A master action takes `side` only together with `pad_mode`, where it just scopes the condition and the action stays global (for example `sampler.play_3` with `side = "left"`); `pad_mode` on a master action without `side` is a load error (`pad_mode needs a side`), and so is `side` on a master action without `pad_mode`. A press keeps its release even if the pad mode changes while it is held. |
 | `value` | How to read the message: `"button"`, `"absolute"`, `"relative_twos"` or `"relative_offset"`. |
 | `invert` | `true` flips an absolute value (`1 - v`) or negates relative steps. Default `false`. |
 | `soft_takeover` | `false` turns [soft takeover](#soft-takeover) off for an absolute binding. Default `true`. |
@@ -239,6 +239,8 @@ browser actions).
 | `deck.jog_scratch` | deck | relative | Platter scratch: like `deck.jog_top`, but a touched deck is scratched even with vinyl mode off, and a running backspin is cancelled only by a touched platter move after its first 50 ms (an untouched move nudges). |
 | `deck.backspin_short` | deck | button | Backspin of the playing deck, `backspin.short` seconds from `config.toml` (default 1 s). |
 | `deck.backspin_long` | deck | button | Backspin of the playing deck, `backspin.long` seconds (default 2 s). |
+| `deck.scratch_anchor_set` | deck | button | Stores the deck's current playhead as its scratch anchor (one per deck, kept until set again; not cleared when a track loads). |
+| `deck.scratch_anchor_return` | deck | button | Seeks the deck to its scratch anchor (a plain seek: it drops slip ghosts, rolls and a backspin, and keeps the play state). With no anchor yet, it stores the playhead as the anchor and does not move. |
 | `deck.loop_fade_1` | deck | button | With no normal loop active, loops 1 beat from the last beat and sets the auto-loop size to 1 beat (the next `deck.auto_loop` uses it). Does nothing while a loop is on. |
 | `deck.loop_fade_4` | deck | button | With no normal loop active, loops 4 beats from the last beat and sets the auto-loop size to 4 beats (the next `deck.auto_loop` uses it). Does nothing while a loop is on. |
 | `deck.loop_exit` | deck | button | Leaves a normal loop. Does nothing if none is on, and never reloops. With a `side` binding, the side's first press after a `deck.loop_fade_N` press goes to the deck that fade loop started on, even after a deck switch. |
@@ -262,6 +264,7 @@ browser actions).
 | `pads.mode_beat_jump` | side | button | Press to set the side's pad mode to beat jump; no sound changes by itself. |
 | `pads.mode_loop_roll` | side | button | Press to set the side's pad mode to loop roll; no sound changes by itself. |
 | `pads.mode_slicer` | side | button | Press to set the side's pad mode to slicer; no sound changes by itself. |
+| `pads.mode_pad_scratch` | side | button | Press to set the side's pad mode to pad scratch (for a controller's scratch routine: bind `deck.scratch_anchor_set` and `deck.scratch_anchor_return` with `pad_mode = "pad_scratch"`); no sound changes by itself. |
 | `deck.beat_jump_1` | deck | button | Press to jump the playhead by the size of beat jump pad 1 (default -4, 4, -8, 8, -16, 16, -32, 32 beats for pads 1 to 8). Needs a beatgrid; the jump stops at the track's start and end. |
 | `deck.beat_jump_2` | deck | button | Press to jump the playhead by the size of beat jump pad 2 (default -4, 4, -8, 8, -16, 16, -32, 32 beats for pads 1 to 8). Needs a beatgrid; the jump stops at the track's start and end. |
 | `deck.beat_jump_3` | deck | button | Press to jump the playhead by the size of beat jump pad 3 (default -4, 4, -8, 8, -16, 16, -32, 32 beats for pads 1 to 8). Needs a beatgrid; the jump stops at the track's start and end. |
