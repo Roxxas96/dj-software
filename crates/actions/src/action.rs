@@ -143,6 +143,11 @@ pub enum ActionKind {
     BackspinShort,
     /// A backspin of `ControlState::backspin_long` seconds.
     BackspinLong,
+    /// Stores the deck's playhead as its scratch anchor.
+    ScratchAnchorSet,
+    /// Seeks the deck to its scratch anchor; with none yet, stores the playhead as the
+    /// anchor and does not move.
+    ScratchAnchorReturn,
     /// With no normal loop active, an auto loop of 1 beat.
     LoopFade1,
     /// With no normal loop active, an auto loop of 4 beats.
@@ -270,8 +275,8 @@ const SAMPLER_STOP_IDS: [&str; 8] = [
 
 impl ActionKind {
     /// Every kind: each slot family (hotcues, beat jumps, rolls, slices, sampler) once per slot.
-    pub const ALL: [ActionKind; 122] = {
-        let mut all = [ActionKind::PlayPause; 122];
+    pub const ALL: [ActionKind; 125] = {
+        let mut all = [ActionKind::PlayPause; 125];
         let fixed = [
             ActionKind::PlayPause,
             ActionKind::Cue,
@@ -318,6 +323,8 @@ impl ActionKind {
             ActionKind::JogScratch,
             ActionKind::BackspinShort,
             ActionKind::BackspinLong,
+            ActionKind::ScratchAnchorSet,
+            ActionKind::ScratchAnchorReturn,
             ActionKind::LoopFade1,
             ActionKind::LoopFade4,
             ActionKind::LoopExit,
@@ -325,6 +332,7 @@ impl ActionKind {
             ActionKind::PadMode(PadMode::BeatJump),
             ActionKind::PadMode(PadMode::LoopRoll),
             ActionKind::PadMode(PadMode::Slicer),
+            ActionKind::PadMode(PadMode::PadScratch),
             ActionKind::SlipToggle,
             ActionKind::KeylockToggle,
             ActionKind::FxToggle(0),
@@ -404,6 +412,8 @@ impl ActionKind {
             ActionKind::JogScratch => "deck.jog_scratch",
             ActionKind::BackspinShort => "deck.backspin_short",
             ActionKind::BackspinLong => "deck.backspin_long",
+            ActionKind::ScratchAnchorSet => "deck.scratch_anchor_set",
+            ActionKind::ScratchAnchorReturn => "deck.scratch_anchor_return",
             ActionKind::LoopFade1 => "deck.loop_fade_1",
             ActionKind::LoopFade4 => "deck.loop_fade_4",
             ActionKind::LoopExit => "deck.loop_exit",
@@ -411,6 +421,7 @@ impl ActionKind {
             ActionKind::PadMode(PadMode::BeatJump) => "pads.mode_beat_jump",
             ActionKind::PadMode(PadMode::LoopRoll) => "pads.mode_loop_roll",
             ActionKind::PadMode(PadMode::Slicer) => "pads.mode_slicer",
+            ActionKind::PadMode(PadMode::PadScratch) => "pads.mode_pad_scratch",
             ActionKind::BeatJump(slot) => BEAT_JUMP_IDS[slot.index()],
             ActionKind::BeatJumpShift(slot) => BEAT_JUMP_SHIFT_IDS[slot.index()],
             ActionKind::LoopRoll(slot) => LOOP_ROLL_IDS[slot.index()],
@@ -466,6 +477,8 @@ impl ActionKind {
             | ActionKind::JogScratch
             | ActionKind::BackspinShort
             | ActionKind::BackspinLong
+            | ActionKind::ScratchAnchorSet
+            | ActionKind::ScratchAnchorReturn
             | ActionKind::LoopFade1
             | ActionKind::LoopFade4
             | ActionKind::LoopExit
@@ -623,6 +636,8 @@ pub enum Action {
     JogScratch(DeckId),
     BackspinShort(DeckId),
     BackspinLong(DeckId),
+    ScratchAnchorSet(DeckId),
+    ScratchAnchorReturn(DeckId),
     LoopFade1(DeckId),
     LoopFade4(DeckId),
     LoopExit(DeckId),
@@ -691,6 +706,8 @@ impl Action {
             (K::JogScratch, Target::Deck(d)) => Action::JogScratch(d),
             (K::BackspinShort, Target::Deck(d)) => Action::BackspinShort(d),
             (K::BackspinLong, Target::Deck(d)) => Action::BackspinLong(d),
+            (K::ScratchAnchorSet, Target::Deck(d)) => Action::ScratchAnchorSet(d),
+            (K::ScratchAnchorReturn, Target::Deck(d)) => Action::ScratchAnchorReturn(d),
             (K::LoopFade1, Target::Deck(d)) => Action::LoopFade1(d),
             (K::LoopFade4, Target::Deck(d)) => Action::LoopFade4(d),
             (K::LoopExit, Target::Deck(d)) => Action::LoopExit(d),
@@ -768,6 +785,8 @@ impl Action {
             Action::JogScratch(_) => ActionKind::JogScratch,
             Action::BackspinShort(_) => ActionKind::BackspinShort,
             Action::BackspinLong(_) => ActionKind::BackspinLong,
+            Action::ScratchAnchorSet(_) => ActionKind::ScratchAnchorSet,
+            Action::ScratchAnchorReturn(_) => ActionKind::ScratchAnchorReturn,
             Action::LoopFade1(_) => ActionKind::LoopFade1,
             Action::LoopFade4(_) => ActionKind::LoopFade4,
             Action::LoopExit(_) => ActionKind::LoopExit,
@@ -825,6 +844,8 @@ impl Action {
             | Action::JogScratch(d)
             | Action::BackspinShort(d)
             | Action::BackspinLong(d)
+            | Action::ScratchAnchorSet(d)
+            | Action::ScratchAnchorReturn(d)
             | Action::LoopFade1(d)
             | Action::LoopFade4(d)
             | Action::LoopExit(d)

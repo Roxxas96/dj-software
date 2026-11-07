@@ -196,6 +196,19 @@ pub fn apply(
             let seconds = state.backspin_long;
             (deck(d, DeckCommand::Backspin { seconds }), Update::None)
         }
+        (Action::ScratchAnchorSet(d), Input::Press) => {
+            state.deck_mut(d).scratch_anchor = Some(engine.deck(d).position_frames);
+            return ApplyResult::Sent(0);
+        }
+        // `Seek` rather than a hotcue jump: the anchor is not a hotcue (no preview, no slot),
+        // and dropping slip ghosts, rolls and a backspin is what a restart should do.
+        (Action::ScratchAnchorReturn(d), Input::Press) => {
+            let Some(anchor) = state.deck(d).scratch_anchor else {
+                state.deck_mut(d).scratch_anchor = Some(engine.deck(d).position_frames);
+                return ApplyResult::Sent(0);
+            };
+            (deck(d, DeckCommand::Seek(anchor)), Update::None)
+        }
         // No snapshot pre-checks: the engine ignores AutoLoopBeats while a loop is active
         // and LoopExit without one, so an FX FADE pad 3/7 press followed by its loop note
         // in the same batch always acts on the engine's current state.

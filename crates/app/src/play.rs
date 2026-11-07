@@ -294,6 +294,7 @@ pub(crate) fn pad_mode_line(state: &ControlState) -> Option<String> {
                 PadMode::BeatJump => "beat jump",
                 PadMode::LoopRoll => "loop roll",
                 PadMode::Slicer => "slicer",
+                PadMode::PadScratch => "pad scratch",
             };
             Some(format!("{name}: {mode}"))
         })

@@ -422,7 +422,7 @@ fn performance_table() -> Vec<(&'static str, Layer, Action)> {
         (
             "deck1.mode_pad_scratch",
             Main,
-            Action::PadMode(l, PadMode::Hardware),
+            Action::PadMode(l, PadMode::PadScratch),
         ),
         (
             "deck1.mode_sampler",
@@ -474,7 +474,7 @@ fn performance_table() -> Vec<(&'static str, Layer, Action)> {
         (
             "deck2.mode_pad_scratch",
             Main,
-            Action::PadMode(r, PadMode::Hardware),
+            Action::PadMode(r, PadMode::PadScratch),
         ),
         (
             "deck2.mode_sampler",
@@ -1466,6 +1466,7 @@ fn set_mode(rig: &mut Rig, side: Side, mode: PadMode) {
         PadMode::BeatJump => format!("deck{n}.mode_hot_cue.shift"),
         PadMode::LoopRoll => format!("deck{n}.mode_fx_fade.shift"),
         PadMode::Slicer => format!("deck{n}.mode_pad_scratch.shift"),
+        PadMode::PadScratch => format!("deck{n}.mode_pad_scratch"),
     };
     rig.press(&id);
     assert_eq!(rig.runtime.state().side(side).pad_mode, mode, "{id}");
@@ -1496,7 +1497,7 @@ fn mode_buttons_set_the_side_pad_mode() {
             ("mode_fx_fade.shift", PadMode::LoopRoll),
             ("mode_fx_fade", PadMode::Hardware),
             ("mode_pad_scratch.shift", PadMode::Slicer),
-            ("mode_pad_scratch", PadMode::Hardware),
+            ("mode_pad_scratch", PadMode::PadScratch),
             ("mode_hot_cue.shift", PadMode::BeatJump),
             ("mode_sampler", PadMode::Hardware),
             ("mode_pad_scratch.shift", PadMode::Slicer),
@@ -2028,4 +2029,44 @@ fn firmware_pad_messages_drive_their_actions() {
             *i += 1;
         }
     }
+}
+
+#[test]
+fn pad_scratch_mode_anchors_the_playhead_and_leaves_hotcues_alone() {
+    let mut rig = Rig::attached();
+    play_from(&mut rig, 1, 10_000.0);
+    set_mode(&mut rig, Side::Left, PadMode::PadScratch);
+
+    // A routine pad sets the anchor; the firmware's HOT CUE 1 note (index 2) returns to it.
+    let set = rig.pad("deck1.pads_pad_scratch", 0, 127);
+    assert_eq!(set, [Action::ScratchAnchorSet(d(1))]);
+    let anchor = rig.runtime.state().deck(d(1)).scratch_anchor.unwrap();
+    assert!((anchor - 10_000.0).abs() < 5_000.0, "anchor {anchor}");
+    rig.deck_command(1, DeckCommand::Seek(150_000.0));
+    let back = rig.pad("deck1.pads_pad_scratch", 2, 127);
+    assert_eq!(back, [Action::ScratchAnchorReturn(d(1))]);
+    let returned = rig.engine.deck(d(1)).position_frames;
+    assert!(
+        (returned - anchor).abs() < 2_000.0,
+        "returned to {returned}, anchor {anchor}"
+    );
+    rig.pad("deck1.pads_pad_scratch", 2, 0);
+    assert_eq!(rig.engine.deck(d(1)).hotcues, [None; 8], "no hotcue is set");
+
+    // Every routine pad (0x20-0x27) sets the anchor.
+    for index in [4, 10] {
+        rig.deck_command(1, DeckCommand::Seek(60_000.0));
+        let set = rig.pad("deck1.pads_pad_scratch", index, 127);
+        assert_eq!(set, [Action::ScratchAnchorSet(d(1))], "message {index}");
+    }
+
+    // HOT CUE mode brings the hotcue pads back.
+    set_mode(&mut rig, Side::Left, PadMode::Hardware);
+    rig.deck_command(1, DeckCommand::Seek(30_000.0));
+    let set = rig.pad("deck1.pads_hot_cue", 0, 127);
+    assert_eq!(set, [Action::Hotcue(d(1), slot(1))]);
+    let cue = rig.engine.deck(d(1)).hotcues[0].expect("pad 1 set hotcue 1");
+    assert!((cue - 30_000.0).abs() < 2_000.0, "hotcue 1 at {cue}");
+    // And the routine pads do nothing outside PAD SCRATCH mode.
+    assert_eq!(rig.pad("deck1.pads_pad_scratch", 0, 127), []);
 }

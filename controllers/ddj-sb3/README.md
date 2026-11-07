@@ -86,7 +86,8 @@ point you set is remembered and comes back when the track is loaded again. See
 | SAMPLER pads 1-8 (hardware pad mode) | play sample 1-8 from the start; again restarts it |
 | SHIFT + SAMPLER pads 1-8 | stop sample 1-8 |
 | SHIFT + HOT CUE, SHIFT + FX FADE, SHIFT + PAD SCRATCH | software pad mode of the side: beat jump, loop roll, slicer |
-| HOT CUE, FX FADE, PAD SCRATCH, SAMPLER, SHIFT + SAMPLER | back to the hardware pad mode |
+| HOT CUE, FX FADE, SAMPLER, SHIFT + SAMPLER | back to the hardware pad mode |
+| PAD SCRATCH | the pad scratch mode of the side (the routine's anchor, see below) |
 | pads in beat jump mode | jump by `beat_jump.pads` beats (default -4, 4, -8, 8, -16, 16, -32, 32) |
 | SHIFT + pads in beat jump mode | jump by `beat_jump.shift_pads` beats (default -1, 1, -2, 2, -4, 4, -64, 64) |
 | pads in loop roll mode | hold to roll `loop_roll.pads` beats (default 1/16 to 8), slip back on release |
@@ -188,9 +189,15 @@ VirtualDJ:
   the second press still ends the loop on the deck it started on.
 - **FX FADE pad 4 (pad 8):** a backspin of `backspin.short` (`backspin.long`) seconds,
   1 s and 2 s by default (`docs/config.md`).
-- **PAD SCRATCH pads:** the first message jumps to hotcue 1, or sets it where the deck is
-  if there is none (it is then remembered on the track); the SB3 then keeps jumping back
-  to it and scratching (a jog that scratches whatever VINYL says).
+- **PAD SCRATCH pads:** pressing PAD SCRATCH puts the side in its pad scratch mode. The
+  routine's pads (notes 0x20-0x27) store where the deck is as its scratch anchor, then the
+  SB3 keeps sending HOT CUE pad 1 about every beat to restart its scratch pattern, and the
+  app seeks the deck back to the anchor (a seek: it drops a slip ghost or a roll), while
+  the jog scratches whatever VINYL says. So the routine always scratches from where you
+  were in the track. It never sets or uses a hotcue. The pad note comes before the first
+  HOT CUE 1 note, so that first return stays put. A deck keeps its anchor until a routine
+  pad sets another (a track load does not clear it); a return with no anchor yet stores
+  the playhead. HOT CUE, FX FADE, SAMPLER or a SHIFT mode button leaves the mode.
 - **TRANS pads:** the SB3 cuts the fader in rhythm.
 
 When a routine ends, the deck is where the physical controls are: the SB3 sends the real
