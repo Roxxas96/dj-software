@@ -395,8 +395,24 @@ fn trans_cuts_and_restores_the_fader() {
 
 #[test]
 fn pad_scratch_scratches_from_hotcue_1() {
+    pad_scratch_from_hotcue_1(true);
+}
+
+/// The routine's jog scratches through the platter whatever VINYL says.
+#[test]
+fn pad_scratch_scratches_from_hotcue_1_with_vinyl_off() {
+    pad_scratch_from_hotcue_1(false);
+}
+
+fn pad_scratch_from_hotcue_1(vinyl: bool) {
     let messages = segment(PAD_SCRATCH);
     let mut rig = Rig::playing(PAD_SCRATCH.0);
+    for deck in [d(1), d(3)] {
+        rig.engine
+            .send(Command::Deck(deck, DeckCommand::SetVinyl(vinyl)))
+            .unwrap();
+    }
+    rig.render_frames(1);
     let first = messages
         .iter()
         .find(|(_, m)| {

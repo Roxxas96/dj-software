@@ -687,7 +687,8 @@ value = "relative_offset"
 # and sends, besides the pad notes, messages of its own (VirtualDJ's names below). The
 # routines also move the fader and FILTER (bound above) and end by sending their physical
 # positions, so the deck ends where the controls are. Recorded in firmware-modes.txt and
-# firmware-modes-2.txt on the left side; the right side is bound by symmetry (channel 2, pads on channel 9), as the capture shows the same messages there.
+# firmware-modes-2.txt on the left side; the right side is bound by symmetry (channel 2,
+# pads on channel 9), as the capture shows the same messages there.
 # LOOP_FADE_LOOP (note 0x4D) stays unbound: the SB3 also sends it when TRANS is selected
 # and during the backspin, so it would start loops nobody asked for.
 
