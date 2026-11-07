@@ -77,7 +77,7 @@ impl EngineRenderer {
                 self.mixer
                     .set_beat_frames(id, deck.beat_frames(self.config.sample_rate));
             }
-            self.update_stems();
+            self.update_stems(master.len() / 2);
             let inputs = self.mixer.inputs(master.len());
             for (deck, input) in self.decks.iter_mut().zip(inputs) {
                 deck.render_add(input, self.config.sample_rate);
@@ -167,12 +167,16 @@ impl EngineRenderer {
 
     /// Before a chunk renders: sets each deck's stem gains from its channel's EQ knobs and
     /// bypasses the EQ bands of the channels whose stems take the knobs. A change of
-    /// either ramps over the chunk, which is the changeover's crossfade.
-    fn update_stems(&mut self) {
+    /// either ramps over a chunk, which is the changeover's crossfade; under keylock the
+    /// bands change once the stem gains come out of the stretcher.
+    fn update_stems(&mut self, frames: usize) {
         for id in DeckId::ALL {
             let knobs = self.mixer.eq_positions(id);
-            let (active, released) = self.decks[id.index()].update_stems(self.eq_mode, knobs);
-            self.mixer.set_stems_active(id, active);
+            let deck = &mut self.decks[id.index()];
+            let (active, released) = deck.update_stems(self.eq_mode, knobs);
+            // The deck's gains are heard after its stretcher's latency: so are the bands'.
+            self.mixer
+                .set_stems_active(id, active, deck.stem_latency(), frames);
             if let Some(stems) = released {
                 self.discard(Garbage::Stems(stems));
             }

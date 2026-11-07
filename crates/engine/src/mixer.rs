@@ -14,7 +14,12 @@
 //! band gains ramp to unity, which leaves the isolator a flat allpass. It keeps running
 //! so the stem path has the EQ path's phase: with the knobs centered the changeover is
 //! then inaudible (the stems sum to the mix), where a dry bypass would switch between the
-//! allpass's phase and none. The filter is
+//! allpass's phase and none.
+//!
+//! Under keylock the deck's stem gains act before its time-stretcher, so they are heard
+//! the stretcher's latency later (about 0.1 s): a stems changeover delays the bands'
+//! change by that much to stay in step, and in stem mode the knobs themselves respond
+//! with that latency. The filter is
 //! bypassed inside its center deadzone; engaging or releasing it crossfades between dry and
 //! filtered signal across one block.
 //!
@@ -164,6 +169,10 @@ struct ChannelStrip {
     eq_pos: [f32; 3],
     /// The knobs control the deck's stems: the band gains are unity.
     stems_active: bool,
+    /// What `stems_active` becomes once `stems_countdown` output frames have played: the
+    /// deck's stem gains reach the output that late under keylock.
+    stems_wanted: bool,
+    stems_countdown: usize,
     /// Low, mid and high band gains.
     eq_gain: [Ramp; 3],
     isolator: Isolator,
@@ -186,6 +195,8 @@ impl ChannelStrip {
             trim: Ramp::new(trim_gain(0.5)),
             eq_pos: [0.5; 3],
             stems_active: false,
+            stems_wanted: false,
+            stems_countdown: 0,
             eq_gain: [Ramp::new(eq_gain(0.5)); 3],
             isolator: Isolator::new(sample_rate),
             filter: Filter::default(),
@@ -328,13 +339,33 @@ impl Mixer {
         self.channels[deck.index()].eq_pos
     }
 
-    /// Bypasses the channel's EQ bands (unity gains, ramped over the next block) while its
-    /// deck's stems take the knobs.
-    pub(crate) fn set_stems_active(&mut self, deck: DeckId, active: bool) {
+    /// Before a block of `frames`: bypasses the channel's EQ bands (unity gains, ramped
+    /// over a block) while its deck's stems take the knobs. A change waits `delay` output
+    /// frames, the time the deck's own change takes to be heard (its stretcher's latency
+    /// under keylock), to the nearest block; a smaller `delay` later shortens the wait.
+    pub(crate) fn set_stems_active(
+        &mut self,
+        deck: DeckId,
+        active: bool,
+        delay: usize,
+        frames: usize,
+    ) {
         let strip = &mut self.channels[deck.index()];
-        if strip.stems_active != active {
-            strip.stems_active = active;
+        if strip.stems_wanted != active {
+            strip.stems_wanted = active;
+            strip.stems_countdown = delay;
+        } else {
+            strip.stems_countdown = strip.stems_countdown.min(delay);
+        }
+        if strip.stems_active == strip.stems_wanted {
+            return;
+        }
+        if strip.stems_countdown <= frames / 2 {
+            strip.stems_countdown = 0;
+            strip.stems_active = strip.stems_wanted;
             strip.retarget_eq();
+        } else {
+            strip.stems_countdown = strip.stems_countdown.saturating_sub(frames);
         }
     }
 

@@ -35,8 +35,8 @@ impl EngineController {
     /// Queues `cmd` for the next render block.
     pub fn send(&mut self, cmd: Command) -> Result<(), CommandQueueFull> {
         // Draining garbage before every push bounds it by the commands in flight, so the
-        // renderer's garbage queue (twice the command queue: a command returns at most two
-        // items) can never fill up.
+        // renderer's garbage queue (three times the command queue: a command returns at
+        // most three items) can never fill up.
         self.collect_garbage();
         self.commands.push(cmd).map_err(|_| CommandQueueFull)
     }

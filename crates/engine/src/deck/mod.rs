@@ -16,10 +16,11 @@ use crate::{
     knob_law,
 };
 
-/// What a command hands back for the renderer to discard: at most a track and a stem set.
-pub(crate) type Discarded = [Option<Garbage>; 2];
+/// What a command hands back for the renderer to discard: at most a track, its stems and
+/// a set waiting to replace them.
+pub(crate) type Discarded = [Option<Garbage>; 3];
 
-const NOTHING: Discarded = [None, None];
+const NOTHING: Discarded = [None, None, None];
 
 /// Transport state of one deck. Owned by the renderer.
 #[derive(Debug)]
@@ -78,8 +79,11 @@ pub(crate) struct Deck {
     touched_at: Option<u64>,
     /// The loaded track's stems.
     stems: Option<Arc<StemSet>>,
-    /// The stems were dropped: they stay until the gains have ramped back to the mix.
+    /// The stems were dropped or replaced: they stay until the gains have ramped back to
+    /// the mix.
     stems_leaving: bool,
+    /// The set replacing the leaving one once its gains are back at the mix.
+    stems_incoming: Option<Arc<StemSet>>,
     /// The stem pads, in [`Stem::ALL`](crate::Stem::ALL) order. All on after a load.
     stem_on: [bool; 4],
     /// Per stem gain, from the knob law and the pads; all 1.0 plays the mix itself.
@@ -122,6 +126,7 @@ impl Default for Deck {
             touched_at: None,
             stems: None,
             stems_leaving: false,
+            stems_incoming: None,
             stem_on: [true; 4],
             stem_gain: [Ramp::new(1.0); 4],
             stems_active: false,
@@ -152,15 +157,22 @@ impl Deck {
                 self.hotcues = memory.hotcues;
                 self.grid = memory.grid;
                 self.load_seq = self.load_seq.wrapping_add(1);
-                let stems = self.reset_stems();
-                return [self.track.replace(track).map(Garbage::Track), stems];
+                let [stems, incoming] = self.reset_stems();
+                return [
+                    self.track.replace(track).map(Garbage::Track),
+                    stems,
+                    incoming,
+                ];
             }
             DeckCommand::Unload => {
                 self.reset_transport();
-                let stems = self.reset_stems();
-                return [self.track.take().map(Garbage::Track), stems];
+                let [stems, incoming] = self.reset_stems();
+                return [self.track.take().map(Garbage::Track), stems, incoming];
             }
-            DeckCommand::SetStems(stems) => return [self.set_stems(stems), None],
+            DeckCommand::SetStems(stems) => {
+                let [a, b] = self.set_stems(stems);
+                return [a, b, None];
+            }
             DeckCommand::StemOn(stem, on) => self.stem_on[stem.index()] = on,
             DeckCommand::Play => self.play(),
             DeckCommand::Pause => self.pause(),
@@ -253,29 +265,40 @@ impl Deck {
 
     /// Drops the stems at once, with every pad on and the gains at the mix: for a load,
     /// where the sound jumps anyway.
-    fn reset_stems(&mut self) -> Option<Garbage> {
+    fn reset_stems(&mut self) -> [Option<Garbage>; 2] {
         self.stems_leaving = false;
         self.stem_on = [true; 4];
         self.stem_gain = [Ramp::new(1.0); 4];
         self.stems_active = false;
-        self.stems.take().map(Garbage::Stems)
+        [
+            self.stems.take().map(Garbage::Stems),
+            self.stems_incoming.take().map(Garbage::Stems),
+        ]
     }
 
     /// Takes `stems` for the loaded track, or drops the current ones (`None`), and returns
-    /// the set to discard. Stems that are dropped keep playing until the gains have ramped
-    /// back to the mix ([`Deck::update_stems`] hands them back then).
-    fn set_stems(&mut self, stems: Option<Arc<StemSet>>) -> Option<Garbage> {
+    /// the sets to discard. Stems that are dropped, or replaced while their gains are away
+    /// from the mix, keep playing until the gains have ramped back to it; then
+    /// [`Deck::update_stems`] hands them back and swaps in the replacement, which ramps
+    /// to its gains in turn.
+    fn set_stems(&mut self, stems: Option<Arc<StemSet>>) -> [Option<Garbage>; 2] {
+        let incoming = |deck: &mut Self| deck.stems_incoming.take().map(Garbage::Stems);
         match stems {
             None => {
                 self.stems_leaving = self.stems.is_some();
-                None
+                [incoming(self), None]
             }
             Some(set) if self.track.is_none() || set.frames() != self.frames() => {
-                Some(Garbage::Stems(set))
+                [Some(Garbage::Stems(set)), None]
+            }
+            // At the mix, a swap is inaudible.
+            Some(set) if self.stem_gain.iter().all(|g| g.current == 1.0) => {
+                self.stems_leaving = false;
+                [self.stems.replace(set).map(Garbage::Stems), incoming(self)]
             }
             Some(set) => {
-                self.stems_leaving = false;
-                self.stems.replace(set).map(Garbage::Stems)
+                self.stems_leaving = true;
+                [self.stems_incoming.replace(set).map(Garbage::Stems), None]
             }
         }
     }
@@ -291,21 +314,49 @@ impl Deck {
     ) -> (bool, Option<Arc<StemSet>>) {
         let released = if self.stems_leaving && self.stem_gain.iter().all(|g| g.current == 1.0) {
             self.stems_leaving = false;
-            self.stems.take()
+            std::mem::replace(&mut self.stems, self.stems_incoming.take())
         } else {
             None
         };
-        let present = self.stems.is_some() && !self.stems_leaving;
+        let present = self.has_stems();
         self.stems_active = present && mode == EqMode::Stems;
-        let law = if self.stems_active {
+        let law = if self.stems_active && !self.stems_leaving {
             knob_law(low, mid, high)
         } else {
             [1.0; 4]
         };
+        let pads = present && !self.stems_leaving;
         for ((gain, law), on) in self.stem_gain.iter_mut().zip(law).zip(self.stem_on) {
-            gain.target = if present && !on { 0.0 } else { law };
+            gain.target = if pads && !on { 0.0 } else { law };
         }
         (self.stems_active, released)
+    }
+
+    /// The track has stems: present and not dropped (a set being replaced counts).
+    fn has_stems(&self) -> bool {
+        self.stems.is_some() && (!self.stems_leaving || self.stems_incoming.is_some())
+    }
+
+    /// Whether the next block plays through the keylock stretcher.
+    fn plays_stretched(&self) -> bool {
+        self.scratch.is_none()
+            && self.backspin.is_none()
+            && self.playing
+            && self.tempo_ratio() > 0.0
+            && self.stretches()
+            && self.track.is_some()
+    }
+
+    /// How late, in output frames, a change of the stem gains is heard: the stretcher's
+    /// latency on the stretched path, 0 otherwise.
+    pub(crate) fn stem_latency(&self) -> usize {
+        if !self.plays_stretched() {
+            return 0;
+        }
+        let speed = self.tempo_ratio() * (1.0 + self.bend);
+        self.stretcher
+            .as_ref()
+            .map_or(0, |stretcher| stretcher.latency_frames(speed))
     }
 
     /// Starts the stem gains' ramp over `reads` source reads. `None` plays the mix itself:
@@ -508,11 +559,7 @@ impl Deck {
         self.clock = self.clock.wrapping_add((out.len() / 2) as u64);
         // Keylock stretches a deck playing on its own; scratching, a paused deck and the
         // original tempo play resampled.
-        if self.scratch.is_none()
-            && self.backspin.is_none()
-            && self.playing
-            && self.tempo_ratio() > 0.0
-            && self.stretches()
+        if self.plays_stretched()
             // A clone of the deck's own track: it is never the last one, so never freed here.
             && let Some(track) = self.track.clone()
         {
@@ -633,7 +680,7 @@ impl Deck {
             backspinning: self.backspin.is_some(),
             slicer_block_beat: self.slicer_block_beat(),
             load_seq: self.load_seq,
-            stems: self.stems.is_some() && !self.stems_leaving,
+            stems: self.has_stems(),
             stems_active: self.stems_active,
         }
     }
