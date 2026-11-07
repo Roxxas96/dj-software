@@ -92,6 +92,8 @@ impl Deck {
         }
         if spin.elapsed >= total || self.position <= 0.0 {
             self.backspin = None;
+            // A nudge made during the spin must not bend the playback that follows it.
+            self.bend = 0.0;
             self.exit_loop_if_outside(self.position);
         } else {
             self.backspin = Some(spin);

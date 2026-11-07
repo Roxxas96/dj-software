@@ -418,3 +418,88 @@ pub fn decode_relative(kind: ValueKind, value: u8) -> i32 {
         ValueKind::Button | ValueKind::Absolute => 0,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use actions::ActionKind;
+
+    use super::super::file::ControllerInfo;
+    use super::*;
+
+    fn deck(n: usize) -> DeckId {
+        DeckId::new(n).unwrap()
+    }
+
+    fn binding(kind: ActionKind, side: Side) -> InputBinding {
+        InputBinding {
+            midi: MidiSource::Note {
+                channel: 0,
+                note: 0,
+            },
+            kind,
+            target: Target::Side(side),
+            shift: None,
+            active_deck: None,
+            pad_mode: None,
+            pad_scope: None,
+            value: ValueKind::Button,
+            invert: false,
+            soft_takeover: false,
+        }
+    }
+
+    fn resolver() -> Resolver {
+        Resolver::new(&Mapping {
+            controller: ControllerInfo {
+                name: String::new(),
+                port: String::new(),
+                jog_steps_per_turn: None,
+            },
+            init: Vec::new(),
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+        })
+    }
+
+    #[test]
+    fn the_fade_loop_record_is_per_side() {
+        let mut r = resolver();
+        let left = binding(ActionKind::LoopExit, Side::Left);
+        let right = binding(ActionKind::LoopExit, Side::Right);
+        // The right side starts a fade loop on deck 2; the left side's exit is unaffected.
+        r.follow_fade_loop(
+            &binding(ActionKind::LoopFade1, Side::Right),
+            Action::LoopFade1(deck(1)),
+        );
+        assert_eq!(
+            r.follow_fade_loop(&left, Action::LoopExit(deck(2))),
+            Action::LoopExit(deck(2))
+        );
+        // The right side's exit goes to the recorded deck, once.
+        assert_eq!(
+            r.follow_fade_loop(&right, Action::LoopExit(deck(3))),
+            Action::LoopExit(deck(1))
+        );
+        assert_eq!(
+            r.follow_fade_loop(&right, Action::LoopExit(deck(3))),
+            Action::LoopExit(deck(3))
+        );
+    }
+
+    #[test]
+    fn attaching_clears_the_fade_loop_record() {
+        let mut r = resolver();
+        let exit = binding(ActionKind::LoopExit, Side::Left);
+        for attach in [Resolver::attach, Resolver::first_attach] {
+            r.follow_fade_loop(
+                &binding(ActionKind::LoopFade4, Side::Left),
+                Action::LoopFade4(deck(0)),
+            );
+            attach(&mut r);
+            assert_eq!(
+                r.follow_fade_loop(&exit, Action::LoopExit(deck(2))),
+                Action::LoopExit(deck(2))
+            );
+        }
+    }
+}
