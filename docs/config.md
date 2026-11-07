@@ -26,6 +26,8 @@ optional; a key left out keeps its default, and so does a missing file.
 | `beat_jump.pads`     | `[-4, 4, -8, 8, -16, 16, -32, 32]`           | Beats the beat jump pads move the playhead; exactly 8, each non-zero with `abs <= 512` |
 | `beat_jump.shift_pads` | `[-1, 1, -2, 2, -4, 4, -64, 64]`           | The same with SHIFT held |
 | `loop_roll.pads`     | `[0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8]`     | Beats the loop roll pads roll; exactly 8, each from 1/32 to 64 |
+| `backspin.short`     | `1.0`                                        | Seconds of the short backspin (`deck.backspin_short`), from 0.2 to 10 |
+| `backspin.long`      | `2.0`                                        | Seconds of the long backspin (`deck.backspin_long`), from 0.2 to 10 |
 
 A sample is at most 60 seconds long. A `track` id is looked up in the library: the one opened
 by `--library`, otherwise the default library if it exists.
@@ -52,6 +54,10 @@ shift_pads = [-1, 1, -2, 2, -4, 4, -64, 64]
 
 [loop_roll]
 pads = [0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8]
+
+[backspin]
+short = 1.0                  # seconds, 0.2 to 10
+long = 2.0
 ```
 
 ## Errors

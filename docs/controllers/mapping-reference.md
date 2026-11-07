@@ -56,7 +56,7 @@ written in decimal or hex (`note = 0x0B`).
 |---|---|
 | `name` | Display name. |
 | `port` | Text matched against the names of the MIDI input and output ports. Any port whose name contains it is used. |
-| `jog_steps_per_turn` | Optional, 1 to 10000. How many relative steps the jog wheel sends for one full turn of the platter. Required whenever a binding uses `deck.jog_top`, `deck.jog_ring` or `deck.jog_search`: a mapping with such a binding and no key fails to load. |
+| `jog_steps_per_turn` | Optional, 1 to 10000. How many relative steps the jog wheel sends for one full turn of the platter. Required whenever a binding uses `deck.jog_top`, `deck.jog_ring`, `deck.jog_search` or `deck.jog_scratch`: a mapping with such a binding and no key fails to load. |
 
 `name` and `port` are required.
 
@@ -139,7 +139,7 @@ not exist are load errors; an error in an expanded binding is reported as
 If you leave `value` out, notes are `button` and everything else is `absolute`.
 
 The action decides which kinds it accepts (the "Takes" column below). The relative actions are
-`browser.scroll`, `deck.jog_top`, `deck.jog_ring` and `deck.jog_search`; a relative binding to
+`browser.scroll`, `deck.jog_top`, `deck.jog_ring`, `deck.jog_search` and `deck.jog_scratch`; a relative binding to
 any other action fails to load.
 
 #### Soft takeover
@@ -236,6 +236,12 @@ browser actions).
 | `deck.jog_top` | deck | relative | The top of the jog wheel. While touched in vinyl mode it scratches: the playhead follows the platter, and a held record is silent. Otherwise it nudges a playing deck (a turn bends the speed, up to 50 %, and the bend fades out within about half a second of the hand stopping), or moves the playhead of a paused one (one platter turn is 1.8 s of track). |
 | `deck.jog_ring` | deck | relative | The outer ring of the jog wheel. It nudges a playing deck (a speed bend that fades out within about half a second) and moves a paused one's playhead, like the top without vinyl mode, and is ignored while the deck is scratching. |
 | `deck.jog_search` | deck | relative | Search: moves the playhead 10 s of track per platter turn, leaving a loop it lands outside of. |
+| `deck.jog_scratch` | deck | relative | Platter scratch: like `deck.jog_top`, but a touched deck is scratched even with vinyl mode off, and a running backspin is cancelled. |
+| `deck.backspin_short` | deck | button | Backspin of the playing deck, `backspin.short` seconds from `config.toml` (default 1 s). |
+| `deck.backspin_long` | deck | button | Backspin of the playing deck, `backspin.long` seconds (default 2 s). |
+| `deck.loop_fade_1` | deck | button | With no normal loop active, loops 1 beat from the last beat. Does nothing while a loop is on. |
+| `deck.loop_fade_4` | deck | button | With no normal loop active, loops 4 beats from the last beat. Does nothing while a loop is on. |
+| `deck.loop_exit` | deck | button | Leaves a normal loop. Does nothing if none is on, and never reloops. |
 | `channel.trim` | deck | absolute | Channel gain (TRIM). |
 | `channel.eq_high` | deck | absolute | High EQ. |
 | `channel.eq_mid` | deck | absolute | Mid EQ. |
@@ -317,7 +323,7 @@ move; a button press or release in between keeps the steps on each side of it ap
 Only "absolute" actions can be used in `[[init]]`. `soft_takeover` has an effect only on absolute bindings, and `invert` flips absolute values (or negates relative steps).
 Button actions ignore releases, except `deck.cue`, `deck.hotcue_1` to `deck.hotcue_8`, `deck.loop_roll_1` to `deck.loop_roll_8`, `deck.slice_1` to `deck.slice_8`, `deck.jog_touch`, `deck.jog_release` and `modifier.shift`, and `deck.return_to_start` and `deck.hotcue_delete_1` to `deck.hotcue_delete_8`, whose release ends a CUE or pad hold of the same deck (`deck.return_to_start` a CUE preview, `deck.hotcue_delete_N` a preview of pad N). A controller that sends a different note with SHIFT held sends the release there when SHIFT goes down during the hold, so binding the shifted note to these actions keeps that hold from sticking. A roll or slice pad can be bound to the shifted note as well as the plain one: a release on either ends the held roll or slice of the same kind on the deck that pad press went to.
 
-Jog wheel actions turn the steps a wheel sends into platter turns using the `jog_steps_per_turn` key of `[controller]`, which jog bindings (`deck.jog_top`, `deck.jog_ring`, `deck.jog_search`) require: a mapping that binds one without it fails to load.
+Jog wheel actions turn the steps a wheel sends into platter turns using the `jog_steps_per_turn` key of `[controller]`, which jog bindings (`deck.jog_top`, `deck.jog_ring`, `deck.jog_search`, `deck.jog_scratch`) require: a mapping that binds one without it fails to load.
 
 The `deck.grid_*` actions edit the loaded track's beatgrid in the library. Every grid edit
 except `deck.grid_lock_toggle` also locks the grid, so analyzing the track again never undoes

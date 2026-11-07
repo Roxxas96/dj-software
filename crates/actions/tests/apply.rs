@@ -143,6 +143,12 @@ fn ids_round_trip_for_every_action() {
         "deck.jog_top",
         "deck.jog_ring",
         "deck.jog_search",
+        "deck.jog_scratch",
+        "deck.backspin_short",
+        "deck.backspin_long",
+        "deck.loop_fade_1",
+        "deck.loop_fade_4",
+        "deck.loop_exit",
         "deck.beat_jump_1",
         "deck.beat_jump_2",
         "deck.beat_jump_3",
@@ -229,7 +235,7 @@ fn ids_round_trip_for_every_action() {
         .into_iter()
         .filter(|k| k.takes_release())
         .collect();
-    assert_eq!(ActionKind::ALL.len(), 116);
+    assert_eq!(ActionKind::ALL.len(), 122);
     let hotcue = |n| ActionKind::Hotcue(HotcueSlot::new(n).unwrap());
     let hotcue_delete = |n| ActionKind::HotcueDelete(HotcueSlot::new(n).unwrap());
     let mut expected_release = vec![
@@ -251,6 +257,7 @@ fn ids_round_trip_for_every_action() {
         ActionKind::JogTop,
         ActionKind::JogRing,
         ActionKind::JogSearch,
+        ActionKind::JogScratch,
     ] {
         assert!(kind.accepts(InputKind::Relative));
         assert!(!kind.accepts(InputKind::Button));
@@ -696,6 +703,7 @@ fn accepts_matches_what_apply_does() {
                     | ActionKind::JogTop
                     | ActionKind::JogRing
                     | ActionKind::JogSearch
+                    | ActionKind::JogScratch
             ),
             "{kind:?}"
         );
@@ -1365,4 +1373,112 @@ fn fx_level_is_a_takeover_value() {
     );
     assert_eq!(rig.c.channel(d(1)).fx_amount, 0.8);
     assert_eq!(rig.apply(level, Input::Press), ApplyResult::Ignored);
+}
+
+#[test]
+fn jog_scratch_steps_become_platter_turns() {
+    // A touched deck with vinyl off still scratches from the platter: 720 steps is one turn
+    // of 1.8 s of track.
+    let moved = |kind, steps, per_turn: Option<u16>| {
+        let mut rig = Rig::new();
+        if let Some(per_turn) = per_turn {
+            rig.state.jog_steps_per_turn = per_turn;
+        }
+        rig.apply(deck_action(ActionKind::VinylToggle, 0), Input::Press);
+        assert!(!rig.c.deck(d(0)).vinyl);
+        rig.apply(deck_action(ActionKind::JogTouch, 0), Input::Press);
+        let before = rig.c.deck(d(0)).position_frames;
+        assert_eq!(
+            rig.apply(deck_action(kind, 0), Input::Relative(steps)),
+            ApplyResult::Sent(1)
+        );
+        // The scratch follows the hand over a few blocks.
+        rig.render(40 * BLOCK);
+        assert!(rig.c.deck(d(0)).jog_touched);
+        rig.c.deck(d(0)).position_frames - before
+    };
+    let one_turn = 1.8 * f64::from(SR);
+    assert!((moved(ActionKind::JogScratch, 720, None) - one_turn).abs() < 1.0);
+    assert!((moved(ActionKind::JogScratch, 360, Some(360)) - one_turn).abs() < 1.0);
+    assert!((moved(ActionKind::JogScratch, 360, None) - one_turn / 2.0).abs() < 1.0);
+}
+
+#[test]
+fn backspin_uses_the_configured_lengths() {
+    let state = ControlState::default();
+    assert_eq!((state.backspin_short, state.backspin_long), (1.0, 2.0));
+    let travelled = |kind, short, long| {
+        let mut rig = Rig::new();
+        rig.state.backspin_short = short;
+        rig.state.backspin_long = long;
+        rig.apply(deck_action(ActionKind::PlayPause, 0), Input::Press);
+        rig.c
+            .send(engine::Command::Deck(
+                d(0),
+                engine::DeckCommand::Seek(150_000.0),
+            ))
+            .unwrap();
+        rig.render(1);
+        assert_eq!(
+            rig.apply(deck_action(kind, 0), Input::Press),
+            ApplyResult::Sent(1)
+        );
+        assert!(rig.c.deck(d(0)).backspinning);
+        let start = rig.c.deck(d(0)).position_frames;
+        let mut lowest = start;
+        for _ in 0..(2 * SR as usize / BLOCK) {
+            rig.render(BLOCK);
+            lowest = lowest.min(rig.c.deck(d(0)).position_frames);
+        }
+        // The spin runs back 1.5 times its length in seconds.
+        (start - lowest) / f64::from(SR)
+    };
+    assert!((travelled(ActionKind::BackspinShort, 0.4, 5.0) - 0.6).abs() < 0.05);
+    assert!((travelled(ActionKind::BackspinLong, 5.0, 0.8) - 1.2).abs() < 0.05);
+}
+
+#[test]
+fn loop_fade_starts_a_loop_only_when_none_is_active() {
+    let mut rig = Rig::new();
+    rig.load_grid(0, 120.0, true);
+    let loop_beats = |rig: &Rig| rig.c.deck(d(0)).loop_beats;
+    assert_eq!(
+        rig.apply(deck_action(ActionKind::LoopFade1, 0), Input::Press),
+        ApplyResult::Sent(1)
+    );
+    assert!(rig.c.deck(d(0)).loop_active);
+    assert_eq!(loop_beats(&rig), 1.0);
+    // With a loop active, neither fade does anything.
+    assert_eq!(
+        rig.apply(deck_action(ActionKind::LoopFade4, 0), Input::Press),
+        ApplyResult::Sent(0)
+    );
+    assert!(rig.c.deck(d(0)).loop_active);
+    assert_eq!(loop_beats(&rig), 1.0);
+    rig.apply(deck_action(ActionKind::LoopExit, 0), Input::Press);
+    assert!(!rig.c.deck(d(0)).loop_active);
+    rig.apply(deck_action(ActionKind::LoopFade4, 0), Input::Press);
+    assert!(rig.c.deck(d(0)).loop_active);
+    assert_eq!(loop_beats(&rig), 4.0);
+}
+
+#[test]
+fn loop_exit_without_a_loop_does_nothing() {
+    let mut rig = Rig::new();
+    rig.load_grid(0, 120.0, true);
+    let before = rig.c.deck(d(0));
+    assert_eq!(
+        rig.apply(deck_action(ActionKind::LoopExit, 0), Input::Press),
+        ApplyResult::Sent(0)
+    );
+    let after = rig.c.deck(d(0));
+    assert!(!after.loop_active);
+    assert_eq!(after.loop_beats, before.loop_beats);
+    // Exiting never reloops, however often it is pressed.
+    rig.apply(deck_action(ActionKind::AutoLoop, 0), Input::Press);
+    assert!(rig.c.deck(d(0)).loop_active);
+    for _ in 0..2 {
+        rig.apply(deck_action(ActionKind::LoopExit, 0), Input::Press);
+        assert!(!rig.c.deck(d(0)).loop_active);
+    }
 }

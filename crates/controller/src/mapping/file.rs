@@ -151,7 +151,10 @@ pub fn parse_mapping(name: &str, text: &str) -> Result<Mapping, MappingError> {
     let uses_jog = inputs.iter().any(|binding| {
         matches!(
             binding.kind,
-            ActionKind::JogTop | ActionKind::JogRing | ActionKind::JogSearch
+            ActionKind::JogTop
+                | ActionKind::JogRing
+                | ActionKind::JogSearch
+                | ActionKind::JogScratch
         )
     });
     if uses_jog && jog_steps_per_turn.is_none() {

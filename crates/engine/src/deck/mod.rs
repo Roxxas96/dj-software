@@ -169,6 +169,8 @@ impl Deck {
             DeckCommand::LoopIn
             | DeckCommand::LoopOut
             | DeckCommand::AutoLoop
+            | DeckCommand::AutoLoopBeats(_)
+            | DeckCommand::LoopExit
             | DeckCommand::LoopHalve
             | DeckCommand::LoopDouble
             | DeckCommand::ReloopExit
@@ -176,6 +178,11 @@ impl Deck {
             DeckCommand::LoopIn => self.loop_in_press(),
             DeckCommand::LoopOut => self.loop_out_press(),
             DeckCommand::AutoLoop => self.auto_loop(),
+            DeckCommand::AutoLoopBeats(beats) if beats.is_finite() && beats > 0.0 => {
+                self.auto_loop_beats(beats);
+            }
+            DeckCommand::AutoLoopBeats(_) => {}
+            DeckCommand::LoopExit => self.exit_loop(),
             DeckCommand::LoopHalve => self.loop_resize(0.5),
             DeckCommand::LoopDouble => self.loop_resize(2.0),
             DeckCommand::ReloopExit => self.reloop_exit(),
@@ -675,6 +682,62 @@ mod tests {
             assert_eq!(*frame, track.frame(index), "frame {i}");
         }
         assert_eq!(out[200..202], track.frame(1000));
+    }
+
+    #[test]
+    fn auto_loop_beats_loops_exactly_that_size() {
+        let track = ramp_track(400_000);
+        let grid = Grid::from_bpm(180.0, 0.0, SR);
+        let mut deck = deck_at(&track, grid, 20_000.0);
+        let _ = deck.apply(DeckCommand::AutoLoopBeats(1.0));
+        let (start, end) = (deck.loop_in.unwrap(), deck.loop_out.unwrap());
+        assert!(deck.loop_active);
+        assert_eq!(start, 14_700.0);
+        assert!((end - start - 14_700.0).abs() < 1e-9);
+        assert_eq!(deck.loop_beats, 1.0);
+        // An active loop is left alone, and bad sizes are ignored.
+        let _ = deck.apply(DeckCommand::AutoLoopBeats(4.0));
+        assert_eq!(deck.loop_beats, 1.0);
+        let _ = deck.apply(DeckCommand::LoopExit);
+        for bad in [f64::NAN, f64::INFINITY, 0.0, -2.0] {
+            let _ = deck.apply(DeckCommand::AutoLoopBeats(bad));
+            assert!(!deck.loop_active, "{bad}");
+        }
+        let _ = deck.apply(DeckCommand::AutoLoopBeats(4.0));
+        assert_eq!(deck.loop_beats, 4.0);
+        assert!(deck.loop_active);
+    }
+
+    #[test]
+    fn auto_loop_beats_needs_a_grid_and_waits_for_a_roll() {
+        let track = ramp_track(400_000);
+        let mut deck = deck_at(&track, None, 20_000.0);
+        let _ = deck.apply(DeckCommand::AutoLoopBeats(1.0));
+        assert!(!deck.loop_active);
+        assert_eq!(deck.loop_beats, looping::DEFAULT_LOOP_BEATS);
+        let grid = Grid::from_bpm(180.0, 0.0, SR);
+        let mut deck = deck_at(&track, grid, 20_000.0);
+        let _ = deck.apply(DeckCommand::RollPress { beats: 1.0 });
+        let _ = deck.apply(DeckCommand::AutoLoopBeats(1.0));
+        let _ = deck.apply(DeckCommand::LoopExit);
+        assert!(!deck.loop_active);
+        assert_eq!(deck.loop_beats, looping::DEFAULT_LOOP_BEATS);
+    }
+
+    #[test]
+    fn loop_exit_only_exits() {
+        let track = ramp_track(400_000);
+        let grid = Grid::from_bpm(180.0, 0.0, SR);
+        let mut deck = deck_at(&track, grid, 20_000.0);
+        let _ = deck.apply(DeckCommand::LoopExit);
+        assert!(!deck.loop_active);
+        let _ = deck.apply(DeckCommand::AutoLoop);
+        assert!(deck.loop_active);
+        let _ = deck.apply(DeckCommand::LoopExit);
+        assert!(!deck.loop_active);
+        // Unlike ReloopExit, a second exit never reloops.
+        let _ = deck.apply(DeckCommand::LoopExit);
+        assert!(!deck.loop_active);
     }
 
     #[test]

@@ -77,6 +77,12 @@ pub enum DeckCommand {
     /// at or before the playhead (loop-in clamps to 0 before the first beat) for the current
     /// loop length in beats; without a grid it does nothing.
     AutoLoop,
+    /// Starts an auto loop of exactly `beats` beats at the last beat at or before the playhead,
+    /// like [`DeckCommand::AutoLoop`], and makes `beats` the loop length. Does nothing while a
+    /// normal loop is active, without a grid, or for a `beats` that is not finite and positive.
+    AutoLoopBeats(f64),
+    /// Exits an active loop and keeps playing. Otherwise does nothing (it never reloops).
+    LoopExit,
     /// Halves the loop length in beats (at least 1/32); an active loop's own length is halved
     /// too (at least 1 frame).
     LoopHalve,

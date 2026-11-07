@@ -183,6 +183,37 @@ pub fn apply(
             let turns = turns(state, steps);
             (deck(d, DeckCommand::JogSearch { turns }), Update::None)
         }
+        (Action::JogScratch(d), Input::Relative(steps)) => {
+            let turns = turns(state, steps);
+            let surface = JogSurface::Platter;
+            (deck(d, DeckCommand::Jog { turns, surface }), Update::None)
+        }
+        (Action::BackspinShort(d), Input::Press) => {
+            let seconds = state.backspin_short;
+            (deck(d, DeckCommand::Backspin { seconds }), Update::None)
+        }
+        (Action::BackspinLong(d), Input::Press) => {
+            let seconds = state.backspin_long;
+            (deck(d, DeckCommand::Backspin { seconds }), Update::None)
+        }
+        (Action::LoopFade1(d), Input::Press) => {
+            if engine.deck(d).loop_active {
+                return ApplyResult::Sent(0);
+            }
+            (deck(d, DeckCommand::AutoLoopBeats(1.0)), Update::None)
+        }
+        (Action::LoopFade4(d), Input::Press) => {
+            if engine.deck(d).loop_active {
+                return ApplyResult::Sent(0);
+            }
+            (deck(d, DeckCommand::AutoLoopBeats(4.0)), Update::None)
+        }
+        (Action::LoopExit(d), Input::Press) => {
+            if !engine.deck(d).loop_active {
+                return ApplyResult::Sent(0);
+            }
+            (deck(d, DeckCommand::LoopExit), Update::None)
+        }
         (Action::Sync(d), Input::Press) => return sync(d, state, engine),
         (Action::TempoRangeNext(d), Input::Press) => {
             let next = next_range(state.deck(d).tempo_range);

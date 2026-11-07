@@ -645,6 +645,12 @@ fn control_loop(
     if let Some(pads) = config.loop_roll_pads {
         state.loop_roll_pads = pads;
     }
+    if let Some(seconds) = config.backspin_short {
+        state.backspin_short = seconds;
+    }
+    if let Some(seconds) = config.backspin_long {
+        state.backspin_long = seconds;
+    }
     let printer = Printer::spawn();
     let lines = std::io::stdin().is_terminal().then(console::spawn_reader);
     let keys = if lines.is_some() {
