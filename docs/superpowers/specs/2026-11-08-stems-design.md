@@ -113,6 +113,7 @@ The main spec's anti-goals stand: no freeze, crash or dropout; a control does on
 
 **By the owner:**
 - The knob law above, where every knob turned right keeps its own stem.
+- **The model is never redistributed by Open Jockey** (owner, 2026-11-08). The repository ships only a weight-free model graph. `open-jockey stems setup` downloads the Demucs author's official weights from their source, fills the graph locally and verifies it. The docs say the weights' license is unclear (the author trained them partly on research-only data) and that each user fetches them from the author.
 - **A one-time model download:** `open-jockey stems setup` downloads the model from a fixed address and verifies its checksum. After that, everything runs offline and no audio ever leaves the computer. The app never downloads anything by itself; without the model, stems are simply unavailable, with a message saying how to set them up.
 
 **My calls:**
