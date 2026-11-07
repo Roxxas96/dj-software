@@ -11,6 +11,7 @@ mod midi_cmd;
 mod play;
 mod printer;
 mod samples;
+mod stems_cmd;
 
 #[cfg(test)]
 use std::path::Path;
@@ -44,6 +45,16 @@ enum Sub {
     Midi(MidiCommand),
     /// The music library: folders, tracks, analysis, playlists and beatgrids
     Library(LibraryArgs),
+    /// Stems separation
+    #[command(subcommand)]
+    Stems(StemsCommand),
+}
+
+#[derive(Debug, Subcommand)]
+enum StemsCommand {
+    /// Download the stems model's weights from their author (once), fill and verify the
+    /// model, and print where it went. Nothing else ever downloads it.
+    Setup,
 }
 
 #[derive(Debug, Subcommand)]
@@ -131,6 +142,7 @@ fn main() -> ExitCode {
             play(&args)
         }
         Sub::Library(args) => library_cmd::run(&args),
+        Sub::Stems(StemsCommand::Setup) => stems_cmd::setup(),
         Sub::Midi(MidiCommand::Ports) => midi_cmd::ports(),
         Sub::Midi(MidiCommand::Monitor {
             port,
@@ -219,6 +231,15 @@ mod tests {
     fn rejects_malformed_channel_pair() {
         assert!(parse(&["open-jockey", "play", "a.mp3", "--master", "1"]).is_err());
         assert!(parse(&["open-jockey", "play", "a.mp3", "--master", "a,b"]).is_err());
+    }
+
+    #[test]
+    fn parses_stems_setup() {
+        assert!(matches!(
+            parse(&["open-jockey", "stems", "setup"]).unwrap().command,
+            Sub::Stems(StemsCommand::Setup)
+        ));
+        assert!(parse(&["open-jockey", "stems"]).is_err());
     }
 
     #[test]

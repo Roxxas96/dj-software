@@ -18,6 +18,15 @@ indent_size = 4
 indent_style = unset
 indent_size = unset
 
+# The stems model's export scripts follow PEP 8.
+[*.py]
+indent_size = 4
+
+# Verbatim upstream ONNX files: the protobuf schema and its license.
+[crates/stems/model/onnx.proto3{,.LICENSE}]
+indent_style = unset
+indent_size = unset
+
 # Fenced code blocks mix Rust, TOML/YAML snippets and prose —
 # no single indent rule fits a whole markdown file, so leave indent unenforced.
 [*.md]

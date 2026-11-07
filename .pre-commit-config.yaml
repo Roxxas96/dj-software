@@ -9,11 +9,16 @@ repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:
+      # onnx.proto3 is verbatim upstream, checked by its SHA-256 (docs/stems-backend.md).
       - id: trailing-whitespace
+        exclude: '^crates/stems/model/onnx\.proto3$'
       - id: end-of-file-fixer
+        exclude: '^crates/stems/model/onnx\.proto3$'
       - id: check-merge-conflict
       - id: check-added-large-files
         args: [--maxkb=1024]
+        # The weight-free stems graph (9 MB, ruling R5), embedded in the binary.
+        exclude: '^crates/stems/model/htdemucs-core-wf\.onnx$'
       - id: check-yaml
       - id: check-toml
       - id: check-json

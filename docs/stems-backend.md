@@ -4,7 +4,8 @@ Date: 2026-11-07 (revised the same day for ruling R2). Plan 8, Task 1. Measured 
 **Apple M1 Pro (8 performance + 2 efficiency cores), 32 GB, macOS 27.0.1**.
 
 This records the model, runtime, distribution, cache format and the numbers later tasks rely on. The trial
-programs lived in a scratch folder. Task 4 commits the export script and wrapper (below) to the repository.
+programs lived in a scratch folder. Task 4 committed the export script and wrapper (below) to
+`crates/stems/model/`.
 
 ## Model distribution (settled, ruling R2)
 
@@ -178,8 +179,7 @@ the background at startup when stems are enabled. Runtime per chunk is unchanged
 
 ### The export (committed by Task 4)
 
-Task 4 commits these under `crates/stems/model/` (or `scripts/stems-model/`) together with
-`htdemucs-core-wf.onnx`:
+Task 4 committed these under `crates/stems/model/` together with `htdemucs-core-wf.onnx`:
 - the wrapper `htdemucs_core.py`;
 - the export script, with the Python package versions pinned;
 - `onnx.proto3` from ONNX v1.23.2 (Apache-2.0, SHA-256
@@ -263,7 +263,7 @@ Export script, in outline (the trial's `export_wf.py`):
 | `prost` | `0.14.4` | Apache-2.0 | `stems` (setup) | ONNX protobuf read/write |
 | `prost-build` + `protox` (build, or one-time generation with the result committed) | `0.14.4` + `0.10.0` | Apache-2.0; MIT OR Apache-2.0 | `stems` | generate `onnx.rs` from `onnx.proto3` without a `protoc` binary |
 | `sha2` | `0.11.1` | MIT OR Apache-2.0 | `stems` (setup) | download and model checks |
-| `ureq` | `3.5.1`, `default-features = false, features = ["native-tls-no-default"]` | MIT OR Apache-2.0 | `stems` (setup) | the HTTPS download, using the OS trust store (`RootCerts::PlatformVerifier`), so no bundled root list at run time. Generic User-Agent `open-jockey/<version>`, no personal data (ruling R3) |
+| `ureq` | `3.5.1`, `default-features = false, features = ["native-tls-no-default"]` | MIT OR Apache-2.0 | `stems` (setup) | the HTTPS download, using the OS trust store (`RootCerts::PlatformVerifier`), so no bundled root list at run time. Generic User-Agent `open-jockey-dev`, no personal data (ruling R3) |
 | `vorbis_rs` | `0.5.6` | BSD-3-Clause (bundles aoTuV libvorbis and libogg, BSD-3-Clause, built with `cc`) | cache | Vorbis encoder |
 | `symphonia` | `0.6` (workspace), `vorbis` + `ogg` | MPL-2.0 | already present | Vorbis decoder |
 
@@ -370,39 +370,35 @@ should drop the session when stems are disabled, and may drop it after a while i
     `cache_gb` stem budget**, and is documented and removable.
   - The CoreML EP leaves 25 nodes on the CPU (26 partitions): the time-branch 1-D convolutions exceed
     CoreML's 16,384-sample limit. The outputs still match PyTorch.
+  - **The slow first compile is cached per executable too** (measured in Task 4): with a warm
+    `coreml-cache`, the same test binary opened the session in 14 s. A copy of that binary at another path
+    took 54 s, and a different binary took 62 s. So `stems setup` warms the cache for the `open-jockey`
+    binary that runs it. After an update that moves or replaces the binary, the first session compiles
+    again, which is one more reason to open it in the background at startup.
 
 ## How `Separator` wraps it
 
-```rust
-pub struct OnnxSeparator {
-    session: ort::session::Session, // CoreML EP on macOS, CPU (PreferCPU) elsewhere; built once, in the background
-    dsp: Stft,                      // realfft plans, Hann window, scratch buffers
-}
+As built in the `stems` crate (Task 4):
 
-impl Separator for OnnxSeparator {
-    fn separate(&mut self, mix: &Track, start_frame: usize, cancel: &AtomicBool,
-                progress: &mut dyn FnMut(f32)) -> Result<StemSet, StemsError> {
-        let x = resample_to_44k1(mix);                     // rubato; identity at 44.1 kHz
-        let (mean, std) = mono_mean_std(&x);
-        let mut acc = Finalizer::new(x.frames());          // pending chunk buffers + final i16 stems
-        for (done, k) in chunk_order(x.frames(), start_frame).enumerate() {
-            if cancel.load(Relaxed) { return Err(StemsError::Cancelled); }
-            let chunk = window(&x, k * STRIDE, SEG, mean, std);   // zero-padded, centered if short
-            let mag = self.dsp.spec(&chunk);                       // [4, 2048, 336]
-            let out = self.session.run(ort::inputs!["mix" => chunk, "mag" => mag])?;
-            let sources = add_istft(&out["time_out"], &out["spec_out"], &self.dsp);
-            acc.add(k, sources);   // overlap-add; finalizes regions whose two chunks are done
-            progress((done + 1) as f32 / acc.chunks() as f32);
-        }
-        let [drums, bass, _other, vocals] = acc.finish(mean, std, mix.sample_rate()); // back to native rate
-        // stored: vocals, bass, rhythm (= drums); instruments = mix − (vocals + bass + rhythm)
-        Ok(StemSet::from_three(mix, vocals, bass, drums))
-    }
-}
-```
+- `trait Separator: Send { fn separate(&mut self, track: &TrackBuffer, progress: &dyn Fn(f32), cancel: &AtomicBool) -> Result<StemSet, SeparateError>; }`
+  checks `cancel` before every chunk and reports progress after each.
+- `ModelSeparator::new(model, &ModelOptions)` opens the session (CoreML on macOS, CPU with `PreferCPU`
+  elsewhere, or with `cpu_only`). `start_at(frame)` sets the playhead that the next separation works
+  outward from.
+- `chunked.rs` holds the steps:
+  - resample to 44.1 kHz (`rubato` FFT resampler, streamed in blocks; identity at 44.1 kHz);
+  - normalize by the mono mean and std;
+  - run the chunks in playhead order, each `time_out + iSTFT(spec_out)`;
+  - overlap-add into pending chunk buffers, finalizing regions to 16-bit as soon as both of their chunks
+    are done (at most 3 chunk buffers are held);
+  - resample each stem back to the track's rate.
+- **Mapping:** source 3 (vocals) → vocals, 1 → bass and 0 (drums) → rhythm; source 2 (other) is dropped.
+  The `StemSet` is built with `StemSet::new(vocals, bass, rhythm, frames)` from the 16-bit stems, and
+  instruments is the engine's residual.
+- Tracks over 20 minutes return `SeparateError::TooLong`.
+- `SyntheticSeparator` is a fixed band split behind the same trait, so CI never needs the model.
 
-`ort` sessions are `Send + Sync`. Tests use the synthetic linear-split separator behind the same trait, so CI
-never needs the model.
+`ort` allows one ONNX Runtime environment per process, so the crate creates it once and shares it.
 
 ## Cache
 

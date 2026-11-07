@@ -108,6 +108,17 @@ impl StemSet {
         self.frames
     }
 
+    /// The stored samples of `stem`, interleaved stereo; `None` for instruments, which is
+    /// not stored (it is what the other three leave of the mix).
+    pub fn stored(&self, stem: Stem) -> Option<&[i16]> {
+        match stem {
+            Stem::Vocals => Some(&self.stems[0]),
+            Stem::Bass => Some(&self.stems[1]),
+            Stem::Rhythm => Some(&self.stems[2]),
+            Stem::Instruments => None,
+        }
+    }
+
     /// The four stems of frame `index`, `[left, right]` each, in [`Stem::ALL`] order;
     /// instruments is what the other three leave of `mix`.
     ///
