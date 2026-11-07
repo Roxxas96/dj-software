@@ -182,12 +182,15 @@ VirtualDJ:
 - **FX FADE pads 1, 2, 5, 6:** the SB3 sweeps the FILTER and fades the fader.
 - **FX FADE pad 3 (pad 7):** the first press starts a 1-beat (4-beat) loop while the fader
   falls; the SB3 shrinks pad 7's loop with its own 1/2X presses. The second press ends the
-  loop. A loop the DJ had on is replaced by the routine's. If DECK was pressed in between,
+  loop. A loop the DJ had on is replaced by the routine's. The routine leaves the deck's
+  AUTO LOOP size at 1 beat (pad 3) or at 4 beats halved by the SB3's own 1/2X presses
+  (pad 7), as in VirtualDJ. If DECK was pressed in between,
   the second press still ends the loop on the deck it started on.
 - **FX FADE pad 4 (pad 8):** a backspin of `backspin.short` (`backspin.long`) seconds,
   1 s and 2 s by default (`docs/config.md`).
-- **PAD SCRATCH pads:** the first message sets hotcue 1 where the deck is; the SB3 then
-  keeps jumping back to it and scratching (a jog that scratches whatever VINYL says).
+- **PAD SCRATCH pads:** the first message jumps to hotcue 1, or sets it where the deck is
+  if there is none (it is then remembered on the track); the SB3 then keeps jumping back
+  to it and scratching (a jog that scratches whatever VINYL says).
 - **TRANS pads:** the SB3 cuts the fader in rhythm.
 
 When a routine ends, the deck is where the physical controls are: the SB3 sends the real
@@ -201,7 +204,8 @@ position when the routine ends, and that message goes to the deck the side shows
 So if DECK was pressed during, say, FX FADE pad 3, the routine's deck can be left with its
 fader where the routine put it (possibly closed), and the newly shown deck's fader takes
 the message only once soft takeover picks it up. Move that deck's fader to bring it back.
-Only the fade loop itself follows its deck (see pad 3 above).
+Only the fade loop itself follows its deck (see pad 3 above). The same goes for the SB3's
+own 1/2X presses after DECK mid pad 7: they also go to the newly shown deck.
 
 The SB3 sends its own jog touch and a small backward nudge with some FX FADE pad 4/8
 presses, within a millisecond of the pad. The engine treats jog touches and moves within

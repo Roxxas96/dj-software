@@ -236,7 +236,7 @@ browser actions).
 | `deck.jog_top` | deck | relative | The top of the jog wheel. While touched in vinyl mode it scratches: the playhead follows the platter, and a held record is silent. Otherwise it nudges a playing deck (a turn bends the speed, up to 50 %, and the bend fades out within about half a second of the hand stopping), or moves the playhead of a paused one (one platter turn is 1.8 s of track). |
 | `deck.jog_ring` | deck | relative | The outer ring of the jog wheel. It nudges a playing deck (a speed bend that fades out within about half a second) and moves a paused one's playhead, like the top without vinyl mode, and is ignored while the deck is scratching. |
 | `deck.jog_search` | deck | relative | Search: moves the playhead 10 s of track per platter turn, leaving a loop it lands outside of. |
-| `deck.jog_scratch` | deck | relative | Platter scratch: like `deck.jog_top`, but a touched deck is scratched even with vinyl mode off, and a running backspin is cancelled. |
+| `deck.jog_scratch` | deck | relative | Platter scratch: like `deck.jog_top`, but a touched deck is scratched even with vinyl mode off, and a running backspin is cancelled only by a touched platter move after its first 50 ms (an untouched move nudges). |
 | `deck.backspin_short` | deck | button | Backspin of the playing deck, `backspin.short` seconds from `config.toml` (default 1 s). |
 | `deck.backspin_long` | deck | button | Backspin of the playing deck, `backspin.long` seconds (default 2 s). |
 | `deck.loop_fade_1` | deck | button | With no normal loop active, loops 1 beat from the last beat and sets the auto-loop size to 1 beat (the next `deck.auto_loop` uses it). Does nothing while a loop is on. |
