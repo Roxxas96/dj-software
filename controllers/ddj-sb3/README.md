@@ -224,6 +224,18 @@ and during the backspin. The firmware messages were recorded on the left side on
 right side is bound by symmetry (channel 2, pads on channel 9), which the capture
 confirms for the same messages.
 
+### Hands-on check (plan 7)
+
+Done by the owner on 2026-11-07 with their SB3 on macOS, fader below full and filter off
+center. Everything worked:
+
+- [x] FX FADE pads 1-8: filter sweeps, the 1-beat fade loop, backspins and the shrinking
+  loop; each ends with the deck at the physical fader and filter positions.
+- [x] TRANS: fader cuts at the physical fader level, never louder.
+- [x] PAD SCRATCH: scratches from where the track is when the pad is pressed (changed at
+  the owner's request from hotcue 1), with VINYL on or off; hotcues are left alone.
+- [x] The routines on deck 3 after DECK.
+
 ## LEDs
 
 Only the headphone MASTER LED is driven. An LED scan of all 16 channels (note-on, with
