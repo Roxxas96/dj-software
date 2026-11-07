@@ -114,7 +114,7 @@ impl StemSet {
     /// # Panics
     ///
     /// If `index` is outside `self` or `mix`.
-    pub fn frame(&self, mix: &TrackBuffer, index: usize) -> [[f32; 2]; 4] {
+    pub(crate) fn frame(&self, mix: &TrackBuffer, index: usize) -> [[f32; 2]; 4] {
         let [vocals, bass, rhythm] = self
             .stems
             .each_ref()

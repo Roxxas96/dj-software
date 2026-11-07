@@ -85,6 +85,13 @@ impl Fixture {
         Arc::new(StemSet::new(v.into(), b.into(), r.into(), FRAMES).unwrap())
     }
 
+    /// A set that hears no vocals: they are left in instruments.
+    fn set_without_vocals(&self) -> Arc<StemSet> {
+        let [v, b, r] = self.stored.clone();
+        let silent = vec![0; v.len()];
+        Arc::new(StemSet::new(silent.into(), b.into(), r.into(), FRAMES).unwrap())
+    }
+
     /// A track holding `Σ gains[s] × stem[s]`.
     fn track_of(&self, gains: [f32; 4]) -> Arc<TrackBuffer> {
         let samples = (0..FRAMES * 2)
@@ -249,6 +256,9 @@ fn changeover_has_no_click() {
         Command::Deck(deck(), DeckCommand::SetStems(Some(fx.set()))),
         Command::Master(MasterCommand::EqMode(EqMode::Eq)),
         Command::Master(MasterCommand::EqMode(EqMode::Stems)),
+        // Replacing the set ramps out of the old one, then into the new one.
+        Command::Deck(deck(), DeckCommand::SetStems(Some(fx.set_without_vocals()))),
+        Command::Deck(deck(), DeckCommand::SetStems(Some(fx.set()))),
         Command::Deck(deck(), DeckCommand::StemOn(Stem::Vocals, false)),
         Command::Deck(deck(), DeckCommand::StemOn(Stem::Vocals, true)),
         Command::Deck(deck(), DeckCommand::SetStems(None)),
@@ -458,4 +468,76 @@ fn keylock_and_scratch_play_the_stem_mix() {
         ],
         "scratched",
     );
+}
+
+/// The amplitude of the fixture's 60 Hz bass in each window of 1470 frames (two of its
+/// cycles, and whole cycles of every other tone), left channel.
+fn bass_levels(samples: &[f32]) -> Vec<f32> {
+    const WINDOW: usize = 1470;
+    samples
+        .as_chunks::<2>()
+        .0
+        .as_chunks::<WINDOW>()
+        .0
+        .iter()
+        .map(|w| {
+            let (mut i, mut q) = (0.0_f32, 0.0_f32);
+            for (n, frame) in w.iter().enumerate() {
+                let angle = TAU * 60.0 * n as f32 / SR as f32;
+                i += frame[0] * angle.cos();
+                q += frame[0] * angle.sin();
+            }
+            2.0 * (i * i + q * q).sqrt() / WINDOW as f32
+        })
+        .collect()
+}
+
+#[test]
+fn keylock_changeover_keeps_the_bass_level() {
+    // LOW at 0.25: the EQ band plays the bass at 0.25, the stems at 0.5. Changing over
+    // early or late under keylock would play it at 1.0 (bands at unity over the mix) or
+    // 0.125 (both).
+    let fx = Fixture::new();
+    let start = |low: f32| {
+        let (mut c, mut r) = loaded(&fx.mix, EqMode::Eq);
+        c.send(Command::Channel(deck(), ChannelCommand::EqLow(low)))
+            .unwrap();
+        send_all(
+            &mut c,
+            &[
+                DeckCommand::SetKeylock(true),
+                DeckCommand::SetTempoSlider(0.7),
+            ],
+        );
+        let _ = render(&mut r, BLOCK);
+        send_all(&mut c, &[DeckCommand::Play]);
+        (c, r)
+    };
+    // The bass at full level, as heard through keylock.
+    let (_full_c, mut full_r) = start(0.5);
+    let full_levels = bass_levels(&render(&mut full_r, BLOCK * 100).0);
+    let full = full_levels[10..].iter().sum::<f32>() / (full_levels.len() - 10) as f32;
+    assert!(full > 0.05, "{full}");
+
+    let (mut c, mut r) = start(0.25);
+    let _ = render(&mut r, BLOCK * 20);
+    let mut levels = Vec::new();
+    for cmd in [
+        Command::Deck(deck(), DeckCommand::SetStems(Some(fx.set()))),
+        Command::Master(MasterCommand::EqMode(EqMode::Stems)),
+        Command::Master(MasterCommand::EqMode(EqMode::Eq)),
+        Command::Master(MasterCommand::EqMode(EqMode::Stems)),
+        Command::Deck(deck(), DeckCommand::SetStems(None)),
+    ] {
+        c.send(cmd).unwrap();
+        levels.extend(bass_levels(&render(&mut r, 1470 * 12).0));
+    }
+    assert!(c.deck(deck()).keylock && !c.deck(deck()).stems);
+    for (n, level) in levels.iter().enumerate() {
+        let level = level / full;
+        assert!(
+            (0.2..=0.6).contains(&level),
+            "window {n}: the bass at {level} of its level"
+        );
+    }
 }

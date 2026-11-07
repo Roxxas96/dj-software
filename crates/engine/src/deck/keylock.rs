@@ -76,6 +76,16 @@ impl Stretcher {
         }
     }
 
+    /// From a source read to its output, in output frames, at `speed`.
+    pub(super) fn latency_frames(&self, speed: f64) -> usize {
+        let input = if speed > 0.0 {
+            self.input_latency as f64 / speed
+        } else {
+            0.0
+        };
+        input.round() as usize + self.output_latency
+    }
+
     fn input_capacity(&self) -> usize {
         self.input.len() / CHANNELS
     }

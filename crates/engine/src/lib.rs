@@ -36,9 +36,10 @@ pub use track::{TrackBuffer, TrackError};
 /// Capacity of the command queue (controller to renderer).
 const COMMAND_QUEUE_CAPACITY: usize = 256;
 /// Capacity of the garbage queue (renderer to controller): a command hands back at most
-/// two items (a `Load` returns the old track and its stems), and each deck may hand back
-/// one set of dropped stems later, once their gains have ramped out.
-const GARBAGE_QUEUE_CAPACITY: usize = 2 * COMMAND_QUEUE_CAPACITY + DeckId::ALL.len();
+/// three items (a `Load` returns the old track, its stems and a set waiting to replace
+/// them), and each deck may hand back one set of dropped stems later, once their gains
+/// have ramped out.
+const GARBAGE_QUEUE_CAPACITY: usize = 3 * COMMAND_QUEUE_CAPACITY + DeckId::ALL.len();
 
 /// Output format the renderer is driven with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
