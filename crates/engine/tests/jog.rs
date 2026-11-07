@@ -415,6 +415,27 @@ fn backspin_reverses_then_resumes() {
 }
 
 #[test]
+fn a_nudge_during_a_backspin_does_not_bend_the_playback_after_it() {
+    let (mut c, mut r, id) = setup();
+    step(&mut c, &mut r, id, DeckCommand::Seek(200_000.0));
+    step(&mut c, &mut r, id, DeckCommand::Play);
+    step(&mut c, &mut r, id, DeckCommand::Backspin { seconds: 0.2 });
+    // Past the grace window, an untouched top move nudges.
+    render(&mut r, 4410);
+    assert!(c.deck(id).backspinning);
+    step(&mut c, &mut r, id, top(0.25));
+    render(&mut r, 8820);
+    assert!(!c.deck(id).backspinning);
+    let resumed = position(&c, id);
+    render(&mut r, 4410);
+    assert!(
+        (position(&c, id) - resumed - 4410.0).abs() < 1.0,
+        "bent: {}",
+        position(&c, id) - resumed
+    );
+}
+
+#[test]
 fn backspin_clamps_at_the_start() {
     let (mut c, mut r, id) = setup();
     step(&mut c, &mut r, id, DeckCommand::Seek(20_000.0));

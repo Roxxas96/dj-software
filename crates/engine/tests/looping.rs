@@ -382,3 +382,39 @@ fn load_resets_loop_keeps_size() {
     assert_eq!((s.loop_in, s.loop_out, s.loop_active), (None, None, false));
     assert_eq!(s.loop_beats, 2.0);
 }
+
+#[test]
+fn a_backspin_ignores_the_loop_and_exits_it_only_when_it_ends_outside() {
+    // Loop 22 050..110 250 (the four beats before 30 000).
+    let looped = || {
+        let (mut c, mut r, id) = setup();
+        step(&mut c, &mut r, id, DeckCommand::Seek(30_000.0));
+        step(&mut c, &mut r, id, DeckCommand::AutoLoop);
+        step(&mut c, &mut r, id, DeckCommand::Seek(100_000.0));
+        step(&mut c, &mut r, id, DeckCommand::Play);
+        (c, r, id)
+    };
+
+    // Ends outside the loop: it ran back through loop-in without wrapping, then exits.
+    let (mut c, mut r, id) = looped();
+    step(&mut c, &mut r, id, DeckCommand::Backspin { seconds: 2.0 });
+    let mut passed_loop_in = false;
+    while c.deck(id).backspinning {
+        render(&mut r, 512);
+        let s = c.deck(id);
+        assert!(s.loop_active || !s.backspinning, "the loop ended mid-spin");
+        passed_loop_in |= s.position_frames < 22_050.0 && s.backspinning;
+    }
+    assert!(passed_loop_in, "the spin wrapped at the loop");
+    assert!(!c.deck(id).loop_active);
+
+    // Ends inside the loop: the loop stays on.
+    let (mut c, mut r, id) = looped();
+    step(&mut c, &mut r, id, DeckCommand::Backspin { seconds: 0.5 });
+    while c.deck(id).backspinning {
+        render(&mut r, 512);
+    }
+    let s = c.deck(id);
+    assert!(s.position_frames > 22_050.0 && s.position_frames < 110_250.0);
+    assert!(s.loop_active);
+}
