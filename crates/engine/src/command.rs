@@ -156,6 +156,16 @@ pub enum DeckCommand {
     JogSearch {
         turns: f64,
     },
+    /// Spins a playing deck backwards like a stopped record: the playhead starts at -3 times
+    /// the deck's normal speed and slows linearly to 0 over `seconds` (clamped to 0.2-10),
+    /// then normal playback resumes forward from there. The spin stops at the track's
+    /// start, and playback resumes from 0. A paused deck or one without a track ignores it,
+    /// as does one held by a scratch. A deliberate jump: it drops a slip ghost and ends a
+    /// roll or slice. A `Seek`, hotcue jump, `Load` or `JogTouch(true)` cancels it. Keylock is
+    /// bypassed while it spins. Non-finite values are ignored.
+    Backspin {
+        seconds: f64,
+    },
 }
 
 /// Which part of the jog wheel turned.
@@ -165,6 +175,9 @@ pub enum JogSurface {
     Top,
     /// The outer ring.
     Ring,
+    /// The whole platter as the SB3's firmware routines see it: scratches while the deck is
+    /// touched, whatever the vinyl flag says, and nudges like the ring otherwise.
+    Platter,
 }
 
 /// How far the tempo slider reaches either side of the original tempo.

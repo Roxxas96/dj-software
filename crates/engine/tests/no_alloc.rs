@@ -277,6 +277,31 @@ fn render_does_not_allocate() {
         DeckCommand::SetTempoSlider(0.7),
         DeckCommand::SetKeylock(false),
         DeckCommand::SetKeylock(true),
+        // A backspin over keylock: bypass while it spins, a restart after, a jump and a
+        // touch cancelling it, and one clamped at the start.
+        DeckCommand::Backspin { seconds: 0.2 },
+        DeckCommand::Backspin { seconds: f64::NAN },
+        DeckCommand::Backspin { seconds: 50.0 },
+        DeckCommand::Seek(5_000.0),
+        DeckCommand::Backspin { seconds: 0.5 },
+        DeckCommand::JogTouch(true),
+        DeckCommand::JogTouch(false),
+        DeckCommand::Seek(1_000.0),
+        DeckCommand::Backspin { seconds: 10.0 },
+        // A platter scratch with vinyl off, then a nudge.
+        DeckCommand::SetVinyl(false),
+        DeckCommand::JogTouch(true),
+        DeckCommand::Jog {
+            turns: 0.3,
+            surface: JogSurface::Platter,
+        },
+        DeckCommand::JogTouch(false),
+        DeckCommand::Jog {
+            turns: 0.1,
+            surface: JogSurface::Platter,
+        },
+        DeckCommand::SetVinyl(true),
+        DeckCommand::Seek(5_000.0),
     ] {
         c.send(Command::Deck(decks[0], cmd)).unwrap();
         render_blocks(10);

@@ -101,10 +101,12 @@ impl Deck {
     }
 
     /// A deliberate jump wins over any slip: the ghost is dropped, and a held roll or slice
-    /// ends with it (its loop would hold the playhead away from the jump).
+    /// ends with it (its loop would hold the playhead away from the jump). A running backspin
+    /// is cancelled too.
     pub(super) fn slip_drop(&mut self) {
         self.ghost = None;
         self.roll = None;
+        self.backspin = None;
     }
 
     /// The normal loop was deactivated, by request or by a jump outside it. The ghost stops

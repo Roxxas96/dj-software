@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+mod backspin;
 mod beat_jump;
 mod hotcue;
 mod jog;
@@ -57,6 +58,8 @@ pub(crate) struct Deck {
     roll: Option<roll::Roll>,
     /// How many `Load`s were applied.
     load_seq: u64,
+    /// A running backspin.
+    backspin: Option<backspin::Backspin>,
 }
 
 impl Default for Deck {
@@ -87,6 +90,7 @@ impl Default for Deck {
             stretcher: None,
             roll: None,
             load_seq: 0,
+            backspin: None,
         }
     }
 }
@@ -186,13 +190,17 @@ impl Deck {
             DeckCommand::JogTouch(touched) => self.jog_touch(touched),
             DeckCommand::Jog { turns, surface } if turns.is_finite() => self.jog(turns, surface),
             DeckCommand::JogSearch { turns } if turns.is_finite() => self.jog_search(turns),
+            DeckCommand::Backspin { seconds } if seconds.is_finite() => {
+                self.backspin_start(seconds)
+            }
             DeckCommand::SetTempoSlider(_)
             | DeckCommand::Seek(_)
             | DeckCommand::SetCue(_)
             | DeckCommand::SetGrid(_)
             | DeckCommand::SetHotcue(..)
             | DeckCommand::Jog { .. }
-            | DeckCommand::JogSearch { .. } => {}
+            | DeckCommand::JogSearch { .. }
+            | DeckCommand::Backspin { .. } => {}
         }
         None
     }
@@ -214,6 +222,7 @@ impl Deck {
         self.pending_sync = None;
         self.ghost = None;
         self.roll = None;
+        self.backspin = None;
     }
 
     fn play(&mut self) {
@@ -229,6 +238,7 @@ impl Deck {
         self.playing = false;
         self.preview = None;
         self.play_latched = false;
+        self.backspin = None;
         // A bend only makes sense against the motion it was given for.
         self.bend = 0.0;
     }
@@ -380,6 +390,7 @@ impl Deck {
         // Keylock stretches a deck playing on its own; scratching, a paused deck and the
         // original tempo play resampled.
         if self.scratch.is_none()
+            && self.backspin.is_none()
             && self.playing
             && self.tempo_ratio() > 0.0
             && self.stretches()
@@ -399,6 +410,16 @@ impl Deck {
         let frames = out.as_chunks_mut::<2>().0;
         let rate =
             self.tempo_ratio() * f64::from(track.sample_rate()) / f64::from(output_sample_rate);
+        // A backspin plays first; once it ends, the rest of the block plays forward.
+        let frames = if self.backspin.is_some() {
+            let done = self.render_backspin(frames, rate, output_sample_rate);
+            &mut frames[done..]
+        } else {
+            frames
+        };
+        let Some(track) = self.track.as_deref() else {
+            return;
+        };
         let decay = (-1.0 / (jog::NUDGE_DECAY_SECONDS * f64::from(output_sample_rate))).exp();
         // The ghost moves at normal speed whenever the deck plays for real.
         let ghost_moves = self.plays_for_real();
@@ -478,6 +499,7 @@ impl Deck {
             keylock: self.keylock,
             ghost_frames: self.ghost_frames(),
             roll_active: self.roll.is_some(),
+            backspinning: self.backspin.is_some(),
             slicer_block_beat: self.slicer_block_beat(),
             load_seq: self.load_seq,
         }

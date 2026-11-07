@@ -34,6 +34,9 @@ impl Deck {
 
     pub(super) fn jog_touch(&mut self, touched: bool) {
         self.jog_touched = touched;
+        if touched {
+            self.backspin = None;
+        }
         self.scratch = None;
         self.start_scratch_if_held();
     }
@@ -43,22 +46,35 @@ impl Deck {
     /// where the track would be; a paused deck is positioned as without slip.
     fn start_scratch_if_held(&mut self) {
         if self.jog_touched && self.vinyl && self.track.is_some() {
-            self.scratch = Some(0.0);
-            if self.plays_for_real() {
-                self.slip_begin(SlipOwner::Scratch);
-            }
+            self.begin_scratch();
         } else {
             self.slip_end(SlipOwner::Scratch);
         }
     }
 
+    fn begin_scratch(&mut self) {
+        self.scratch = Some(0.0);
+        if self.plays_for_real() {
+            self.slip_begin(SlipOwner::Scratch);
+        }
+    }
+
     pub(super) fn jog(&mut self, turns: f64, surface: JogSurface) {
+        // The platter scratches a touched deck even with vinyl off; the scratch then ends
+        // on the touch release like any other.
+        if surface == JogSurface::Platter
+            && self.jog_touched
+            && self.scratch.is_none()
+            && self.track.is_some()
+        {
+            self.begin_scratch();
+        }
         let Some(track_rate) = self.track.as_ref().map(|t| f64::from(t.sample_rate())) else {
             return;
         };
         let end = self.frames() as f64;
         match self.scratch {
-            Some(pending) if surface == JogSurface::Top => {
+            Some(pending) if surface != JogSurface::Ring => {
                 // The target stays on the record, so turning back from past an end
                 // moves at once.
                 let target =
