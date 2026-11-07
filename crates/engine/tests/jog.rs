@@ -449,6 +449,9 @@ fn a_platter_jog_cancels_a_running_backspin() {
     step(&mut c, &mut r, id, DeckCommand::JogTouch(true));
     step(&mut c, &mut r, id, DeckCommand::Backspin { seconds: 2.0 });
     assert!(c.deck(id).backspinning);
+    // Past the 50 ms the spin's start keeps the platter for (100 ms here).
+    render(&mut r, 4410);
+    assert!(c.deck(id).backspinning);
     let jog = DeckCommand::Jog {
         turns: 0.1,
         surface: JogSurface::Platter,
@@ -482,5 +485,91 @@ fn backspin_is_cancelled_by_a_seek_and_ends_a_roll() {
     step(&mut c, &mut r, id, DeckCommand::Backspin { seconds: 2.0 });
     assert!(c.deck(id).backspinning && !c.deck(id).roll_active);
     step(&mut c, &mut r, id, DeckCommand::Seek(50_000.0));
+    assert!(!c.deck(id).backspinning);
+}
+
+/// The SB3's backspin burst: touches and backward platter steps over about 2 ms, released
+/// some 27 ms later (firmware-modes-2.txt, FX FADE pad 4).
+fn sb3_burst(c: &mut EngineController, r: &mut EngineRenderer, id: DeckId) {
+    for _ in 0..5 {
+        step(c, r, id, DeckCommand::JogTouch(true));
+        step(c, r, id, platter(-8.0 / 720.0));
+        render(r, 20);
+    }
+    render(r, 1100);
+    step(c, r, id, DeckCommand::JogTouch(false));
+}
+
+#[test]
+fn backspin_survives_a_touch_burst_just_after_its_start() {
+    for vinyl in [true, false] {
+        let (mut c, mut r, id) = setup();
+        step(&mut c, &mut r, id, DeckCommand::Seek(200_000.0));
+        step(&mut c, &mut r, id, DeckCommand::Play);
+        step(&mut c, &mut r, id, DeckCommand::SetVinyl(vinyl));
+        step(&mut c, &mut r, id, DeckCommand::Backspin { seconds: 1.0 });
+        render(&mut r, 44);
+        sb3_burst(&mut c, &mut r, id);
+        assert!(
+            c.deck(id).backspinning,
+            "vinyl {vinyl}: the burst ended the spin"
+        );
+        assert!(!c.deck(id).jog_touched);
+        let start = 200_000.0;
+        let lowest = lowest_position(&c, &mut r, id, SR as usize);
+        assert!(
+            start - lowest > 1.2 * f64::from(SR),
+            "vinyl {vinyl}: {lowest}"
+        );
+    }
+}
+
+#[test]
+fn backspin_takes_over_a_scratch_begun_just_before() {
+    for vinyl in [true, false] {
+        let (mut c, mut r, id) = setup();
+        step(&mut c, &mut r, id, DeckCommand::Seek(200_000.0));
+        step(&mut c, &mut r, id, DeckCommand::Play);
+        step(&mut c, &mut r, id, DeckCommand::SetVinyl(vinyl));
+        // Recorded order in firmware-modes.txt: the touch and the platter step, then the
+        // pad, all within a millisecond.
+        step(&mut c, &mut r, id, DeckCommand::JogTouch(true));
+        step(&mut c, &mut r, id, platter(-8.0 / 720.0));
+        step(&mut c, &mut r, id, DeckCommand::Backspin { seconds: 1.0 });
+        assert!(
+            c.deck(id).backspinning,
+            "vinyl {vinyl}: the scratch blocked the spin"
+        );
+        sb3_burst(&mut c, &mut r, id);
+        assert!(c.deck(id).backspinning, "vinyl {vinyl}");
+        let lowest = lowest_position(&c, &mut r, id, SR as usize);
+        assert!(
+            200_000.0 - lowest > 1.2 * f64::from(SR),
+            "vinyl {vinyl}: {lowest}"
+        );
+    }
+}
+
+#[test]
+fn backspin_is_still_blocked_by_a_held_scratch() {
+    let (mut c, mut r, id) = setup();
+    step(&mut c, &mut r, id, DeckCommand::Seek(200_000.0));
+    step(&mut c, &mut r, id, DeckCommand::Play);
+    step(&mut c, &mut r, id, DeckCommand::JogTouch(true));
+    // The hand has held the record for 100 ms.
+    render(&mut r, 4410);
+    step(&mut c, &mut r, id, DeckCommand::Backspin { seconds: 1.0 });
+    assert!(!c.deck(id).backspinning);
+}
+
+#[test]
+fn backspin_is_cancelled_by_a_touch_200_ms_later() {
+    let (mut c, mut r, id) = setup();
+    step(&mut c, &mut r, id, DeckCommand::Seek(200_000.0));
+    step(&mut c, &mut r, id, DeckCommand::Play);
+    step(&mut c, &mut r, id, DeckCommand::Backspin { seconds: 2.0 });
+    render(&mut r, 8820);
+    assert!(c.deck(id).backspinning);
+    step(&mut c, &mut r, id, DeckCommand::JogTouch(true));
     assert!(!c.deck(id).backspinning);
 }

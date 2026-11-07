@@ -293,6 +293,17 @@ fn render_does_not_allocate() {
         DeckCommand::JogTouch(false),
         DeckCommand::Seek(1_000.0),
         DeckCommand::Backspin { seconds: 10.0 },
+        // The SB3's burst at a spin's start: a scratch taken over, then touches and
+        // platter steps within the grace window.
+        DeckCommand::Seek(100_000.0),
+        DeckCommand::JogTouch(true),
+        DeckCommand::Backspin { seconds: 1.0 },
+        DeckCommand::JogTouch(true),
+        DeckCommand::Jog {
+            turns: -0.01,
+            surface: JogSurface::Platter,
+        },
+        DeckCommand::JogTouch(false),
         // A platter scratch with vinyl off, then a nudge.
         DeckCommand::SetVinyl(false),
         DeckCommand::JogTouch(true),
