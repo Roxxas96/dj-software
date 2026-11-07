@@ -50,6 +50,11 @@ impl Segment {
         self.start + self.step * (frame + 1) as f32
     }
 
+    /// Whether the gain is exactly `value` across the whole block.
+    pub(crate) fn rests_at(&self, value: f32) -> bool {
+        self.start == value && self.step == 0.0
+    }
+
     /// Whether the gain is exactly zero across the whole block.
     pub(crate) fn is_zero(&self) -> bool {
         self.start == 0.0 && self.step == 0.0

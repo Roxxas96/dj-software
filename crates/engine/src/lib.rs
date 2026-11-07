@@ -14,6 +14,7 @@ pub mod mixer;
 mod renderer;
 mod sampler;
 mod shared;
+mod stems;
 mod track;
 
 pub use command::{
@@ -29,12 +30,15 @@ pub use memory::{Grid, HOTCUES, HotcueSlot, TrackMemory};
 pub use renderer::EngineRenderer;
 pub use sampler::{SAMPLER_SLOTS, SamplerSnapshot};
 pub use shared::{ChannelSnapshot, DeckSnapshot, Meters};
+pub use stems::{EqMode, Stem, StemError, StemSet, knob_law};
 pub use track::{TrackBuffer, TrackError};
 
 /// Capacity of the command queue (controller to renderer).
 const COMMAND_QUEUE_CAPACITY: usize = 256;
-/// Capacity of the garbage queue (renderer to controller).
-const GARBAGE_QUEUE_CAPACITY: usize = 256;
+/// Capacity of the garbage queue (renderer to controller): a command hands back at most
+/// two items (a `Load` returns the old track and its stems), and each deck may hand back
+/// one set of dropped stems later, once their gains have ramped out.
+const GARBAGE_QUEUE_CAPACITY: usize = 2 * COMMAND_QUEUE_CAPACITY + DeckId::ALL.len();
 
 /// Output format the renderer is driven with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,7 +1,8 @@
 //! Backspin of a deck: the playhead runs backwards from three times the normal speed and
 //! slows linearly to a stop, then normal playback resumes forward from there.
 
-use super::{Deck, add_frame};
+use super::{Deck, Source, add_frame};
+use crate::dsp::smooth::Segment;
 
 /// Speed at the start of a spin, backwards, as a multiple of the deck's normal speed.
 const START_SPEED: f64 = 3.0;
@@ -62,12 +63,13 @@ impl Deck {
 
     /// Plays the spin into `frames` and returns how many it filled; fewer than `frames.len()`
     /// when the spin ended. `rate` is the deck's normal speed in track frames per output
-    /// frame.
+    /// frame, and `gains` the stem gains across the block, one read per frame.
     pub(super) fn render_backspin(
         &mut self,
         frames: &mut [[f32; 2]],
         rate: f64,
         output_rate: u32,
+        gains: Option<[Segment; 4]>,
     ) -> usize {
         let Some(track) = self.track.as_deref() else {
             self.backspin = None;
@@ -76,6 +78,7 @@ impl Deck {
         let Some(mut spin) = self.backspin else {
             return 0;
         };
+        let source = Source::new(track, self.stems.as_deref(), gains);
         let total = spin.seconds * f64::from(output_rate);
         let mut done = 0;
         for frame in frames.iter_mut() {
@@ -84,7 +87,7 @@ impl Deck {
             }
             let speed = START_SPEED * rate * (1.0 - spin.elapsed / total);
             if speed > 0.0 && track.frames() > 0 {
-                add_frame(frame, track, self.position);
+                add_frame(frame, source, self.position, done);
             }
             self.position = (self.position - speed).max(0.0);
             spin.elapsed += 1.0;

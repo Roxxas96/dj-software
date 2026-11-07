@@ -5,8 +5,9 @@ use std::sync::Arc;
 use assert_no_alloc::{AllocDisabler, assert_no_alloc};
 use common::ramp_track;
 use engine::{
-    ChannelCommand, Command, DeckCommand, DeckId, EffectKind, EngineConfig, Grid, HotcueSlot,
-    JogSurface, MasterCommand, SamplerCommand, TrackMemory, XfaderAssign, engine,
+    ChannelCommand, Command, DeckCommand, DeckId, EffectKind, EngineConfig, EqMode, Grid,
+    HotcueSlot, JogSurface, MasterCommand, SamplerCommand, Stem, StemSet, TrackMemory,
+    XfaderAssign, engine,
 };
 
 #[global_allocator]
@@ -467,4 +468,112 @@ fn render_does_not_allocate() {
     assert!(master.iter().any(|&s| s != 0.0));
     assert!(headphones.iter().any(|&s| s != 0.0));
     assert!(c.meters().channel_peak[0] > 0.0);
+}
+
+/// A stem set of `frames` frames whose three stems ramp at different rates.
+fn ramp_stems(frames: usize) -> Arc<StemSet> {
+    let stem = |div: usize| -> Box<[i16]> {
+        (0..frames * 2)
+            .map(|i| i16::try_from((i / 2 / div) % 8000).unwrap())
+            .collect()
+    };
+    Arc::new(StemSet::new(stem(1), stem(2), stem(3), frames).unwrap())
+}
+
+#[test]
+fn stems_do_not_allocate() {
+    let (mut c, mut r) = engine(EngineConfig {
+        sample_rate: 44_100,
+        max_block_frames: BLOCK_FRAMES,
+    });
+    let decks: Vec<DeckId> = (0..4).map(|i| DeckId::new(i).unwrap()).collect();
+    const FRAMES: usize = 400_000;
+    let mut sets = Vec::new();
+    for &id in &decks {
+        let set = ramp_stems(FRAMES);
+        sets.push(Arc::clone(&set));
+        for cmd in [
+            DeckCommand::Load {
+                track: ramp_track(44_100, FRAMES),
+                memory: TrackMemory::default(),
+            },
+            DeckCommand::Play,
+            DeckCommand::SetStems(Some(set)),
+        ] {
+            c.send(Command::Deck(id, cmd)).unwrap();
+        }
+        // Off-center knobs, so the stems are summed with gains below one.
+        for cmd in [
+            ChannelCommand::EqLow(0.8),
+            ChannelCommand::EqMid(0.3),
+            ChannelCommand::EqHigh(0.6),
+        ] {
+            c.send(Command::Channel(id, cmd)).unwrap();
+        }
+    }
+    // Built up front: allocating inside the guarded section would abort the test.
+    let replacement = ramp_stems(FRAMES);
+    let mismatched = ramp_stems(FRAMES - 1);
+    let reload = ramp_track(44_100, FRAMES);
+    let mut master = vec![0.0; BLOCK_FRAMES * 2];
+    let mut headphones = vec![0.0; BLOCK_FRAMES * 2];
+    let mut render_blocks = |blocks: usize| {
+        assert_no_alloc(|| {
+            for _ in 0..blocks {
+                r.render(&mut master, &mut headphones);
+            }
+        });
+    };
+
+    render_blocks(5);
+    c.send(Command::Master(MasterCommand::EqMode(EqMode::Stems)))
+        .unwrap();
+    render_blocks(10);
+    assert!(decks.iter().all(|&id| c.deck(id).stems_active));
+    // Keylock and a scratch over the stems on one deck.
+    for cmd in [
+        DeckCommand::SetKeylock(true),
+        DeckCommand::SetTempoSlider(0.7),
+        DeckCommand::StemOn(Stem::Vocals, false),
+        DeckCommand::StemOn(Stem::Instruments, false),
+        DeckCommand::StemOn(Stem::Bass, false),
+        DeckCommand::StemOn(Stem::Rhythm, false),
+        DeckCommand::StemOn(Stem::Rhythm, true),
+        DeckCommand::JogTouch(true),
+        DeckCommand::Jog {
+            turns: -0.3,
+            surface: JogSurface::Top,
+        },
+        DeckCommand::JogTouch(false),
+        DeckCommand::Backspin { seconds: 0.5 },
+        // A replaced set and a mismatched one go to the garbage queue.
+        DeckCommand::SetStems(Some(replacement)),
+        DeckCommand::SetStems(Some(mismatched)),
+        DeckCommand::SetStems(None),
+    ] {
+        c.send(Command::Deck(decks[0], cmd)).unwrap();
+        render_blocks(4);
+    }
+    for mode in [EqMode::Eq, EqMode::Stems] {
+        c.send(Command::Master(MasterCommand::EqMode(mode)))
+            .unwrap();
+        render_blocks(4);
+    }
+    // A load drops the stems of a deck playing them.
+    c.send(Command::Deck(
+        decks[1],
+        DeckCommand::Load {
+            track: reload,
+            memory: TrackMemory::default(),
+        },
+    ))
+    .unwrap();
+    render_blocks(4);
+    assert!(!c.deck(decks[1]).stems);
+    assert!(c.deck(decks[2]).stems_active);
+
+    c.collect_garbage();
+    assert_eq!(Arc::strong_count(&sets[0]), 1);
+    assert_eq!(Arc::strong_count(&sets[1]), 1);
+    assert!(master.iter().any(|&s| s != 0.0));
 }

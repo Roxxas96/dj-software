@@ -9,7 +9,17 @@ mod looping;
 mod roll;
 mod slip;
 
-use crate::{DeckCommand, DeckId, DeckSnapshot, Grid, HOTCUES, TempoRange, TrackBuffer};
+use crate::dsp::smooth::{Ramp, Segment};
+use crate::stems::Garbage;
+use crate::{
+    DeckCommand, DeckId, DeckSnapshot, EqMode, Grid, HOTCUES, StemSet, TempoRange, TrackBuffer,
+    knob_law,
+};
+
+/// What a command hands back for the renderer to discard: at most a track and a stem set.
+pub(crate) type Discarded = [Option<Garbage>; 2];
+
+const NOTHING: Discarded = [None, None];
 
 /// Transport state of one deck. Owned by the renderer.
 #[derive(Debug)]
@@ -66,6 +76,16 @@ pub(crate) struct Deck {
     output_rate: u32,
     /// The clock when the jog was last touched.
     touched_at: Option<u64>,
+    /// The loaded track's stems.
+    stems: Option<Arc<StemSet>>,
+    /// The stems were dropped: they stay until the gains have ramped back to the mix.
+    stems_leaving: bool,
+    /// The stem pads, in [`Stem::ALL`](crate::Stem::ALL) order. All on after a load.
+    stem_on: [bool; 4],
+    /// Per stem gain, from the knob law and the pads; all 1.0 plays the mix itself.
+    stem_gain: [Ramp; 4],
+    /// The EQ knobs control the stems.
+    stems_active: bool,
 }
 
 impl Default for Deck {
@@ -100,6 +120,11 @@ impl Default for Deck {
             clock: 0,
             output_rate: 44_100,
             touched_at: None,
+            stems: None,
+            stems_leaving: false,
+            stem_on: [true; 4],
+            stem_gain: [Ramp::new(1.0); 4],
+            stems_active: false,
         }
     }
 }
@@ -115,10 +140,10 @@ impl Deck {
         }
     }
 
-    /// Applies `cmd` and returns the track it replaced, if any. The caller must not drop
-    /// that track on the audio thread.
+    /// Applies `cmd` and returns the track and stems it replaced or ignored, if any. The
+    /// caller must not drop them on the audio thread.
     #[must_use]
-    pub(crate) fn apply(&mut self, cmd: DeckCommand) -> Option<Arc<TrackBuffer>> {
+    pub(crate) fn apply(&mut self, cmd: DeckCommand) -> Discarded {
         match cmd {
             DeckCommand::Load { track, memory } => {
                 self.reset_transport();
@@ -127,12 +152,16 @@ impl Deck {
                 self.hotcues = memory.hotcues;
                 self.grid = memory.grid;
                 self.load_seq = self.load_seq.wrapping_add(1);
-                return self.track.replace(track);
+                let stems = self.reset_stems();
+                return [self.track.replace(track).map(Garbage::Track), stems];
             }
             DeckCommand::Unload => {
                 self.reset_transport();
-                return self.track.take();
+                let stems = self.reset_stems();
+                return [self.track.take().map(Garbage::Track), stems];
             }
+            DeckCommand::SetStems(stems) => return [self.set_stems(stems), None],
+            DeckCommand::StemOn(stem, on) => self.stem_on[stem.index()] = on,
             DeckCommand::Play => self.play(),
             DeckCommand::Pause => self.pause(),
             DeckCommand::TogglePlay => {
@@ -219,7 +248,78 @@ impl Deck {
             | DeckCommand::JogSearch { .. }
             | DeckCommand::Backspin { .. } => {}
         }
-        None
+        NOTHING
+    }
+
+    /// Drops the stems at once, with every pad on and the gains at the mix: for a load,
+    /// where the sound jumps anyway.
+    fn reset_stems(&mut self) -> Option<Garbage> {
+        self.stems_leaving = false;
+        self.stem_on = [true; 4];
+        self.stem_gain = [Ramp::new(1.0); 4];
+        self.stems_active = false;
+        self.stems.take().map(Garbage::Stems)
+    }
+
+    /// Takes `stems` for the loaded track, or drops the current ones (`None`), and returns
+    /// the set to discard. Stems that are dropped keep playing until the gains have ramped
+    /// back to the mix ([`Deck::update_stems`] hands them back then).
+    fn set_stems(&mut self, stems: Option<Arc<StemSet>>) -> Option<Garbage> {
+        match stems {
+            None => {
+                self.stems_leaving = self.stems.is_some();
+                None
+            }
+            Some(set) if self.track.is_none() || set.frames() != self.frames() => {
+                Some(Garbage::Stems(set))
+            }
+            Some(set) => {
+                self.stems_leaving = false;
+                self.stems.replace(set).map(Garbage::Stems)
+            }
+        }
+    }
+
+    /// Before a block: sets the stem gains the block ramps to, from the EQ knob positions
+    /// `[low, mid, high]` under `mode`, and returns whether the knobs control the stems,
+    /// with a dropped set to discard once its gains are back at the mix. In
+    /// [`EqMode::Eq`] the gains are the pads alone.
+    pub(crate) fn update_stems(
+        &mut self,
+        mode: EqMode,
+        [low, mid, high]: [f32; 3],
+    ) -> (bool, Option<Arc<StemSet>>) {
+        let released = if self.stems_leaving && self.stem_gain.iter().all(|g| g.current == 1.0) {
+            self.stems_leaving = false;
+            self.stems.take()
+        } else {
+            None
+        };
+        let present = self.stems.is_some() && !self.stems_leaving;
+        self.stems_active = present && mode == EqMode::Stems;
+        let law = if self.stems_active {
+            knob_law(low, mid, high)
+        } else {
+            [1.0; 4]
+        };
+        for ((gain, law), on) in self.stem_gain.iter_mut().zip(law).zip(self.stem_on) {
+            gain.target = if present && !on { 0.0 } else { law };
+        }
+        (self.stems_active, released)
+    }
+
+    /// Starts the stem gains' ramp over `reads` source reads. `None` plays the mix itself:
+    /// no stems, or every gain at rest at 1.
+    fn stem_segments(&mut self, reads: usize) -> Option<[Segment; 4]> {
+        let segments = self.stem_gain.each_mut().map(|gain| gain.block(reads));
+        let mix = self.stems.is_none() || segments.iter().all(|s| s.rests_at(1.0));
+        (!mix).then_some(segments)
+    }
+
+    /// The stem gains held where they are, for reads outside the block's ramp.
+    fn stem_held(&self) -> Option<[Segment; 4]> {
+        let mix = self.stems.is_none() || self.stem_gain.iter().all(|g| g.current == 1.0);
+        (!mix).then(|| self.stem_gain.map(|mut gain| gain.block(0)))
     }
 
     fn reset_transport(&mut self) {
@@ -416,12 +516,23 @@ impl Deck {
             // A clone of the deck's own track: it is never the last one, so never freed here.
             && let Some(track) = self.track.clone()
         {
+            // The same for the stems: never the last reference either.
+            let stems = self.stems.clone();
             let step = f64::from(track.sample_rate()) / f64::from(output_sample_rate);
             let bounds = self.play_bounds();
-            self.render_stretched(out, &track, output_sample_rate, step, bounds);
+            self.render_stretched(
+                out,
+                &track,
+                stems.as_deref(),
+                output_sample_rate,
+                step,
+                bounds,
+            );
             return;
         }
         self.keylock_bypassed();
+        // One read per output frame: the stem gains ramp across the block.
+        let gains = self.stem_segments(out.len() / 2);
         let Some(track) = self.track.as_deref() else {
             return;
         };
@@ -430,15 +541,16 @@ impl Deck {
         let rate =
             self.tempo_ratio() * f64::from(track.sample_rate()) / f64::from(output_sample_rate);
         // A backspin plays first; once it ends, the rest of the block plays forward.
-        let frames = if self.backspin.is_some() {
-            let done = self.render_backspin(frames, rate, output_sample_rate);
-            &mut frames[done..]
+        let (frames, done) = if self.backspin.is_some() {
+            let done = self.render_backspin(frames, rate, output_sample_rate, gains);
+            (&mut frames[done..], done)
         } else {
-            frames
+            (frames, 0)
         };
         let Some(track) = self.track.as_deref() else {
             return;
         };
+        let source = Source::new(track, self.stems.as_deref(), gains);
         let decay = (-1.0 / (jog::NUDGE_DECAY_SECONDS * f64::from(output_sample_rate))).exp();
         // The ghost moves at normal speed whenever the deck plays for real.
         let ghost_moves = self.plays_for_real();
@@ -452,7 +564,7 @@ impl Deck {
             // Only the platter moves the record, playing or paused; it never wraps a loop
             // and holds at the ends instead of pausing. A record held still is silent.
             let lag = jog::SCRATCH_LAG_SECONDS * f64::from(output_sample_rate);
-            for frame in frames {
+            for (i, frame) in frames.iter_mut().enumerate() {
                 // The nudge bend keeps fading under the hand, as the ghost hears it.
                 if ghost_moves {
                     if let Some(ghost) = &mut self.ghost {
@@ -462,7 +574,7 @@ impl Deck {
                 }
                 let speed = (pending / lag).clamp(-jog::SCRATCH_MAX_SPEED, jog::SCRATCH_MAX_SPEED);
                 if speed.abs() >= jog::SCRATCH_STILL_SPEED {
-                    add_frame(frame, track, self.position);
+                    add_frame(frame, source, self.position, done + i);
                 }
                 let next = (self.position + speed).clamp(0.0, end);
                 pending -= next - self.position;
@@ -481,9 +593,9 @@ impl Deck {
         }
         let bounds = self.play_bounds();
 
-        for frame in frames {
+        for (i, frame) in frames.iter_mut().enumerate() {
             let step = rate * (1.0 + self.bend);
-            let Some(sound) = read_frame(track, &mut self.position, bounds, step) else {
+            let Some(sound) = read_frame(source, &mut self.position, bounds, step, done + i) else {
                 self.pause();
                 return;
             };
@@ -521,41 +633,83 @@ impl Deck {
             backspinning: self.backspin.is_some(),
             slicer_block_beat: self.slicer_block_beat(),
             load_seq: self.load_seq,
+            stems: self.stems.is_some() && !self.stems_leaving,
+            stems_active: self.stems_active,
+        }
+    }
+}
+
+/// What a deck plays: its track, or the gain-weighted sum of its stems.
+#[derive(Clone, Copy)]
+struct Source<'a> {
+    track: &'a TrackBuffer,
+    /// The stems and their gains across the block's reads; `None` plays the track.
+    stems: Option<(&'a StemSet, [Segment; 4])>,
+}
+
+impl<'a> Source<'a> {
+    fn new(
+        track: &'a TrackBuffer,
+        stems: Option<&'a StemSet>,
+        gains: Option<[Segment; 4]>,
+    ) -> Self {
+        Self {
+            track,
+            stems: stems.zip(gains),
+        }
+    }
+
+    fn mix(track: &'a TrackBuffer) -> Self {
+        Self { track, stems: None }
+    }
+
+    fn frames(&self) -> usize {
+        self.track.frames()
+    }
+
+    /// Frame `index` as heard at read `read` of the block.
+    #[inline]
+    fn frame(&self, index: usize, read: usize) -> [f32; 2] {
+        match self.stems {
+            None => self.track.frame(index),
+            Some((stems, gains)) => stems.mixed(self.track, index, gains.map(|g| g.at(read))),
         }
     }
 }
 
 /// The playing source reader, shared by the normal path and keylock: wraps `position` in
-/// `bounds`, returns the track's sound there and moves it on by `step`. At the track's end
-/// it holds `position` there and returns `None`.
+/// `bounds`, returns the source's sound there (at read `read` of the block, for the stem
+/// gains) and moves it on by `step`. At the track's end it holds `position` there and
+/// returns `None`.
 fn read_frame(
-    track: &TrackBuffer,
+    source: Source<'_>,
     position: &mut f64,
     bounds: Option<(f64, f64)>,
     step: f64,
+    read: usize,
 ) -> Option<[f32; 2]> {
-    let end = track.frames() as f64;
+    let end = source.frames() as f64;
     *position = looping::wrap_position(*position, bounds, step);
     if *position >= end {
         *position = end;
         return None;
     }
     let mut sound = [0.0; 2];
-    add_frame(&mut sound, track, *position);
+    add_frame(&mut sound, source, *position, read);
     *position += step;
     Some(sound)
 }
 
-/// Adds the track's sound at `position` (in `[0, frames]`) to `frame`, interpolating
-/// linearly between the frames around it.
-fn add_frame(frame: &mut [f32; 2], track: &TrackBuffer, position: f64) {
-    let last = track.frames() - 1;
+/// Adds the source's sound at `position` (in `[0, frames]`), at read `read` of the block,
+/// to `frame`, interpolating linearly between the frames around it.
+fn add_frame(frame: &mut [f32; 2], source: Source<'_>, position: f64, read: usize) {
+    let last = source.frames() - 1;
     let index = (position as usize).min(last);
     let frac = (position - index as f64) as f32;
-    let a = track.frame(index);
+    let a = source.frame(index, read);
     // At the last frame there is nothing to interpolate towards; frac is then weighted
     // against the same frame.
-    let b = track.frame((index + 1).min(last));
+    let b = source.frame((index + 1).min(last), read);
     frame[0] += a[0] + (b[0] - a[0]) * frac;
     frame[1] += a[1] + (b[1] - a[1]) * frac;
 }
@@ -585,7 +739,8 @@ mod tests {
                 track: Arc::clone(track),
                 memory: TrackMemory::default(),
             })
-            .is_none()
+            .iter()
+            .all(Option::is_none)
         );
         let _ = deck.apply(DeckCommand::Play);
         deck
@@ -665,7 +820,8 @@ mod tests {
                 track: Arc::clone(track),
                 memory,
             })
-            .is_none()
+            .iter()
+            .all(Option::is_none)
         );
         let _ = deck.apply(DeckCommand::Seek(position));
         let _ = deck.apply(DeckCommand::Play);

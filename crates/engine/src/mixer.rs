@@ -7,7 +7,14 @@
 //! sum of the PFL taps. Every gain change is ramped linearly across one block.
 //!
 //! The EQ is an always-on isolator: at unity its bands sum to an allpass (flat magnitude,
-//! DC passes at unity once settled), so the channel is never bit-exact dry. The filter is
+//! DC passes at unity once settled), so the channel is never bit-exact dry.
+//!
+//! While a channel's deck plays its stems with the knobs ([`EqMode::Stems`](crate::EqMode)),
+//! the EQ stage is bypassed: the knobs set the stem gains in the deck instead, and the
+//! band gains ramp to unity, which leaves the isolator a flat allpass. It keeps running
+//! so the stem path has the EQ path's phase: with the knobs centered the changeover is
+//! then inaudible (the stems sum to the mix), where a dry bypass would switch between the
+//! allpass's phase and none. The filter is
 //! bypassed inside its center deadzone; engaging or releasing it crossfades between dry and
 //! filtered signal across one block.
 //!
@@ -153,6 +160,10 @@ impl FxSlot {
 #[derive(Debug)]
 struct ChannelStrip {
     trim: Ramp,
+    /// Low, mid and high EQ knob positions.
+    eq_pos: [f32; 3],
+    /// The knobs control the deck's stems: the band gains are unity.
+    stems_active: bool,
     /// Low, mid and high band gains.
     eq_gain: [Ramp; 3],
     isolator: Isolator,
@@ -173,6 +184,8 @@ impl ChannelStrip {
     fn new(assign: XfaderAssign, crossfader: f32, sample_rate: u32) -> Self {
         Self {
             trim: Ramp::new(trim_gain(0.5)),
+            eq_pos: [0.5; 3],
+            stems_active: false,
             eq_gain: [Ramp::new(eq_gain(0.5)); 3],
             isolator: Isolator::new(sample_rate),
             filter: Filter::default(),
@@ -187,7 +200,14 @@ impl ChannelStrip {
     }
 
     fn set_eq(&mut self, band: usize, pos: f32) {
-        self.eq_gain[band].target = eq_gain(pos);
+        self.eq_pos[band] = pos.clamp(0.0, 1.0);
+        self.retarget_eq();
+    }
+
+    fn retarget_eq(&mut self) {
+        for (gain, pos) in self.eq_gain.iter_mut().zip(self.eq_pos) {
+            gain.target = if self.stems_active { 1.0 } else { eq_gain(pos) };
+        }
     }
 }
 
@@ -287,7 +307,9 @@ impl Mixer {
                     strip.fx[slot].set_kind(kind);
                 }
             }
-            MasterCommand::FxSlot(..)
+            // The renderer applies it: the decks play the stems.
+            MasterCommand::EqMode(_)
+            | MasterCommand::FxSlot(..)
             | MasterCommand::Crossfader(_)
             | MasterCommand::MasterLevel(_)
             | MasterCommand::HeadphoneLevel(_)
@@ -299,6 +321,21 @@ impl Mixer {
     /// the tempo-synced effects.
     pub(crate) fn set_beat_frames(&mut self, deck: DeckId, frames: f64) {
         self.channels[deck.index()].beat_frames = frames;
+    }
+
+    /// The channel's EQ knob positions, `[low, mid, high]`.
+    pub(crate) fn eq_positions(&self, deck: DeckId) -> [f32; 3] {
+        self.channels[deck.index()].eq_pos
+    }
+
+    /// Bypasses the channel's EQ bands (unity gains, ramped over the next block) while its
+    /// deck's stems take the knobs.
+    pub(crate) fn set_stems_active(&mut self, deck: DeckId, active: bool) {
+        let strip = &mut self.channels[deck.index()];
+        if strip.stems_active != active {
+            strip.stems_active = active;
+            strip.retarget_eq();
+        }
     }
 
     /// The channel's state for display.

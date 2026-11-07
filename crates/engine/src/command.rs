@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use crate::{DeckId, EffectKind, Grid, HotcueSlot, TrackBuffer, TrackMemory};
+use crate::{
+    DeckId, EffectKind, EqMode, Grid, HotcueSlot, Stem, StemSet, TrackBuffer, TrackMemory,
+};
 
 /// A message from the controller to the audio thread.
 #[derive(Debug, Clone)]
@@ -29,12 +31,23 @@ pub enum Command {
 #[derive(Debug, Clone)]
 pub enum DeckCommand {
     /// Loads a track, paused at frame 0, then applies `memory.clamped(track.frames())`.
-    /// The tempo slider keeps its position.
+    /// The tempo slider keeps its position. Drops the previous track's stems and turns
+    /// every stem back on.
     Load {
         track: Arc<TrackBuffer>,
         memory: TrackMemory,
     },
+    /// Unloads the track and its stems.
     Unload,
+    /// Gives the loaded track its stems (`None` drops them). A set whose frame count is not
+    /// the track's, or one sent to an empty deck, is ignored. A replaced or ignored set goes
+    /// back to the controller to be freed, like a track. Stems arriving or leaving while the
+    /// knobs control them crossfade over one block.
+    SetStems(Option<Arc<StemSet>>),
+    /// A stem pad: turns one stem on or off, ramped over one block. It applies whatever
+    /// the [`EqMode`], once the deck has stems (a press before then is kept). Every stem is
+    /// on after `Load`.
+    StemOn(Stem, bool),
     Play,
     Pause,
     TogglePlay,
@@ -264,6 +277,11 @@ pub enum MasterCommand {
     /// Sets the kind of effect slot `0..=2` on every channel and clears its state (the new
     /// engine runs Echo, Reverb and Flanger). A slot index `>= 3` is ignored.
     FxSlot(usize, EffectKind),
+    /// What every channel's EQ knobs control (`Eq` for a new engine). In
+    /// [`EqMode::Stems`], a deck with stems plays them with the
+    /// [`knob_law`](crate::knob_law) gains in place of the EQ bands; switching crossfades
+    /// over one block.
+    EqMode(EqMode),
 }
 
 /// Sampler commands. A slot index `>= SAMPLER_SLOTS` is ignored.
