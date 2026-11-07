@@ -13,6 +13,12 @@ allow = [
   "MPL-2.0",
   "CC0-1.0",
 ]
+exceptions = [
+  # Mozilla's CA list as data (CDLA-Permissive-2.0, a permissive data license), pulled in
+  # only by ort-sys's build script, which downloads ONNX Runtime; the run-time download in
+  # `stems setup` uses the OS trust store instead (ruling R1).
+  { allow = ["CDLA-Permissive-2.0"], crate = "webpki-root-certs" },
+]
 
 [advisories]
 # defaults: known vulnerabilities are denied

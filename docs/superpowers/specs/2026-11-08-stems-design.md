@@ -157,10 +157,9 @@ The main spec's anti-goals stand: no freeze, crash or dropout; a control does on
 
 ## Left to the builder
 
-- The model variant and its packaging:
+- The model variant and its format:
   - which Demucs variant and quantization;
-  - converted to ONNX or CoreML, or run through a Rust runtime;
-  - where the model file lives (bundled with releases, or fetched once by an explicit setup command with a checksum; never silently at play time).
+  - converted to ONNX or CoreML, or run through a Rust runtime.
 - The runtime and its acceleration on each OS.
 - The cache format (compressed, for example FLAC or Opus; the quality must keep the summed stems close to the original).
 - Chunking, overlap and the "around the playhead first" order.

@@ -1,0 +1,12 @@
+# The export environment (Python 3.14.9 venv), for export_wf.py and test_vector.py:
+#   python3.14 -m venv venv && venv/bin/pip install -r requirements.txt
+#   venv/bin/python -I export_wf.py <955717e8.safetensors> htdemucs-core-wf.onnx
+torch==2.15.0
+demucs==4.1.0
+onnx==1.23.2
+onnxscript==0.7.2
+onnxslim==0.1.99
+safetensors==0.8.0
+numpy==2.5.4
+# test_vector.py only
+onnxruntime==1.31.1

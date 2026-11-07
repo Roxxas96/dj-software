@@ -26,6 +26,7 @@ engine = { path = "../engine" }
 directories.workspace = true
 dunce.workspace = true
 library = { path = "../library" }
+stems = { path = "../stems" }
 toml.workspace = true
 analysis = { path = "../analysis" }
 
