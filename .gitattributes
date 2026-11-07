@@ -1,1 +1,5 @@
 crates/decode/tests/fixtures/* binary
+# The stems graph is embedded byte for byte and checked by its SHA-256, like onnx.proto3:
+# no line-ending conversion on any checkout.
+crates/stems/model/*.onnx binary
+crates/stems/model/onnx.proto3 -text
