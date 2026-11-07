@@ -6,25 +6,27 @@ use crate::deck::Deck;
 use crate::mixer::Mixer;
 use crate::sampler::Sampler;
 use crate::shared::Shared;
-use crate::{Command, DeckId, EngineConfig, Meters, TrackBuffer};
+use crate::stems::Garbage;
+use crate::{Command, DeckId, EngineConfig, EqMode, MasterCommand, Meters};
 
 /// Audio-thread handle: renders output blocks. [`render`](Self::render) never allocates,
 /// frees, locks or blocks.
 pub struct EngineRenderer {
     config: EngineConfig,
     commands: Consumer<Command>,
-    garbage: Producer<Arc<TrackBuffer>>,
+    garbage: Producer<Garbage>,
     shared: Arc<Shared>,
     decks: [Deck; DeckId::ALL.len()],
     mixer: Mixer,
     sampler: Sampler,
+    eq_mode: EqMode,
 }
 
 impl EngineRenderer {
     pub(crate) fn new(
         config: EngineConfig,
         commands: Consumer<Command>,
-        garbage: Producer<Arc<TrackBuffer>>,
+        garbage: Producer<Garbage>,
     ) -> Self {
         let renderer = Self {
             config,
@@ -35,6 +37,7 @@ impl EngineRenderer {
             decks: std::array::from_fn(|_| Deck::new(config.sample_rate, config.max_block_frames)),
             mixer: Mixer::new(config.sample_rate, config.max_block_frames),
             sampler: Sampler::new(config.max_block_frames),
+            eq_mode: EqMode::default(),
         };
         renderer.publish();
         renderer
@@ -74,6 +77,7 @@ impl EngineRenderer {
                 self.mixer
                     .set_beat_frames(id, deck.beat_frames(self.config.sample_rate));
             }
+            self.update_stems();
             let inputs = self.mixer.inputs(master.len());
             for (deck, input) in self.decks.iter_mut().zip(inputs) {
                 deck.render_add(input, self.config.sample_rate);
@@ -91,11 +95,12 @@ impl EngineRenderer {
     fn apply(&mut self, cmd: Command) {
         match cmd {
             Command::Deck(id, cmd) => {
-                if let Some(old) = self.decks[id.index()].apply(cmd) {
+                for old in self.decks[id.index()].apply(cmd).into_iter().flatten() {
                     self.discard(old);
                 }
                 self.drop_syncs_to_stopped_master(id);
             }
+            Command::Master(MasterCommand::EqMode(mode)) => self.eq_mode = mode,
             Command::PhaseSync {
                 deck,
                 master,
@@ -105,7 +110,7 @@ impl EngineRenderer {
             Command::Master(cmd) => self.mixer.apply_master(cmd),
             Command::Sampler(cmd) => {
                 if let Some(old) = self.sampler.apply(cmd) {
-                    self.discard(old);
+                    self.discard(Garbage::Track(old));
                 }
             }
         }
@@ -160,14 +165,29 @@ impl EngineRenderer {
         }
     }
 
-    /// Hands a replaced track back to the controller, which frees it off the audio thread.
-    fn discard(&mut self, track: Arc<TrackBuffer>) {
-        let result = self.garbage.push(track);
+    /// Before a chunk renders: sets each deck's stem gains from its channel's EQ knobs and
+    /// bypasses the EQ bands of the channels whose stems take the knobs. A change of
+    /// either ramps over the chunk, which is the changeover's crossfade.
+    fn update_stems(&mut self) {
+        for id in DeckId::ALL {
+            let knobs = self.mixer.eq_positions(id);
+            let (active, released) = self.decks[id.index()].update_stems(self.eq_mode, knobs);
+            self.mixer.set_stems_active(id, active);
+            if let Some(stems) = released {
+                self.discard(Garbage::Stems(stems));
+            }
+        }
+    }
+
+    /// Hands a replaced track or stem set back to the controller, which frees it off the
+    /// audio thread.
+    fn discard(&mut self, garbage: Garbage) {
+        let result = self.garbage.push(garbage);
         debug_assert!(result.is_ok(), "garbage queue full");
-        if let Err(PushError::Full(track)) = result {
+        if let Err(PushError::Full(garbage)) = result {
             // Unreachable while `EngineController::send` collects garbage first. Leaking
             // is still better than freeing on the audio thread.
-            std::mem::forget(track);
+            std::mem::forget(garbage);
         }
     }
 

@@ -6,8 +6,8 @@ use std::fmt;
 
 use signalsmith_stretch::Stretch;
 
-use super::{Deck, jog, read_frame, slip};
-use crate::TrackBuffer;
+use super::{Deck, Source, jog, read_frame, slip};
+use crate::{StemSet, TrackBuffer};
 
 /// Tempo ratios this close to 1.0 play without the stretcher, as at the original tempo. The
 /// nudge bend never counts, so a nudge never switches between the paths.
@@ -85,10 +85,13 @@ impl Stretcher {
     }
 
     /// Fills the first `frames` input frames from the feed, which wraps in `bounds` and
-    /// reads silence past the track's end.
-    fn fill(&mut self, track: &TrackBuffer, bounds: Option<(f64, f64)>, step: f64, frames: usize) {
-        for frame in self.input.as_chunks_mut::<2>().0[..frames].iter_mut() {
-            *frame = read_frame(track, &mut self.feed, bounds, step).unwrap_or([0.0; 2]);
+    /// reads silence past the track's end. Input frame `i` is the source's read `i`.
+    fn fill(&mut self, source: Source<'_>, bounds: Option<(f64, f64)>, step: f64, frames: usize) {
+        for (i, frame) in self.input.as_chunks_mut::<2>().0[..frames]
+            .iter_mut()
+            .enumerate()
+        {
+            *frame = read_frame(source, &mut self.feed, bounds, step, i).unwrap_or([0.0; 2]);
         }
     }
 
@@ -97,7 +100,7 @@ impl Stretcher {
     /// output latency, so the next output is the track at `position` at full level.
     fn restart(
         &mut self,
-        track: &TrackBuffer,
+        source: Source<'_>,
         position: f64,
         bounds: Option<(f64, f64)>,
         step: f64,
@@ -107,13 +110,13 @@ impl Stretcher {
         self.feed = position;
         self.carry = 0.0;
         let preroll = self.input_latency;
-        self.fill(track, bounds, step, preroll);
+        self.fill(source, bounds, step, preroll);
         self.stretch.seek(&self.input[..preroll * CHANNELS], speed);
         let mut left = self.output_latency;
         while left > 0 {
             let frames = left.min(self.output_capacity());
             let read = self.source_frames(frames, speed);
-            self.fill(track, bounds, step, read);
+            self.fill(source, bounds, step, read);
             self.stretch.process(
                 &self.input[..read * CHANNELS],
                 &mut self.output[..frames * CHANNELS],
@@ -164,13 +167,15 @@ impl Deck {
     }
 
     /// Renders a block through the stretcher and adds it to the interleaved stereo `out`.
-    /// Reads `round_carry(n × speed)` source frames at the original pitch; the playhead and
-    /// the ghost advance by exactly those frames. `step` is the track frames per output
-    /// frame at the original tempo, and `bounds` the loop the playhead wraps in.
+    /// Reads `round_carry(n × speed)` source frames at the original pitch (the track, or
+    /// its `stems` with the gains ramped across those reads); the playhead and the ghost
+    /// advance by exactly those frames. `step` is the track frames per output frame at the
+    /// original tempo, and `bounds` the loop the playhead wraps in.
     pub(super) fn render_stretched(
         &mut self,
         out: &mut [f32],
         track: &TrackBuffer,
+        stems: Option<&StemSet>,
         output_rate: u32,
         step: f64,
         bounds: Option<(f64, f64)>,
@@ -188,11 +193,14 @@ impl Deck {
             bounds,
         };
         if stretcher.resume != Some(here) {
-            stretcher.restart(track, self.position, bounds, step, speed);
+            // The preroll hears the gains where the last block left them.
+            let source = Source::new(track, stems, self.stem_held());
+            stretcher.restart(source, self.position, bounds, step, speed);
         }
 
         let read = stretcher.source_frames(frames, speed);
-        stretcher.fill(track, bounds, step, read);
+        let source = Source::new(track, stems, self.stem_segments(read));
+        stretcher.fill(source, bounds, step, read);
         stretcher.stretch.process(
             &stretcher.input[..read * CHANNELS],
             &mut stretcher.output[..frames * CHANNELS],
@@ -207,7 +215,7 @@ impl Deck {
         let ghost_bounds = self.ghost_bounds();
         let mut ended = false;
         for _ in 0..read {
-            if read_frame(track, &mut self.position, bounds, step).is_none() {
+            if read_frame(Source::mix(track), &mut self.position, bounds, step, 0).is_none() {
                 ended = true;
                 break;
             }

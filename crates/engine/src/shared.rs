@@ -48,6 +48,11 @@ pub struct DeckSnapshot {
     /// [`EngineController::deck_consistent`](crate::EngineController::deck_consistent)
     /// every field is from the same block as this count.
     pub load_seq: u64,
+    /// The loaded track has its stems.
+    pub stems: bool,
+    /// The stems are in use: the EQ knobs control them ([`EqMode::Stems`](crate::EqMode)
+    /// with stems present).
+    pub stems_active: bool,
 }
 
 impl Default for DeckSnapshot {
@@ -77,6 +82,8 @@ impl Default for DeckSnapshot {
             backspinning: false,
             slicer_block_beat: None,
             load_seq: 0,
+            stems: false,
+            stems_active: false,
         }
     }
 }
@@ -227,6 +234,8 @@ struct DeckShared {
     backspinning: AtomicBool,
     slicer_block_beat: AtomicU64,
     load_seq: AtomicU64,
+    stems: AtomicBool,
+    stems_active: AtomicBool,
     fx_enabled: [AtomicBool; 3],
     fx_amount: AtomicU32,
 }
@@ -310,6 +319,8 @@ impl DeckShared {
         self.slicer_block_beat
             .store(opt_bits(s.slicer_block_beat), Ordering::Relaxed);
         self.load_seq.store(s.load_seq, Ordering::Relaxed);
+        self.stems.store(s.stems, Ordering::Relaxed);
+        self.stems_active.store(s.stems_active, Ordering::Relaxed);
     }
 
     /// One block's snapshot whole, or `None` if the renderer was storing one at each of
@@ -365,6 +376,8 @@ impl DeckShared {
             backspinning: self.backspinning.load(Ordering::Relaxed),
             slicer_block_beat: bits_opt(self.slicer_block_beat.load(Ordering::Relaxed)),
             load_seq: self.load_seq.load(Ordering::Relaxed),
+            stems: self.stems.load(Ordering::Relaxed),
+            stems_active: self.stems_active.load(Ordering::Relaxed),
         }
     }
 }

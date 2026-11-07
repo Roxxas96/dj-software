@@ -169,7 +169,7 @@ mod tests {
             DeckCommand::Play,
             DeckCommand::JogTouch(true),
         ] {
-            assert!(deck.apply(cmd).is_none());
+            assert!(deck.apply(cmd).iter().all(Option::is_none));
         }
         deck
     }
