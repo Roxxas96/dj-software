@@ -155,6 +155,18 @@ Everything worked:
 - [x] Slip: with slip on, a scratch, loop or hotcue lands where the track would have been.
 - [x] Crossfader: with `crossfader = false`, moving it changes nothing.
 
+### Hands-on check (plan 6)
+
+Done by the owner on 2026-11-07 with their SB3 on macOS (`play --library --controller
+ddj-sb3`). Everything worked:
+
+- [x] Keylock: KEY LOCK keeps the pitch at ±8 % and ±16 % on the owner's music; hotcues,
+  CUE and the jog still feel instant; scratching sounds raw; nudging at 0 % is click-free.
+- [x] FX: FX 1/2/3 switch echo, reverb and flanger on the side's deck; LEVEL sets the
+  amount on the DJ-mixer dry/wet curve; the echo follows the beat; an effect stays on its
+  deck after DECK.
+- [x] Config: `[fx] slots` changes the slot effects after a restart.
+
 ## LEDs
 
 Only the headphone MASTER LED is driven. An LED scan of all 16 channels (note-on, with
