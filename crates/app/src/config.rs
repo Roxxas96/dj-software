@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, anyhow};
 use toml::{Table, Value};
 
-use engine::EffectKind;
+use engine::{EffectKind, EqMode};
 
 use crate::format::safe;
 
@@ -36,6 +36,7 @@ pub struct Config {
     pub backspin_short: Option<f64>,
     /// Seconds of the long backspin, when the file sets it.
     pub backspin_long: Option<f64>,
+    pub stems: StemsConfig,
 }
 
 impl Default for Config {
@@ -49,8 +50,87 @@ impl Default for Config {
             loop_roll_pads: None,
             backspin_short: None,
             backspin_long: None,
+            stems: StemsConfig::default(),
         }
     }
+}
+
+/// The range of `stems.cache_gb`, in gigabytes.
+const CACHE_GB_RANGE: (f64, f64) = (0.5, 1000.0);
+
+/// The `[stems]` section.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StemsConfig {
+    /// Whether tracks are separated into stems (and the cache used) at all.
+    pub enabled: bool,
+    /// What the EQ knobs control once stems are enabled.
+    pub eq_mode: EqMode,
+    /// The most disk the stems cache may use, in gigabytes.
+    pub cache_gb: f64,
+}
+
+impl Default for StemsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            eq_mode: EqMode::Eq,
+            cache_gb: 5.0,
+        }
+    }
+}
+
+impl StemsConfig {
+    /// The mode `play` sends at startup: `eq_mode`, but the plain EQ while stems are not
+    /// enabled (`eq_mode = "stems"` without `enabled` is not an error).
+    pub fn startup_eq_mode(&self) -> EqMode {
+        if self.enabled {
+            self.eq_mode
+        } else {
+            EqMode::Eq
+        }
+    }
+}
+
+fn parse_stems(table: &Table, file: &str) -> anyhow::Result<StemsConfig> {
+    let mut stems = StemsConfig::default();
+    for (key, value) in table {
+        match key.as_str() {
+            "enabled" => {
+                stems.enabled = value
+                    .as_bool()
+                    .ok_or_else(|| invalid(file, "stems.enabled", "expected true or false"))?;
+            }
+            "eq_mode" => {
+                stems.eq_mode = match value.as_str() {
+                    Some("eq") => EqMode::Eq,
+                    Some("stems") => EqMode::Stems,
+                    _ => {
+                        return Err(invalid(
+                            file,
+                            "stems.eq_mode",
+                            "expected \"eq\" or \"stems\"",
+                        ));
+                    }
+                };
+            }
+            "cache_gb" => {
+                stems.cache_gb = number(value)
+                    .filter(|gb| (CACHE_GB_RANGE.0..=CACHE_GB_RANGE.1).contains(gb))
+                    .ok_or_else(|| {
+                        invalid(
+                            file,
+                            "stems.cache_gb",
+                            format!(
+                                "expected a number from {} to {}",
+                                CACHE_GB_RANGE.0, CACHE_GB_RANGE.1
+                            ),
+                        )
+                    })?;
+            }
+            _ => return Err(unknown(file, "stems", key)),
+        }
+    }
+    Ok(stems)
 }
 
 /// The `[sampler]` section.
@@ -194,6 +274,7 @@ fn parse(text: &str, file: &str, home: Option<&Path>) -> anyhow::Result<Config> 
                     }
                 }
             }
+            "stems" => config.stems = parse_stems(section(file, name, value)?, file)?,
             _ => return Err(invalid(file, name, "unknown key")),
         }
     }
@@ -437,6 +518,11 @@ pads = [0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8]
 [backspin]
 short = 1.0
 long = 2.0
+
+[stems]
+enabled = false
+eq_mode = "eq"
+cache_gb = 5
 "#;
 
     fn home() -> PathBuf {
@@ -630,6 +716,83 @@ long = 2.0
         }
         let e = error_of("[mixer]\n\ncrossfader = \"open");
         assert!(e.starts_with("config.toml: line 3: "), "{e}");
+    }
+
+    #[test]
+    fn stems_config_parses_and_rejects() {
+        assert_eq!(parse_text("").unwrap().stems, StemsConfig::default());
+        let defaults = StemsConfig::default();
+        assert!(!defaults.enabled);
+        assert_eq!(defaults.eq_mode, EqMode::Eq);
+        assert_eq!(defaults.cache_gb, 5.0);
+        let config =
+            parse_text("[stems]\nenabled = true\neq_mode = \"stems\"\ncache_gb = 0.5").unwrap();
+        assert_eq!(
+            config.stems,
+            StemsConfig {
+                enabled: true,
+                eq_mode: EqMode::Stems,
+                cache_gb: 0.5,
+            }
+        );
+        assert_eq!(
+            parse_text("[stems]\ncache_gb = 1000")
+                .unwrap()
+                .stems
+                .cache_gb,
+            1000.0
+        );
+        let cases: &[(&str, &str)] = &[
+            (
+                "[stems]\nmodel = 1",
+                "config.toml: stems.model: unknown key",
+            ),
+            (
+                "[stems]\nenabled = 1",
+                "config.toml: stems.enabled: expected true or false",
+            ),
+            (
+                "[stems]\neq_mode = \"band\"",
+                "config.toml: stems.eq_mode: expected \"eq\" or \"stems\"",
+            ),
+            (
+                "[stems]\neq_mode = 1",
+                "config.toml: stems.eq_mode: expected \"eq\" or \"stems\"",
+            ),
+            (
+                "[stems]\ncache_gb = 0.4",
+                "config.toml: stems.cache_gb: expected a number from 0.5 to 1000",
+            ),
+            (
+                "[stems]\ncache_gb = 1001",
+                "config.toml: stems.cache_gb: expected a number from 0.5 to 1000",
+            ),
+            (
+                "[stems]\ncache_gb = \"big\"",
+                "config.toml: stems.cache_gb: expected a number from 0.5 to 1000",
+            ),
+            ("stems = 1", "config.toml: stems: expected a table"),
+        ];
+        for (text, expected) in cases {
+            let error = error_of(text);
+            assert!(error.starts_with(expected), "{text:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn eq_mode_stems_needs_enabled() {
+        let eq_mode = |text| parse_text(text).unwrap().stems.startup_eq_mode();
+        assert_eq!(eq_mode(""), EqMode::Eq);
+        // Not an error: stems mode without stems enabled starts as the plain EQ.
+        assert_eq!(eq_mode("[stems]\neq_mode = \"stems\""), EqMode::Eq);
+        assert_eq!(
+            eq_mode("[stems]\nenabled = true\neq_mode = \"stems\""),
+            EqMode::Stems
+        );
+        assert_eq!(
+            eq_mode("[stems]\nenabled = true\neq_mode = \"eq\""),
+            EqMode::Eq
+        );
     }
 
     #[test]

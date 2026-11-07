@@ -400,6 +400,10 @@ pub fn play(args: &PlayArgs) -> anyhow::Result<()> {
         &mut controller,
         Command::Master(MasterCommand::CrossfaderEnabled(config.crossfader)),
     )?;
+    send(
+        &mut controller,
+        Command::Master(MasterCommand::EqMode(config.stems.startup_eq_mode())),
+    )?;
     for (slot, kind) in config.fx_slots.into_iter().enumerate() {
         send(
             &mut controller,

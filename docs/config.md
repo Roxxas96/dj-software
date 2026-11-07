@@ -1,6 +1,6 @@
 # config.toml
 
-Settings for the mixer, the effects, the sampler and the performance pad sizes. Every section and key is
+Settings for the mixer, the effects, the sampler, the performance pad sizes and the stems. Every section and key is
 optional; a key left out keeps its default, and so does a missing file.
 
 ## Location
@@ -28,6 +28,9 @@ optional; a key left out keeps its default, and so does a missing file.
 | `loop_roll.pads`     | `[0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8]`     | Beats the loop roll pads roll; exactly 8, each from 1/32 to 64 |
 | `backspin.short`     | `1.0`                                        | Seconds of the short backspin (`deck.backspin_short`), from 0.2 to 10 |
 | `backspin.long`      | `2.0`                                        | Seconds of the long backspin (`deck.backspin_long`), from 0.2 to 10 |
+| `stems.enabled`      | `false`                                      | `true`: tracks loaded from the library are separated into stems (and cached); `false`: no separation and no cache, nothing is paid |
+| `stems.eq_mode`      | `"eq"`                                       | What the EQ knobs control: `"eq"` (the frequency bands) or `"stems"` (HI vocals, MID instruments, LOW bass, on a deck whose stems are ready). `"stems"` without `enabled = true` is not an error: `play` starts with the plain EQ |
+| `stems.cache_gb`     | `5`                                          | The most disk the stems cache may use, in gigabytes, from 0.5 to 1000 |
 
 A sample is at most 60 seconds long. A `track` id is looked up in the library: the one opened
 by `--library`, otherwise the default library if it exists.
@@ -58,6 +61,11 @@ pads = [0.0625, 0.125, 0.25, 0.5, 1, 2, 4, 8]
 [backspin]
 short = 1.0                  # seconds, 0.2 to 10
 long = 2.0
+
+[stems]
+enabled = false              # true: separate library tracks into stems (needs `stems setup` once)
+eq_mode = "eq"               # "eq" or "stems"; "stems" only acts when enabled
+cache_gb = 5                 # 0.5 to 1000
 ```
 
 ## Errors

@@ -303,6 +303,10 @@ browser actions).
 | `deck.fx_toggle_2` | deck | button | Press to turn effect slot 2 of the deck's channel on or off. |
 | `deck.fx_toggle_3` | deck | button | Press to turn effect slot 3 of the deck's channel on or off. |
 | `deck.fx_level` | deck | absolute | Sets how much of the deck's effects is heard (the effect amount), 0 to 1; 0.5 until moved. Takes soft takeover like the other knobs. |
+| `deck.stem_toggle_vocals` | deck | button | Press to turn the deck's vocals stem off or on (all four are on after a load). Works whatever `[stems] eq_mode` is, once the deck has its stems; a press before then is remembered and applies when they are ready. Needs `[stems] enabled = true`. No LED feedback. |
+| `deck.stem_toggle_instruments` | deck | button | Press to turn the deck's instruments stem off or on (all four are on after a load). Works whatever `[stems] eq_mode` is, once the deck has its stems; a press before then is remembered and applies when they are ready. Needs `[stems] enabled = true`. No LED feedback. |
+| `deck.stem_toggle_bass` | deck | button | Press to turn the deck's bass stem off or on (all four are on after a load). Works whatever `[stems] eq_mode` is, once the deck has its stems; a press before then is remembered and applies when they are ready. Needs `[stems] enabled = true`. No LED feedback. |
+| `deck.stem_toggle_rhythm` | deck | button | Press to turn the deck's rhythm stem off or on (all four are on after a load). Works whatever `[stems] eq_mode` is, once the deck has its stems; a press before then is remembered and applies when they are ready. Needs `[stems] enabled = true`. No LED feedback. |
 | `sampler.play_1` | none | button | Press to play sampler slot 1 from the start, restarting it if it is playing. An empty slot does nothing. |
 | `sampler.play_2` | none | button | Press to play sampler slot 2 from the start, restarting it if it is playing. An empty slot does nothing. |
 | `sampler.play_3` | none | button | Press to play sampler slot 3 from the start, restarting it if it is playing. An empty slot does nothing. |

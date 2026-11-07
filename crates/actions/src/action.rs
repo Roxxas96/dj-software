@@ -1,4 +1,4 @@
-use engine::{DeckId, HotcueSlot};
+use engine::{DeckId, HotcueSlot, Stem};
 
 use crate::PadMode;
 
@@ -169,6 +169,9 @@ pub enum ActionKind {
     /// Turns effect slot N (0 to 2) of the deck's channel on or off.
     FxToggle(u8),
     FxLevel,
+    /// A stem pad: turns the deck's stem on or off (all on after a load). It works whatever
+    /// the EQ mode, once the deck has stems; a press before then is kept.
+    StemToggle(Stem),
     /// Plays sampler slot `slot` (the sampler has as many slots as there are pads).
     SamplerPlay(HotcueSlot),
     SamplerStop(HotcueSlot),
@@ -275,8 +278,8 @@ const SAMPLER_STOP_IDS: [&str; 8] = [
 
 impl ActionKind {
     /// Every kind: each slot family (hotcues, beat jumps, rolls, slices, sampler) once per slot.
-    pub const ALL: [ActionKind; 125] = {
-        let mut all = [ActionKind::PlayPause; 125];
+    pub const ALL: [ActionKind; 129] = {
+        let mut all = [ActionKind::PlayPause; 129];
         let fixed = [
             ActionKind::PlayPause,
             ActionKind::Cue,
@@ -339,6 +342,10 @@ impl ActionKind {
             ActionKind::FxToggle(1),
             ActionKind::FxToggle(2),
             ActionKind::FxLevel,
+            ActionKind::StemToggle(Stem::Vocals),
+            ActionKind::StemToggle(Stem::Instruments),
+            ActionKind::StemToggle(Stem::Bass),
+            ActionKind::StemToggle(Stem::Rhythm),
         ];
         let mut i = 0;
         while i < fixed.len() {
@@ -430,6 +437,10 @@ impl ActionKind {
             ActionKind::KeylockToggle => "deck.keylock_toggle",
             ActionKind::FxToggle(slot) => FX_TOGGLE_IDS[slot as usize],
             ActionKind::FxLevel => "deck.fx_level",
+            ActionKind::StemToggle(Stem::Vocals) => "deck.stem_toggle_vocals",
+            ActionKind::StemToggle(Stem::Instruments) => "deck.stem_toggle_instruments",
+            ActionKind::StemToggle(Stem::Bass) => "deck.stem_toggle_bass",
+            ActionKind::StemToggle(Stem::Rhythm) => "deck.stem_toggle_rhythm",
             ActionKind::SamplerPlay(slot) => SAMPLER_PLAY_IDS[slot.index()],
             ActionKind::SamplerStop(slot) => SAMPLER_STOP_IDS[slot.index()],
         }
@@ -492,6 +503,7 @@ impl ActionKind {
             | ActionKind::KeylockToggle
             | ActionKind::FxToggle(_)
             | ActionKind::FxLevel
+            | ActionKind::StemToggle(_)
             | ActionKind::LoadSelected => Scope::Deck,
             ActionKind::Crossfader
             | ActionKind::MasterLevel
@@ -650,6 +662,7 @@ pub enum Action {
     KeylockToggle(DeckId),
     FxToggle(DeckId, u8),
     FxLevel(DeckId),
+    StemToggle(DeckId, Stem),
     SamplerPlay(HotcueSlot),
     SamplerStop(HotcueSlot),
 }
@@ -720,6 +733,7 @@ impl Action {
             (K::KeylockToggle, Target::Deck(d)) => Action::KeylockToggle(d),
             (K::FxToggle(n), Target::Deck(d)) => Action::FxToggle(d, n),
             (K::FxLevel, Target::Deck(d)) => Action::FxLevel(d),
+            (K::StemToggle(stem), Target::Deck(d)) => Action::StemToggle(d, stem),
             (K::SamplerPlay(slot), Target::Global) => Action::SamplerPlay(slot),
             (K::SamplerStop(slot), Target::Global) => Action::SamplerStop(slot),
             _ => return None,
@@ -799,6 +813,7 @@ impl Action {
             Action::KeylockToggle(_) => ActionKind::KeylockToggle,
             Action::FxToggle(_, n) => ActionKind::FxToggle(*n),
             Action::FxLevel(_) => ActionKind::FxLevel,
+            Action::StemToggle(_, stem) => ActionKind::StemToggle(*stem),
             Action::SamplerPlay(slot) => ActionKind::SamplerPlay(*slot),
             Action::SamplerStop(slot) => ActionKind::SamplerStop(*slot),
         }
@@ -856,7 +871,8 @@ impl Action {
             | Action::SlipToggle(d)
             | Action::KeylockToggle(d)
             | Action::FxToggle(d, _)
-            | Action::FxLevel(d) => Target::Deck(d),
+            | Action::FxLevel(d)
+            | Action::StemToggle(d, _) => Target::Deck(d),
             Action::Crossfader
             | Action::MasterLevel
             | Action::HeadphoneLevel
