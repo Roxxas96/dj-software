@@ -335,3 +335,135 @@ fn load_resets_jog_state() {
     step(&mut c, &mut r, id, load(FRAMES));
     assert!(!c.deck(id).vinyl);
 }
+
+fn platter(turns: f64) -> DeckCommand {
+    DeckCommand::Jog {
+        turns,
+        surface: JogSurface::Platter,
+    }
+}
+
+#[test]
+fn platter_scratches_with_vinyl_off() {
+    let (mut c, mut r, id) = setup();
+    step(&mut c, &mut r, id, DeckCommand::SetVinyl(false));
+    step(&mut c, &mut r, id, DeckCommand::Seek(10_000.0));
+    step(&mut c, &mut r, id, DeckCommand::Play);
+    step(&mut c, &mut r, id, DeckCommand::JogTouch(true));
+    // A Top move does nothing without vinyl; a Platter move scratches.
+    step(&mut c, &mut r, id, platter(1.0));
+    render(&mut r, SR as usize / 2);
+    let pos = position(&c, id);
+    // The one-frame steps that played before the touch count for a frame each.
+    assert!((pos - (10_000.0 + PLATTER_FRAMES)).abs() <= 4.0, "{pos}");
+    // The release ends the scratch: playback resumes.
+    step(&mut c, &mut r, id, DeckCommand::JogTouch(false));
+    let released = position(&c, id);
+    render(&mut r, 4410);
+    assert!(position(&c, id) > released + 4000.0);
+}
+
+#[test]
+fn platter_without_touch_nudges() {
+    let (mut c, mut r, id) = setup();
+    step(&mut c, &mut r, id, DeckCommand::Seek(10_000.0));
+    step(&mut c, &mut r, id, DeckCommand::Play);
+    step(&mut c, &mut r, id, platter(0.1));
+    render(&mut r, 1000);
+    // Untouched, it bends the speed like the ring instead of scratching.
+    let pos = position(&c, id);
+    assert!(
+        pos > 10_000.0 + 1000.0 + 20.0 && pos < 10_000.0 + 1000.0 + PLATTER_FRAMES,
+        "{pos}"
+    );
+    let (mut c2, mut r2, id2) = setup();
+    step(&mut c2, &mut r2, id2, DeckCommand::Seek(10_000.0));
+    step(&mut c2, &mut r2, id2, DeckCommand::Play);
+    step(&mut c2, &mut r2, id2, ring(0.1));
+    render(&mut r2, 1000);
+    assert_eq!(pos, position(&c2, id2));
+}
+
+/// Renders `frames` in blocks, returning the lowest playhead seen.
+fn lowest_position(c: &EngineController, r: &mut EngineRenderer, id: DeckId, frames: usize) -> f64 {
+    let mut lowest = position(c, id);
+    for _ in 0..frames / 512 {
+        render(r, 512);
+        lowest = lowest.min(position(c, id));
+    }
+    lowest
+}
+
+#[test]
+fn backspin_reverses_then_resumes() {
+    let (mut c, mut r, id) = setup();
+    step(&mut c, &mut r, id, DeckCommand::Seek(200_000.0));
+    step(&mut c, &mut r, id, DeckCommand::Play);
+    step(&mut c, &mut r, id, DeckCommand::Backspin { seconds: 1.0 });
+    assert!(c.deck(id).backspinning);
+    let start = position(&c, id);
+    let lowest = lowest_position(&c, &mut r, id, SR as usize);
+    let back = start - lowest;
+    let expected = 1.5 * f64::from(SR);
+    assert!((back - expected).abs() <= 3.0 * 512.0, "went back {back}");
+    // Afterwards it plays forward again.
+    render(&mut r, 1024);
+    assert!(!c.deck(id).backspinning);
+    let resumed = position(&c, id);
+    render(&mut r, 4410);
+    assert!((position(&c, id) - resumed - 4410.0).abs() < 1.0);
+}
+
+#[test]
+fn backspin_clamps_at_the_start() {
+    let (mut c, mut r, id) = setup();
+    step(&mut c, &mut r, id, DeckCommand::Seek(20_000.0));
+    step(&mut c, &mut r, id, DeckCommand::Play);
+    step(&mut c, &mut r, id, DeckCommand::Backspin { seconds: 5.0 });
+    let lowest = lowest_position(&c, &mut r, id, SR as usize);
+    // The spin stops at 0 within a block and playback goes on forward in the same block.
+    assert!(lowest < 512.0, "{lowest}");
+    assert!(!c.deck(id).backspinning);
+    assert!(c.deck(id).playing);
+    let before = position(&c, id);
+    render(&mut r, 4410);
+    assert!(position(&c, id) > before + 4000.0);
+}
+
+#[test]
+fn backspin_on_a_paused_deck_does_nothing() {
+    let (mut c, mut r, id) = setup();
+    step(&mut c, &mut r, id, DeckCommand::Seek(20_000.0));
+    step(&mut c, &mut r, id, DeckCommand::Backspin { seconds: 1.0 });
+    assert!(!c.deck(id).backspinning);
+    render(&mut r, 4410);
+    assert_eq!(position(&c, id), 20_000.0);
+}
+
+#[test]
+fn backspin_is_cancelled_by_a_touch() {
+    let (mut c, mut r, id) = setup();
+    step(&mut c, &mut r, id, DeckCommand::Seek(200_000.0));
+    step(&mut c, &mut r, id, DeckCommand::Play);
+    step(&mut c, &mut r, id, DeckCommand::Backspin { seconds: 2.0 });
+    render(&mut r, 4410);
+    assert!(c.deck(id).backspinning);
+    step(&mut c, &mut r, id, DeckCommand::JogTouch(true));
+    assert!(!c.deck(id).backspinning);
+    let held = position(&c, id);
+    render(&mut r, 4410);
+    assert!((position(&c, id) - held).abs() < 1.0, "held by the hand");
+}
+
+#[test]
+fn backspin_is_cancelled_by_a_seek_and_ends_a_roll() {
+    let (mut c, mut r, id) = setup();
+    step(&mut c, &mut r, id, DeckCommand::Seek(200_000.0));
+    step(&mut c, &mut r, id, DeckCommand::Play);
+    step(&mut c, &mut r, id, DeckCommand::RollPress { beats: 1.0 });
+    assert!(c.deck(id).roll_active);
+    step(&mut c, &mut r, id, DeckCommand::Backspin { seconds: 2.0 });
+    assert!(c.deck(id).backspinning && !c.deck(id).roll_active);
+    step(&mut c, &mut r, id, DeckCommand::Seek(50_000.0));
+    assert!(!c.deck(id).backspinning);
+}

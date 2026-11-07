@@ -252,3 +252,22 @@ fn nudge_at_ratio_one_keeps_keylock_bypassed() {
     // resampled path (like vinyl) and never switches to the stretcher and back.
     assert!(nudge_at_ratio_one(true) == nudge_at_ratio_one(false));
 }
+
+#[test]
+fn backspin_bypasses_keylock_and_restarts_it() {
+    let (mut c, mut r) = setup(sine_track(440.0, None, 6.0), PLUS_8, true);
+    send(&mut c, DeckCommand::Seek(3.0 * f64::from(SR)));
+    send(&mut c, DeckCommand::Play);
+    render(&mut r, 4096);
+    send(&mut c, DeckCommand::Backspin { seconds: 1.0 });
+    let (spin, _) = render(&mut r, SR as usize);
+    // Raw resampled playback: the pitch falls from 3 x 440 x 1.08 towards 0.
+    assert_near(frequency(&spin, 0.03, 0.05), 3.0 * 440.0 * 1.08, 0.1);
+    let (after, _) = render(&mut r, SR as usize);
+    assert!(!c.deck(deck()).backspinning);
+    // Stretched playback again: the pitch is back to the track's own.
+    assert_near(frequency(&after, 0.3, 0.3), 440.0, 0.02);
+    let window = &after[2 * 13_230..2 * (13_230 + 4410)];
+    let rms = (window.iter().map(|s| s * s).sum::<f32>() / window.len() as f32).sqrt();
+    assert!(rms > 0.25, "rms {rms}");
+}
