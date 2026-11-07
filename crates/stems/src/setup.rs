@@ -39,6 +39,8 @@ const WEIGHTS_BYTES: u64 = 84_025_440;
 /// The filled model's SHA-256 when `prost` 0.14 writes it.
 pub(crate) const FILLED_SHA256: &str =
     "7e2f3095902c8c1fc2e86844d9ef3662b3f7e5add140167479807b0f666411df";
+/// How long the download may go without a byte.
+const STALL: Duration = Duration::from_secs(60);
 /// A generic User-Agent: no personal data is ever sent (ruling R3).
 const USER_AGENT: &str = "open-jockey-dev";
 
@@ -82,6 +84,9 @@ pub enum SetupError {
     Warm(String),
 }
 
+/// A check of a filled model on disk.
+pub(crate) type Check = fn(&Path) -> Result<(), SetupError>;
+
 /// Everything `setup` needs; [`Plan::htdemucs`] is the real one, tests use small ones.
 #[derive(Debug, Clone)]
 pub(crate) struct Plan<'a> {
@@ -96,9 +101,12 @@ pub(crate) struct Plan<'a> {
     pub(crate) model_path: PathBuf,
     /// Plain `http://` is allowed (tests on localhost).
     pub(crate) allow_http: bool,
-    /// Check a model whose bytes differ from `filled_sha256` with the test vector
-    /// (feature `model`); otherwise such a model is refused.
-    pub(crate) test_vector: bool,
+    /// The download fails after this long without a byte (or without response headers);
+    /// there is no limit on the total time.
+    pub(crate) stall: Duration,
+    /// Checks a model whose bytes differ from `filled_sha256` (the test vector, with the
+    /// feature `model`); without one such a model is refused.
+    pub(crate) test_vector: Option<Check>,
     /// Open a CoreML session once after writing (macOS, feature `model`), with this
     /// compile cache (`None`: [`crate::coreml_cache_dir`]).
     pub(crate) warm: bool,
@@ -116,7 +124,11 @@ impl Plan<'static> {
             filled_sha256: FILLED_SHA256,
             model_path,
             allow_http: false,
-            test_vector: true,
+            stall: STALL,
+            #[cfg(feature = "model")]
+            test_vector: Some(check_test_vector),
+            #[cfg(not(feature = "model"))]
+            test_vector: None,
             warm: cfg!(target_os = "macos"),
             coreml_cache: None,
         }
@@ -145,13 +157,24 @@ fn io_error(path: &Path) -> impl FnOnce(std::io::Error) -> SetupError + '_ {
     }
 }
 
-/// `true` when `path` holds the verified model.
-fn installed(path: &Path, filled_sha256: &str) -> bool {
-    std::fs::read(path).is_ok_and(|bytes| sha256_hex(&bytes) == filled_sha256)
+/// `true` when `plan.model_path` holds a verified model: with the recorded hash, or (other
+/// bytes, as another protobuf encoder writes them) passing the test vector.
+fn installed(plan: &Plan<'_>, progress: &dyn Fn(SetupEvent)) -> bool {
+    let Ok(bytes) = std::fs::read(&plan.model_path) else {
+        return false;
+    };
+    if sha256_hex(&bytes) == plan.filled_sha256 {
+        return true;
+    }
+    drop(bytes);
+    plan.test_vector.is_some_and(|check| {
+        progress(SetupEvent::TestVector);
+        check(&plan.model_path).is_ok()
+    })
 }
 
 pub(crate) fn run(plan: &Plan<'_>, progress: &dyn Fn(SetupEvent)) -> Result<(), SetupError> {
-    if installed(&plan.model_path, plan.filled_sha256) {
+    if installed(plan, progress) {
         progress(SetupEvent::AlreadyInstalled);
     } else {
         let weights = download(plan, progress)?;
@@ -166,18 +189,16 @@ pub(crate) fn run(plan: &Plan<'_>, progress: &dyn Fn(SetupEvent)) -> Result<(), 
     Ok(())
 }
 
-/// Downloads the weights into memory, checking their size limit and SHA-256.
-fn download(plan: &Plan<'_>, progress: &dyn Fn(SetupEvent)) -> Result<Vec<u8>, SetupError> {
+/// The HTTP agent: the OS trust store, a generic User-Agent, and stall timeouts only (a
+/// total body budget would fail an 84 MB download on a slow line).
+fn agent(allow_http: bool, stall: Duration) -> ureq::Agent {
     use ureq::tls::{RootCerts, TlsConfig, TlsProvider};
-    let failed = |message: String| SetupError::Download {
-        url: plan.weights_url.clone(),
-        message,
-    };
-    let agent = ureq::Agent::config_builder()
+    ureq::Agent::config_builder()
         .user_agent(USER_AGENT)
-        .https_only(!plan.allow_http)
+        .https_only(!allow_http)
         .timeout_connect(Some(Duration::from_secs(30)))
-        .timeout_recv_body(Some(Duration::from_secs(60)))
+        .timeout_recv_response(Some(stall))
+        .timeout_per_read(Some(stall))
         .tls_config(
             TlsConfig::builder()
                 .provider(TlsProvider::NativeTls)
@@ -185,8 +206,16 @@ fn download(plan: &Plan<'_>, progress: &dyn Fn(SetupEvent)) -> Result<Vec<u8>, S
                 .build(),
         )
         .build()
-        .new_agent();
-    let mut response = agent
+        .new_agent()
+}
+
+/// Downloads the weights into memory, checking their size limit and SHA-256.
+fn download(plan: &Plan<'_>, progress: &dyn Fn(SetupEvent)) -> Result<Vec<u8>, SetupError> {
+    let failed = |message: String| SetupError::Download {
+        url: plan.weights_url.clone(),
+        message,
+    };
+    let mut response = agent(plan.allow_http, plan.stall)
         .get(&plan.weights_url)
         .call()
         .map_err(|e| failed(e.to_string()))?;
@@ -320,6 +349,10 @@ pub(crate) fn fill(
     Ok(model.encode_to_vec())
 }
 
+/// The temporary file's name: `.htdemucs-<random>.partial`.
+const PARTIAL_PREFIX: &str = ".htdemucs-";
+const PARTIAL_SUFFIX: &str = ".partial";
+
 /// Writes `filled` to a temporary file beside the model, verifies it, then renames it into
 /// place: the model path holds either nothing (or what it held) or a verified model.
 fn write_verified(
@@ -330,9 +363,17 @@ fn write_verified(
     let path = &plan.model_path;
     let dir = path.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(dir).map_err(io_error(dir))?;
+    // An interrupted setup (Ctrl-C) leaves its temporary file behind.
+    for entry in std::fs::read_dir(dir).map_err(io_error(dir))?.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with(PARTIAL_PREFIX) && name.ends_with(PARTIAL_SUFFIX) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
     let mut temp = tempfile::Builder::new()
-        .prefix(".htdemucs-")
-        .suffix(".partial")
+        .prefix(PARTIAL_PREFIX)
+        .suffix(PARTIAL_SUFFIX)
         .tempfile_in(dir)
         .map_err(io_error(dir))?;
     temp.write_all(filled).map_err(io_error(temp.path()))?;
@@ -342,15 +383,15 @@ fn write_verified(
     if actual != plan.filled_sha256 {
         // Another protobuf encoder writes other bytes for the same model: the test vector
         // then decides.
-        if !plan.test_vector {
+        let Some(check) = plan.test_vector else {
             return Err(SetupError::Checksum {
                 what: "the filled model",
                 expected: plan.filled_sha256.into(),
                 actual,
             });
-        }
+        };
         progress(SetupEvent::TestVector);
-        check_test_vector(temp.path())?;
+        check(temp.path())?;
     }
     temp.persist(path).map_err(|e| SetupError::Io {
         path: path.clone(),
@@ -362,13 +403,6 @@ fn write_verified(
 #[cfg(feature = "model")]
 fn check_test_vector(path: &Path) -> Result<(), SetupError> {
     crate::model::check_test_vector(path).map_err(SetupError::TestVector)
-}
-
-#[cfg(not(feature = "model"))]
-fn check_test_vector(_: &Path) -> Result<(), SetupError> {
-    Err(SetupError::TestVector(
-        "this build has no model runtime (feature `model`)".into(),
-    ))
 }
 
 /// Opens the model once with CoreML (and runs it once), so its slow first compile lands in
@@ -480,6 +514,8 @@ mod tests {
         Body(Vec<u8>),
         /// Announces the whole body, sends `n` bytes of it and closes.
         Truncated(Vec<u8>, usize),
+        /// Sends the body in `pieces`, waiting `gap` before each.
+        Trickle(Vec<u8>, usize, Duration),
     }
 
     /// Serves `answers` on localhost, one per connection; returns the URL and the requests.
@@ -504,7 +540,7 @@ mod tests {
                 }
                 requests.push(request);
                 let (body, sent) = match &answer {
-                    Answer::Body(body) => (body, body.len()),
+                    Answer::Body(body) | Answer::Trickle(body, ..) => (body, body.len()),
                     Answer::Truncated(body, n) => (body, *n),
                 };
                 let head = format!(
@@ -512,7 +548,20 @@ mod tests {
                     body.len()
                 );
                 stream.write_all(head.as_bytes()).unwrap();
-                let _ = stream.write_all(&body[..sent]);
+                if let Answer::Trickle(body, pieces, gap) = &answer {
+                    for piece in body.chunks(body.len().div_ceil(*pieces)) {
+                        std::thread::sleep(*gap);
+                        if stream
+                            .write_all(piece)
+                            .and_then(|()| stream.flush())
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                } else {
+                    let _ = stream.write_all(&body[..sent]);
+                }
             }
             requests
         });
@@ -535,13 +584,14 @@ mod tests {
             filled_sha256,
             model_path: dir.join("models").join("tiny.onnx"),
             allow_http: true,
-            test_vector: false,
+            stall: Duration::from_secs(10),
+            test_vector: None,
             warm: false,
             coreml_cache: None,
         }
     }
 
-    /// Every file under `dir`, relative.
+    /// Every file under `dir`, relative, with `/` separators.
     fn files(dir: &Path) -> Vec<String> {
         let mut found = Vec::new();
         let mut stack = vec![dir.to_path_buf()];
@@ -550,8 +600,15 @@ mod tests {
                 if entry.file_type().unwrap().is_dir() {
                     stack.push(entry.path());
                 } else {
+                    // Joined with `/` on every OS, so expectations are portable.
                     let path = entry.path();
-                    found.push(path.strip_prefix(dir).unwrap().display().to_string());
+                    let relative: Vec<String> = path
+                        .strip_prefix(dir)
+                        .unwrap()
+                        .components()
+                        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                        .collect();
+                    found.push(relative.join("/"));
                 }
             }
         }
@@ -599,7 +656,7 @@ mod tests {
             "{error}"
         );
         server.join().unwrap();
-        assert!(!dir.path().join("models/tiny.onnx").exists());
+        assert!(!dir.path().join("models").join("tiny.onnx").exists());
         assert_eq!(
             files(dir.path()),
             Vec::<String>::new(),
@@ -614,7 +671,7 @@ mod tests {
         let filled = sha256_hex(&expected);
         let good = sha256_hex(&weights);
         let dir = tempfile::tempdir().unwrap();
-        let model = dir.path().join("models/tiny.onnx");
+        let model = dir.path().join("models").join("tiny.onnx");
 
         // A download cut short writes nothing.
         let half = weights.len() / 2;
@@ -661,7 +718,7 @@ mod tests {
         )
         .unwrap();
         server.join().unwrap();
-        let model = dir.path().join("models/tiny.onnx");
+        let model = dir.path().join("models").join("tiny.onnx");
         let written = std::fs::metadata(&model).unwrap().modified().unwrap();
 
         // The server is gone: a second run must not need it.
@@ -777,6 +834,101 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("inputs left"), "{error}");
+    }
+
+    #[test]
+    fn the_agent_detects_stalls_without_a_total_budget() {
+        let agent = agent(false, Duration::from_secs(60));
+        let config = agent.config();
+        assert_eq!(config.timeout_per_read(), Some(Duration::from_secs(60)));
+        let timeouts = config.timeouts();
+        assert_eq!(timeouts.recv_response, Some(Duration::from_secs(60)));
+        // No total budget: 84 MB at any speed completes while bytes keep coming.
+        assert!(timeouts.recv_body.is_none());
+        assert!(timeouts.global.is_none());
+        assert!(timeouts.per_call.is_none());
+    }
+
+    #[test]
+    fn a_slow_download_completes_and_a_stalled_one_fails() {
+        let (graph, weights) = tiny();
+        let filled = sha256_hex(&fill(&graph, &weights, &["x"]).unwrap());
+        let good = sha256_hex(&weights);
+        let stall = Duration::from_millis(400);
+
+        // 1.2 s in all, but never 400 ms without a byte.
+        let dir = tempfile::tempdir().unwrap();
+        let gap = Duration::from_millis(100);
+        let (url, server) = serve(vec![Answer::Trickle(weights.clone(), 12, gap)]);
+        let mut slow = plan(dir.path(), url, &graph, &good, &filled);
+        slow.stall = stall;
+        run(&slow, &|_| {}).unwrap();
+        server.join().unwrap();
+
+        // One piece, a second late.
+        let dir = tempfile::tempdir().unwrap();
+        let late = Duration::from_millis(1_000);
+        let (url, server) = serve(vec![Answer::Trickle(weights, 2, late)]);
+        let mut stalled = plan(dir.path(), url, &graph, &good, &filled);
+        stalled.stall = stall;
+        let error = run(&stalled, &|_| {}).unwrap_err();
+        assert!(matches!(error, SetupError::Download { .. }), "{error}");
+        server.join().unwrap();
+        assert_eq!(files(dir.path()), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_model_verified_by_its_test_vector_is_kept() {
+        let (graph, weights) = tiny();
+        let filled = sha256_hex(&fill(&graph, &weights, &["x"]).unwrap());
+        let good = sha256_hex(&weights);
+        let dir = tempfile::tempdir().unwrap();
+        let model = dir.path().join("models").join("tiny.onnx");
+        std::fs::create_dir_all(model.parent().unwrap()).unwrap();
+        // Other bytes than the recorded hash, as another protobuf encoder would write.
+        std::fs::write(&model, b"same model, other bytes").unwrap();
+
+        // No server: nothing may be downloaded.
+        let mut kept = plan(
+            dir.path(),
+            "http://127.0.0.1:9/w".into(),
+            &graph,
+            &good,
+            &filled,
+        );
+        kept.test_vector = Some(|_| Ok(()));
+        let events = RefCell::new(Vec::new());
+        run(&kept, &|e| events.borrow_mut().push(e)).unwrap();
+        assert_eq!(
+            *events.borrow(),
+            [SetupEvent::TestVector, SetupEvent::AlreadyInstalled]
+        );
+        assert_eq!(std::fs::read(&model).unwrap(), b"same model, other bytes");
+
+        // A model failing its test vector is fetched again.
+        let (url, server) = serve(vec![Answer::Body(weights)]);
+        let mut redone = plan(dir.path(), url, &graph, &good, &filled);
+        redone.test_vector = Some(|_| Err(SetupError::TestVector("off".into())));
+        run(&redone, &|_| {}).unwrap();
+        server.join().unwrap();
+        assert_eq!(sha256_hex(&std::fs::read(&model).unwrap()), filled);
+    }
+
+    #[test]
+    fn stale_partial_files_are_removed() {
+        let (graph, weights) = tiny();
+        let filled = sha256_hex(&fill(&graph, &weights, &["x"]).unwrap());
+        let good = sha256_hex(&weights);
+        let dir = tempfile::tempdir().unwrap();
+        let models = dir.path().join("models");
+        std::fs::create_dir_all(&models).unwrap();
+        // Left by an interrupted setup; the other file is not ours.
+        std::fs::write(models.join(".htdemucs-a1B2c3.partial"), b"half").unwrap();
+        std::fs::write(models.join("notes.txt"), b"mine").unwrap();
+        let (url, server) = serve(vec![Answer::Body(weights)]);
+        run(&plan(dir.path(), url, &graph, &good, &filled), &|_| {}).unwrap();
+        server.join().unwrap();
+        assert_eq!(files(dir.path()), ["models/notes.txt", "models/tiny.onnx"]);
     }
 
     #[test]

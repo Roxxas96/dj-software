@@ -286,8 +286,10 @@ pub(crate) fn separate(
     let [vocals, bass, rhythm] = if rate == MODEL_RATE {
         out.map(Vec::into_boxed_slice)
     } else {
-        let mut back = [(); KEPT].map(|()| vec![0i16; 2 * frames]);
-        for (stem, native) in out.iter().zip(back.iter_mut()) {
+        // One stem at a time, each 44.1 kHz stem freed once resampled.
+        let mut back = Vec::with_capacity(KEPT);
+        for stem in out {
+            let mut native = vec![0i16; 2 * frames];
             resample(
                 MODEL_RATE,
                 rate,
@@ -310,8 +312,12 @@ pub(crate) fn separate(
                 },
                 cancel,
             )?;
+            drop(stem);
+            back.push(native.into_boxed_slice());
         }
-        back.map(Vec::into_boxed_slice)
+        let [vocals, bass, rhythm]: [Box<[i16]>; KEPT] =
+            back.try_into().expect("one per kept stem");
+        [vocals, bass, rhythm]
     };
     Ok((StemSet::new(vocals, bass, rhythm, frames)?, stats))
 }
