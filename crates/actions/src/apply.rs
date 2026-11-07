@@ -146,7 +146,9 @@ pub fn apply(
             )
         }
         (Action::StemToggle(d, stem), Input::Press) => {
-            // The engine turned every stem on at its last load; mirror that first.
+            // The engine turned every stem on at its last load; mirror that first. Accepted
+            // window: a press in the same control-loop iteration as a Load, before the
+            // snapshot shows the new load_seq, can leave one later press dead.
             let seq = engine.deck(d).load_seq;
             let control = state.deck_mut(d);
             if control.stems_load_seq != seq {

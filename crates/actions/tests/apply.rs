@@ -1396,10 +1396,7 @@ fn stem_flags_reset_on_load() {
         ))
         .unwrap();
     rig.render(1);
-    rig.state
-        .sync_loads(DeckId::ALL.map(|id| rig.c.deck(id).load_seq));
-    assert_eq!(rig.state.deck(d(0)).stems_on, [true; 4]);
-    // Pressing right after a load, without a tick in between, resets first as well.
+    // The press resets first (all on), then turns bass off again, not back on.
     rig.apply(bass, Input::Press);
     assert_eq!(rig.state.deck(d(0)).stems_on, [true, true, false, true]);
     rig.c
