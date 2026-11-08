@@ -5,8 +5,8 @@ precise controller mapping: every control on a supported controller is mapped to
 and LEDs follow the app state.
 
 **Status: early development.** The audio engine, file decoding, audio output, the first
-controller mapping and a music library with BPM, key and beatgrid analysis work from the
-command line; there is no UI yet.
+controller mapping and a music library with BPM, key and beatgrid analysis work, from the
+command line and in a window that mirrors the DDJ-SB3 (see [docs/ui.md](docs/ui.md)).
 
 ## Library
 
@@ -133,7 +133,7 @@ cargo run --release -p open-jockey -- play --library --controller ddj-sb3 \
 cargo run --release -p open-jockey -- midi monitor --controller ddj-sb3
 ```
 
-Channel numbers are 1-based, as printed on the hardware. `--cue-track` needs `--headphones`.
+The window is described in [docs/ui.md](docs/ui.md). Channel numbers are 1-based, as printed on the hardware. `--cue-track` needs `--headphones`.
 `--library` needs `--controller`. Press Ctrl-C to stop.
 
 ## Architecture

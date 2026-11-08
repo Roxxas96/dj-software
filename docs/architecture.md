@@ -43,7 +43,10 @@ Each plan that adds or changes a crate updates this page. The full design is in
   `play --library --controller`, which publishes a `ControlFrame` (control state, library
   decks, browser, status lines and events) at most every 10 ms by swapping one pointer, and
   never waits on the window. The window reads the deck and meter snapshots through an
-  `EngineMonitor` and never sends the engine anything. The session waits for the audio
+  `EngineMonitor` and never sends the engine anything. Two more threads serve the window:
+  a **detail-waveform thread** (session) that decodes the loaded tracks and computes their
+  scrolling waveforms off the control loop, and a **cover thread** (`ui`) that reads and
+  decodes cover art. The session waits for the audio
   device (retrying every 2 s), and closing the window ends the loop, which saves the last
   cues and hotcues.
 - **Database writer:** one thread owns the write connection to the library DB. Every change
@@ -63,7 +66,7 @@ Each plan that adds or changes a crate updates this page. The full design is in
 | `analysis` | Offline track analysis written for this project: three-band waveform, tempo and constant beatgrid, and musical key with Camelot, standard and Open Key notation. Pure functions on decoded audio; no database. |
 | `library` | The SQLite library: schema and migrations, startup backups, folder scans and the watcher, fingerprints, tags, cues, playlists, beatgrid edits, the writer thread, the analyzer pool that stores `analysis` results, and the stems cache with its Ogg Vorbis format (encoded in `library/src/stems_cache.rs`, decoded through `decode`). See [library.md](library.md). |
 | `stems` | Splits a track into vocals, bass and rhythm (instruments are the residual; kicks and hats are split from rhythm later, in `engine`) with the Demucs `htdemucs` model through ONNX Runtime (`ort`; CoreML on macOS, CPU elsewhere), in chunks, with the STFT in Rust. Also `stems setup` (one-time download of the author's weights, filling the weight-free graph embedded in the crate, verification), and a fixed synthetic separator for tests. No database, no audio thread. See [stems-backend.md](stems-backend.md). |
-| `ui` | The window (egui through eframe): the published `ControlFrame` model, the theme, the top bar and the scrolling waveform lanes. It only reads the frame and the engine's monitor. |
+| `ui` | The window (egui through eframe): the published `ControlFrame` model, the theme, the top bar, the scrolling waveform lanes, the deck panels, the mixer and the browser. It only reads the frame and the engine's monitor. |
 | `open-jockey` (`crates/app`) | The application binary. Without a command, the window and the session behind it; also a command-line player and MIDI tools (`devices`, `play`, `library`, `stems` and `midi` with `ports`, `monitor`, `capture` and `led-scan`) that wire the other crates together. |
 
 ## Track memory, grids and sync
