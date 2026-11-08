@@ -137,6 +137,8 @@ pub(crate) struct Shared {
     decks: [DeckShared; DeckId::ALL.len()],
     channel_peak: [AtomicU32; DeckId::ALL.len()],
     master_peak: [AtomicU32; 2],
+    /// `f32` bits.
+    dsp_load: AtomicU32,
     sampler_playing: [AtomicBool; SAMPLER_SLOTS],
 }
 
@@ -165,6 +167,14 @@ impl Shared {
     pub(crate) fn store_meters(&self, meters: &Meters) {
         store_f32s(&self.channel_peak, &meters.channel_peak);
         store_f32s(&self.master_peak, &meters.master_peak);
+    }
+
+    pub(crate) fn store_dsp_load(&self, load: f32) {
+        self.dsp_load.store(load.to_bits(), Ordering::Relaxed);
+    }
+
+    pub(crate) fn load_dsp_load(&self) -> f32 {
+        f32::from_bits(self.dsp_load.load(Ordering::Relaxed))
     }
 
     pub(crate) fn store_sampler(&self, snapshot: &SamplerSnapshot) {
