@@ -94,11 +94,12 @@ pub enum WriteOp {
     /// Records that track `id` was loaded into a deck now (`tracks.last_loaded_at`), which
     /// keeps its stems cached. Fails with [`LibraryError::NoSuchTrack`] for an unknown track.
     TrackLoaded(i64),
-    /// Records (or replaces) track `track`'s stems cache entry. `prepared` is kept once set.
-    /// Used by [`crate::StemCache`].
+    /// Records (or replaces) track `track`'s stems cache entry. `prepared` is kept once set,
+    /// on the track too (`tracks.stems_prepared`), so an entry removed as damaged or stale
+    /// is prepared again when redone. Used by [`crate::StemCache`].
     PutStems(Box<StemsRow>),
-    /// Marks track `id`'s stems cache entry as prepared ahead (`library stems`); no-op
-    /// without an entry.
+    /// Marks track `id` and its stems cache entry, if any, as prepared ahead
+    /// (`library stems`).
     MarkStemsPrepared(i64),
     /// Removes track `id`'s stems cache entry row (the cache removes its files).
     RemoveStems(i64),
@@ -520,9 +521,17 @@ fn apply(tx: &Transaction<'_>, op: &WriteOp) -> Result<WriteOutcome, LibraryErro
             Ok(WriteOutcome::Done)
         }
         WriteOp::PutStems(row) => {
+            if row.prepared {
+                tx.execute(
+                    "UPDATE tracks SET stems_prepared = 1 WHERE id = ?1",
+                    [row.track_id],
+                )?;
+            }
+            // A track once prepared stays so, even after its entry was removed as damaged.
             tx.execute(
                 "INSERT INTO stems(track_id, fingerprint, path, bytes, prepared, created_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+                 VALUES (?1, ?2, ?3, ?4, ?5 OR coalesce( \
+                     (SELECT stems_prepared FROM tracks WHERE id = ?1), 0), ?6) \
                  ON CONFLICT(track_id) DO UPDATE SET \
                      fingerprint = excluded.fingerprint, path = excluded.path, \
                      bytes = excluded.bytes, prepared = prepared OR excluded.prepared, \
@@ -539,6 +548,7 @@ fn apply(tx: &Transaction<'_>, op: &WriteOp) -> Result<WriteOutcome, LibraryErro
             Ok(WriteOutcome::Done)
         }
         WriteOp::MarkStemsPrepared(id) => {
+            tx.execute("UPDATE tracks SET stems_prepared = 1 WHERE id = ?1", [id])?;
             tx.execute("UPDATE stems SET prepared = 1 WHERE track_id = ?1", [id])?;
             Ok(WriteOutcome::Done)
         }

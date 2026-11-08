@@ -770,6 +770,18 @@ fn grid(lib: &Library, track: i64, action: GridAction) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The stems model could not be opened: `library stems` stops there.
+#[derive(Debug)]
+struct ModelOpenFailed(stems::SeparateError);
+
+impl std::fmt::Display for ModelOpenFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "opening the stems model: {}", self.0)
+    }
+}
+
+impl std::error::Error for ModelOpenFailed {}
+
 /// What `library stems` prepares, and with what.
 struct StemsRequest<'a> {
     playlist: Option<&'a str>,
@@ -856,7 +868,7 @@ fn prepare_stems(lib: &Library, request: &StemsRequest<'_>) -> anyhow::Result<()
                     err_out!("opening the stems model (the first time takes about a minute)");
                     *separator = Some(
                         stems::ModelSeparator::new(request.model, &stems::ModelOptions::default())
-                            .context("opening the stems model")?,
+                            .map_err(ModelOpenFailed)?,
                     );
                 }
                 Ok(())
@@ -876,6 +888,8 @@ fn prepare_stems(lib: &Library, request: &StemsRequest<'_>) -> anyhow::Result<()
                 skipped += 1;
                 out!("{prefix}: skipped, {why}");
             }
+            // The model will not open for the next track either.
+            Err(e) if e.is::<ModelOpenFailed>() => return Err(e),
             Err(e) if cancel.load(Ordering::Relaxed) => {
                 out!("{prefix}: stopped ({e:#})");
                 break;
@@ -969,6 +983,12 @@ fn prepare_one<S: Separator>(
     let eviction = cache.put(&key, &set, true, &[])?;
     if let Some(notice) = eviction.notice {
         err_out!("{notice}");
+    }
+    if eviction.failed > 0 {
+        err_out!(
+            "stems cache: {} entry(ies) could not be removed; they are retried later",
+            eviction.failed
+        );
     }
     if !eviction.removed.is_empty() {
         err_out!(
@@ -1075,6 +1095,31 @@ mod tests {
             bytes.extend_from_slice(&s.to_le_bytes());
         }
         std::fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn a_model_that_will_not_open_stops_the_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let music = dir.path().join("music");
+        std::fs::create_dir_all(&music).unwrap();
+        write_wav(&music.join("a.wav"), 0.5);
+        write_wav(&music.join("b.wav"), 0.6);
+        let lib = Library::open(&dir.path().join("library.sqlite3")).unwrap();
+        library::add_folder(&lib, &music).unwrap();
+        library::scan_folder(&lib, &music, &mut |_| {}).unwrap();
+        let model = dir.path().join("broken.onnx");
+        std::fs::write(&model, b"not a model").unwrap();
+        let err = prepare_stems(
+            &lib,
+            &StemsRequest {
+                playlist: None,
+                tracks: &[1, 2],
+                model: &model,
+                budget_bytes: u64::MAX,
+            },
+        )
+        .unwrap_err();
+        assert!(err.is::<ModelOpenFailed>(), "{err:#}");
     }
 
     #[test]

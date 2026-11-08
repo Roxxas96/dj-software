@@ -39,8 +39,12 @@ const FILES: [(&str, Stem); 3] = [
 const MANIFEST: &str = "stems.toml";
 
 /// Temporary entry folders start with this; any left by a crash are swept by
-/// [`StemCache::new`].
+/// [`StemCache::new`] once older than [`TEMP_MAX_AGE`].
 const TEMP_PREFIX: &str = ".tmp-";
+
+/// A temporary folder older than this (1 hour) is a crash's leftover, not a write in
+/// progress in another process.
+const TEMP_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 
 const STEREO: NonZeroU8 = NonZeroU8::new(2).unwrap();
 const TARGET_BITRATE: NonZeroU32 = NonZeroU32::new(192_000).unwrap();
@@ -73,12 +77,15 @@ pub struct StemKey<'a> {
 pub struct Eviction {
     /// The tracks whose entries were removed, in eviction order.
     pub removed: Vec<i64>,
+    /// Entries that could not be removed (their files stay, and so does their row, so a
+    /// later pass retries), or 1 if eviction itself failed after a [`StemCache::put`].
+    pub failed: usize,
     /// The cache's size afterwards.
     pub bytes: u64,
     /// Still over budget: everything left is held by a loaded deck.
     pub over_budget: bool,
-    /// A message to log, set only the first time the cache stays over budget (until it is
-    /// back under).
+    /// A message to log: set the first time the cache stays over budget (until it is back
+    /// under), and whenever an eviction after a [`StemCache::put`] failed.
     pub notice: Option<String>,
 }
 
@@ -103,13 +110,14 @@ struct Row {
 impl StemCache {
     /// Opens the cache in `dir` (created if needed) with a budget of `budget_bytes`.
     ///
-    /// Leftovers of a crash are swept: temporary folders, entry folders without a row
-    /// (a crash between the rename and the row) and rows whose folder is gone. Other files
-    /// and folders in `dir` (such as the CoreML compile cache) are left alone.
+    /// Leftovers of a crash are swept, best effort: temporary folders over an hour old,
+    /// entry folders without a row (a crash between the rename and the row) and rows whose
+    /// folder is gone. Other files and folders in `dir` (such as the CoreML compile cache)
+    /// are left alone, and so is anything that cannot be read or removed.
     ///
     /// # Errors
     ///
-    /// Fails if `dir` cannot be created or read, or on a database error.
+    /// Fails if `dir` cannot be created, or on a database error.
     pub fn new(
         library: &Library,
         dir: impl Into<PathBuf>,
@@ -203,7 +211,8 @@ impl StemCache {
             && old.path != name
             && is_entry_name(&old.path)
         {
-            remove_folder(&self.dir.join(&old.path))?;
+            // Best effort: a folder left behind has no row and is swept later.
+            let _ = remove_folder(&self.dir.join(&old.path));
         }
         let target = self.dir.join(&name);
         remove_folder(&target)?;
@@ -222,7 +231,17 @@ impl StemCache {
             })))?;
         let mut protected = loaded.to_vec();
         protected.push(key.track);
-        self.evict(&protected)
+        // The entry is stored: an eviction failure is reported, not an error.
+        Ok(self.evict(&protected).unwrap_or_else(|e| {
+            let bytes = self.bytes().unwrap_or(0);
+            Eviction {
+                removed: Vec::new(),
+                failed: 1,
+                bytes,
+                over_budget: bytes > self.budget,
+                notice: Some(format!("stems cache: eviction failed: {e}")),
+            }
+        }))
     }
 
     /// Marks track `track`'s entry as prepared ahead (no-op without one).
@@ -247,6 +266,7 @@ impl StemCache {
     pub fn evict(&mut self, loaded: &[i64]) -> Result<Eviction, LibraryError> {
         let mut bytes = self.bytes()?;
         let mut removed = Vec::new();
+        let mut failed = 0;
         if bytes > self.budget {
             for (track, path, size) in self.eviction_order()? {
                 if bytes <= self.budget {
@@ -255,16 +275,23 @@ impl StemCache {
                 if loaded.contains(&track) {
                     continue;
                 }
-                self.remove(track, &path)?;
-                bytes = bytes.saturating_sub(size);
-                removed.push(track);
+                // Best effort per entry: one that cannot be removed now is retried later.
+                match self.remove_files(&path) {
+                    Ok(()) => {
+                        self.writer.submit_wait(WriteOp::RemoveStems(track))?;
+                        bytes = bytes.saturating_sub(size);
+                        removed.push(track);
+                    }
+                    Err(_) => failed += 1,
+                }
             }
         }
         let over_budget = bytes > self.budget;
         let notice = (over_budget && !self.over_budget_noted).then(|| {
             format!(
                 "stems cache: {:.1} GB is over its {:.1} GB budget, but every entry left is \
-                 held by a loaded deck; it shrinks once a deck loads another track",
+                 in use (loaded in a deck or just stored) or could not be removed; it \
+                 shrinks once they can go",
                 bytes as f64 / 1e9,
                 self.budget as f64 / 1e9
             )
@@ -272,6 +299,7 @@ impl StemCache {
         self.over_budget_noted = over_budget;
         Ok(Eviction {
             removed,
+            failed,
             bytes,
             over_budget,
             notice,
@@ -333,10 +361,16 @@ impl StemCache {
 
     /// Removes an entry's folder, then its row.
     fn remove(&self, track: i64, path: &str) -> Result<(), LibraryError> {
+        self.remove_files(path)?;
+        self.writer.submit_wait(WriteOp::RemoveStems(track))?;
+        Ok(())
+    }
+
+    /// Removes an entry's folder (only one named like an entry).
+    fn remove_files(&self, path: &str) -> std::io::Result<()> {
         if is_entry_name(path) {
             remove_folder(&self.dir.join(path))?;
         }
-        self.writer.submit_wait(WriteOp::RemoveStems(track))?;
         Ok(())
     }
 
@@ -376,18 +410,29 @@ impl StemCache {
             rows.collect::<Result<_, _>>()?
         };
         let known: HashSet<&str> = rows.iter().map(|(_, path)| path.as_str()).collect();
-        for entry in fs::read_dir(&self.dir)? {
-            let entry = entry?;
+        // Best effort throughout: whatever cannot be read or removed now is left for a
+        // later pass.
+        let entries = fs::read_dir(&self.dir).into_iter().flatten().flatten();
+        for entry in entries {
             let name = entry.file_name();
             let Some(name) = name.to_str() else { continue };
-            let stale =
-                name.starts_with(TEMP_PREFIX) || (is_entry_name(name) && !known.contains(name));
-            if stale && entry.file_type()?.is_dir() {
-                remove_folder(&entry.path())?;
+            let stale = if name.starts_with(TEMP_PREFIX) {
+                // Another process may still be writing it.
+                entry
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|modified| modified.elapsed().ok())
+                    .is_some_and(|age| age > TEMP_MAX_AGE)
+            } else {
+                is_entry_name(name) && !known.contains(name)
+            };
+            if stale && entry.file_type().is_ok_and(|t| t.is_dir()) {
+                let _ = remove_folder(&entry.path());
             }
         }
         for (track, path) in &rows {
-            if !is_entry_name(path) || !self.dir.join(path).is_dir() {
+            if !is_entry_name(path) || !self.dir.join(path).exists() {
                 self.writer.submit_wait(WriteOp::RemoveStems(*track))?;
             }
         }
@@ -528,17 +573,13 @@ fn encode(path: &Path, samples: &[i16], sample_rate: u32) -> Result<(), LibraryE
     Ok(())
 }
 
-/// Decodes an entry's three stems in parallel; `None` if any is unusable.
+/// Decodes an entry's three stems one after another, so only one stem's decoded float
+/// buffer is held at a time; `None` if any is unusable.
 fn decode_entry(dir: &Path, key: &StemKey<'_>) -> Option<StemSet> {
-    let [vocals, bass, rhythm] = std::thread::scope(|scope| {
-        FILES
-            .map(|(file, _)| {
-                let path = dir.join(file);
-                scope.spawn(move || decode_stem(&path, key))
-            })
-            .map(|job| job.join().ok().flatten())
-    });
-    StemSet::new(vocals?, bass?, rhythm?, key.frames).ok()
+    let vocals = decode_stem(&dir.join(FILES[0].0), key)?;
+    let bass = decode_stem(&dir.join(FILES[1].0), key)?;
+    let rhythm = decode_stem(&dir.join(FILES[2].0), key)?;
+    StemSet::new(vocals, bass, rhythm, key.frames).ok()
 }
 
 /// One stem at `key`'s rate and frame count, as 16-bit samples.
