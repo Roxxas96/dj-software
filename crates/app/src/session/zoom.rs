@@ -106,7 +106,8 @@ fn read(path: &Path) -> Option<f64> {
     (low..=high).contains(&beats).then_some(beats)
 }
 
-/// Best effort: a zoom that cannot be saved is simply not remembered.
+/// Best effort: a zoom that cannot be saved is simply not remembered. The file is written
+/// beside its place and renamed over it, so it is never left half written.
 fn write(path: &Path, beats: f64) {
     let text = format!(
         "# The window's state, saved by Open Jockey. Delete it to start from config.toml.\n\
@@ -115,7 +116,10 @@ fn write(path: &Path, beats: f64) {
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let _ = std::fs::write(path, text);
+    let partial = path.with_extension("toml.partial");
+    if std::fs::write(&partial, text).is_ok() && std::fs::rename(&partial, path).is_err() {
+        let _ = std::fs::remove_file(&partial);
+    }
 }
 
 #[cfg(test)]

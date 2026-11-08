@@ -111,6 +111,9 @@ impl Lanes {
         if ui.rect_contains_pointer(area) {
             let (scroll, pinch) = ui.input(|i| (i.smooth_scroll_delta().y, i.zoom_delta()));
             steps += self.gesture.steps(scroll, pinch);
+        } else {
+            // A scroll elsewhere never finishes a zoom step begun over the lanes.
+            self.gesture = ZoomGesture::default();
         }
         for (label, step, offset) in [("+", 1, 1.0), ("-", -1, 2.0)] {
             let at = pos2(
