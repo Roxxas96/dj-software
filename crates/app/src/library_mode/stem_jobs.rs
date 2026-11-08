@@ -4,11 +4,12 @@
 //!
 //! One job per track: decks holding the same track share it. The thread looks a job up in
 //! the stems cache as soon as it arrives; a miss waits its turn for the separator, one
-//! separation at a time, so a separation's memory peak never meets another one's. Between a separation's chunks, newly requested tracks are looked up
-//! in the cache (on the same thread: one decoded set more at most), so a cached track
-//! never waits for the whole separation (Ruling R12). A
-//! job no deck wants any more is cancelled (its flag is checked once per chunk); a result
-//! that still completes is kept in the cache but sent to no deck (Ruling R14).
+//! separation at a time, so a separation's memory peak never meets another one's. Between
+//! a separation's chunks, and before its cache write, newly requested tracks are looked
+//! up in the cache (on the same thread: one decoded set more at most), so a cached track
+//! never waits for the whole separation (Ruling R12). A job no deck wants any more is
+//! cancelled (its flag is checked once per chunk); a result that still completes is kept
+//! in the cache but sent to no deck (Ruling R14).
 //!
 //! The separator opens on its own thread at startup (the CoreML compile cache is per
 //! executable, so the first open after an update takes about a minute); cache hits are
