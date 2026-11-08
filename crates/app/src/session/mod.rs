@@ -5,10 +5,11 @@
 
 mod detail;
 mod frame;
+mod zoom;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
 
@@ -39,6 +40,10 @@ const KEYS: &str = "close the window to quit";
 struct Shared {
     frame: Published<ControlFrame>,
     monitor: Published<Option<EngineMonitor>>,
+    /// Waveform zoom steps the window asked for, not yet applied.
+    zoom: Arc<AtomicI32>,
+    /// Where the window's state (its zoom) is kept; `None` keeps nothing.
+    state_path: Option<PathBuf>,
 }
 
 /// The open audio output with the engine it plays.
@@ -62,6 +67,8 @@ pub fn run_window(config_path: Option<&Path>) -> anyhow::Result<()> {
     let shared = Shared {
         frame: Published::new(ControlFrame::default()),
         monitor: Published::new(None),
+        zoom: Arc::new(AtomicI32::new(0)),
+        state_path: state_path(config_path),
     };
     let session = {
         let (shared, quit) = (shared.clone(), Arc::clone(&quit));
@@ -71,12 +78,20 @@ pub fn run_window(config_path: Option<&Path>) -> anyhow::Result<()> {
             .spawn(move || session(config_path.as_deref(), &shared, &quit))
             .context("starting the session thread")?
     };
-    let shown = ui::run(shared.frame, shared.monitor, Arc::clone(&quit));
+    let shown = ui::run(shared.frame, shared.monitor, Arc::clone(&quit), shared.zoom);
     quit.store(true, Ordering::Relaxed);
     let ran = session
         .join()
         .map_err(|_| anyhow!("the session thread panicked"))?;
     ran.and(shown)
+}
+
+/// `ui-state.toml` next to the configuration file in use.
+fn state_path(config_path: Option<&Path>) -> Option<PathBuf> {
+    match config_path {
+        Some(path) => Some(path.with_file_name(zoom::STATE_FILE)),
+        None => controller::builtin::config_dir().map(|dir| dir.join(zoom::STATE_FILE)),
+    }
 }
 
 /// The session thread: loads the configuration, then [`run_config`]. When that ends the
@@ -177,6 +192,7 @@ fn run_session(
     let (lines_tx, lines) = channel();
     let printer = Printer::to_channel(lines_tx);
     let mut parts = FrameParts::new(config);
+    parts.zoom = zoom::Zoom::load(shared.state_path.clone(), config.ui.waveform_beats);
     parts.detail = Some(DetailJobs::new(library.library()));
     parts.samples_loaded = start.samples_loaded;
     for text in start.events.drain(..) {
@@ -249,6 +265,10 @@ fn run_session(
         for line in lines.try_iter() {
             parts.take(line);
         }
+        parts.take_zoom(
+            shared.zoom.swap(0, Ordering::Relaxed),
+            Some(pass.state.waveform_zoom),
+        );
         let now = Instant::now();
         if last_publish.is_some_and(|last| now.duration_since(last) < PUBLISH_EVERY) {
             return;
@@ -289,6 +309,7 @@ fn retry<T>(
         for line in lines.try_iter() {
             parts.take(line);
         }
+        parts.take_zoom(shared.zoom.swap(0, Ordering::Relaxed), None);
         shared.frame.publish(parts.idle());
         if value.is_some() {
             return value;
@@ -342,6 +363,8 @@ mod tests {
         let shared = Shared {
             frame: Published::new(ControlFrame::default()),
             monitor: Published::new(None),
+            zoom: Arc::new(AtomicI32::new(0)),
+            state_path: None,
         };
         let quit = AtomicBool::new(false);
 
@@ -385,6 +408,8 @@ mod tests {
         let shared = Shared {
             frame: Published::new(ControlFrame::default()),
             monitor: Published::new(None),
+            zoom: Arc::new(AtomicI32::new(0)),
+            state_path: None,
         };
         let quit = Arc::new(AtomicBool::new(false));
         let session = {

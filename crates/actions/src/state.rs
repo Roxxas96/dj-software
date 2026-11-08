@@ -177,6 +177,10 @@ pub struct ControlState {
     pub backspin_short: f64,
     /// Seconds of the long backspin action. The config sets it.
     pub backspin_long: f64,
+    /// Waveform zoom steps the zoom actions asked for: each `ui.waveform_zoom_in` adds one,
+    /// each `ui.waveform_zoom_out` takes one away. The window zooms by the change since it
+    /// last looked; the count itself means nothing (it wraps).
+    pub waveform_zoom: i32,
 }
 
 /// The default [`ControlState::beat_jump_pads`].
@@ -220,6 +224,7 @@ impl Default for ControlState {
             loop_roll_pads: DEFAULT_LOOP_ROLL_PADS,
             backspin_short: 1.0,
             backspin_long: 2.0,
+            waveform_zoom: 0,
         }
     }
 }

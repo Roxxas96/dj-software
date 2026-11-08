@@ -19,7 +19,7 @@ From the configuration file ([config.md](config.md)):
 |---|---|---|
 | `audio.device`, `audio.master`, `audio.headphones` | the default output | Where the sound goes |
 | `controller.mapping` | `"ddj-sb3"` | The controller mapping |
-| `ui.waveform_beats` | `16` | Beats across a waveform lane, 4 to 64 |
+| `ui.waveform_beats` | `16` | Beats across a waveform lane at the first launch, 4 to 64 (the window's zoom then takes over) |
 
 The library opens at the default database. A missing DDJ-SB3 or audio device does not stop the
 window: it tries again every 2 seconds, and the top bar says what is missing. A bad
@@ -34,7 +34,13 @@ like Ctrl-C in `play`.
 - **Waveform lanes:** the decks both sides show, plus any other deck that is playing. Colour
   follows frequency. Beat ticks are drawn, with a red tick on the first beat of each bar.
   Cue and hotcue markers and the loop band show on the lane. The playhead is fixed at the
-  centre; the zoom is `ui.waveform_beats`.
+  centre.
+- **Zoom:** scroll (or pinch) over the waveforms, or click the `-` and `+` buttons at their
+  top right. Both lanes always share the zoom, so the two tracks' beats stay lined up. The
+  `ui.waveform_zoom_in` and `ui.waveform_zoom_out` actions do the same from a controller
+  button (unmapped by default). The zoom is saved in `ui-state.toml` next to `config.toml`
+  and restored at the next launch; `ui.waveform_beats` is only the zoom before that file
+  exists (delete the file to go back to it).
 - **Deck panels:** cover, title, artist and remix, the overview waveform, BPM, key, elapsed
   and remaining time, the FX slots, the jog, the pitch fader with its pickup marker, VINYL,
   SLIP and KEYLOCK, the pad mode name and the 8 pads, the loop size, and CUE, PLAY and SYNC.

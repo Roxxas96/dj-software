@@ -12,6 +12,7 @@ use crate::play::Pass;
 use crate::printer::Line;
 
 use super::detail::DetailJobs;
+use super::zoom::Zoom;
 
 /// What the session knows besides the loop's state: the configuration's settings, what
 /// the printer was asked to show, and the audio device.
@@ -20,7 +21,8 @@ pub(super) struct FrameParts {
     fx_slots: [engine::EffectKind; 3],
     eq_mode: engine::EqMode,
     stem_knobs: engine::StemKnobs,
-    waveform_beats: f64,
+    /// The waveform zoom; saved when it changes and when the session ends.
+    pub zoom: Zoom,
     pub samples_loaded: [bool; SAMPLER_SLOTS],
     pub status: Vec<String>,
     pub events: VecDeque<(Instant, String)>,
@@ -37,7 +39,7 @@ impl FrameParts {
             fx_slots: config.fx_slots,
             eq_mode: config.stems.startup_eq_mode(),
             stem_knobs: config.stems.knobs,
-            waveform_beats: config.ui.waveform_beats,
+            zoom: Zoom::load(None, config.ui.waveform_beats),
             samples_loaded: [false; SAMPLER_SLOTS],
             status: Vec::new(),
             events: VecDeque::new(),
@@ -63,13 +65,21 @@ impl FrameParts {
     }
 
     /// The frame before the control loop runs: no controller, decks or browser yet.
+    /// Applies the zoom steps the window asked for and, once the loop runs, the zoom
+    /// actions' `count`; saves the zoom once it has stayed put.
+    pub fn take_zoom(&mut self, steps: i32, count: Option<i32>) {
+        let now = Instant::now();
+        self.zoom.take(steps, count, now);
+        self.zoom.save_if_due(now);
+    }
+
     pub fn idle(&self) -> ControlFrame {
         ControlFrame {
             crossfader_enabled: self.crossfader_enabled,
             fx_slots: self.fx_slots,
             eq_mode: self.eq_mode,
             stem_knobs: self.stem_knobs,
-            waveform_beats: self.waveform_beats,
+            waveform_beats: self.zoom.beats(),
             samples_loaded: self.samples_loaded,
             status: self.status.clone(),
             events: self.events.clone(),

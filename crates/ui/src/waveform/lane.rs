@@ -2,6 +2,7 @@
 //! one more per other deck that plays, each centred on what is being heard.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Instant;
 
 use actions::Side;
@@ -9,7 +10,7 @@ use analysis::Waveform;
 use egui::{Align2, Color32, FontId, Mesh, Painter, Pos2, Rect, Shape, Ui, pos2, vec2};
 use engine::{DeckId, DeckSnapshot, EngineMonitor};
 
-use super::{Playhead, colour, ticks};
+use super::{Playhead, ZoomGesture, colour, ticks};
 use crate::model::ControlFrame;
 use crate::theme;
 
@@ -31,6 +32,9 @@ const LANE_GAP: f32 = 1.0;
 const LABEL_OFFSET: f32 = 4.0;
 const LABEL_FONT: f32 = 14.0;
 const FLAG_FONT: f32 = 10.0;
+/// The zoom buttons' side, and their gap from the area's top right corner.
+const ZOOM_BUTTON: f32 = 18.0;
+const ZOOM_MARGIN: f32 = 4.0;
 
 /// The decks that get a lane, top to bottom: the left side's active deck, the right's,
 /// then every other deck that plays, in deck order. No deck twice.
@@ -55,12 +59,20 @@ pub fn lanes(active: [DeckId; 2], playing: [bool; 4]) -> Vec<DeckId> {
 pub struct Lanes {
     playheads: [Playhead; 4],
     meshes: [Arc<Mesh>; 4],
+    gesture: ZoomGesture,
 }
 
 impl Lanes {
     /// Draws the lanes in the space `ui` has left, sharing its height equally. Without
-    /// `monitor` every deck is empty.
-    pub fn show(&mut self, ui: &mut Ui, frame: &ControlFrame, monitor: Option<&EngineMonitor>) {
+    /// `monitor` every deck is empty. A scroll or pinch over the lanes, or the zoom
+    /// buttons, add zoom steps to `zoom` (positive zooms in) for the session to apply.
+    pub fn show(
+        &mut self,
+        ui: &mut Ui,
+        frame: &ControlFrame,
+        monitor: Option<&EngineMonitor>,
+        zoom: &AtomicI32,
+    ) {
         let now = Instant::now();
         let read =
             DeckId::ALL.map(|id| monitor.map(|m| m.deck_rendered_at(id)).unwrap_or_default());
@@ -94,6 +106,30 @@ impl Lanes {
                 beats: frame.waveform_beats,
             };
             lane.draw(&ui.painter_at(rect), rect, &mut self.meshes[deck.index()]);
+        }
+        let mut steps = 0;
+        if ui.rect_contains_pointer(area) {
+            let (scroll, pinch) = ui.input(|i| (i.smooth_scroll_delta().y, i.zoom_delta()));
+            steps += self.gesture.steps(scroll, pinch);
+        }
+        for (label, step, offset) in [("+", 1, 1.0), ("-", -1, 2.0)] {
+            let at = pos2(
+                area.right() - offset * (ZOOM_BUTTON + ZOOM_MARGIN),
+                area.top() + ZOOM_MARGIN,
+            );
+            let button = egui::Button::new(label).min_size(vec2(ZOOM_BUTTON, ZOOM_BUTTON));
+            if ui
+                .put(
+                    Rect::from_min_size(at, vec2(ZOOM_BUTTON, ZOOM_BUTTON)),
+                    button,
+                )
+                .clicked()
+            {
+                steps += step;
+            }
+        }
+        if steps != 0 {
+            zoom.fetch_add(steps, Ordering::Relaxed);
         }
     }
 }

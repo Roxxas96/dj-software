@@ -396,6 +396,7 @@ browser actions).
 | `browser.scroll` | none | relative | Move the cursor of the focused browser pane by the steps sent (positive is down). It stops at the first and last rows. |
 | `browser.toggle_focus` | none | button | Press to switch the browser between the tree (the drives and their folders, then the playlists) and the list of the highlighted entry. |
 | `browser.toggle_folder` | none | button | Press to open or close the highlighted folder in the browser tree. |
+| `ui.waveform_zoom_in`, `ui.waveform_zoom_out` | none | button | Press to zoom the window's waveforms in (fewer beats across) or out, one step each. Both decks share the zoom. |
 | `pads.mode_hardware` | side | button | Press to set the side's pad mode to hardware (the controller's own pad modes); no sound changes by itself. |
 | `pads.mode_hot_cue`, `pads.mode_fx_fade`, `pads.mode_sampler`, `pads.mode_trans` | side | button | Press to set the side's pad mode to hardware and remember which hardware mode button it was (the window shows its name); no sound changes by itself. |
 | `pads.mode_beat_jump` | side | button | Press to set the side's pad mode to beat jump; no sound changes by itself. |

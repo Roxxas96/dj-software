@@ -104,6 +104,14 @@ pub fn apply(
         (Action::BrowserToggleFolder, Input::Press) => {
             return ApplyResult::Request(AppRequest::Browser(BrowserRequest::ToggleFolder));
         }
+        (Action::WaveformZoomIn, Input::Press) => {
+            state.waveform_zoom = state.waveform_zoom.wrapping_add(1);
+            return ApplyResult::Sent(0);
+        }
+        (Action::WaveformZoomOut, Input::Press) => {
+            state.waveform_zoom = state.waveform_zoom.wrapping_sub(1);
+            return ApplyResult::Sent(0);
+        }
         (Action::HardwarePadMode(side, mode), Input::Press) => {
             let side = state.side_mut(side);
             side.pad_mode = PadMode::Hardware;
