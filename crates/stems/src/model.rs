@@ -31,6 +31,8 @@ pub struct ModelOptions {
     pub threads: Option<usize>,
     /// The CPU path even on macOS.
     pub cpu_only: bool,
+    /// Where kicks split from rhythm, in Hz; `None` is [`engine::DEFAULT_KICKS_HZ`].
+    pub kicks_hz: Option<f32>,
 }
 
 /// htdemucs behind [`Separator`]: chunked, overlapped and mapped to vocals, bass and
@@ -38,6 +40,7 @@ pub struct ModelOptions {
 pub struct ModelSeparator {
     network: OrtNetwork,
     start_frame: usize,
+    kicks_hz: f32,
 }
 
 impl std::fmt::Debug for ModelSeparator {
@@ -189,6 +192,7 @@ impl ModelSeparator {
         Ok(Self {
             network: OrtNetwork::new(open(model, options)?),
             start_frame: 0,
+            kicks_hz: options.kicks_hz.unwrap_or(engine::DEFAULT_KICKS_HZ),
         })
     }
 
@@ -212,8 +216,14 @@ impl Separator for ModelSeparator {
         progress: &dyn Fn(f32),
         cancel: &AtomicBool,
     ) -> Result<StemSet, SeparateError> {
-        let (set, _) =
-            chunked::separate(&mut self.network, track, self.start_frame, progress, cancel)?;
+        let (set, _) = chunked::separate(
+            &mut self.network,
+            track,
+            self.start_frame,
+            self.kicks_hz,
+            progress,
+            cancel,
+        )?;
         Ok(set)
     }
 }

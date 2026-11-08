@@ -107,8 +107,8 @@ tick. Tracks over 20 minutes are refused.
 
 **In the engine** (`crates/engine/src/stems.rs`). A `StemSet` holds four stems as 16-bit samples
 at the track's own rate: vocals, bass, rhythm and kicks. Kicks are precomputed when the set is
-built (not cached; a cache hit recomputes them): rhythm through a zero-phase low pass at 250 Hz
-(`KICKS_HZ`), a Butterworth biquad run forward and backward off the audio thread. Instruments are
+built (not cached; a cache hit recomputes them): rhythm through a zero-phase low pass at
+`stems.kicks_hz` (300 Hz by default, `DEFAULT_KICKS_HZ`), a Butterworth biquad run forward and backward off the audio thread. Instruments are
 the residual `mix - (vocals + bass + rhythm)` and hats are `rhythm - kicks`, both computed per
 frame from the deck's track. So there are five parts (vocals, instruments, bass, kicks, hats)
 and they always sum to the mix. The deck's single source reader is the one place that reads

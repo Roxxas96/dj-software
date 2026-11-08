@@ -1988,6 +1988,7 @@ mod tests {
     fn setup(separator: SeparatorSource) -> StemsSetup {
         StemsSetup {
             budget_bytes: 1_000_000_000,
+            kicks_hz: engine::DEFAULT_KICKS_HZ,
             separator,
         }
     }

@@ -347,8 +347,10 @@ Estimated peak for a 20-minute track (52.9 M frames):
 - pending chunks, < 0.1 GB;
 - **≈ 3.4 GB in total**, of which 2.2 GB is fixed.
 
-**Kicks (the stems addendum).** `StemSet::new` also computes a fourth i16 stereo stem, kicks: rhythm
-through a zero-phase low pass at 250 Hz (`KICKS_HZ`, a Butterworth biquad run forward and backward).
+**Kicks (the stems addendum).** `StemSet::with_split` also computes a fourth i16 stereo stem, kicks:
+rhythm through a zero-phase low pass at `stems.kicks_hz` (a Butterworth biquad run forward and
+backward). The default, `DEFAULT_KICKS_HZ`, is 300 Hz: the normal EQ's 250 Hz crossover left too
+much kick in the hats on the owner's tracks (hands-on, 2026-11-08). `StemSet::new` uses it.
 Hats is `rhythm − kicks`, computed per frame like instruments, so nothing else is stored. Kicks lives
 **in memory only, not in the cache**: a cache hit recomputes it after decoding (about 0.6 s for a
 5-minute track on the M1 Pro, release build). Its cost:

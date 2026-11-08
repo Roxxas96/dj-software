@@ -72,6 +72,8 @@ pub enum SeparatorSource {
 pub struct StemsSetup {
     /// The stems cache's budget (`stems.cache_gb`).
     pub budget_bytes: u64,
+    /// Where kicks split from rhythm (`stems.kicks_hz`).
+    pub kicks_hz: f32,
     pub separator: SeparatorSource,
 }
 
@@ -79,13 +81,15 @@ impl StemsSetup {
     /// The real setup: the model `stems setup` installed, if it is there.
     pub fn from_config(config: &crate::config::StemsConfig) -> Self {
         let model = stems::model_path();
+        let kicks_hz = config.kicks_hz;
         let separator = if model.is_file() {
-            SeparatorSource::Open(Box::new(move || open_model(&model)))
+            SeparatorSource::Open(Box::new(move || open_model(&model, kicks_hz)))
         } else {
             SeparatorSource::Missing
         };
         Self {
             budget_bytes: crate::library_cmd::gb_to_bytes(config.cache_gb),
+            kicks_hz,
             separator,
         }
     }
@@ -93,9 +97,10 @@ impl StemsSetup {
 
 /// Opens the model and runs it once, so a model that opens but cannot run fails here, with
 /// the one message.
-fn open_model(model: &Path) -> Result<Box<dyn StemSeparator>, String> {
+fn open_model(model: &Path, kicks_hz: f32) -> Result<Box<dyn StemSeparator>, String> {
     let options = stems::ModelOptions {
         threads: Some(cpu_threads()),
+        kicks_hz: Some(kicks_hz),
         ..stems::ModelOptions::default()
     };
     let mut separator = stems::ModelSeparator::new(model, &options).map_err(|e| e.to_string())?;
@@ -231,7 +236,7 @@ impl StemsControl {
                 };
                 match StemCache::new(&lib, dir, setup.budget_bytes) {
                     Ok(cache) => Worker {
-                        cache,
+                        cache: cache.with_kicks_hz(setup.kicks_hz),
                         model,
                         shared: thread_shared,
                         replies: replies_tx.clone(),

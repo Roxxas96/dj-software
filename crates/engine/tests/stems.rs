@@ -12,9 +12,9 @@ use std::sync::Arc;
 
 use common::{SETTLE_FRAMES, render};
 use engine::{
-    ChannelCommand, Command, DeckCommand, DeckId, EngineConfig, EngineController, EngineRenderer,
-    EqMode, JogSurface, MasterCommand, Stem, StemError, StemKnobs, StemSet, TrackBuffer,
-    TrackMemory, engine, knob_law, pad_gains,
+    ChannelCommand, Command, DEFAULT_KICKS_HZ, DeckCommand, DeckId, EngineConfig, EngineController,
+    EngineRenderer, EqMode, JogSurface, MasterCommand, Stem, StemError, StemKnobs, StemSet,
+    TrackBuffer, TrackMemory, engine, knob_law, pad_gains,
 };
 
 const SR: u32 = 44_100;
@@ -294,24 +294,31 @@ fn kicks_split_low_frequencies() {
             high < 0.01,
             "{rate} Hz: kicks keep {high} of the 5 kHz energy"
         );
-        // The split sits at 250 Hz: half the amplitude there, whatever the rate (a filter
-        // built for another rate would read about 0.58).
-        let probe: Vec<f32> = (0..frames)
-            .flat_map(|n| {
-                let v = sine(250.0, 0.4, n);
-                [v, v]
-            })
-            .collect();
-        let probe = to_i16(&probe);
+        // The split sits at its frequency: half the amplitude there, whatever the rate (a
+        // filter built for another rate would read about 0.58). `new` splits at the default.
         let silent = vec![0_i16; frames * 2].into_boxed_slice();
-        let probed =
-            StemSet::new(silent.clone(), silent, probe.clone().into(), frames, rate).unwrap();
-        let ratio = amplitude(&left(probed.stored(Stem::Kicks).unwrap()), 250.0, rate)
-            / amplitude(&left(&probe), 250.0, rate);
-        assert!(
-            (ratio - 0.5).abs() <= 0.03,
-            "{rate} Hz: kicks keep {ratio} of the 250 Hz amplitude"
-        );
+        for hz in [DEFAULT_KICKS_HZ, 200.0, 450.0] {
+            let probe: Vec<f32> = (0..frames)
+                .flat_map(|n| {
+                    let v = sine(hz, 0.4, n);
+                    [v, v]
+                })
+                .collect();
+            let probe = to_i16(&probe);
+            let (v, b, r) = (silent.clone(), silent.clone(), probe.clone().into());
+            let probed = if hz == DEFAULT_KICKS_HZ {
+                StemSet::new(v, b, r, frames, rate)
+            } else {
+                StemSet::with_split(v, b, r, frames, rate, hz)
+            }
+            .unwrap();
+            let ratio = amplitude(&left(probed.stored(Stem::Kicks).unwrap()), hz, rate)
+                / amplitude(&left(&probe), hz, rate);
+            assert!(
+                (ratio - 0.5).abs() <= 0.03,
+                "{rate} Hz: kicks keep {ratio} of the {hz} Hz amplitude"
+            );
+        }
         // Hats, what kicks leave of rhythm, sums back to it with kicks: played with only
         // kicks and hats, the deck plays rhythm itself (here, the whole mix).
         let track = Arc::new(TrackBuffer::new(rate, from_i16(&rhythm)).unwrap());
@@ -351,6 +358,18 @@ fn kicks_split_low_frequencies() {
         ),
         Err(StemError::SampleRate)
     ));
+    // A split must lie strictly between 0 and half the rate.
+    for hz in [0.0, -10.0, 22_050.0, f32::NAN, f32::INFINITY] {
+        let set = StemSet::with_split(
+            vec![0; 4].into(),
+            vec![0; 4].into(),
+            vec![0; 4].into(),
+            2,
+            44_100,
+            hz,
+        );
+        assert!(matches!(set, Err(StemError::Split { .. })), "{hz} Hz");
+    }
 }
 
 #[test]

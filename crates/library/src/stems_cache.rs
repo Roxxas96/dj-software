@@ -99,6 +99,8 @@ pub struct StemCache {
     reader: Reader,
     /// The over-budget notice was given and the cache has not been under budget since.
     over_budget_noted: bool,
+    /// Where the decoded sets split kicks from rhythm (kicks are not stored).
+    kicks_hz: f32,
 }
 
 /// An entry's row.
@@ -131,9 +133,18 @@ impl StemCache {
             writer: library.writer(),
             reader: library.reader()?,
             over_budget_noted: false,
+            kicks_hz: engine::DEFAULT_KICKS_HZ,
         };
         cache.sweep()?;
         Ok(cache)
+    }
+
+    /// Splits the kicks of the sets [`StemCache::get`] decodes at `hz` instead of
+    /// [`engine::DEFAULT_KICKS_HZ`].
+    #[must_use]
+    pub fn with_kicks_hz(mut self, hz: f32) -> Self {
+        self.kicks_hz = hz;
+        self
     }
 
     /// The folder holding the entries.
@@ -149,7 +160,7 @@ impl StemCache {
         let row = self.row(key.track).ok()??;
         match self
             .check(key, &row)
-            .and_then(|dir| decode_entry(&dir, key))
+            .and_then(|dir| decode_entry(&dir, key, self.kicks_hz))
         {
             Some(set) => Some(set),
             None => {
@@ -610,11 +621,11 @@ fn encode(path: &Path, samples: &[i16], sample_rate: u32) -> Result<(), LibraryE
 
 /// Decodes an entry's three stems one after another, so only one stem's decoded float
 /// buffer is held at a time; `None` if any is unusable.
-fn decode_entry(dir: &Path, key: &StemKey<'_>) -> Option<StemSet> {
+fn decode_entry(dir: &Path, key: &StemKey<'_>, kicks_hz: f32) -> Option<StemSet> {
     let vocals = decode_stem(&dir.join(FILES[0].0), key)?;
     let bass = decode_stem(&dir.join(FILES[1].0), key)?;
     let rhythm = decode_stem(&dir.join(FILES[2].0), key)?;
-    StemSet::new(vocals, bass, rhythm, key.frames, key.sample_rate).ok()
+    StemSet::with_split(vocals, bass, rhythm, key.frames, key.sample_rate, kicks_hz).ok()
 }
 
 /// One stem at `key`'s rate and frame count, as 16-bit samples.
