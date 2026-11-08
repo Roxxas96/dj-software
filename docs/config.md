@@ -1,6 +1,6 @@
 # config.toml
 
-Settings for the mixer, the effects, the sampler, the performance pad sizes and the stems. Every section and key is
+Settings for the mixer, the effects, the sampler, the performance pad sizes, the stems and the window (audio output, controller mapping and waveform zoom). Every section and key is
 optional; a key left out keeps its default, and so does a missing file.
 
 ## Location
@@ -33,6 +33,11 @@ optional; a key left out keeps its default, and so does a missing file.
 | `stems.knobs`        | `"vdj"`                                      | What the knobs control in stems mode: `"vdj"` (LOW the kicks, MID the melody (vocals, instruments and bass), HI the hats) or `"raw"` (HI the vocals, MID the instruments, LOW the bass) |
 | `stems.kicks_hz`     | `300`                                        | Where kicks hand over to hats in the `"vdj"` layout (and the kicks and hats pads), in Hz, from 50 to 1000. Higher puts more of the drums in the kicks. It applies to stems loaded after a restart, cached ones included |
 | `stems.cache_gb`     | `5`                                          | The most disk the stems cache may use, in gigabytes, from 0.5 to 1000 |
+| `audio.device`       | the system default output                    | The output device for the window: a name, or part of one (see `open-jockey devices`) |
+| `audio.master`       | `[1, 2]`                                     | The 1-based output channels carrying the master, left then right |
+| `audio.headphones`   | none (no headphone output)                   | The 1-based output channels carrying the headphones, left then right; must not overlap `audio.master` |
+| `controller.mapping` | `"ddj-sb3"`                                  | The controller mapping: a built-in name or the path of a mapping file |
+| `ui.waveform_beats`  | `16`                                         | The beats visible across a waveform lane, from 4 to 64 |
 
 A sample is at most 60 seconds long. A `track` id is looked up in the library: the one opened
 by `--library`, otherwise the default library if it exists.
@@ -70,6 +75,17 @@ eq_mode = "eq"               # "eq" or "stems"; "stems" only acts when enabled
 knobs = "vdj"                # "vdj" or "raw"; what the knobs control in stems mode
 kicks_hz = 300               # 50 to 1000; where kicks hand over to hats
 cache_gb = 5                 # 0.5 to 1000
+
+[audio]
+device = "DDJ-SB3"           # a name or part of one; left out, the system default
+master = [1, 2]              # 1-based output channels, left then right
+headphones = [3, 4]          # left out, no headphone output
+
+[controller]
+mapping = "ddj-sb3"          # a built-in name or a mapping file path
+
+[ui]
+waveform_beats = 16          # 4 to 64; beats across a waveform lane
 ```
 
 ## Errors
