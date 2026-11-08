@@ -3,8 +3,6 @@
 
 use egui::Color32;
 
-use crate::theme;
-
 /// The colour of a bucket that is all low frequencies.
 pub const LOW: [f32; 3] = [255.0, 58.0, 31.0]; // #ff3a1f
 /// The colour of a bucket that is all mid frequencies.
@@ -16,12 +14,12 @@ pub const MIN_BRIGHTNESS: f32 = 0.35;
 
 /// The colour of `bucket`, `[peak, low, mid, high]`: the three bands' share of their sum
 /// blends the anchors, and the peak scales the brightness, never below
-/// [`MIN_BRIGHTNESS`]. A bucket without bands is [`theme::TEXT_DIM`].
-pub fn colour(bucket: [u8; 4]) -> Color32 {
+/// [`MIN_BRIGHTNESS`]. A bucket without bands is `silent`.
+pub fn colour(bucket: [u8; 4], silent: Color32) -> Color32 {
     let [peak, low, mid, high] = bucket.map(f32::from);
     let sum = low + mid + high;
     if sum == 0.0 {
-        return theme::TEXT_DIM;
+        return silent;
     }
     let brightness = MIN_BRIGHTNESS + (1.0 - MIN_BRIGHTNESS) * peak / 255.0;
     let channel = |i: usize| {
@@ -35,21 +33,23 @@ pub fn colour(bucket: [u8; 4]) -> Color32 {
 mod tests {
     use super::*;
 
+    const SILENT: Color32 = Color32::from_gray(0x80);
+
     #[test]
     fn colour_is_warm_for_bass_and_light_for_highs() {
-        let bass = colour([255, 255, 0, 0]);
+        let bass = colour([255, 255, 0, 0], SILENT);
         assert!(bass.r() > 200 && bass.g() < 120, "{bass:?}");
-        let highs = colour([255, 0, 0, 255]);
+        let highs = colour([255, 0, 0, 255], SILENT);
         assert!(
             highs.r() > 230 && highs.g() > 230 && highs.b() > 230,
             "{highs:?}"
         );
-        assert_eq!(colour([0, 0, 0, 0]), theme::TEXT_DIM);
+        assert_eq!(colour([0, 0, 0, 0], SILENT), SILENT);
     }
 
     #[test]
     fn a_quiet_bucket_keeps_a_third_of_its_brightness() {
-        let quiet = colour([0, 0, 0, 255]);
+        let quiet = colour([0, 0, 0, 255], SILENT);
         assert_eq!(quiet.r(), 89); // 255 * 0.35
     }
 }

@@ -13,7 +13,7 @@ use engine::{DeckId, DeckSnapshot, EngineMonitor};
 use super::{Playhead, ZoomGesture, colour, ticks};
 use crate::command::UiCommand;
 use crate::model::ControlFrame;
-use crate::theme;
+use crate::theme::{self, Palette};
 
 /// The beat period, in seconds, of a lane whose deck has no grid: 120 BPM.
 const DEFAULT_BEAT_SECONDS: f64 = 0.5;
@@ -156,22 +156,23 @@ impl Lane<'_> {
     /// Draws the lane in `rect` with `painter`, filling `mesh` (its buffers are kept when
     /// nothing else holds it any more).
     pub fn draw(&self, painter: &Painter, rect: Rect, mesh: &mut Arc<Mesh>) {
-        painter.rect_filled(rect, 0.0, theme::LANE);
+        let p = theme::palette(painter.ctx());
+        painter.rect_filled(rect, 0.0, p.lane);
         if let Some(scale) = self.scale(rect, painter.pixels_per_point()) {
             let m = Arc::make_mut(mesh);
             // `Mesh::clear` frees the vertices; clear by hand to keep them.
             m.indices.clear();
             m.vertices.clear();
-            self.fill(m, rect, &scale);
+            self.fill(m, rect, &scale, &p);
             painter.add(Shape::mesh(Arc::clone(mesh)));
-            self.hotcue_numbers(painter, rect, &scale);
+            self.hotcue_numbers(painter, rect, &scale, &p);
         }
         painter.text(
             rect.left_top() + vec2(LABEL_OFFSET, LABEL_OFFSET),
             Align2::LEFT_TOP,
             self.deck.index() + 1,
             FontId::proportional(LABEL_FONT),
-            theme::deck_accent(self.deck),
+            p.deck_accent(self.deck),
         );
     }
 
@@ -202,24 +203,24 @@ impl Lane<'_> {
 
     /// Everything but text: the columns, the loop, the ticks, the markers and the
     /// playhead, in that order from the back.
-    fn fill(&self, mesh: &mut Mesh, rect: Rect, scale: &Scale) {
+    fn fill(&self, mesh: &mut Mesh, rect: Rect, scale: &Scale, p: &Palette) {
         let snapshot = self.snapshot;
         if let Some(waveform) = self.waveform {
-            columns(mesh, rect, scale, waveform);
+            columns(mesh, rect, scale, waveform, p.text_dim);
         }
         if let (true, Some(start), Some(end)) =
             (snapshot.loop_active, snapshot.loop_in, snapshot.loop_out)
         {
             let band = Rect::from_x_y_ranges(scale.x(start)..=scale.x(end), rect.y_range());
-            mesh.add_colored_rect(band, theme::LOOP_BAND);
+            mesh.add_colored_rect(band, p.loop_band);
         }
         let from = scale.centre_frame - scale.half_span;
         let to = scale.centre_frame + scale.half_span;
         for tick in ticks(snapshot.grid, from, to) {
             let (height, colour) = if tick.bar {
-                (BAR_TICK_HEIGHT, theme::BAR_TICK)
+                (BAR_TICK_HEIGHT, p.bar_tick)
             } else {
-                (BEAT_TICK_HEIGHT, theme::BEAT_TICK)
+                (BEAT_TICK_HEIGHT, p.beat_tick)
             };
             let x = scale.x(tick.frame);
             let xs = x - TICK_WIDTH / 2.0..=x + TICK_WIDTH / 2.0;
@@ -231,9 +232,9 @@ impl Lane<'_> {
         for frame in snapshot.hotcues.iter().flatten() {
             let x = scale.x(*frame);
             let pole = x..=x + FLAG_POLE;
-            mesh.add_colored_rect(Rect::from_x_y_ranges(pole, rect.y_range()), theme::HOTCUE);
+            mesh.add_colored_rect(Rect::from_x_y_ranges(pole, rect.y_range()), p.hotcue);
             let flag = Rect::from_min_size(pos2(x, rect.top()), vec2(FLAG_SIZE, FLAG_SIZE));
-            mesh.add_colored_rect(flag, theme::HOTCUE);
+            mesh.add_colored_rect(flag, p.hotcue);
         }
         let cue = scale.x(snapshot.cue_frames);
         triangle(
@@ -243,15 +244,15 @@ impl Lane<'_> {
                 pos2(cue - CUE_SIZE / 2.0, rect.bottom()),
                 pos2(cue + CUE_SIZE / 2.0, rect.bottom()),
             ],
-            theme::CUE,
+            p.cue,
         );
         let centre = rect.center().x;
         let head = centre - PLAYHEAD_WIDTH / 2.0..=centre + PLAYHEAD_WIDTH / 2.0;
-        mesh.add_colored_rect(Rect::from_x_y_ranges(head, rect.y_range()), theme::PLAYHEAD);
+        mesh.add_colored_rect(Rect::from_x_y_ranges(head, rect.y_range()), p.playhead);
     }
 
     /// The numbers on the hotcue flags in sight.
-    fn hotcue_numbers(&self, painter: &Painter, rect: Rect, scale: &Scale) {
+    fn hotcue_numbers(&self, painter: &Painter, rect: Rect, scale: &Scale, p: &Palette) {
         for (slot, frame) in self.snapshot.hotcues.iter().enumerate() {
             let Some(frame) = frame else { continue };
             let x = scale.x(*frame);
@@ -263,7 +264,7 @@ impl Lane<'_> {
                 Align2::CENTER_CENTER,
                 slot + 1,
                 FontId::proportional(FLAG_FONT),
-                theme::BACKGROUND,
+                p.background,
             );
         }
     }
@@ -291,7 +292,7 @@ impl Scale {
 /// One column per physical pixel, mirrored around the lane's middle, as tall as the
 /// loudest bucket under it and in its colour. Columns are cut at fixed track frames and
 /// only their place moves, so a column keeps its shape as the track scrolls.
-fn columns(mesh: &mut Mesh, rect: Rect, scale: &Scale, waveform: &Waveform) {
+fn columns(mesh: &mut Mesh, rect: Rect, scale: &Scale, waveform: &Waveform, silent: Color32) {
     let per_bucket = f64::from(waveform.frames_per_bucket.max(1));
     let buckets = &waveform.buckets;
     let fpc = scale.frames_per_column;
@@ -320,7 +321,7 @@ fn columns(mesh: &mut Mesh, rect: Rect, scale: &Scale, waveform: &Waveform) {
             pos2(scale.x(start), middle - reach),
             pos2(scale.x(end), middle + reach),
         );
-        mesh.add_colored_rect(bar, colour(*loudest));
+        mesh.add_colored_rect(bar, colour(*loudest, silent));
     }
 }
 
@@ -379,9 +380,9 @@ mod tests {
             half_span: 5000.0,
         };
         let mut a = Mesh::default();
-        columns(&mut a, rect, &scale(5000.0), &waveform);
+        columns(&mut a, rect, &scale(5000.0), &waveform, Color32::GRAY);
         let mut b = Mesh::default();
-        columns(&mut b, rect, &scale(5025.0), &waveform);
+        columns(&mut b, rect, &scale(5025.0), &waveform, Color32::GRAY);
         // Moving a quarter column shifts every column a quarter point, unchanged.
         let shifted: Vec<f32> = b.vertices.iter().map(|v| v.pos.x + 0.25).collect();
         let (first_a, first_b) = (a.vertices[0].pos, b.vertices[0].pos);

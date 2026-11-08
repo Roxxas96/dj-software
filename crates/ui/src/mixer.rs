@@ -27,9 +27,6 @@ const FADER_WIDTH: f32 = 14.0;
 const METER_WIDTH: f32 = 8.0;
 /// A knob's travel, either side of straight up, in radians.
 const KNOB_SWEEP: f32 = 0.75 * std::f32::consts::PI;
-pub const GHOST: Color32 = theme::CUE;
-const METER_OK: Color32 = Color32::from_rgb(0x4c, 0xc2, 0x6a);
-const METER_CLIP: Color32 = Color32::from_rgb(0xff, 0x3b, 0x3b);
 const METER_HOT: f32 = 0.95;
 
 /// The labels of the three EQ knobs, top to bottom. The stems' names show only where the
@@ -136,11 +133,12 @@ pub fn strip(
     level: f32,
     held: f32,
 ) {
-    let accent = theme::deck_accent(deck);
+    let p = theme::palette(ui.ctx());
+    let accent = p.deck_accent(deck);
     let state = frame.control.deck(deck);
     let ghosts = &frame.ghosts[deck.index()];
     let painter = ui.painter().clone();
-    painter.rect_filled(rect.shrink(2.0), CornerRadius::same(4), theme::PANEL);
+    painter.rect_filled(rect.shrink(2.0), CornerRadius::same(4), p.panel);
 
     let header = Rect::from_min_size(
         rect.min + vec2(6.0, 4.0),
@@ -159,20 +157,11 @@ pub fn strip(
     painter.rect(
         pfl,
         CornerRadius::same(3),
-        if state.pfl { accent } else { theme::BACKGROUND },
+        if state.pfl { accent } else { p.background },
         Stroke::new(1.0, accent),
         StrokeKind::Inside,
     );
-    caption(
-        ui,
-        pfl,
-        "PFL",
-        if state.pfl {
-            Color32::BLACK
-        } else {
-            theme::TEXT
-        },
-    );
+    caption(ui, pfl, "PFL", if state.pfl { p.on_accent } else { p.text });
 
     let [high, mid, low] = eq_labels(frame.eq_mode, stems_active, frame.stem_knobs);
     let knobs = [
@@ -194,7 +183,7 @@ pub fn strip(
                 vec2(KNOB_RADIUS * 4.0 + 20.0, 10.0),
             ),
             name,
-            theme::TEXT_DIM,
+            p.text_dim,
         );
     }
 
@@ -216,6 +205,7 @@ pub fn strip(
 
 /// A knob at `value` (0 to 1) with its pickup marker, if any.
 fn knob(painter: &egui::Painter, centre: Pos2, value: f32, ghost: Option<f32>, accent: Color32) {
+    let p = theme::palette(painter.ctx());
     let on_rim = |v: f32, inset: f32| {
         let angle = (v.clamp(0.0, 1.0) * 2.0 - 1.0) * KNOB_SWEEP;
         centre + vec2(angle.sin(), -angle.cos()) * (KNOB_RADIUS - inset)
@@ -223,22 +213,23 @@ fn knob(painter: &egui::Painter, centre: Pos2, value: f32, ghost: Option<f32>, a
     painter.circle(
         centre,
         KNOB_RADIUS,
-        theme::BACKGROUND,
-        Stroke::new(1.5, theme::TEXT_DIM),
+        p.background,
+        Stroke::new(1.5, p.text_dim),
     );
     painter.line_segment(
         [on_rim(value, 10.0), on_rim(value, 1.0)],
         Stroke::new(2.5, accent),
     );
     if let Some(at) = ghost_marker(ghost, |v| on_rim(v, -3.0)) {
-        painter.circle_stroke(at, 3.5, Stroke::new(1.5, GHOST));
+        painter.circle_stroke(at, 3.5, Stroke::new(1.5, p.cue));
     }
 }
 
 /// A vertical fader whose handle sits at `value` (0 at the bottom).
 fn fader(painter: &egui::Painter, track: Rect, value: f32, ghost: Option<f32>, accent: Color32) {
+    let p = theme::palette(painter.ctx());
     let slot = Rect::from_center_size(track.center(), vec2(4.0, track.height()));
-    painter.rect_filled(slot, CornerRadius::same(2), theme::BACKGROUND);
+    painter.rect_filled(slot, CornerRadius::same(2), p.background);
     let y = |v: f32| track.bottom() - v.clamp(0.0, 1.0) * track.height();
     let handle = Rect::from_center_size(pos2(track.center().x, y(value)), vec2(track.width(), 8.0));
     painter.rect_filled(handle, CornerRadius::same(2), accent);
@@ -247,7 +238,7 @@ fn fader(painter: &egui::Painter, track: Rect, value: f32, ghost: Option<f32>, a
         painter.rect_stroke(
             wide,
             CornerRadius::same(2),
-            Stroke::new(1.5, GHOST),
+            Stroke::new(1.5, p.cue),
             StrokeKind::Outside,
         );
     }
@@ -255,31 +246,33 @@ fn fader(painter: &egui::Painter, track: Rect, value: f32, ghost: Option<f32>, a
 
 /// A vertical bar filled to `level`.
 fn level_bar(painter: &egui::Painter, bar: Rect, level: f32) {
-    painter.rect_filled(bar, CornerRadius::ZERO, theme::BACKGROUND);
+    let p = theme::palette(painter.ctx());
+    painter.rect_filled(bar, CornerRadius::ZERO, p.background);
     let level = level.clamp(0.0, 1.0);
     let filled = Rect::from_min_max(
         pos2(bar.left(), bar.bottom() - level * bar.height()),
         bar.max,
     );
     let colour = if level > METER_HOT {
-        METER_CLIP
+        p.meter_clip
     } else {
-        METER_OK
+        p.meter_ok
     };
     painter.rect_filled(filled, CornerRadius::ZERO, colour);
 }
 
 /// A line across `bar` at `peak`, the held peak over the live level.
 fn peak_line(painter: &egui::Painter, bar: Rect, peak: f32) {
+    let p = theme::palette(painter.ctx());
     let peak = peak.clamp(0.0, 1.0);
     if peak <= 0.0 {
         return;
     }
     let y = bar.bottom() - peak * bar.height();
     let colour = if peak > METER_HOT {
-        METER_CLIP
+        p.meter_clip
     } else {
-        METER_OK
+        p.meter_ok
     };
     painter.rect_filled(
         Rect::from_min_max(
@@ -294,34 +287,31 @@ fn peak_line(painter: &egui::Painter, bar: Rect, peak: f32) {
 /// The crossfader and the master level in `rect`: the crossfader is dimmed when the
 /// configuration turned it off.
 fn centre(ui: &mut Ui, rect: Rect, frame: &ControlFrame, master_peak: Option<[f32; 2]>) {
+    let p = theme::palette(ui.ctx());
     let painter = ui.painter().clone();
     let dim = if frame.crossfader_enabled { 1.0 } else { 0.35 };
     let half = rect.width() / 2.0;
     let [cross, master] = split(rect.shrink2(vec2(10.0, 6.0)), half);
 
     let slot = Rect::from_center_size(cross.center(), vec2(cross.width() - 20.0, 4.0));
-    painter.rect_filled(slot, CornerRadius::same(2), theme::BACKGROUND);
+    painter.rect_filled(slot, CornerRadius::same(2), p.background);
     let x = slot.left() + frame.control.crossfader.clamp(0.0, 1.0) * slot.width();
     let handle = Rect::from_center_size(pos2(x, slot.center().y), vec2(10.0, 22.0));
-    painter.rect_filled(
-        handle,
-        CornerRadius::same(2),
-        theme::TEXT.gamma_multiply(dim),
-    );
+    painter.rect_filled(handle, CornerRadius::same(2), p.text.gamma_multiply(dim));
     caption(
         ui,
         Rect::from_center_size(pos2(cross.center().x, cross.top() + 4.0), vec2(80.0, 10.0)),
         "CROSSFADER",
-        theme::TEXT_DIM.gamma_multiply(dim),
+        p.text_dim.gamma_multiply(dim),
     );
 
     let bar = Rect::from_center_size(master.center(), vec2(master.width() - 20.0, 6.0));
-    painter.rect_filled(bar, CornerRadius::ZERO, theme::BACKGROUND);
+    painter.rect_filled(bar, CornerRadius::ZERO, p.background);
     let level = frame.control.master_level.clamp(0.0, 1.0);
     painter.rect_filled(
         Rect::from_min_size(bar.min, vec2(bar.width() * level, bar.height())),
         CornerRadius::ZERO,
-        theme::TEXT,
+        p.text,
     );
     // The peaks ride on the bar's edge so the level and the signal read together.
     if let Some(peaks) = master_peak {
@@ -332,9 +322,9 @@ fn centre(ui: &mut Ui, rect: Rect, frame: &ControlFrame, master_peak: Option<[f3
             Stroke::new(
                 1.5,
                 if peak > METER_HOT {
-                    METER_CLIP
+                    p.meter_clip
                 } else {
-                    METER_OK
+                    p.meter_ok
                 },
             ),
         );
@@ -346,7 +336,7 @@ fn centre(ui: &mut Ui, rect: Rect, frame: &ControlFrame, master_peak: Option<[f3
             vec2(80.0, 10.0),
         ),
         "MASTER",
-        theme::TEXT_DIM,
+        p.text_dim,
     );
 }
 

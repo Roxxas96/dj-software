@@ -1,11 +1,14 @@
 //! The top bar: the status line (or the error that stopped the session) on the left; the master meter, the CPU load, the clock and
 //! the controller and audio state on the right.
 
+use std::sync::mpsc::Sender;
 use std::time::Instant;
 
-use egui::{Color32, CornerRadius, Rect, RichText, Sense, Ui, Vec2, pos2};
+use egui::{CornerRadius, Rect, RichText, Sense, Ui, Vec2, pos2};
 use engine::EngineMonitor;
 
+use crate::command::UiCommand;
+use crate::menu;
 use crate::model::ControlFrame;
 use crate::theme;
 
@@ -13,24 +16,30 @@ use crate::theme;
 const METER_BAR: Vec2 = Vec2::new(60.0, 5.0);
 /// Above this peak the meter turns red.
 const METER_HOT: f32 = 0.95;
-const METER_OK: Color32 = Color32::from_rgb(0x4c, 0xc2, 0x6a);
-const METER_CLIP: Color32 = Color32::from_rgb(0xff, 0x3b, 0x3b);
 
-pub fn show(ui: &mut Ui, frame: &ControlFrame, monitor: Option<&EngineMonitor>) {
+pub fn show(
+    ui: &mut Ui,
+    frame: &ControlFrame,
+    monitor: Option<&EngineMonitor>,
+    commands: &Sender<UiCommand>,
+) {
+    let p = theme::palette(ui.ctx());
     ui.horizontal(|ui| {
+        menu::show(ui, &frame.view, commands);
+        ui.separator();
         match &frame.error {
-            Some(error) => ui.label(RichText::new(error.as_str()).color(theme::ERROR).strong()),
+            Some(error) => ui.label(RichText::new(error.as_str()).color(p.error).strong()),
             None => ui.label(frame.status_line(Instant::now())),
         };
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             match &frame.audio {
                 Ok(device) => ui.label(device.as_str()),
-                Err(why) => ui.label(RichText::new(why.as_str()).color(theme::TEXT_DIM)),
+                Err(why) => ui.label(RichText::new(why.as_str()).color(p.text_dim)),
             };
             ui.separator();
             match &frame.controller {
                 Some(port) => ui.label(port.as_str()),
-                None => ui.label(RichText::new("no controller").color(theme::TEXT_DIM)),
+                None => ui.label(RichText::new("no controller").color(p.text_dim)),
             };
             ui.separator();
             ui.label(clock_text());
@@ -58,6 +67,7 @@ fn clock_text() -> String {
 
 /// Two stacked bars, left over right, filled to each master peak.
 fn master_meter(ui: &mut Ui, peaks: [f32; 2]) {
+    let p = theme::palette(ui.ctx());
     let gap = 2.0;
     let size = Vec2::new(METER_BAR.x, METER_BAR.y * 2.0 + gap);
     let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
@@ -65,13 +75,13 @@ fn master_meter(ui: &mut Ui, peaks: [f32; 2]) {
     for (row, peak) in peaks.into_iter().enumerate() {
         let top = rect.top() + row as f32 * (METER_BAR.y + gap);
         let bar = Rect::from_min_size(pos2(rect.left(), top), METER_BAR);
-        painter.rect_filled(bar, CornerRadius::ZERO, theme::BACKGROUND);
+        painter.rect_filled(bar, CornerRadius::ZERO, p.background);
         let level = peak.clamp(0.0, 1.0);
         let filled = Rect::from_min_size(bar.min, Vec2::new(bar.width() * level, bar.height()));
         let colour = if peak > METER_HOT {
-            METER_CLIP
+            p.meter_clip
         } else {
-            METER_OK
+            p.meter_ok
         };
         painter.rect_filled(filled, CornerRadius::ZERO, colour);
     }
