@@ -1,11 +1,10 @@
-use std::sync::Arc;
-
 use rtrb::{Consumer, Producer};
 use thiserror::Error;
 
-use crate::shared::Shared;
 use crate::stems::Garbage;
-use crate::{ChannelSnapshot, Command, DeckId, DeckSnapshot, Meters, SamplerSnapshot};
+use crate::{
+    ChannelSnapshot, Command, DeckId, DeckSnapshot, EngineMonitor, Meters, SamplerSnapshot,
+};
 
 /// The command queue to the audio thread is full; the command was not sent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -16,19 +15,19 @@ pub struct CommandQueueFull;
 pub struct EngineController {
     commands: Producer<Command>,
     garbage: Consumer<Garbage>,
-    shared: Arc<Shared>,
+    monitor: EngineMonitor,
 }
 
 impl EngineController {
     pub(crate) fn new(
         commands: Producer<Command>,
         garbage: Consumer<Garbage>,
-        shared: Arc<Shared>,
+        monitor: EngineMonitor,
     ) -> Self {
         Self {
             commands,
             garbage,
-            shared,
+            monitor,
         }
     }
 
@@ -67,7 +66,7 @@ impl EngineController {
     /// The deck's state as of the last rendered block (for display: its fields may mix two
     /// consecutive blocks).
     pub fn deck(&self, id: DeckId) -> DeckSnapshot {
-        self.shared.load_deck(id)
+        self.monitor.deck(id)
     }
 
     /// The deck's state from one rendered block, every field together, or `None` if the
@@ -75,21 +74,26 @@ impl EngineController {
     /// several fields together, such as telling which track the cue points belong to;
     /// [`EngineController::deck`] is enough for display.
     pub fn deck_consistent(&self, id: DeckId) -> Option<DeckSnapshot> {
-        self.shared.load_deck_consistent(id)
+        self.monitor.deck_consistent(id)
     }
 
     /// The channel's published mixer state as of the last rendered block (for display).
     pub fn channel(&self, id: DeckId) -> ChannelSnapshot {
-        self.shared.load_channel(id)
+        self.monitor.channel(id)
     }
 
     /// Peak levels of the last rendered block.
     pub fn meters(&self) -> Meters {
-        self.shared.load_meters()
+        self.monitor.meters()
     }
 
     /// Which sampler slots were playing at the last rendered block (for display).
     pub fn sampler(&self) -> SamplerSnapshot {
-        self.shared.load_sampler()
+        self.monitor.sampler()
+    }
+
+    /// A read-only handle on the published state, for other threads.
+    pub fn monitor(&self) -> EngineMonitor {
+        self.monitor.clone()
     }
 }

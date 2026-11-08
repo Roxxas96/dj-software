@@ -468,6 +468,7 @@ fn render_does_not_allocate() {
     assert!(master.iter().any(|&s| s != 0.0));
     assert!(headphones.iter().any(|&s| s != 0.0));
     assert!(c.meters().channel_peak[0] > 0.0);
+    assert!(c.monitor().dsp_load() > 0.0);
 }
 
 /// A stem set of `frames` frames whose three stems ramp at different rates.

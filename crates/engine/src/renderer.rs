@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use rtrb::{Consumer, Producer, PushError};
 
@@ -61,6 +62,7 @@ impl EngineRenderer {
     /// lengths differ (or a trailing half frame is left over) only the whole frames both
     /// buffers share are rendered; the rest of either buffer is zero-filled.
     pub fn render(&mut self, master: &mut [f32], headphones: &mut [f32]) {
+        let started = Instant::now();
         while let Ok(cmd) = self.commands.pop() {
             self.apply(cmd);
         }
@@ -92,6 +94,11 @@ impl EngineRenderer {
 
         self.publish();
         self.shared.store_meters(&meters);
+        let block_seconds = (samples / 2) as f64 / f64::from(self.config.sample_rate);
+        if block_seconds > 0.0 {
+            let load = started.elapsed().as_secs_f64() / block_seconds;
+            self.shared.store_dsp_load(load as f32);
+        }
     }
 
     fn apply(&mut self, cmd: Command) {

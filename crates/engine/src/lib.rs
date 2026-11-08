@@ -11,6 +11,7 @@ mod dsp;
 mod ids;
 mod memory;
 pub mod mixer;
+mod monitor;
 mod renderer;
 mod sampler;
 mod shared;
@@ -27,6 +28,7 @@ pub use dsp::fx::EffectKind;
 pub use dsp::fx::{EffectForTests, effect_for_tests};
 pub use ids::DeckId;
 pub use memory::{Grid, HOTCUES, HotcueSlot, TrackMemory};
+pub use monitor::EngineMonitor;
 pub use renderer::EngineRenderer;
 pub use sampler::{SAMPLER_SLOTS, SamplerSnapshot};
 pub use shared::{ChannelSnapshot, DeckSnapshot, Meters};
@@ -67,6 +69,10 @@ pub fn engine(config: EngineConfig) -> (EngineController, EngineRenderer) {
     let (command_tx, command_rx) = rtrb::RingBuffer::new(COMMAND_QUEUE_CAPACITY);
     let (garbage_tx, garbage_rx) = rtrb::RingBuffer::new(GARBAGE_QUEUE_CAPACITY);
     let renderer = EngineRenderer::new(config, command_rx, garbage_tx);
-    let controller = EngineController::new(command_tx, garbage_rx, renderer.shared());
+    let controller = EngineController::new(
+        command_tx,
+        garbage_rx,
+        EngineMonitor::new(renderer.shared(), config.sample_rate),
+    );
     (controller, renderer)
 }
