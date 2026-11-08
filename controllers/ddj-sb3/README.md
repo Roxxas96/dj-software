@@ -207,6 +207,12 @@ seven stem pads and their overlaps all worked. The owner heard a bit too much ki
 enough in LOW with the split at 250 Hz, so the split became the `stems.kicks_hz` setting, 300 Hz
 by default (`docs/config.md`).
 
+### Hands-on check (plan 9: the window)
+
+Owner, 2026-11-08: "very good for a first draft. I like the look of it and everything is very
+smooth." The window, the waveforms and the SB3 mirroring work as a prototype. The owner has
+tweaks in mind and will bring them to the next plans.
+
 ## The SB3's own pad routines
 
 In FX FADE, PAD SCRATCH and TRANS (SHIFT + SAMPLER) the SB3 runs routines of its own on
