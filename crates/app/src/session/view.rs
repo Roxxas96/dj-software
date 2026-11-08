@@ -1,6 +1,6 @@
 //! The window's view state (layout, styles, panel sizes, the waveform zoom), changed by
 //! the window's commands and by the `ui.waveform_zoom_in` / `ui.waveform_zoom_out`
-//! actions, and kept in `ui-state.toml` next to `config.toml`, so the next launch starts
+//! and `ui.layout` actions, and kept in `ui-state.toml` next to `config.toml`, so the next launch starts
 //! where this one ended. `ui.waveform_beats` in `config.toml` is only the zoom before
 //! that file holds one.
 //!
@@ -29,6 +29,8 @@ pub(super) struct ViewStore {
     zoom_range: (f64, f64),
     /// The actions' zoom count when last seen, `None` before the control loop runs.
     seen: Option<i32>,
+    /// The actions' layout count when last seen, `None` before the control loop runs.
+    seen_layout: Option<i32>,
     /// When the view last changed without being saved since.
     unsaved: Option<Instant>,
 }
@@ -47,6 +49,7 @@ impl ViewStore {
             state: state.clamped(zoom_range),
             zoom_range,
             seen: None,
+            seen_layout: None,
             unsaved: None,
         }
     }
@@ -82,6 +85,20 @@ impl ViewStore {
             ..self.state.clone()
         };
         self.replace(next, now)
+    }
+
+    /// Moves to the next layout once for each press of `ui.layout` since the last call (the
+    /// first count seen only sets the base). Returns whether the layout changed.
+    pub fn layout(&mut self, actions_count: i32, now: Instant) -> bool {
+        let seen = self.seen_layout.replace(actions_count);
+        let presses = seen.map_or(0, |seen| actions_count.wrapping_sub(seen));
+        let mut changed = false;
+        // Four presses are a full turn: only the remainder shows.
+        for _ in 0..presses.rem_euclid(ui::Layout::ALL.len() as i32) {
+            let next = ui::Layout::next(self.state.layout);
+            changed |= self.apply(ViewChange::SetLayout(next), now);
+        }
+        changed
     }
 
     fn replace(&mut self, next: ViewState, now: Instant) -> bool {
@@ -419,6 +436,22 @@ mod tests {
         // A zoom saved outside a narrowed range comes back at its nearest end.
         std::fs::write(&path, "waveform_beats = 8").unwrap();
         assert_eq!(beats(&path, (12.0, 32.0)), 12.0);
+    }
+
+    #[test]
+    fn ui_layout_presses_cycle_the_layout() {
+        let now = Instant::now();
+        let mut store = ViewStore::load(None, defaults(), RANGE);
+        // The first count seen is only the base.
+        assert!(!store.layout(5, now));
+        assert!(!store.layout(5, now));
+        assert!(store.layout(6, now));
+        assert_eq!(store.state().layout, Layout::Performance);
+        assert!(store.layout(7, now));
+        assert_eq!(store.state().layout, Layout::Starter);
+        // Two presses between looks move two layouts.
+        assert!(store.layout(9, now));
+        assert_eq!(store.state().layout, Layout::Pro);
     }
 
     #[test]

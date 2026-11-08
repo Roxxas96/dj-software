@@ -11,6 +11,7 @@ use egui::{
 };
 use engine::{DeckId, EngineMonitor, EqMode, StemKnobs};
 
+use crate::layout::Sections;
 use crate::model::{
     ControlFrame, GHOST_EQ_HIGH, GHOST_EQ_LOW, GHOST_EQ_MID, GHOST_FADER, GHOST_FILTER, GHOST_TRIM,
 };
@@ -83,6 +84,7 @@ impl Mixer {
         rect: Rect,
         frame: &ControlFrame,
         monitor: Option<&EngineMonitor>,
+        sections: &Sections,
     ) {
         let now = Instant::now();
         let peaks = monitor.map(|m| m.meters().channel_peak).unwrap_or_default();
@@ -96,7 +98,15 @@ impl Mixer {
             let level = peaks[deck.index()];
             let held = self.holds[deck.index()].update(level, now);
             ui.scope_builder(egui::UiBuilder::new().max_rect(strip_rect), |ui| {
-                strip(ui, strip_rect, deck, frame, stems_active, level, held);
+                strip(
+                    ui,
+                    strip_rect,
+                    deck,
+                    frame,
+                    stems_active,
+                    (level, held),
+                    sections,
+                );
             });
         }
         centre(ui, bottom, frame, monitor.map(|m| m.meters().master_peak));
@@ -130,8 +140,8 @@ pub fn strip(
     deck: DeckId,
     frame: &ControlFrame,
     stems_active: bool,
-    level: f32,
-    held: f32,
+    (level, held): (f32, f32),
+    sections: &Sections,
 ) {
     let p = theme::palette(ui.ctx());
     let accent = p.deck_accent(deck);
@@ -164,13 +174,19 @@ pub fn strip(
     caption(ui, pfl, "PFL", if state.pfl { p.on_accent } else { p.text });
 
     let [high, mid, low] = eq_labels(frame.eq_mode, stems_active, frame.stem_knobs);
-    let knobs = [
-        ("GAIN", state.trim, ghosts[GHOST_TRIM]),
-        (high, state.eq_high, ghosts[GHOST_EQ_HIGH]),
-        (mid, state.eq_mid, ghosts[GHOST_EQ_MID]),
-        (low, state.eq_low, ghosts[GHOST_EQ_LOW]),
-        ("FILTER", state.filter, ghosts[GHOST_FILTER]),
-    ];
+    let gain = ("GAIN", state.trim, ghosts[GHOST_TRIM]);
+    let filter = ("FILTER", state.filter, ghosts[GHOST_FILTER]);
+    let knobs: Vec<_> = if sections.mixer_eq {
+        vec![
+            gain,
+            (high, state.eq_high, ghosts[GHOST_EQ_HIGH]),
+            (mid, state.eq_mid, ghosts[GHOST_EQ_MID]),
+            (low, state.eq_low, ghosts[GHOST_EQ_LOW]),
+            filter,
+        ]
+    } else {
+        vec![gain, filter]
+    };
     let knob_x = rect.left() + 8.0 + KNOB_RADIUS + 14.0;
     for (i, (name, value, ghost)) in knobs.into_iter().enumerate() {
         let top = header.bottom() + 6.0 + i as f32 * KNOB_STEP;
@@ -195,12 +211,14 @@ pub fn strip(
         pos2(fader_x + FADER_WIDTH, travel_bottom),
     );
     fader(&painter, track, state.fader, ghosts[GHOST_FADER], accent);
-    let meter = Rect::from_min_max(
-        pos2(track.right() + METER_WIDTH, travel_top),
-        pos2(track.right() + METER_WIDTH * 2.0, travel_bottom),
-    );
-    level_bar(&painter, meter, level);
-    peak_line(&painter, meter, held);
+    if sections.mixer_meters {
+        let meter = Rect::from_min_max(
+            pos2(track.right() + METER_WIDTH, travel_top),
+            pos2(track.right() + METER_WIDTH * 2.0, travel_bottom),
+        );
+        level_bar(&painter, meter, level);
+        peak_line(&painter, meter, held);
+    }
 }
 
 /// A knob at `value` (0 to 1) with its pickup marker, if any.

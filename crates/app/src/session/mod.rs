@@ -305,7 +305,7 @@ fn run_session(
         for line in lines.try_iter() {
             parts.take(line);
         }
-        parts.settle_view(Some(pass.state.waveform_zoom));
+        parts.settle_view(Some((pass.state.waveform_zoom, pass.state.layout_steps)));
         let now = Instant::now();
         if last_publish.is_some_and(|last| now.duration_since(last) < PUBLISH_EVERY) {
             return;

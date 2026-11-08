@@ -11,7 +11,8 @@ use egui_kittest::kittest::Queryable;
 use engine::{ChannelSnapshot, DeckId, DeckSnapshot, Grid, SamplerSnapshot};
 use library::TrackRow;
 use ui::deck::DeckView;
-use ui::{ControlFrame, DeckInfo};
+use ui::layout::sections;
+use ui::{ControlFrame, DeckInfo, Layout};
 
 /// A 5:29 track at 126 BPM on deck 1, 57.1 s in.
 fn loaded() -> (DeckSnapshot, ControlFrame) {
@@ -48,9 +49,14 @@ fn loaded() -> (DeckSnapshot, ControlFrame) {
 }
 
 fn draw(view: &DeckView) -> Harness<'_> {
+    draw_in(view, Layout::Pro)
+}
+
+fn draw_in(view: &DeckView, layout: Layout) -> Harness<'_> {
+    let sections = sections(layout);
     let mut harness = Harness::builder()
         .with_size([560.0, 340.0])
-        .build_ui(|ui| ui::deck::panel(ui, view, None));
+        .build_ui(move |ui| ui::deck::panel(ui, view, None, &sections));
     harness.run_steps(3);
     harness
 }
@@ -95,4 +101,16 @@ fn deck_panel_draws_the_overview_stems_and_jump_pads() {
     harness.get_by_label("BEAT JUMP");
     harness.get_by_label("−4");
     harness.get_by_label("+32");
+}
+
+#[test]
+fn starter_hides_the_pads() {
+    let (snapshot, frame) = loaded();
+    let view = view(&snapshot, &frame);
+    draw_in(&view, Layout::Pro).get_by_label("pads");
+    let starter = draw_in(&view, Layout::Starter);
+    assert!(starter.query_by_label("pads").is_none());
+    starter.get_by_label("LOOP");
+    let performance = draw_in(&view, Layout::Performance);
+    performance.get_by_label("pads");
 }
