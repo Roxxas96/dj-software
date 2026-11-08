@@ -5,6 +5,7 @@
 pub mod browser;
 pub mod cover;
 pub mod deck;
+mod fonts;
 pub mod mixer;
 mod model;
 pub mod theme;
@@ -47,6 +48,7 @@ pub fn run(
         options,
         Box::new(|cc| {
             theme::apply(&cc.egui_ctx);
+            fonts::install(&cc.egui_ctx);
             Ok(Box::new(app))
         }),
     );

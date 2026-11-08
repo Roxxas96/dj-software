@@ -94,3 +94,19 @@ fn a_cursor_outside_the_page_still_draws_the_page() {
     let harness = draw(&view);
     harness.get_by_label("Lost");
 }
+
+#[test]
+fn non_latin_text_draws_without_panicking() {
+    let mut view = view();
+    let track = view.list[0].track.as_mut().unwrap();
+    track.title = Some("COMسN GO".into());
+    track.artist = Some("日本語".into());
+    let mut covers = Covers::default();
+    let view = &view;
+    let mut harness = Harness::builder()
+        .with_size([1000.0, 300.0])
+        .allow_missing_glyphs()
+        .build_ui(move |ui| ui::browser::show(ui, view, KeyNotation::default(), &mut covers));
+    harness.run_steps(3);
+    assert_eq!(harness.get_all_by_label("COMسN GO").count(), 2);
+}

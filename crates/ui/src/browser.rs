@@ -143,13 +143,8 @@ fn tree_row(ui: &mut Ui, rect: Rect, entry: &TreeRow) {
         return;
     };
     // The note follows the label, dimmed.
-    let label = ui.fonts_mut(|f| {
-        f.layout_no_wrap(
-            entry.label.clone(),
-            egui::FontId::proportional(13.0),
-            theme::TEXT,
-        )
-    });
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let label = ui.fonts_mut(|f| f.layout_no_wrap(entry.label.clone(), font, theme::TEXT));
     let label_width = label.size().x.min(width * 0.7);
     cell(ui, rect, label_x, label_width, RichText::new(&entry.label));
     cell(
@@ -186,24 +181,26 @@ fn glyph(ui: &Ui, kind: TreeKind, at: egui::Pos2) {
     }
 }
 
-/// The list rows to draw, with their absolute indices: the window around the cursor cut to
-/// the loaded page, or the page's first rows when the cursor is outside it.
-fn drawn_rows(view: &BrowserView, rows: usize) -> impl Iterator<Item = (usize, &ListRow)> {
+/// The absolute rows to draw: `rows` of the loaded page, slid to hold the cursor's window
+/// where the page allows, and the page's nearest rows when the cursor is outside it.
+fn page_window(view: &BrowserView, rows: usize) -> Range<usize> {
     let page = view.list_offset..view.list_offset + view.list.len();
     let wanted = visible_window(view.list_cursor, view.list_count, rows);
-    let start = wanted.start.max(page.start);
-    let end = wanted.end.min(page.end);
-    let (start, end) = if start < end {
-        (start, end)
-    } else {
-        (page.start, page.end.min(page.start + rows))
-    };
-    (start..end).map(move |at| (at, &view.list[at - view.list_offset]))
+    let start = wanted
+        .start
+        .clamp(page.start, page.end.saturating_sub(rows).max(page.start));
+    start..(start + rows).min(page.end)
+}
+
+/// The list rows to draw, with their absolute indices.
+fn drawn_rows(view: &BrowserView, rows: usize) -> impl Iterator<Item = (usize, &ListRow)> {
+    page_window(view, rows).map(move |at| (at, &view.list[at - view.list_offset]))
 }
 
 fn list_pane(ui: &mut Ui, view: &BrowserView, notation: KeyNotation) {
     let header = row(ui, None);
-    // The library separates the path with "▸", which egui's fonts can't draw.
+    // The library separates the path with "▸" (U+25B8), which egui's bundled fonts lack and
+    // the system fallbacks may too.
     let path = view.path.replace('▸', ">");
     let files = if view.list_count == 1 {
         "file"
@@ -353,6 +350,43 @@ mod tests {
         assert_eq!(visible_window(99, 100, 10), 90..100);
         assert_eq!(visible_window(3, 5, 10), 0..5);
         assert_eq!(visible_window(0, 0, 10), 0..0);
+    }
+
+    fn paged(offset: usize, cursor: usize) -> BrowserView {
+        let row = ListRow {
+            path: std::path::PathBuf::new(),
+            track: None,
+            file_name: String::new(),
+        };
+        BrowserView {
+            path: String::new(),
+            index: 0,
+            count: 0,
+            track: None,
+            focus: Focus::List,
+            tree: Vec::new(),
+            tree_cursor: 0,
+            list: vec![row; 200],
+            list_offset: offset,
+            list_count: 5000,
+            list_cursor: cursor,
+        }
+    }
+
+    #[test]
+    fn the_window_slides_inside_the_page() {
+        // At the page's start the pane stays full and shows the cursor.
+        let view = paged(100, 100);
+        let window = page_window(&view, 12);
+        assert_eq!(window.len(), 12);
+        assert!(window.contains(&100) && window.start >= 100);
+        // At the page's end too, with the cursor in view.
+        let view = paged(100, 299);
+        let window = page_window(&view, 12);
+        assert_eq!(window, 288..300);
+        assert!(window.contains(&299));
+        // Outside the page: the nearest full pane.
+        assert_eq!(page_window(&paged(100, 5), 12), 100..112);
     }
 
     #[test]
