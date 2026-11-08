@@ -361,8 +361,9 @@ should drop the session when stems are disabled, and may drop it after a while i
   - `GraphOptimizationLevel::Level3`; the default memory pattern and arena (on).
   - `with_intra_threads(n)`: 8 threads (the performance cores) gave 1.02 s per chunk; ORT's default of 10
     gave 1.33 s; 4 gave 1.49 s.
-  - Use the number of performance cores while no deck plays, and fewer (e.g. half) while one plays: the
-    thread runs at low priority, but fewer threads leave room for the audio callback.
+  - Superseded by Ruling R13: ~~use the number of performance cores while no deck plays, and fewer (e.g.
+    half) while one plays~~. As built, the CPU session always uses max(1, cores / 2) intra-op threads, so
+    playback always has room (CoreML is unaffected).
   - The 69 s figure above is the default-threads run.
 - **CoreML path:**
   - `ModelFormat::MLProgram`, `ComputeUnits::All`, `with_static_input_shapes(true)`;
