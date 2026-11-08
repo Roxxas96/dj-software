@@ -6,6 +6,16 @@ use std::time::{Duration, SystemTime};
 use library::{LibraryError, RawStatement, WriteOp, WriteOutcome};
 use rusqlite::{Connection, types::Value};
 
+/// The schema version a new library is created at.
+const LATEST: i64 = library::schema::MIGRATIONS.len() as i64;
+
+/// Every migration, then `next`.
+fn with_migration(next: &'static str) -> Vec<&'static str> {
+    let mut all = library::schema::MIGRATIONS.to_vec();
+    all.push(next);
+    all
+}
+
 fn db_path(dir: &tempfile::TempDir) -> PathBuf {
     dir.path().join("nested").join("library.sqlite3")
 }
@@ -71,13 +81,13 @@ fn backup_count(path: &Path) -> usize {
 }
 
 #[test]
-fn open_creates_schema_v1() {
+fn open_creates_the_latest_schema() {
     let dir = tempfile::tempdir().unwrap();
     let path = db_path(&dir);
     let lib = library::Library::open(&path).unwrap();
     let reader = lib.reader().unwrap();
     let conn = reader.connection();
-    assert_eq!(user_version(conn), 1);
+    assert_eq!(user_version(conn), LATEST);
     for table in [
         "tracks",
         "folders",
@@ -87,6 +97,7 @@ fn open_creates_schema_v1() {
         "playlists",
         "playlist_tracks",
         "settings",
+        "stems",
     ] {
         assert!(table_exists(conn, table), "missing table {table}");
     }
@@ -155,19 +166,16 @@ fn failed_migration_leaves_previous_version() {
     // A recent backup exists, which would normally make the next open skip its backup.
     drop(library::Library::open(&path).unwrap());
     assert_eq!(backup_count(&path), 1);
-    let broken: &[&str] = &[
-        library::schema::MIGRATIONS[0],
-        "CREATE TABLE half_done(a); INSERT INTO no_such_table VALUES (1);",
-    ];
-    let err = library::Library::open_with_migrations(&path, broken)
+    let broken = with_migration("CREATE TABLE half_done(a); INSERT INTO no_such_table VALUES (1);");
+    let err = library::Library::open_with_migrations(&path, &broken)
         .expect_err("broken migration must fail");
     assert!(
-        matches!(err, LibraryError::Migration { version: 2, .. }),
+        matches!(err, LibraryError::Migration { version, .. } if version == broken.len()),
         "{err:?}"
     );
 
     let conn = Connection::open(&path).unwrap();
-    assert_eq!(user_version(&conn), 1);
+    assert_eq!(user_version(&conn), LATEST);
     assert!(!table_exists(&conn, "half_done"));
     let value: String = conn
         .query_row("SELECT value FROM settings WHERE key = 'keep'", [], |r| {
@@ -179,7 +187,7 @@ fn failed_migration_leaves_previous_version() {
     // The pending migration forced a backup, taken before the migration ran.
     assert_eq!(backup_count(&path), 2);
     let backup = Connection::open(newest_backup(&path)).unwrap();
-    assert_eq!(user_version(&backup), 1);
+    assert_eq!(user_version(&backup), LATEST);
     assert!(!table_exists(&backup, "half_done"));
     assert_eq!(count(&backup, "settings"), 1);
 }
@@ -220,14 +228,14 @@ fn pending_migration_forces_a_backup_of_the_old_version() {
     drop(library::Library::open(&path).unwrap());
     assert_eq!(backup_count(&path), 1);
 
-    let v2: &[&str] = &[library::schema::MIGRATIONS[0], "CREATE TABLE extra(a);"];
-    let lib = library::Library::open_with_migrations(&path, v2).unwrap();
+    let next = with_migration("CREATE TABLE extra(a);");
+    let lib = library::Library::open_with_migrations(&path, &next).unwrap();
     assert_eq!(backup_count(&path), 2);
     let backup = Connection::open(newest_backup(&path)).unwrap();
-    assert_eq!(user_version(&backup), 1);
+    assert_eq!(user_version(&backup), LATEST);
     assert!(!table_exists(&backup, "extra"));
     assert_eq!(count(&backup, "settings"), 1);
-    assert_eq!(user_version(lib.reader().unwrap().connection()), 2);
+    assert_eq!(user_version(lib.reader().unwrap().connection()), LATEST + 1);
 }
 
 #[test]
@@ -342,8 +350,8 @@ fn newer_database_is_refused() {
             err,
             LibraryError::TooNew {
                 found: 99,
-                supported: 1
-            }
+                supported
+            } if supported == library::schema::MIGRATIONS.len()
         ),
         "{err:?}"
     );

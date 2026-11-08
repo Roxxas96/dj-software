@@ -419,7 +419,10 @@ whole mix, in dB:
 - Decoded Vorbis frame count = original (13,230,000) for every stem, at both settings.
 - Best cross-correlation lag against the original = **0**: no encoder-delay offset, since `symphonia` applies
   the Ogg pre-skip and end trim.
-- Measured at 44.1 kHz; Task 5 should add a 48 kHz round-trip test.
+- Measured at 44.1 kHz; the cache's tests (Task 5) check 48 kHz too: frame count equal, lag 0.
+- libvorbis has a 192 kbit/s bitrate table only for some rates (44.1, 48, 32 and 16 kHz among them, not
+  22.05, 88.2 or 96 kHz). At the others the cache encodes at quality 0.6 instead (about 192 kbit/s at
+  44.1 kHz).
 
 **Instruments** is derived at load as `mix − (vocals + bass + rhythm)`, so the four always sum to the mix
 exactly. The codec error of the three stored stems lands in instruments:

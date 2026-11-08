@@ -40,3 +40,10 @@ signalsmith-stretch = "0.1.3"
 # about a millisecond per deck and block, too slow for debug builds and tests.
 [profile.dev.package.signalsmith-stretch]
 opt-level = 3
+
+# The stems cache's Vorbis encoder (C, built by the crate's build script) and decoder are
+# far too slow unoptimized for the cache's tests.
+[profile.dev.package.aotuv_lancer_vorbis_sys]
+opt-level = 3
+[profile.dev.package.symphonia-codec-vorbis]
+opt-level = 3
