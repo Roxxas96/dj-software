@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, anyhow};
 use toml::{Table, Value};
 
-use engine::{EffectKind, EqMode};
+use engine::{EffectKind, EqMode, StemKnobs};
 
 use crate::format::safe;
 
@@ -65,6 +65,8 @@ pub struct StemsConfig {
     pub enabled: bool,
     /// What the EQ knobs control once stems are enabled.
     pub eq_mode: EqMode,
+    /// Which parts the knobs control in stems mode.
+    pub knobs: StemKnobs,
     /// The most disk the stems cache may use, in gigabytes.
     pub cache_gb: f64,
 }
@@ -74,6 +76,7 @@ impl Default for StemsConfig {
         Self {
             enabled: false,
             eq_mode: EqMode::Eq,
+            knobs: StemKnobs::Vdj,
             cache_gb: 5.0,
         }
     }
@@ -110,6 +113,15 @@ fn parse_stems(table: &Table, file: &str) -> anyhow::Result<StemsConfig> {
                             "stems.eq_mode",
                             "expected \"eq\" or \"stems\"",
                         ));
+                    }
+                };
+            }
+            "knobs" => {
+                stems.knobs = match value.as_str() {
+                    Some("vdj") => StemKnobs::Vdj,
+                    Some("raw") => StemKnobs::Raw,
+                    _ => {
+                        return Err(invalid(file, "stems.knobs", "expected \"vdj\" or \"raw\""));
                     }
                 };
             }
@@ -522,6 +534,7 @@ long = 2.0
 [stems]
 enabled = false
 eq_mode = "eq"
+knobs = "vdj"
 cache_gb = 5
 "#;
 
@@ -719,6 +732,23 @@ cache_gb = 5
     }
 
     #[test]
+    fn stems_knobs_config_parses_and_rejects() {
+        assert_eq!(parse_text("").unwrap().stems.knobs, StemKnobs::Vdj);
+        assert_eq!(
+            parse_text("[stems]\nenabled = true").unwrap().stems.knobs,
+            StemKnobs::Vdj
+        );
+        assert_eq!(
+            parse_text("[stems]\nknobs = \"raw\"").unwrap().stems.knobs,
+            StemKnobs::Raw
+        );
+        for text in ["[stems]\nknobs = \"VDJ\"", "[stems]\nknobs = 1"] {
+            let error = parse_text(text).unwrap_err().to_string();
+            assert!(error.contains("stems.knobs"), "{error}");
+        }
+    }
+
+    #[test]
     fn stems_config_parses_and_rejects() {
         assert_eq!(parse_text("").unwrap().stems, StemsConfig::default());
         let defaults = StemsConfig::default();
@@ -732,6 +762,7 @@ cache_gb = 5
             StemsConfig {
                 enabled: true,
                 eq_mode: EqMode::Stems,
+                knobs: StemKnobs::Vdj,
                 cache_gb: 0.5,
             }
         );
