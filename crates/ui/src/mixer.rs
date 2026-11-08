@@ -176,19 +176,17 @@ pub fn strip(
     let [high, mid, low] = eq_labels(frame.eq_mode, stems_active, frame.stem_knobs);
     let gain = ("GAIN", state.trim, ghosts[GHOST_TRIM]);
     let filter = ("FILTER", state.filter, ghosts[GHOST_FILTER]);
-    let knobs: Vec<_> = if sections.mixer_eq {
-        vec![
-            gain,
-            (high, state.eq_high, ghosts[GHOST_EQ_HIGH]),
-            (mid, state.eq_mid, ghosts[GHOST_EQ_MID]),
-            (low, state.eq_low, ghosts[GHOST_EQ_LOW]),
-            filter,
-        ]
-    } else {
-        vec![gain, filter]
-    };
+    let all = [
+        gain,
+        (high, state.eq_high, ghosts[GHOST_EQ_HIGH]),
+        (mid, state.eq_mid, ghosts[GHOST_EQ_MID]),
+        (low, state.eq_low, ghosts[GHOST_EQ_LOW]),
+        filter,
+    ];
+    let without_eq = [gain, filter];
+    let knobs: &[_] = if sections.mixer_eq { &all } else { &without_eq };
     let knob_x = rect.left() + 8.0 + KNOB_RADIUS + 14.0;
-    for (i, (name, value, ghost)) in knobs.into_iter().enumerate() {
+    for (i, &(name, value, ghost)) in knobs.iter().enumerate() {
         let top = header.bottom() + 6.0 + i as f32 * KNOB_STEP;
         let centre = pos2(knob_x, top + KNOB_RADIUS);
         knob(&painter, centre, value, ghost, accent);
