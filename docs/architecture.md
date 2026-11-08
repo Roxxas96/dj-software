@@ -54,9 +54,9 @@ Each plan that adds or changes a crate updates this page. The full design is in
 | `actions` | The named actions controls can trigger (ids such as `deck.play_pause`), the app-side control state (which deck each side shows, SHIFT, last set values) and the LED rules. `apply` turns an action into engine commands. No MIDI knowledge. |
 | `controller` | MIDI ports and messages, the mapping file format, the resolver that turns messages into actions (conditions, soft takeover), LED feedback, the capture tools' logic, and the built-in mappings (`controllers/<name>/mapping.toml`). Tested with fake ports. |
 | `analysis` | Offline track analysis written for this project: three-band waveform, tempo and constant beatgrid, and musical key with Camelot, standard and Open Key notation. Pure functions on decoded audio; no database. |
-| `library` | The SQLite library: schema and migrations, startup backups, folder scans and the watcher, fingerprints, tags, cues, playlists, beatgrid edits, the writer thread and the analyzer pool that stores `analysis` results. See [library.md](library.md). |
-| `stems` | Splits a track into vocals, bass and rhythm (instruments are the residual) with the Demucs `htdemucs` model through ONNX Runtime (`ort`; CoreML on macOS, CPU elsewhere), in chunks, with the STFT in Rust. Also `stems setup` (one-time download of the author's weights, filling the weight-free graph embedded in the crate, verification), a fixed synthetic separator for tests, and the Ogg Vorbis encode and decode of the cache format. No database, no audio thread. See [stems-backend.md](stems-backend.md). |
-| `open-jockey` (`crates/app`) | The application binary. A command-line player and MIDI tools (`devices`, `play`, `library` and `midi` with `ports`, `monitor`, `capture` and `led-scan`) that wire the other crates together. |
+| `library` | The SQLite library: schema and migrations, startup backups, folder scans and the watcher, fingerprints, tags, cues, playlists, beatgrid edits, the writer thread, the analyzer pool that stores `analysis` results, and the stems cache with its Ogg Vorbis format (encoded in `library/src/stems_cache.rs`, decoded through `decode`). See [library.md](library.md). |
+| `stems` | Splits a track into vocals, bass and rhythm (instruments are the residual) with the Demucs `htdemucs` model through ONNX Runtime (`ort`; CoreML on macOS, CPU elsewhere), in chunks, with the STFT in Rust. Also `stems setup` (one-time download of the author's weights, filling the weight-free graph embedded in the crate, verification), and a fixed synthetic separator for tests. No database, no audio thread. See [stems-backend.md](stems-backend.md). |
+| `open-jockey` (`crates/app`) | The application binary. A command-line player and MIDI tools (`devices`, `play`, `library`, `stems` and `midi` with `ports`, `monitor`, `capture` and `led-scan`) that wire the other crates together. |
 
 ## Track memory, grids and sync
 
@@ -133,8 +133,8 @@ keylock stretches the stem mix. The sampler is not stemmed.
 
 **Pads.** The four `deck.stem_toggle_*` actions flip the deck's stem flags (`DeckControl::stems_on`) and send
 `StemOn`; the flags reset to all on when the deck's `load_seq` moves, and a press before
-the stems are ready is remembered. A press in the same millisecond as a load can be lost
-(press again).
+the stems are ready is remembered. A press in the same control-loop iteration as a load
+can be lost (press again).
 
 ## Slip, the sampler and software pad modes
 

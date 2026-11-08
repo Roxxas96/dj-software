@@ -17,9 +17,9 @@
 //! allpass's phase and none.
 //!
 //! Under keylock the deck's stem gains act before its time-stretcher, so they are heard
-//! the stretcher's latency later (about 0.1 s): a stems changeover delays the bands'
-//! change by that much to stay in step, and in stem mode the knobs themselves respond
-//! with that latency. The filter is
+//! the stretcher's latency later (about 140 ms at 44.1 kHz): a stems changeover delays
+//! the bands' change by that much to stay in step, and in stem mode the knobs themselves
+//! respond with that latency. The filter is
 //! bypassed inside its center deadzone; engaging or releasing it crossfades between dry and
 //! filtered signal across one block.
 //!
