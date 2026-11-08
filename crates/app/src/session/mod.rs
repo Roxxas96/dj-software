@@ -3,22 +3,24 @@
 //! terminal (the controller, library mode and the stems jobs) and publishes a
 //! [`ui::ControlFrame`] for the window, which reads the engine through its monitor.
 
+mod commands;
 mod detail;
 mod frame;
-mod zoom;
+mod view;
 
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow};
 use audio_io::{AudioError, OutputStream};
-use controller::Connection;
 use controller::mapping::Mapping;
+use controller::{Connection, Runtime};
 use engine::{EngineController, EngineMonitor};
-use ui::{ControlFrame, Published};
+use ui::{ControlFrame, Published, UiCommand};
 
 use crate::config::Config;
 use crate::library_mode::LibraryMode;
@@ -26,6 +28,7 @@ use crate::play::{ControllerPorts, LoopOutput, Pass};
 use crate::printer::{Line, Printer};
 use detail::DetailJobs;
 use frame::FrameParts;
+use view::ViewStore;
 
 /// How often a missing audio device or MIDI backend is tried again.
 const RETRY_EVERY: Duration = Duration::from_secs(2);
@@ -40,9 +43,7 @@ const KEYS: &str = "close the window to quit";
 struct Shared {
     frame: Published<ControlFrame>,
     monitor: Published<Option<EngineMonitor>>,
-    /// Waveform zoom steps the window asked for, not yet applied.
-    zoom: Arc<AtomicI32>,
-    /// Where the window's state (its zoom) is kept; `None` keeps nothing.
+    /// Where the window's view state is kept; `None` keeps nothing.
     state_path: Option<PathBuf>,
 }
 
@@ -67,18 +68,18 @@ pub fn run_window(config_path: Option<&Path>) -> anyhow::Result<()> {
     let shared = Shared {
         frame: Published::new(ControlFrame::default()),
         monitor: Published::new(None),
-        zoom: Arc::new(AtomicI32::new(0)),
         state_path: state_path(config_path),
     };
+    let (commands_tx, commands) = channel();
     let session = {
         let (shared, quit) = (shared.clone(), Arc::clone(&quit));
         let config_path = config_path.map(Path::to_owned);
         std::thread::Builder::new()
             .name("session".to_owned())
-            .spawn(move || session(config_path.as_deref(), &shared, &quit))
+            .spawn(move || session(config_path.as_deref(), &shared, &commands, &quit))
             .context("starting the session thread")?
     };
-    let shown = ui::run(shared.frame, shared.monitor, Arc::clone(&quit), shared.zoom);
+    let shown = ui::run(shared.frame, shared.monitor, Arc::clone(&quit), commands_tx);
     quit.store(true, Ordering::Relaxed);
     let ran = session
         .join()
@@ -89,24 +90,27 @@ pub fn run_window(config_path: Option<&Path>) -> anyhow::Result<()> {
 /// `ui-state.toml` next to the configuration file in use.
 fn state_path(config_path: Option<&Path>) -> Option<PathBuf> {
     match config_path {
-        Some(path) => Some(path.with_file_name(zoom::STATE_FILE)),
-        None => controller::builtin::config_dir().map(|dir| dir.join(zoom::STATE_FILE)),
+        Some(path) => Some(path.with_file_name(view::STATE_FILE)),
+        None => controller::builtin::config_dir().map(|dir| dir.join(view::STATE_FILE)),
     }
 }
 
 /// The session thread: loads the configuration, then [`run_config`]. When that ends the
 /// window closes, unless it ended in an error: the window then shows the error until it is
 /// closed.
-fn session(config_path: Option<&Path>, shared: &Shared, quit: &AtomicBool) -> anyhow::Result<()> {
+fn session(
+    config_path: Option<&Path>,
+    shared: &Shared,
+    commands: &Receiver<UiCommand>,
+    quit: &AtomicBool,
+) -> anyhow::Result<()> {
     let result = crate::config::load(config_path).and_then(|config| {
         let mut parts = FrameParts::new(&config);
-        parts.zoom = zoom::Zoom::load(
-            shared.state_path.clone(),
-            config.ui.waveform_beats,
-            config.ui.zoom_range(),
-        );
+        parts.view = view_store(&config, shared);
         shared.frame.publish(parts.idle());
-        run_config(&config, shared, quit)
+        // The saved view is loaded again by the session: nothing to save here.
+        drop(parts);
+        run_config(&config, shared, commands, quit)
     });
     match &result {
         Ok(()) => quit.store(true, Ordering::Relaxed),
@@ -122,8 +126,22 @@ fn session(config_path: Option<&Path>, shared: &Shared, quit: &AtomicBool) -> an
     result
 }
 
+/// The view saved next to the configuration, else the configuration's.
+fn view_store(config: &Config, shared: &Shared) -> ViewStore {
+    ViewStore::load(
+        shared.state_path.clone(),
+        frame::default_view(config),
+        config.ui.zoom_range(),
+    )
+}
+
 /// Opens the mapping and the library, then runs until `quit`.
-fn run_config(config: &Config, shared: &Shared, quit: &AtomicBool) -> anyhow::Result<()> {
+fn run_config(
+    config: &Config,
+    shared: &Shared,
+    commands: &Receiver<UiCommand>,
+    quit: &AtomicBool,
+) -> anyhow::Result<()> {
     let mapping = crate::legacy_dirs::load_mapping(&config.controller.mapping)
         .context("loading the controller mapping")?;
     let library = LibraryMode::start(None, &config.stems)?;
@@ -143,7 +161,14 @@ fn run_config(config: &Config, shared: &Shared, quit: &AtomicBool) -> anyhow::Re
         samples_loaded,
         events: lines,
     };
-    run_session(config, shared, quit, mapping, library, &mut start, open)
+    let inputs = Inputs { mapping, commands };
+    run_session(config, shared, quit, inputs, library, &mut start, open)
+}
+
+/// Where the session's input comes from: the controller's mapping and the window.
+struct Inputs<'a> {
+    mapping: Mapping,
+    commands: &'a Receiver<UiCommand>,
 }
 
 /// What the session starts the engine with, and reports first.
@@ -190,26 +215,29 @@ fn run_session(
     config: &Config,
     shared: &Shared,
     quit: &AtomicBool,
-    mapping: Mapping,
+    inputs: Inputs<'_>,
     library: LibraryMode,
     start: &mut Start,
     mut open: impl FnMut() -> Result<Audio, String>,
 ) -> anyhow::Result<()> {
+    let Inputs { mapping, commands } = inputs;
     let (lines_tx, lines) = channel();
     let printer = Printer::to_channel(lines_tx);
     let mut parts = FrameParts::new(config);
-    parts.zoom = zoom::Zoom::load(
-        shared.state_path.clone(),
-        config.ui.waveform_beats,
-        config.ui.zoom_range(),
-    );
+    parts.view = view_store(config, shared);
     parts.detail = Some(DetailJobs::new(library.library()));
     parts.samples_loaded = start.samples_loaded;
     for text in start.events.drain(..) {
         parts.event(text);
     }
 
-    let audio = retry(quit, &lines, &mut parts, shared, |parts| match open() {
+    let waiting = Waiting {
+        quit,
+        lines: &lines,
+        commands,
+        shared,
+    };
+    let audio = retry(&waiting, &mut parts, |parts| match open() {
         Ok(audio) => Some(audio),
         Err(why) => {
             parts.audio = Err(why);
@@ -240,12 +268,8 @@ fn run_session(
 
     let (tx, rx) = channel();
     let mut reported = false;
-    let connection = retry(
-        quit,
-        &lines,
-        &mut parts,
-        shared,
-        |parts| match Connection::new(&mapping, tx.clone()) {
+    let connection = retry(&waiting, &mut parts, |parts| {
+        match Connection::new(&mapping, tx.clone()) {
             Ok(connection) => Some(connection),
             Err(e) => {
                 if !std::mem::replace(&mut reported, true) {
@@ -253,8 +277,8 @@ fn run_session(
                 }
                 None
             }
-        },
-    );
+        }
+    });
     let Some(connection) = connection else {
         library.shutdown(&mut audio.engine, &printer);
         return finish(printer, &lines);
@@ -271,14 +295,17 @@ fn run_session(
         keys: KEYS,
     };
     let mut last_publish: Option<Instant> = None;
+    // The control hook and `on_pass` take turns on the control thread.
+    let parts = RefCell::new(parts);
+    let mut control = |runtime: &mut Runtime, engine: &mut EngineController| {
+        commands::drain(commands, &mut parts.borrow_mut(), Some((runtime, engine)));
+    };
     let mut on_pass = |pass: Pass<'_>| {
+        let mut parts = parts.borrow_mut();
         for line in lines.try_iter() {
             parts.take(line);
         }
-        parts.take_zoom(
-            shared.zoom.swap(0, Ordering::Relaxed),
-            Some(pass.state.waveform_zoom),
-        );
+        parts.settle_view(Some(pass.state.waveform_zoom));
         let now = Instant::now();
         if last_publish.is_some_and(|last| now.duration_since(last) < PUBLISH_EVERY) {
             return;
@@ -297,39 +324,59 @@ fn run_session(
         audio.stream.as_mut(),
         output,
         quit,
+        &mut control,
         &mut on_pass,
     );
     finish(printer, &lines)
 }
 
+/// What the session reads and publishes to while it waits for a device.
+struct Waiting<'a> {
+    quit: &'a AtomicBool,
+    lines: &'a Receiver<Line>,
+    commands: &'a Receiver<UiCommand>,
+    shared: &'a Shared,
+}
+
 /// Calls `attempt` every [`RETRY_EVERY`] until it gives a value or `quit` is set (`None`),
-/// publishing the idle frame meanwhile.
+/// publishing the idle frame, with the window's view changes, meanwhile.
 fn retry<T>(
-    quit: &AtomicBool,
-    lines: &Receiver<Line>,
+    waiting: &Waiting<'_>,
     parts: &mut FrameParts,
-    shared: &Shared,
     mut attempt: impl FnMut(&mut FrameParts) -> Option<T>,
 ) -> Option<T> {
     loop {
-        if quit.load(Ordering::Relaxed) {
+        if waiting.quit.load(Ordering::Relaxed) {
             return None;
         }
         let value = attempt(parts);
-        for line in lines.try_iter() {
-            parts.take(line);
-        }
-        parts.take_zoom(shared.zoom.swap(0, Ordering::Relaxed), None);
-        shared.frame.publish(parts.idle());
+        waiting.refresh(parts);
         if value.is_some() {
             return value;
         }
         let began = Instant::now();
         while began.elapsed() < RETRY_EVERY {
-            if quit.load(Ordering::Relaxed) {
+            if waiting.quit.load(Ordering::Relaxed) {
                 return None;
             }
             std::thread::sleep(QUIT_CHECK);
+            waiting.refresh(parts);
+        }
+    }
+}
+
+impl Waiting<'_> {
+    /// Takes the printer's lines and the window's commands, and publishes the idle frame
+    /// if they changed it.
+    fn refresh(&self, parts: &mut FrameParts) {
+        for line in self.lines.try_iter() {
+            parts.take(line);
+        }
+        commands::drain(self.commands, parts, None);
+        parts.settle_view(None);
+        let frame = parts.idle();
+        if frame != *self.shared.frame.latest() {
+            self.shared.frame.publish(frame);
         }
     }
 }
@@ -373,12 +420,12 @@ mod tests {
         let shared = Shared {
             frame: Published::new(ControlFrame::default()),
             monitor: Published::new(None),
-            zoom: Arc::new(AtomicI32::new(0)),
             state_path: None,
         };
         let quit = AtomicBool::new(false);
+        let (_window, commands) = channel();
 
-        assert!(session(Some(&path), &shared, &quit).is_err());
+        assert!(session(Some(&path), &shared, &commands, &quit).is_err());
 
         let frame = shared.frame.latest();
         let error = frame.error.as_deref().expect("the frame carries the error");
@@ -418,10 +465,10 @@ mod tests {
         let shared = Shared {
             frame: Published::new(ControlFrame::default()),
             monitor: Published::new(None),
-            zoom: Arc::new(AtomicI32::new(0)),
             state_path: None,
         };
         let quit = Arc::new(AtomicBool::new(false));
+        let (window, commands) = channel();
         let session = {
             let (shared, quit) = (shared.clone(), Arc::clone(&quit));
             let mut fake = Some(engine);
@@ -439,15 +486,11 @@ mod tests {
                     samples_loaded: [false; engine::SAMPLER_SLOTS],
                     events: Vec::new(),
                 };
-                run_session(
-                    &config,
-                    &shared,
-                    &quit,
-                    mapping(),
-                    library,
-                    &mut start,
-                    open,
-                )
+                let inputs = Inputs {
+                    mapping: mapping(),
+                    commands: &commands,
+                };
+                run_session(&config, &shared, &quit, inputs, library, &mut start, open)
             })
         };
         let began = Instant::now();
@@ -460,6 +503,21 @@ mod tests {
         }
         assert_eq!(shared.frame.latest().audio.as_deref(), Ok("test output"));
         assert!(shared.monitor.latest().is_some());
+        // The window's commands reach the running loop, with no controller plugged in.
+        let beat_jump = actions::Action::PadMode(actions::Side::Left, actions::PadMode::BeatJump);
+        window
+            .send(UiCommand::Action(beat_jump, actions::Input::Press))
+            .unwrap();
+        window.send(UiCommand::Zoom(1)).unwrap();
+        while shared.frame.latest().control.sides[0].pad_mode != actions::PadMode::BeatJump
+            || shared.frame.latest().view.waveform_beats == 16.0
+        {
+            assert!(
+                began.elapsed() < Duration::from_secs(10),
+                "the window's commands were never applied"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
         quit.store(true, Ordering::Relaxed);
         session.join().unwrap().unwrap();
 

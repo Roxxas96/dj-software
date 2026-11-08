@@ -41,9 +41,11 @@ like Ctrl-C in `play`.
   `ui.waveform_max_beats` (4 and 64 beats by default). Both lanes always share the zoom, so
   the two tracks' beats stay lined up. The
   `ui.waveform_zoom_in` and `ui.waveform_zoom_out` actions do the same from a controller
-  button (unmapped by default). The zoom is saved in `ui-state.toml` next to `config.toml`
-  and restored at the next launch; `ui.waveform_beats` is only the zoom before that file
-  exists (delete the file to go back to it).
+  button (unmapped by default). The zoom is saved with the rest of the window's view state
+  in `ui-state.toml` next to `config.toml` (its `[view]` table) and restored at the next
+  launch; `ui.waveform_beats` is only the zoom before that file exists (delete the file to
+  go back to it). A value in the file that cannot be read keeps its default, and the others
+  still load.
 - **Deck panels:** cover, title, artist and remix, the overview waveform, BPM, key, elapsed
   and remaining time, the FX slots, the jog, the pitch fader with its pickup marker, VINYL,
   SLIP and KEYLOCK, the pad mode name and the 8 pads, the loop size, and CUE, PLAY and SYNC.

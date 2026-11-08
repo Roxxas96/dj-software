@@ -1,8 +1,10 @@
 //! The window: an egui (eframe) app that draws the [`ControlFrame`] the control thread
 //! publishes and reads the engine's state through an [`EngineMonitor`]. It never sends
-//! the engine anything, and the control thread never waits on it.
+//! the engine anything: it asks the session for changes with [`UiCommand`]s, and the
+//! control thread never waits on it.
 
 pub mod browser;
+mod command;
 pub mod cover;
 pub mod deck;
 mod fonts;
@@ -10,28 +12,35 @@ pub mod mixer;
 mod model;
 pub mod theme;
 mod topbar;
+mod view;
 pub mod waveform;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Sender, channel};
 
 use anyhow::anyhow;
 use engine::EngineMonitor;
 
+pub use command::{UiCommand, ViewChange};
 pub use model::{ControlFrame, DeckInfo, EVENT_SHOWN, EVENTS_KEPT, GHOSTS, Published};
+pub use view::{
+    ColourScheme, JogDisplay, Layout, MAX_SHARE, MIN_SHARE, PanelSizes, TimeMode, ViewState,
+    WaveformPosition, WaveformStyle,
+};
 
 const TITLE: &str = "Open Jockey";
 const WINDOW_SIZE: [f32; 2] = [1440.0, 900.0];
 
 /// Opens the window and draws until it is closed, then sets `quit`. The window closes
 /// itself once something else sets `quit`. `monitor` holds `None` until the audio device
-/// opens. The waveform zoom steps the viewer asks for are added to `zoom` (positive zooms
-/// in); the session takes them and publishes the new zoom in the frame.
+/// opens. What the viewer asks for (a zoom, a layout) is sent on `commands`; the session
+/// applies it and publishes the result in the frame.
 pub fn run(
     frame: Published<ControlFrame>,
     monitor: Published<Option<EngineMonitor>>,
     quit: Arc<AtomicBool>,
-    zoom: Arc<AtomicI32>,
+    commands: Sender<UiCommand>,
 ) -> anyhow::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -44,7 +53,7 @@ pub fn run(
         monitor,
         quit: Arc::clone(&quit),
         screen: Screen {
-            zoom,
+            commands,
             ..Screen::default()
         },
     };
@@ -91,14 +100,27 @@ const LANES_HEIGHT: f32 = 0.22;
 const DECKS_HEIGHT: f32 = 0.38;
 
 /// What the window keeps from one frame to the next.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Screen {
     pub lanes: waveform::Lanes,
     pub decks: deck::DeckPanels,
     pub covers: cover::Covers,
     pub mixer: mixer::Mixer,
-    /// Waveform zoom steps asked for and not yet taken by the session.
-    pub zoom: Arc<AtomicI32>,
+    /// Where what the viewer asks for goes: the session.
+    pub commands: Sender<UiCommand>,
+}
+
+impl Default for Screen {
+    /// A screen whose commands go nowhere.
+    fn default() -> Self {
+        Self {
+            lanes: waveform::Lanes::default(),
+            decks: deck::DeckPanels::default(),
+            covers: cover::Covers::default(),
+            mixer: mixer::Mixer::default(),
+            commands: channel().0,
+        }
+    }
 }
 
 /// Draws the whole window for `frame`; `monitor` is `None` until the audio device opens.
@@ -117,7 +139,9 @@ pub fn root(
         .exact_size(window_height * LANES_HEIGHT)
         .resizable(false)
         .show_separator_line(false)
-        .show(ui, |ui| screen.lanes.show(ui, frame, monitor, &screen.zoom));
+        .show(ui, |ui| {
+            screen.lanes.show(ui, frame, monitor, &screen.commands)
+        });
     egui::Panel::top("deck_panels")
         .frame(egui::Frame::new().fill(theme::BACKGROUND))
         .exact_size(window_height * DECKS_HEIGHT)

@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use engine::{DeckId, SAMPLER_SLOTS};
-use ui::{ControlFrame, DeckInfo, EVENTS_KEPT};
+use ui::{ControlFrame, DeckInfo, EVENTS_KEPT, ViewState};
 
 use crate::config::Config;
 use crate::library_mode::LibraryMode;
@@ -12,7 +12,7 @@ use crate::play::Pass;
 use crate::printer::Line;
 
 use super::detail::DetailJobs;
-use super::zoom::Zoom;
+use super::view::ViewStore;
 
 /// What the session knows besides the loop's state: the configuration's settings, what
 /// the printer was asked to show, and the audio device.
@@ -21,8 +21,9 @@ pub(super) struct FrameParts {
     fx_slots: [engine::EffectKind; 3],
     eq_mode: engine::EqMode,
     stem_knobs: engine::StemKnobs,
-    /// The waveform zoom; saved when it changes and when the session ends.
-    pub zoom: Zoom,
+    /// The window's view state, the zoom included; saved once it stays put and when the
+    /// session ends.
+    pub view: ViewStore,
     pub samples_loaded: [bool; SAMPLER_SLOTS],
     pub status: Vec<String>,
     pub events: VecDeque<(Instant, String)>,
@@ -39,7 +40,7 @@ impl FrameParts {
             fx_slots: config.fx_slots,
             eq_mode: config.stems.startup_eq_mode(),
             stem_knobs: config.stems.knobs,
-            zoom: Zoom::load(None, config.ui.waveform_beats, config.ui.zoom_range()),
+            view: ViewStore::load(None, default_view(config), config.ui.zoom_range()),
             samples_loaded: [false; SAMPLER_SLOTS],
             status: Vec::new(),
             events: VecDeque::new(),
@@ -64,22 +65,22 @@ impl FrameParts {
         self.events.push_back((Instant::now(), text));
     }
 
-    /// The frame before the control loop runs: no controller, decks or browser yet.
-    /// Applies the zoom steps the window asked for and, once the loop runs, the zoom
-    /// actions' `count`; saves the zoom once it has stayed put.
-    pub fn take_zoom(&mut self, steps: i32, count: Option<i32>) {
+    /// Applies the zoom actions' `count` once the loop runs, and saves the view once it
+    /// has stayed put.
+    pub fn settle_view(&mut self, count: Option<i32>) {
         let now = Instant::now();
-        self.zoom.take(steps, count, now);
-        self.zoom.save_if_due(now);
+        self.view.zoom(0, count, now);
+        self.view.save_if_due(now);
     }
 
+    /// The frame before the control loop runs: no controller, decks or browser yet.
     pub fn idle(&self) -> ControlFrame {
         ControlFrame {
             crossfader_enabled: self.crossfader_enabled,
             fx_slots: self.fx_slots,
             eq_mode: self.eq_mode,
             stem_knobs: self.stem_knobs,
-            waveform_beats: self.zoom.beats(),
+            view: self.view.state().clone(),
             samples_loaded: self.samples_loaded,
             status: self.status.clone(),
             events: self.events.clone(),
@@ -138,6 +139,14 @@ impl FrameParts {
     }
 }
 
+/// The view before `ui-state.toml` holds one: the defaults, zoomed to `ui.waveform_beats`.
+pub(super) fn default_view(config: &Config) -> ViewState {
+    ViewState {
+        waveform_beats: config.ui.waveform_beats,
+        ..ViewState::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,6 +163,6 @@ mod tests {
         assert_eq!(frame.events.front().unwrap().1, "event 5");
         assert_eq!(frame.events.back().unwrap().1, "event 24");
         assert_eq!(frame.status, ["▸ Music"]);
-        assert_eq!(frame.waveform_beats, 16.0);
+        assert_eq!(frame.view.waveform_beats, 16.0);
     }
 }

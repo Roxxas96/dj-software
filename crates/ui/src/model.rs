@@ -11,6 +11,8 @@ use analysis::{KeyNotation, Waveform};
 use engine::{EffectKind, EqMode, SAMPLER_SLOTS, StemKnobs};
 use library::{BrowserView, TrackRow};
 
+use crate::view::ViewState;
+
 /// The soft-takeover targets of a deck that can show a pickup value.
 pub const GHOSTS: usize = 7;
 // Each target's place in `ControlFrame::ghosts`.
@@ -125,7 +127,8 @@ pub struct ControlFrame {
     pub controller: Option<String>,
     /// The audio device's name, or why there is none.
     pub audio: Result<String, String>,
-    pub waveform_beats: f64,
+    /// How the window is arranged and drawn, the zoom included.
+    pub view: ViewState,
     /// How keys are shown: the library's `key_notation` setting.
     pub key_notation: KeyNotation,
     /// Why the session stopped (a bad configuration or mapping, say), shown until the
@@ -150,7 +153,7 @@ impl Default for ControlFrame {
             samples_loaded: [false; SAMPLER_SLOTS],
             controller: None,
             audio: Err("no audio device yet".to_owned()),
-            waveform_beats: 16.0,
+            view: ViewState::default(),
             key_notation: KeyNotation::default(),
             error: None,
         }

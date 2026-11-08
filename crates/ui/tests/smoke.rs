@@ -5,7 +5,7 @@ use std::thread;
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use ui::{ControlFrame, Published};
+use ui::{ControlFrame, Published, UiCommand};
 
 #[test]
 fn window_draws_a_default_frame() {
@@ -33,19 +33,28 @@ fn published_returns_the_latest() {
 
 #[test]
 fn the_zoom_buttons_ask_for_steps() {
-    use std::sync::atomic::Ordering;
     let frame = ControlFrame::default();
-    let mut screen = ui::Screen::default();
-    let zoom = Arc::clone(&screen.zoom);
+    let (commands, asked) = std::sync::mpsc::channel();
+    let mut screen = ui::Screen {
+        commands,
+        ..ui::Screen::default()
+    };
     let mut harness = Harness::builder()
         .with_size([1440.0, 900.0])
         .build_ui(|ui| ui::root(ui, &frame, None, &mut screen));
     harness.run_steps(2);
     harness.get_by_label("+").click();
     harness.run_steps(2);
-    assert_eq!(zoom.load(Ordering::Relaxed), 1);
+    assert_eq!(asked.try_iter().collect::<Vec<_>>(), [UiCommand::Zoom(1)]);
     harness.get_by_label("-").click();
     harness.get_by_label("-").click();
     harness.run_steps(2);
-    assert_eq!(zoom.load(Ordering::Relaxed), -1);
+    let steps: i32 = asked
+        .try_iter()
+        .map(|command| match command {
+            UiCommand::Zoom(steps) => steps,
+            other => panic!("not a zoom: {other:?}"),
+        })
+        .sum();
+    assert_eq!(steps, -2);
 }

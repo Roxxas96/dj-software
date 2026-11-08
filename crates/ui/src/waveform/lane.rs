@@ -2,7 +2,7 @@
 //! one more per other deck that plays, each centred on what is being heard.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::mpsc::Sender;
 use std::time::Instant;
 
 use actions::Side;
@@ -11,6 +11,7 @@ use egui::{Align2, Color32, FontId, Mesh, Painter, Pos2, Rect, Shape, Ui, pos2, 
 use engine::{DeckId, DeckSnapshot, EngineMonitor};
 
 use super::{Playhead, ZoomGesture, colour, ticks};
+use crate::command::UiCommand;
 use crate::model::ControlFrame;
 use crate::theme;
 
@@ -65,13 +66,13 @@ pub struct Lanes {
 impl Lanes {
     /// Draws the lanes in the space `ui` has left, sharing its height equally. Without
     /// `monitor` every deck is empty. A scroll or pinch over the lanes, or the zoom
-    /// buttons, add zoom steps to `zoom` (positive zooms in) for the session to apply.
+    /// buttons, send zoom steps on `commands` (positive zooms in) for the session to apply.
     pub fn show(
         &mut self,
         ui: &mut Ui,
         frame: &ControlFrame,
         monitor: Option<&EngineMonitor>,
-        zoom: &AtomicI32,
+        commands: &Sender<UiCommand>,
     ) {
         let now = Instant::now();
         let read =
@@ -103,7 +104,7 @@ impl Lanes {
                 snapshot,
                 waveform: waveform.map(Arc::as_ref),
                 position_frames: self.playheads[deck.index()].position(now, frame.output_latency),
-                beats: frame.waveform_beats,
+                beats: frame.view.waveform_beats,
             };
             lane.draw(&ui.painter_at(rect), rect, &mut self.meshes[deck.index()]);
         }
@@ -132,7 +133,8 @@ impl Lanes {
             }
         }
         if steps != 0 {
-            zoom.fetch_add(steps, Ordering::Relaxed);
+            // Never blocks; with the session gone there is nothing left to zoom.
+            let _ = commands.send(UiCommand::Zoom(steps));
         }
     }
 }

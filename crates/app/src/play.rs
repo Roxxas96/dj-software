@@ -677,6 +677,7 @@ fn control_loop(
         Some(stream),
         output,
         interrupted,
+        &mut |_, _| {},
         &mut |_| {},
     );
     printer.finish();
@@ -729,7 +730,9 @@ fn ghosts(runtime: &Runtime) -> [[Option<f32>; ui::GHOSTS]; 4] {
 
 /// The body of [`control_loop`], for `play` and the window: applies the controller's
 /// MIDI, drives its LEDs, follows it being unplugged and runs library mode until
-/// `interrupted`, then shuts library mode down. `on_pass` sees the state after every pass.
+/// `interrupted`, then shuts library mode down. `control` runs once every pass, before
+/// `on_pass`, with the runtime and the engine (the window's commands are applied there);
+/// `on_pass` sees the state after every pass.
 /// Without a `stream` (a test engine), no stream errors are read.
 #[expect(
     clippy::too_many_arguments,
@@ -743,6 +746,7 @@ pub(crate) fn run_controller(
     mut stream: Option<&mut OutputStream>,
     output: LoopOutput<'_>,
     interrupted: &AtomicBool,
+    control: &mut dyn FnMut(&mut Runtime, &mut EngineController),
     on_pass: &mut dyn FnMut(Pass<'_>),
 ) {
     let ControllerPorts {
@@ -895,6 +899,7 @@ pub(crate) fn run_controller(
             printer.event(reconnect_message(change, why));
         }
 
+        control(&mut runtime, engine);
         on_pass(Pass {
             state: runtime.state(),
             engine,
