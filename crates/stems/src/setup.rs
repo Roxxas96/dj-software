@@ -363,7 +363,9 @@ fn write_verified(
     let path = &plan.model_path;
     let dir = path.parent().unwrap_or(Path::new("."));
     std::fs::create_dir_all(dir).map_err(io_error(dir))?;
-    // An interrupted setup (Ctrl-C) leaves its temporary file behind.
+    // An interrupted setup (Ctrl-C) leaves its temporary file behind. Two `stems setup`
+    // runs at once can remove each other's: one of them then errors, and neither ever
+    // produces a wrong model.
     for entry in std::fs::read_dir(dir).map_err(io_error(dir))?.flatten() {
         let name = entry.file_name();
         let name = name.to_string_lossy();
@@ -854,20 +856,25 @@ mod tests {
         let (graph, weights) = tiny();
         let filled = sha256_hex(&fill(&graph, &weights, &["x"]).unwrap());
         let good = sha256_hex(&weights);
-        let stall = Duration::from_millis(400);
+        let stall = Duration::from_secs(1);
 
-        // 1.2 s in all, but never 400 ms without a byte.
+        // About 1.5 s in all, but never more than 50 ms without a byte.
         let dir = tempfile::tempdir().unwrap();
-        let gap = Duration::from_millis(100);
-        let (url, server) = serve(vec![Answer::Trickle(weights.clone(), 12, gap)]);
+        let gap = Duration::from_millis(50);
+        let (url, server) = serve(vec![Answer::Trickle(weights.clone(), 30, gap)]);
         let mut slow = plan(dir.path(), url, &graph, &good, &filled);
         slow.stall = stall;
+        let started = std::time::Instant::now();
         run(&slow, &|_| {}).unwrap();
+        assert!(
+            started.elapsed() > stall,
+            "longer in all than the stall limit"
+        );
         server.join().unwrap();
 
-        // One piece, a second late.
+        // One piece, two seconds late.
         let dir = tempfile::tempdir().unwrap();
-        let late = Duration::from_millis(1_000);
+        let late = Duration::from_secs(2);
         let (url, server) = serve(vec![Answer::Trickle(weights, 2, late)]);
         let mut stalled = plan(dir.path(), url, &graph, &good, &filled);
         stalled.stall = stall;
