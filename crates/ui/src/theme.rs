@@ -1,6 +1,8 @@
 //! Open Jockey's colours: a dark palette in the VirtualDJ style, our own values.
 
+use actions::Side;
 use egui::{Color32, Context, Theme};
+use engine::DeckId;
 
 pub const BACKGROUND: Color32 = Color32::from_rgb(0x1e, 0x1f, 0x22);
 pub const PANEL: Color32 = Color32::from_rgb(0x2a, 0x2b, 0x2f);
@@ -14,6 +16,24 @@ pub const DECK_RIGHT: Color32 = Color32::from_rgb(0xe2, 0x38, 0x4b);
 pub const BAR_TICK: Color32 = Color32::from_rgb(0xff, 0x3b, 0x3b);
 /// Every other beat on a waveform.
 pub const BEAT_TICK: Color32 = Color32::from_rgb(0x5b, 0x8f, 0xd6);
+/// Behind a waveform lane.
+pub const LANE: Color32 = Color32::from_rgb(0x12, 0x13, 0x15);
+/// The line at a lane's centre: what is being heard.
+pub const PLAYHEAD: Color32 = Color32::WHITE;
+/// The cue point's triangle.
+pub const CUE: Color32 = Color32::from_rgb(0xff, 0xb3, 0x2e);
+/// A hotcue's flag.
+pub const HOTCUE: Color32 = Color32::from_rgb(0x3d, 0xd6, 0x8c);
+/// An active loop, over the waveform (translucent green, premultiplied).
+pub const LOOP_BAND: Color32 = Color32::from_rgba_premultiplied(0x13, 0x30, 0x1a, 0x40);
+
+/// The accent of `deck`'s side: [`DECK_LEFT`] or [`DECK_RIGHT`].
+pub fn deck_accent(deck: DeckId) -> Color32 {
+    match Side::of(deck) {
+        Side::Left => DECK_LEFT,
+        Side::Right => DECK_RIGHT,
+    }
+}
 
 /// Makes `ctx` dark, with this palette.
 pub fn apply(ctx: &Context) {
