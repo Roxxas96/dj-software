@@ -50,15 +50,16 @@ file, a chain of `extends` that comes back to a file already in it, a `[[remove]
 matches no inherited binding (`remove[0]: matches no inherited binding`), and a `[[remove]]`
 in a file without `extends`.
 
-For example, this file puts the four [stem toggles](#actions) on SAMPLER pads 1-4 of the
-DDJ-SB3, on both sides, and keeps pads 5-8 playing samples. Save it as
-`controllers/ddj-sb3/mapping.toml` in the config directory (see above), so it replaces the
-built-in `ddj-sb3` it extends:
+For example, this file puts the seven [stem toggles](#actions) on SAMPLER pads 1-7 of the
+DDJ-SB3, on both sides: the raw vocals, instruments, bass and rhythm on pads 1-4, then kicks,
+melody and hats (the knob parts) on pads 5-7. Pad 8 is inherited and keeps playing sample 8.
+Save it as `controllers/ddj-sb3/mapping.toml` in the config directory (see above), so it
+replaces the built-in `ddj-sb3` it extends:
 
 ```toml
 extends = "ddj-sb3"
 
-# SAMPLER pads 1-4 (notes 0x30-0x33; channel 8 is the left side, 9 the right)
+# SAMPLER pads 1-7 (notes 0x30-0x36; channel 8 is the left side, 9 the right)
 [[input]]
 midi = { channel = 8, note = 0x30 }
 action = "deck.stem_toggle_vocals"
@@ -80,6 +81,24 @@ pad_mode = "hardware"
 [[input]]
 midi = { channel = 8, note = 0x33 }
 action = "deck.stem_toggle_rhythm"
+side = "left"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 8, note = 0x34 }
+action = "deck.stem_toggle_kicks"
+side = "left"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 8, note = 0x35 }
+action = "deck.stem_toggle_melody"
+side = "left"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 8, note = 0x36 }
+action = "deck.stem_toggle_hats"
 side = "left"
 pad_mode = "hardware"
 
@@ -106,11 +125,29 @@ midi = { channel = 9, note = 0x33 }
 action = "deck.stem_toggle_rhythm"
 side = "right"
 pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 9, note = 0x34 }
+action = "deck.stem_toggle_kicks"
+side = "right"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 9, note = 0x35 }
+action = "deck.stem_toggle_melody"
+side = "right"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 9, note = 0x36 }
+action = "deck.stem_toggle_hats"
+side = "right"
+pad_mode = "hardware"
 ```
 
 Each binding replaces the inherited `sampler.play_N` of its pad in the hardware pad mode; the
-software pad modes keep their bindings on these notes, and SHIFT + SAMPLER pads 1-4 still stop
-samples 1-4. To leave a pad doing nothing instead, use `[[remove]]`:
+software pad modes keep their bindings on these notes, and SHIFT + SAMPLER pads 1-7 still stop
+samples 1-7. To leave a pad doing nothing instead, use `[[remove]]`:
 
 ```toml
 [[remove]]

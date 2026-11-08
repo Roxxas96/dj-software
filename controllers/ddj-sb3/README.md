@@ -176,21 +176,30 @@ ddj-sb3`). Everything worked:
 ## Stems
 
 With `[stems] enabled = true` and `eq_mode = "stems"` in `config.toml`, the EQ knobs of a deck
-whose stems are ready control stems: HI is vocals, MID is instruments and LOW is bass (the knob
-law is in the [README](../../README.md#stems)). Until then they are the normal EQ. The SB3
-needs no mapping change for that.
+whose stems are ready control stems. By default (`knobs = "vdj"`) LOW is the kicks, MID is the
+melody (vocals, instruments and bass) and HI is the hats; `knobs = "raw"` gives HI to the vocals,
+MID to the instruments and LOW to the bass. The knob law is in the [README](../../README.md#stems).
+Until the stems are ready the knobs are the normal EQ. The SB3 needs no mapping change for that.
 
-The stem pads (`deck.stem_toggle_vocals`, `_instruments`, `_bass` and `_rhythm`) have no
-default binding. To use them, extend the built-in mapping and list only the pads you change:
-the [mapping reference](../../docs/controllers/mapping-reference.md#extending-a-mapping) has
-a file that puts them on SAMPLER pads 1-4 of both sides and keeps pads 5-8 playing samples.
-Save it as `controllers/ddj-sb3/mapping.toml` in the config folder. The SB3's pad LEDs do not
-show stem state.
+The seven stem pads (`deck.stem_toggle_vocals`, `_instruments`, `_bass`, `_rhythm`, `_kicks`,
+`_melody` and `_hats`) have no default binding. To use them, extend the built-in mapping and
+list only the pads you change: the
+[mapping reference](../../docs/controllers/mapping-reference.md#extending-a-mapping) has a file
+that puts them on SAMPLER pads 1-7 of both sides and keeps pad 8 playing sample 8. Save it as
+`controllers/ddj-sb3/mapping.toml` in the config folder. The SB3's pad LEDs do not show stem
+state.
 
 Check the file with `open-jockey midi monitor --controller <path-to-your-mapping.toml>`, which
 shows what each pad does.
 
 ### Hands-on check (plan 8)
+
+Owner, 2026-11-08: "Test results are very good, everything works." Stems setup, separation on
+load, the knobs, the pads, the instant reload and `library stems` all worked. Afterwards the
+owner asked for the VirtualDJ knob layout and the right-half boost, which is the addendum
+below.
+
+### Hands-on check (plan 8 addendum: knob layouts and pads)
 
 (to be filled after the owner's check)
 
