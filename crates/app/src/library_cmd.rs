@@ -402,7 +402,7 @@ fn list_tracks(lib: &Library, args: &ListArgs) -> anyhow::Result<()> {
             let filter = TrackFilter {
                 folder,
                 text: args.search.clone(),
-                missing: None,
+                ..TrackFilter::default()
             };
             let sort = TrackSort {
                 key: args.sort.map_or(TrackSortKey::Artist, SortArg::key),

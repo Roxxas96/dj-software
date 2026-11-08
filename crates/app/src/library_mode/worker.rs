@@ -11,7 +11,7 @@ use std::thread::JoinHandle;
 
 use engine::{DeckId, HOTCUES, TrackBuffer, TrackMemory};
 use library::{
-    Beatgrid, Browser, BrowserRequest, BrowserView, GridEdit, Library, PendingTrack, Reader,
+    Beatgrid, Browser, BrowserRequest, BrowserView, Drive, GridEdit, Library, PendingTrack, Reader,
     TrackRow,
 };
 
@@ -92,24 +92,35 @@ struct LoadJob {
     path: PathBuf,
 }
 
-/// Starts the worker (and its loader). It stops when the returned sender is dropped.
+/// Starts the worker (and its loader), browsing the computer's drives. It stops when the
+/// returned sender is dropped.
 pub fn spawn(
     lib: Arc<Library>,
     events: Sender<Event>,
 ) -> std::io::Result<(Sender<Job>, JoinHandle<()>)> {
-    spawn_with(lib, events, decode::decode_file)
+    // Unit tests must not read the real disks.
+    let roots = || {
+        if cfg!(test) {
+            Vec::new()
+        } else {
+            library::drives()
+        }
+    };
+    spawn_with(lib, events, decode::decode_file, roots)
 }
 
-/// [`spawn`] with the loader decoding through `decode`.
+/// [`spawn`] with the loader decoding through `decode` and the browser's tree starting
+/// at the drives `roots` gives (called on the worker thread).
 fn spawn_with(
     lib: Arc<Library>,
     events: Sender<Event>,
     decode: DecodeFn,
+    roots: impl FnOnce() -> Vec<Drive> + Send + 'static,
 ) -> std::io::Result<(Sender<Job>, JoinHandle<()>)> {
     let (tx, rx) = channel();
     let handle = std::thread::Builder::new()
         .name("library-worker".into())
-        .spawn(move || run(&lib, &rx, &events, decode))?;
+        .spawn(move || run(&lib, &rx, &events, decode, roots()))?;
     Ok((tx, handle))
 }
 
@@ -120,13 +131,19 @@ fn deck_number(deck: DeckId) -> usize {
 /// How the loader decodes a file (the real decoder, or a stand-in in tests).
 type DecodeFn = fn(&Path) -> Result<decode::Decoded, decode::DecodeError>;
 
-fn run(lib: &Library, jobs: &Receiver<Job>, events: &Sender<Event>, decode: DecodeFn) {
+fn run(
+    lib: &Library,
+    jobs: &Receiver<Job>,
+    events: &Sender<Event>,
+    decode: DecodeFn,
+    roots: Vec<Drive>,
+) {
     let say = |text: String| {
         let _ = events.send(Event::Message(text));
     };
     let readers = (
         lib.reader(),
-        lib.reader().and_then(Browser::new),
+        lib.reader().and_then(|r| Browser::with_roots(r, roots)),
         lib.reader(),
     );
     let (reader, mut browser, loader_reader) = match readers {
@@ -391,7 +408,7 @@ mod tests {
         }
     }
 
-    /// Track ids in browser order ("All tracks": artist, then id).
+    /// Every track id, by artist, then id.
     fn ids(lib: &Library) -> Vec<i64> {
         lib.reader()
             .unwrap()
@@ -563,7 +580,7 @@ mod tests {
         let id = ids(&s.lib)[0];
         DURING_DECODE.set((Arc::clone(&s.lib), id)).unwrap();
         let (tx, events) = channel();
-        let (jobs, _worker) = spawn_with(Arc::clone(&s.lib), tx, saving_decode).unwrap();
+        let (jobs, _worker) = spawn_with(Arc::clone(&s.lib), tx, saving_decode, Vec::new).unwrap();
         jobs.send(Job::LoadTrack {
             deck: deck(1),
             track: id,
@@ -596,7 +613,8 @@ mod tests {
         };
         let (boom, fine) = (id_of("boom.wav"), id_of("fine.wav"));
         let (tx, events) = channel();
-        let (jobs, _worker) = spawn_with(Arc::clone(&s.lib), tx, panicking_decode).unwrap();
+        let (jobs, _worker) =
+            spawn_with(Arc::clone(&s.lib), tx, panicking_decode, Vec::new).unwrap();
         jobs.send(Job::LoadTrack {
             deck: deck(1),
             track: boom,
@@ -625,26 +643,37 @@ mod tests {
     #[test]
     fn refresh_keeps_the_selected_track_and_finds_new_ones() {
         let s = setup(&["b.wav", "c.wav"]);
-        let before = ids(&s.lib);
+        let reader = s.lib.reader().unwrap();
+        let c = ids(&s.lib)
+            .into_iter()
+            .find(|&id| reader.track(id).unwrap().unwrap().path.ends_with("c.wav"))
+            .unwrap();
         let (tx, events) = channel();
-        let (jobs, _worker) = spawn(Arc::clone(&s.lib), tx).unwrap();
+        let roots = vec![Drive {
+            name: "music".into(),
+            path: s.music.clone(),
+        }];
+        let (jobs, _worker) =
+            spawn_with(Arc::clone(&s.lib), tx, decode::decode_file, move || roots).unwrap();
         let view = |events: &Receiver<Event>| {
             wait_for(events, |e| match e {
                 Event::Browser(v) => Some(v),
                 _ => None,
             })
         };
-        let _initial = view(&events);
-        // Tree: "Folders ▸ music", "All tracks". Select the second track of All tracks.
-        jobs.send(Job::Browse(BrowserRequest::Scroll(1))).unwrap();
+        // Tree: "music", "Playlists". Select the second file of the music folder.
+        let initial = view(&events);
+        assert_eq!((initial.path.as_str(), initial.list_count), ("music", 2));
         jobs.send(Job::Browse(BrowserRequest::ToggleFocus)).unwrap();
         jobs.send(Job::Browse(BrowserRequest::Scroll(1))).unwrap();
         let mut selected = None;
-        for _ in 0..3 {
+        for _ in 0..2 {
             selected = view(&events).track.map(|t| t.id);
         }
-        assert_eq!(selected, Some(before[1]));
-        // A track that sorts first appears (lowest id, no artist, like the others).
+        assert_eq!(selected, Some(c));
+        // A file that sorts first appears in the folder, and a track elsewhere in the
+        // library (lowest id, no artist, like the others).
+        std::fs::copy(FIXTURE, s.music.join("a.wav")).unwrap();
         s.lib
             .writer()
             .submit_wait(WriteOp::Raw(vec![RawStatement {
@@ -660,7 +689,7 @@ mod tests {
         })
         .unwrap();
         let refreshed = view(&events);
-        assert_eq!(refreshed.track.map(|t| t.id), Some(before[1]));
+        assert_eq!(refreshed.track.map(|t| t.id), Some(c));
         assert_eq!((refreshed.index, refreshed.count), (2, 3));
         let new = wait_for(&events, |e| match e {
             Event::NewTracks(ids) => Some(ids),

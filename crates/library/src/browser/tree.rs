@@ -1,0 +1,218 @@
+//! The browser's folder tree: the drives and the folders opened below them, read from the
+//! disk, then the playlists.
+//!
+//! The tree is held as its visible rows. Opening a folder reads its subfolders and inserts
+//! them below it; closing it removes every row below it, so a closed branch is read again
+//! when it next opens.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use super::Drive;
+use crate::PlaylistSummary;
+use crate::scan::is_hidden;
+
+/// What a tree row is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TreeKind {
+    Drive,
+    Folder,
+    /// The node the playlists sit under.
+    Playlists,
+    Playlist,
+}
+
+/// One visible row of the folder tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TreeRow {
+    pub label: String,
+    /// 0 for the drives and the Playlists node.
+    pub depth: u8,
+    pub kind: TreeKind,
+    /// Open, showing its children (the Playlists node always is).
+    pub expanded: bool,
+    /// Why an open folder shows no children, such as "cannot read".
+    pub note: Option<&'static str>,
+}
+
+/// What a tree row's list shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Target {
+    /// A drive's or folder's own audio files.
+    Dir(PathBuf),
+    /// Nothing: the Playlists node.
+    Playlists,
+    /// A playlist and its entry count.
+    Playlist { id: i64, len: usize },
+}
+
+impl Target {
+    /// Whether `self` and `other` are the same entry, even if its contents changed.
+    pub(super) fn same_entry(&self, other: &Target) -> bool {
+        match (self, other) {
+            (Target::Playlist { id: a, .. }, Target::Playlist { id: b, .. }) => a == b,
+            _ => self == other,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Node {
+    row: TreeRow,
+    target: Target,
+}
+
+/// The visible tree rows. Never empty: the Playlists node is always there.
+#[derive(Debug, Clone)]
+pub(super) struct Tree {
+    nodes: Vec<Node>,
+}
+
+impl Tree {
+    /// The drives (closed), then the Playlists node, open, with `playlists` below it.
+    pub(super) fn new(roots: Vec<Drive>, playlists: &[PlaylistSummary]) -> Self {
+        let mut nodes: Vec<Node> = roots
+            .into_iter()
+            .map(|d| Node {
+                row: row(d.name, 0, TreeKind::Drive),
+                target: Target::Dir(d.path),
+            })
+            .collect();
+        let mut playlists_node = row("Playlists".to_owned(), 0, TreeKind::Playlists);
+        playlists_node.expanded = true;
+        nodes.push(Node {
+            row: playlists_node,
+            target: Target::Playlists,
+        });
+        let mut tree = Self { nodes };
+        tree.set_playlists(playlists);
+        tree
+    }
+
+    pub(super) fn len(&self) -> usize {
+        self.nodes.len()
+    }
+
+    pub(super) fn target(&self, index: usize) -> &Target {
+        &self.nodes[index].target
+    }
+
+    /// Where `target` is in the tree, if it is visible.
+    pub(super) fn position(&self, target: &Target) -> Option<usize> {
+        self.nodes.iter().position(|n| n.target.same_entry(target))
+    }
+
+    pub(super) fn rows(&self) -> Vec<TreeRow> {
+        self.nodes.iter().map(|n| n.row.clone()).collect()
+    }
+
+    /// Row `index`'s label after its ancestors', such as `"Music ▸ House"`.
+    pub(super) fn path(&self, index: usize) -> String {
+        let mut labels = vec![self.nodes[index].row.label.as_str()];
+        let mut depth = self.nodes[index].row.depth;
+        for node in self.nodes[..index].iter().rev() {
+            if depth == 0 {
+                break;
+            }
+            if node.row.depth < depth {
+                depth = node.row.depth;
+                labels.push(&node.row.label);
+            }
+        }
+        labels.reverse();
+        labels.join(" ▸ ")
+    }
+
+    /// Opens or closes the drive or folder at `index`; anything else is left alone.
+    ///
+    /// Opening reads the folder's subfolders: hidden ones are skipped and the rest sorted
+    /// by name, ignoring case. A folder that can't be read opens with no children and the
+    /// note "cannot read".
+    pub(super) fn toggle(&mut self, index: usize) {
+        let Target::Dir(dir) = &self.nodes[index].target else {
+            return;
+        };
+        if self.nodes[index].row.expanded {
+            let end = self.subtree_end(index);
+            self.nodes.drain(index + 1..end);
+            let closed = &mut self.nodes[index].row;
+            closed.expanded = false;
+            closed.note = None;
+            return;
+        }
+        let read = subfolders(dir);
+        let opened = &mut self.nodes[index].row;
+        opened.expanded = true;
+        let depth = opened.depth.saturating_add(1);
+        match read {
+            Ok(children) => {
+                let children = children.into_iter().map(|(name, path)| Node {
+                    row: row(name, depth, TreeKind::Folder),
+                    target: Target::Dir(path),
+                });
+                self.nodes.splice(index + 1..index + 1, children);
+            }
+            Err(_) => opened.note = Some("cannot read"),
+        }
+    }
+
+    /// Replaces the rows under the Playlists node with `playlists`, in their order.
+    pub(super) fn set_playlists(&mut self, playlists: &[PlaylistSummary]) {
+        let at = self
+            .nodes
+            .iter()
+            .position(|n| n.target == Target::Playlists)
+            .unwrap_or(self.nodes.len() - 1);
+        let end = self.subtree_end(at);
+        let rows = playlists.iter().map(|p| Node {
+            row: row(p.name.clone(), 1, TreeKind::Playlist),
+            target: Target::Playlist {
+                id: p.id,
+                len: usize::try_from(p.track_count).unwrap_or(usize::MAX),
+            },
+        });
+        self.nodes.splice(at + 1..end, rows);
+    }
+
+    /// The index just past the rows below row `index`.
+    fn subtree_end(&self, index: usize) -> usize {
+        let depth = self.nodes[index].row.depth;
+        self.nodes[index + 1..]
+            .iter()
+            .position(|n| n.row.depth <= depth)
+            .map_or(self.nodes.len(), |i| index + 1 + i)
+    }
+}
+
+fn row(label: String, depth: u8, kind: TreeKind) -> TreeRow {
+    TreeRow {
+        label,
+        depth,
+        kind,
+        expanded: false,
+        note: None,
+    }
+}
+
+/// `dir`'s visible subfolders (links to folders included) as `(name, path)`, sorted by
+/// name ignoring case.
+fn subfolders(dir: &Path) -> std::io::Result<Vec<(String, PathBuf)>> {
+    let mut folders = Vec::new();
+    for entry in fs::read_dir(dir)?.flatten() {
+        let name = entry.file_name();
+        if is_hidden(&name) {
+            continue;
+        }
+        let path = entry.path();
+        let is_dir = match entry.file_type() {
+            Ok(t) if t.is_symlink() => path.is_dir(),
+            Ok(t) => t.is_dir(),
+            Err(_) => false,
+        };
+        if is_dir {
+            folders.push((name.to_string_lossy().into_owned(), path));
+        }
+    }
+    folders.sort_by_cached_key(|(name, _)| name.to_lowercase());
+    Ok(folders)
+}

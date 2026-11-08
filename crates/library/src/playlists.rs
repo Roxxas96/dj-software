@@ -51,6 +51,8 @@ pub struct TrackDetails {
 pub struct TrackFilter {
     /// Only tracks whose file lives under this folder.
     pub folder: Option<PathBuf>,
+    /// With `folder`, only the tracks directly in it, not in its subfolders.
+    pub folder_only: bool,
     /// Case-insensitive (ASCII) substring of the title or artist; `%` and `_` are literal.
     pub text: Option<String>,
     /// `Some(true)` only missing tracks, `Some(false)` only present ones.
@@ -102,6 +104,11 @@ fn track_row(row: &Row<'_>) -> rusqlite::Result<TrackRow> {
         has_cues: row.get(7)?,
         missing: row.get(8)?,
     })
+}
+
+/// A row of [`TRACK_COLUMNS`] followed by `t.path`.
+fn file_and_row(row: &Row<'_>) -> rusqlite::Result<(PathBuf, TrackRow)> {
+    Ok((PathBuf::from(row.get::<_, String>(9)?), track_row(row)?))
 }
 
 fn to_i64(n: usize) -> i64 {
@@ -179,14 +186,45 @@ impl Reader {
         offset: usize,
         limit: usize,
     ) -> Result<Vec<TrackRow>, LibraryError> {
+        let files = self.playlist_files(id, offset, limit)?;
+        Ok(files.into_iter().map(|(_, row)| row).collect())
+    }
+
+    /// [`Reader::playlist_tracks`] with each track's file.
+    pub(crate) fn playlist_files(
+        &self,
+        id: i64,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<(PathBuf, TrackRow)>, LibraryError> {
         let sql = format!(
-            "SELECT {TRACK_COLUMNS} FROM playlist_tracks pt \
+            "SELECT {TRACK_COLUMNS}, t.path FROM playlist_tracks pt \
              JOIN tracks t ON t.id = pt.track_id \
              LEFT JOIN analysis a ON a.track_id = t.id \
              WHERE pt.playlist_id = ?1 ORDER BY pt.position LIMIT ?2 OFFSET ?3"
         );
         let mut stmt = self.connection().prepare_cached(&sql)?;
-        let rows = stmt.query_map((id, to_i64(limit), to_i64(offset)), track_row)?;
+        let rows = stmt.query_map((id, to_i64(limit), to_i64(offset)), file_and_row)?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// Every library track matching `filter`, with its file, in no particular order.
+    ///
+    /// # Errors
+    ///
+    /// Any database error, or [`LibraryError::NonUtf8Path`] for a folder filter that is
+    /// not valid UTF-8.
+    pub(crate) fn track_files(
+        &self,
+        filter: &TrackFilter,
+    ) -> Result<Vec<(PathBuf, TrackRow)>, LibraryError> {
+        let (where_clause, params) = filter_clause(filter)?;
+        let sql = format!(
+            "SELECT {TRACK_COLUMNS}, t.path FROM tracks t \
+             LEFT JOIN analysis a ON a.track_id = t.id {where_clause}"
+        );
+        let mut stmt = self.connection().prepare_cached(&sql)?;
+        let rows = stmt.query_map(params_from_iter(&params), file_and_row)?;
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
@@ -327,8 +365,15 @@ fn filter_clause(filter: &TrackFilter) -> Result<(String, Vec<Value>), LibraryEr
             char::from(u8::try_from(MAIN_SEPARATOR).unwrap_or(b'/') + 1)
         });
         conds.push("t.path >= ? AND t.path < ?");
+        let start = prefix.chars().count() + 1;
         params.push(Value::Text(prefix));
         params.push(Value::Text(upper));
+        if filter.folder_only {
+            // No separator after the folder's own (`substr` counts characters).
+            conds.push("instr(substr(t.path, ?), ?) = 0");
+            params.push(Value::Integer(to_i64(start)));
+            params.push(Value::Text(MAIN_SEPARATOR.to_string()));
+        }
     }
     if let Some(text) = filter.text.as_deref().filter(|t| !t.is_empty()) {
         let pattern = Value::Text(format!("%{}%", escape_like(text)));

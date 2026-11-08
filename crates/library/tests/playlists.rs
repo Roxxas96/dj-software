@@ -487,6 +487,15 @@ fn folder_and_missing_filters() {
     assert_eq!(titles(folder("/music/a")), ["one", "two"]);
     assert_eq!(titles(folder("/music/a/")), ["one", "two"]);
     assert_eq!(titles(folder("/music")), ["four", "one", "three", "two"]);
+    // Only the folder's own files, not its subfolders'.
+    let own = |f: &str| TrackFilter {
+        folder_only: true,
+        ..folder(f)
+    };
+    assert_eq!(titles(own("/music/a")), ["one"]);
+    assert_eq!(titles(own("/music/a/")), ["one"]);
+    assert_eq!(titles(own("/music/a/deep")), ["two"]);
+    assert_eq!(titles(own("/music")), Vec::<String>::new());
     let missing = |m| TrackFilter {
         missing: Some(m),
         ..TrackFilter::default()

@@ -280,12 +280,20 @@ open-jockey play --library --controller ddj-sb3 --device "DDJ-SB3" --master 3,4
 
 `--library` needs `--controller`. The track argument is optional. In this mode:
 
-- The BROWSE knob scrolls, pressing it switches between the tree (Playlists, then
-  Folders, then All tracks) and the track list, and
+- The browser is a tree, as in VirtualDJ: the computer's drives (on macOS, Macintosh HD
+  then each volume in `/Volumes`) and the folders opened below them, read from the disk,
+  then "Playlists" with one row per playlist. The list beside it shows the highlighted
+  folder's own audio files (not its subfolders'), sorted by file name, or the
+  highlighted playlist's tracks. A file the library has shows its title, BPM and key (only
+  those load for now); a folder that can't be read opens empty, marked "cannot read". Hidden (`.`) folders and
+  files are not shown.
+- The BROWSE knob scrolls the focused pane, pressing it switches between the tree and the
+  list, SHIFT + BROWSE press opens or closes the highlighted drive or folder, and
   LOAD (left or right) loads the selected track onto the deck that side currently shows,
   decks 3 and 4 included. See [the DDJ-SB3 page](../controllers/ddj-sb3/README.md).
 - A browser line is printed: `▸ <path>  <n>/<count>  Artist – Title  <BPM>  <key>  •`
-  (the bullet means the track has a cue point above 0 or at least one hotcue, `missing` flags a missing file), followed by
+  (`<path>` is the highlighted tree row after its parents, such as
+  `Macintosh HD ▸ Users ▸ me ▸ Music` or `Playlists ▸ Peak time`; the bullet means the track has a cue point above 0 or at least one hotcue, `missing` flags a missing file), followed by
   analysis progress while the background analysis runs.
 - Tracks load in the background. A cue point or hotcue you set is remembered with the
   track and restored when you load it again, and so is a hotcue you delete (it stays
