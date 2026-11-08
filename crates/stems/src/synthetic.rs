@@ -80,6 +80,6 @@ impl Separator for SyntheticSeparator {
             progress((chunk + 1) as f32 / chunks as f32);
         }
         let [vocals, bass, rhythm] = stems.map(Vec::into_boxed_slice);
-        Ok(StemSet::new(vocals, bass, rhythm, frames)?)
+        Ok(StemSet::new(vocals, bass, rhythm, frames, rate)?)
     }
 }

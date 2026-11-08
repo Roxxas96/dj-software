@@ -1363,7 +1363,7 @@ fn fx_toggles_track_state_and_send() {
 #[test]
 fn stem_toggles_flip_and_send() {
     let mut rig = Rig::new();
-    assert_eq!(rig.state.deck(d(0)).stems_on, [true; 4]);
+    assert_eq!(rig.state.deck(d(0)).stems_on, [true; 7]);
     for (i, stem) in engine::Stem::ALL.into_iter().enumerate() {
         let kind = ActionKind::StemToggle(stem);
         assert!(kind.accepts(InputKind::Button));
@@ -1373,8 +1373,8 @@ fn stem_toggles_flip_and_send() {
         assert!(!rig.state.deck(d(0)).stems_on[i]);
         assert_eq!(rig.apply(action, Input::Release), ApplyResult::Ignored);
         assert_eq!(rig.apply(action, Input::Press), ApplyResult::Sent(1));
-        assert_eq!(rig.state.deck(d(0)).stems_on, [true; 4]);
-        assert_eq!(rig.state.deck(d(1)).stems_on, [true; 4]);
+        assert_eq!(rig.state.deck(d(0)).stems_on, [true; 7]);
+        assert_eq!(rig.state.deck(d(1)).stems_on, [true; 7]);
     }
 }
 
@@ -1383,7 +1383,10 @@ fn stem_flags_reset_on_load() {
     let mut rig = Rig::new();
     let bass = deck_action(ActionKind::StemToggle(engine::Stem::Bass), 0);
     rig.apply(bass, Input::Press);
-    assert_eq!(rig.state.deck(d(0)).stems_on, [true, true, false, true]);
+    assert_eq!(
+        rig.state.deck(d(0)).stems_on,
+        [true, true, false, true, true, true, true]
+    );
     // A new load: the engine turns every stem back on, and the next press starts from all on.
     let track = Arc::new(TrackBuffer::new(SR, vec![0.5; 2000 * 2]).unwrap());
     rig.c
@@ -1398,7 +1401,10 @@ fn stem_flags_reset_on_load() {
     rig.render(1);
     // The press resets first (all on), then turns bass off again, not back on.
     rig.apply(bass, Input::Press);
-    assert_eq!(rig.state.deck(d(0)).stems_on, [true, true, false, true]);
+    assert_eq!(
+        rig.state.deck(d(0)).stems_on,
+        [true, true, false, true, true, true, true]
+    );
     rig.c
         .send(engine::Command::Deck(
             d(0),
@@ -1411,7 +1417,10 @@ fn stem_flags_reset_on_load() {
     rig.render(1);
     let vocals = deck_action(ActionKind::StemToggle(engine::Stem::Vocals), 0);
     rig.apply(vocals, Input::Press);
-    assert_eq!(rig.state.deck(d(0)).stems_on, [false, true, true, true]);
+    assert_eq!(
+        rig.state.deck(d(0)).stems_on,
+        [false, true, true, true, true, true, true]
+    );
 }
 
 #[test]

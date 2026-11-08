@@ -7,7 +7,7 @@ use crate::mixer::Mixer;
 use crate::sampler::Sampler;
 use crate::shared::Shared;
 use crate::stems::Garbage;
-use crate::{Command, DeckId, EngineConfig, EqMode, MasterCommand, Meters};
+use crate::{Command, DeckId, EngineConfig, EqMode, MasterCommand, Meters, StemKnobs};
 
 /// Audio-thread handle: renders output blocks. [`render`](Self::render) never allocates,
 /// frees, locks or blocks.
@@ -20,6 +20,7 @@ pub struct EngineRenderer {
     mixer: Mixer,
     sampler: Sampler,
     eq_mode: EqMode,
+    stem_knobs: StemKnobs,
 }
 
 impl EngineRenderer {
@@ -38,6 +39,7 @@ impl EngineRenderer {
             mixer: Mixer::new(config.sample_rate, config.max_block_frames),
             sampler: Sampler::new(config.max_block_frames),
             eq_mode: EqMode::default(),
+            stem_knobs: StemKnobs::default(),
         };
         renderer.publish();
         renderer
@@ -101,6 +103,7 @@ impl EngineRenderer {
                 self.drop_syncs_to_stopped_master(id);
             }
             Command::Master(MasterCommand::EqMode(mode)) => self.eq_mode = mode,
+            Command::Master(MasterCommand::StemKnobs(knobs)) => self.stem_knobs = knobs,
             Command::PhaseSync {
                 deck,
                 master,
@@ -165,7 +168,8 @@ impl EngineRenderer {
         }
     }
 
-    /// Before a chunk renders: sets each deck's stem gains from its channel's EQ knobs and
+    /// Before a chunk renders: sets each deck's stem gains from its channel's EQ knobs (in
+    /// the knob layout) and
     /// bypasses the EQ bands of the channels whose stems take the knobs. A change of
     /// either ramps over a chunk, which is the changeover's crossfade; under keylock the
     /// bands change once the stem gains come out of the stretcher.
@@ -173,7 +177,7 @@ impl EngineRenderer {
         for id in DeckId::ALL {
             let knobs = self.mixer.eq_positions(id);
             let deck = &mut self.decks[id.index()];
-            let (active, released) = deck.update_stems(self.eq_mode, knobs);
+            let (active, released) = deck.update_stems(self.eq_mode, self.stem_knobs, knobs);
             // The deck's gains are heard after its stretcher's latency: so are the bands'.
             self.mixer
                 .set_stems_active(id, active, deck.stem_latency(), frames);

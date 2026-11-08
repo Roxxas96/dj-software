@@ -25,7 +25,7 @@ pub struct DeckControl {
     /// Which stems the app left on, by `Stem::index`. The engine turns every stem on at
     /// each load, so a stem press first resets this to all on when the deck's `load_seq` has
     /// moved past `stems_load_seq` (the only reset; nothing else reads the flags).
-    pub stems_on: [bool; 4],
+    pub stems_on: [bool; 7],
     /// The deck's `load_seq` when `stems_on` last matched the engine.
     pub stems_load_seq: u64,
 }
@@ -46,7 +46,7 @@ impl Default for DeckControl {
             fx_level: 0.5,
             fx_on: [false; 3],
             scratch_anchor: None,
-            stems_on: [true; 4],
+            stems_on: [true; 7],
             stems_load_seq: 0,
         }
     }

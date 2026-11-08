@@ -202,7 +202,7 @@ pub(crate) fn separate(
     if frames == 0 {
         let empty = || Box::<[i16]>::default();
         return Ok((
-            StemSet::new(empty(), empty(), empty(), 0)?,
+            StemSet::new(empty(), empty(), empty(), 0, rate)?,
             Stats::default(),
         ));
     }
@@ -319,7 +319,7 @@ pub(crate) fn separate(
             back.try_into().expect("one per kept stem");
         [vocals, bass, rhythm]
     };
-    Ok((StemSet::new(vocals, bass, rhythm, frames)?, stats))
+    Ok((StemSet::new(vocals, bass, rhythm, frames, rate)?, stats))
 }
 
 #[cfg(test)]

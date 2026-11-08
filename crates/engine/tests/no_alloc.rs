@@ -6,7 +6,7 @@ use assert_no_alloc::{AllocDisabler, assert_no_alloc};
 use common::ramp_track;
 use engine::{
     ChannelCommand, Command, DeckCommand, DeckId, EffectKind, EngineConfig, EqMode, Grid,
-    HotcueSlot, JogSurface, MasterCommand, SamplerCommand, Stem, StemSet, TrackMemory,
+    HotcueSlot, JogSurface, MasterCommand, SamplerCommand, Stem, StemKnobs, StemSet, TrackMemory,
     XfaderAssign, engine,
 };
 
@@ -477,7 +477,7 @@ fn ramp_stems(frames: usize) -> Arc<StemSet> {
             .map(|i| i16::try_from((i / 2 / div) % 8000).unwrap())
             .collect()
     };
-    Arc::new(StemSet::new(stem(1), stem(2), stem(3), frames).unwrap())
+    Arc::new(StemSet::new(stem(1), stem(2), stem(3), frames, 44_100).unwrap())
 }
 
 #[test]
@@ -539,6 +539,10 @@ fn stems_do_not_allocate() {
         DeckCommand::StemOn(Stem::Bass, false),
         DeckCommand::StemOn(Stem::Rhythm, false),
         DeckCommand::StemOn(Stem::Rhythm, true),
+        DeckCommand::StemOn(Stem::Kicks, false),
+        DeckCommand::StemOn(Stem::Melody, false),
+        DeckCommand::StemOn(Stem::Hats, false),
+        DeckCommand::StemOn(Stem::Melody, true),
         DeckCommand::JogTouch(true),
         DeckCommand::Jog {
             turns: -0.3,
@@ -556,6 +560,11 @@ fn stems_do_not_allocate() {
     }
     for mode in [EqMode::Eq, EqMode::Stems] {
         c.send(Command::Master(MasterCommand::EqMode(mode)))
+            .unwrap();
+        render_blocks(4);
+    }
+    for knobs in [StemKnobs::Raw, StemKnobs::Vdj] {
+        c.send(Command::Master(MasterCommand::StemKnobs(knobs)))
             .unwrap();
         render_blocks(4);
     }

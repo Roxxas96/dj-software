@@ -69,7 +69,7 @@ impl Deck {
         frames: &mut [[f32; 2]],
         rate: f64,
         output_rate: u32,
-        gains: Option<[Segment; 4]>,
+        gains: Option<[Segment; crate::stems::PARTS]>,
     ) -> usize {
         let Some(track) = self.track.as_deref() else {
             self.backspin = None;

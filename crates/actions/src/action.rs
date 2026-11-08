@@ -441,6 +441,10 @@ impl ActionKind {
             ActionKind::StemToggle(Stem::Instruments) => "deck.stem_toggle_instruments",
             ActionKind::StemToggle(Stem::Bass) => "deck.stem_toggle_bass",
             ActionKind::StemToggle(Stem::Rhythm) => "deck.stem_toggle_rhythm",
+            // Not in `ALL` yet: the knob-part pads join the actions with their state.
+            ActionKind::StemToggle(Stem::Kicks) => "deck.stem_toggle_kicks",
+            ActionKind::StemToggle(Stem::Melody) => "deck.stem_toggle_melody",
+            ActionKind::StemToggle(Stem::Hats) => "deck.stem_toggle_hats",
             ActionKind::SamplerPlay(slot) => SAMPLER_PLAY_IDS[slot.index()],
             ActionKind::SamplerStop(slot) => SAMPLER_STOP_IDS[slot.index()],
         }

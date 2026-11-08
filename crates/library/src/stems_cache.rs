@@ -614,7 +614,7 @@ fn decode_entry(dir: &Path, key: &StemKey<'_>) -> Option<StemSet> {
     let vocals = decode_stem(&dir.join(FILES[0].0), key)?;
     let bass = decode_stem(&dir.join(FILES[1].0), key)?;
     let rhythm = decode_stem(&dir.join(FILES[2].0), key)?;
-    StemSet::new(vocals, bass, rhythm, key.frames).ok()
+    StemSet::new(vocals, bass, rhythm, key.frames, key.sample_rate).ok()
 }
 
 /// One stem at `key`'s rate and frame count, as 16-bit samples.

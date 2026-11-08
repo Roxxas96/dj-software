@@ -30,7 +30,7 @@ pub use memory::{Grid, HOTCUES, HotcueSlot, TrackMemory};
 pub use renderer::EngineRenderer;
 pub use sampler::{SAMPLER_SLOTS, SamplerSnapshot};
 pub use shared::{ChannelSnapshot, DeckSnapshot, Meters};
-pub use stems::{EqMode, Stem, StemError, StemSet, knob_law};
+pub use stems::{EqMode, KICKS_HZ, Stem, StemError, StemKnobs, StemSet, knob_law, pad_gains};
 pub use track::{TrackBuffer, TrackError};
 
 /// Capacity of the command queue (controller to renderer).
