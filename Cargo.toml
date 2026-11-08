@@ -35,6 +35,10 @@ walkdir = "2.5.0"
 tempfile = "3.27.0"
 rustfft = "6.4.1"
 signalsmith-stretch = "0.1.3"
+eframe = "0.37.0"
+egui = "0.37.0"
+egui_kittest = "0.37.0"
+jiff = "0.2.40"
 
 # The keylock stretcher is C++ built by the crate's build script; unoptimized it costs
 # about a millisecond per deck and block, too slow for debug builds and tests.

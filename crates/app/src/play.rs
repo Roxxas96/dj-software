@@ -167,7 +167,7 @@ fn load_samples(
 
 /// The library reader for the `track` pads, with the default library it reads (kept alive
 /// while the samples load): `None` when no pad uses a track or there is no library file.
-fn open_sample_library(
+pub(crate) fn open_sample_library(
     config: &Config,
     library: Option<&LibraryMode>,
 ) -> anyhow::Result<Option<(library::Reader, Option<library::Library>)>> {
@@ -196,7 +196,7 @@ fn open_sample_library(
 
 /// Decodes the pads with the library `opened` gave, returning the samples and the lines to
 /// report.
-fn load_samples_from(
+pub(crate) fn load_samples_from(
     config: &Config,
     opened: anyhow::Result<Option<(library::Reader, Option<library::Library>)>>,
 ) -> (Vec<(usize, Arc<engine::TrackBuffer>)>, Vec<String>) {
@@ -396,34 +396,7 @@ pub fn play(args: &PlayArgs) -> anyhow::Result<()> {
         })?;
     let (mut controller, renderer) = engine(pending.engine_config());
     let deck = |n: usize| DeckId::new(n - 1).with_context(|| format!("deck {n} missing"));
-    send(
-        &mut controller,
-        Command::Master(MasterCommand::CrossfaderEnabled(config.crossfader)),
-    )?;
-    send(
-        &mut controller,
-        Command::Master(MasterCommand::EqMode(config.stems.startup_eq_mode())),
-    )?;
-    send(
-        &mut controller,
-        Command::Master(MasterCommand::StemKnobs(config.stems.knobs)),
-    )?;
-    for (slot, kind) in config.fx_slots.into_iter().enumerate() {
-        send(
-            &mut controller,
-            Command::Master(MasterCommand::FxSlot(slot, kind)),
-        )?;
-    }
-    send(
-        &mut controller,
-        Command::Sampler(SamplerCommand::Volume(config.sampler.volume)),
-    )?;
-    for (slot, buffer) in samples {
-        send(
-            &mut controller,
-            Command::Sampler(SamplerCommand::Set(slot, Some(buffer))),
-        )?;
-    }
+    configure_engine(&mut controller, &config, samples)?;
     if let Some(track) = track {
         send(
             &mut controller,
@@ -493,6 +466,43 @@ pub fn play(args: &PlayArgs) -> anyhow::Result<()> {
         ),
         None => playback_loop(deck(1)?, &mut controller, &mut stream, &interrupted),
     }
+}
+
+/// Sends the engine the configuration's settings and the sampler pads' `samples`.
+pub(crate) fn configure_engine(
+    controller: &mut EngineController,
+    config: &Config,
+    samples: Vec<(usize, Arc<engine::TrackBuffer>)>,
+) -> anyhow::Result<()> {
+    send(
+        controller,
+        Command::Master(MasterCommand::CrossfaderEnabled(config.crossfader)),
+    )?;
+    send(
+        controller,
+        Command::Master(MasterCommand::EqMode(config.stems.startup_eq_mode())),
+    )?;
+    send(
+        controller,
+        Command::Master(MasterCommand::StemKnobs(config.stems.knobs)),
+    )?;
+    for (slot, kind) in config.fx_slots.into_iter().enumerate() {
+        send(
+            controller,
+            Command::Master(MasterCommand::FxSlot(slot, kind)),
+        )?;
+    }
+    send(
+        controller,
+        Command::Sampler(SamplerCommand::Volume(config.sampler.volume)),
+    )?;
+    for (slot, buffer) in samples {
+        send(
+            controller,
+            Command::Sampler(SamplerCommand::Set(slot, Some(buffer))),
+        )?;
+    }
+    Ok(())
 }
 
 /// Without a controller: show deck 1's time until it stops or Ctrl-C.
@@ -634,14 +644,100 @@ fn reconnect_message(change: PresenceChange, why: &str) -> String {
 fn control_loop(
     mapping: controller::mapping::Mapping,
     config: &Config,
-    mut library: Option<LibraryMode>,
+    library: Option<LibraryMode>,
     engine: &mut EngineController,
     stream: &mut OutputStream,
     interrupted: &AtomicBool,
 ) -> anyhow::Result<()> {
-    let name = mapping.controller.name.clone();
     let (tx, rx) = channel::<TimedMidi>();
-    let mut connection = Connection::new(&mapping, tx).context("opening the controller")?;
+    let connection = Connection::new(&mapping, tx).context("opening the controller")?;
+    let printer = Printer::spawn();
+    let lines = std::io::stdin().is_terminal().then(console::spawn_reader);
+    let keys = if lines.is_some() {
+        "press Enter to reconnect the controller, type `help` for commands, Ctrl-C to quit"
+    } else {
+        "Ctrl-C to quit; the console (Enter to reconnect) is unavailable, stdin is not a \
+         terminal"
+    };
+    let controller = ControllerPorts {
+        mapping,
+        connection,
+        rx,
+    };
+    let output = LoopOutput {
+        printer: &printer,
+        console: lines,
+        keys,
+    };
+    run_controller(
+        controller,
+        config,
+        library,
+        engine,
+        Some(stream),
+        output,
+        interrupted,
+        &mut |_| {},
+    );
+    printer.finish();
+    println!();
+    Ok(())
+}
+
+/// The controller's mapping and ports, with the receiver its input forwards to.
+pub(crate) struct ControllerPorts {
+    pub mapping: controller::mapping::Mapping,
+    pub connection: Connection,
+    pub rx: Receiver<TimedMidi>,
+}
+
+/// Where the control loop reports, and the console it reads.
+pub(crate) struct LoopOutput<'a> {
+    pub printer: &'a Printer,
+    /// The console's lines, when there is one.
+    pub console: Option<Receiver<(String, u64)>>,
+    /// How to reconnect and quit, shown with the controller's first state.
+    pub keys: &'a str,
+}
+
+/// What the control loop holds after a pass, for the window to show.
+pub(crate) struct Pass<'a> {
+    pub state: &'a ControlState,
+    pub engine: &'a EngineController,
+    pub library: Option<&'a LibraryMode>,
+    /// The connected controller's input port.
+    pub controller: Option<&'a str>,
+}
+
+/// The body of [`control_loop`], for `play` and the window: applies the controller's
+/// MIDI, drives its LEDs, follows it being unplugged and runs library mode until
+/// `interrupted`, then shuts library mode down. `on_pass` sees the state after every pass.
+/// Without a `stream` (a test engine), no stream errors are read.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the loop's parts, each owned by a different caller"
+)]
+pub(crate) fn run_controller(
+    controller: ControllerPorts,
+    config: &Config,
+    mut library: Option<LibraryMode>,
+    engine: &mut EngineController,
+    mut stream: Option<&mut OutputStream>,
+    output: LoopOutput<'_>,
+    interrupted: &AtomicBool,
+    on_pass: &mut dyn FnMut(Pass<'_>),
+) {
+    let ControllerPorts {
+        mapping,
+        mut connection,
+        rx,
+    } = controller;
+    let LoopOutput {
+        printer,
+        console: lines,
+        keys,
+    } = output;
+    let name = mapping.controller.name.clone();
     let mut runtime = Runtime::new(mapping);
     // The size tables are not engine values, so there is no soft takeover to arm.
     let state = runtime.control_state_mut();
@@ -660,14 +756,6 @@ fn control_loop(
     if let Some(seconds) = config.backspin_long {
         state.backspin_long = seconds;
     }
-    let printer = Printer::spawn();
-    let lines = std::io::stdin().is_terminal().then(console::spawn_reader);
-    let keys = if lines.is_some() {
-        "press Enter to reconnect the controller, type `help` for commands, Ctrl-C to quit"
-    } else {
-        "Ctrl-C to quit; the console (Enter to reconnect) is unavailable, stdin is not a \
-         terminal"
-    };
     let mut hinted_library = false;
 
     // `[[init]]` is applied on the first attach only; later ones keep the values set.
@@ -699,7 +787,7 @@ fn control_loop(
             }
             for request in stats.requests {
                 match library.as_mut() {
-                    Some(library) => library.handle_request(request, engine, &printer),
+                    Some(library) => library.handle_request(request, engine, printer),
                     None if !hinted_library => {
                         hinted_library = true;
                         printer.event(
@@ -742,7 +830,7 @@ fn control_loop(
                 Ok(ConsoleCommand::Reconnect) => manual = true,
                 Ok(ConsoleCommand::Help) => printer.event(console::HELP.to_owned()),
                 Ok(command) => match library.as_mut() {
-                    Some(library) => library.console(command, engine, &printer),
+                    Some(library) => library.console(command, engine, printer),
                     None => printer.event("`grid` and `load` need `play --library`".to_owned()),
                 },
                 Err(message) => printer.event(message),
@@ -752,7 +840,7 @@ fn control_loop(
 
         let library_dirty = match library.as_mut() {
             Some(library) => {
-                library.poll(now, engine, &printer);
+                library.poll(now, engine, printer);
                 library.take_dirty()
             }
             None => false,
@@ -760,11 +848,13 @@ fn control_loop(
         if library_dirty || last_status.is_none_or(|last| now.duration_since(last) >= TICK) {
             last_status = Some(now);
             engine.collect_garbage();
-            let (warning, errors) = poll_stream_errors(stream, &mut reported_errors);
-            if let Some(warning) = warning {
-                printer.event(warning);
+            if let Some(stream) = stream.as_deref_mut() {
+                let (warning, errors) = poll_stream_errors(stream, &mut reported_errors);
+                if let Some(warning) = warning {
+                    printer.event(warning);
+                }
+                stream_errors = errors;
             }
-            stream_errors = errors;
             match &library {
                 Some(library) => {
                     let mut lines = library.status_lines(engine, &config.fx_slots);
@@ -786,13 +876,17 @@ fn control_loop(
             attached_once |= change == PresenceChange::Back;
             printer.event(reconnect_message(change, why));
         }
+
+        on_pass(Pass {
+            state: runtime.state(),
+            engine,
+            library: library.as_ref(),
+            controller: connection.port_names().map(|(input, _)| input),
+        });
     }
     if let Some(library) = library {
-        library.shutdown(engine, &printer);
+        library.shutdown(engine, printer);
     }
-    printer.finish();
-    println!();
-    Ok(())
 }
 
 /// Waits up to [`MIDI_WAIT`] for a message, then takes every message already queued.

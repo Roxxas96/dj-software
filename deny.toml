@@ -12,12 +12,18 @@ allow = [
   "Unicode-3.0",
   "MPL-2.0",
   "CC0-1.0",
+  # Boost's permissive license: clipboard-win and error-code, the window's clipboard on
+  # Windows (through eframe's arboard).
+  "BSL-1.0",
 ]
 exceptions = [
   # Mozilla's CA list as data (CDLA-Permissive-2.0, a permissive data license), pulled in
   # only by ort-sys's build script, which downloads ONNX Runtime; the run-time download in
   # `stems setup` uses the OS trust store instead (ruling R1).
   { allow = ["CDLA-Permissive-2.0"], crate = "webpki-root-certs" },
+  # egui's bundled fonts as data: Hack and Noto Emoji (OFL-1.1, a permissive font license)
+  # and Ubuntu Light (the Ubuntu Font Licence, permissive for fonts that keep their name).
+  { allow = ["OFL-1.1", "Ubuntu-font-1.0"], crate = "epaint_default_fonts" },
 ]
 
 [advisories]
@@ -26,6 +32,14 @@ ignore = [
   # `paste` is unmaintained (not vulnerable): a compile-time proc macro pulled in by lofty
   # 0.25.5, the latest release. Drop this once lofty moves off it.
   { id = "RUSTSEC-2024-0436", reason = "unmaintained build-time macro used by lofty; no vulnerability" },
+  # Unmaintained (not vulnerable), Linux-only crates of eframe 0.37, the latest release:
+  # ttf-parser draws the title bar Wayland windows decorate themselves (winit's
+  # sctk-adwaita); zvariant, zvariant_derive and zbus_names carry accessibility over D-Bus
+  # (accesskit_unix). Drop these once eframe moves off them.
+  { id = "RUSTSEC-2026-0192", reason = "unmaintained ttf-parser in winit's Wayland decorations; no vulnerability" },
+  { id = "RUSTSEC-2026-0370", reason = "unmaintained zvariant in accesskit's Linux backend; no vulnerability" },
+  { id = "RUSTSEC-2026-0371", reason = "unmaintained zbus_names in accesskit's Linux backend; no vulnerability" },
+  { id = "RUSTSEC-2026-0372", reason = "unmaintained zvariant_derive in accesskit's Linux backend; no vulnerability" },
 ]
 
 [bans]

@@ -102,6 +102,10 @@ On Linux you also need the ALSA headers (`libasound2-dev` on Debian and Ubuntu).
 ## Quick start
 
 ```bash
+# Open the window: the DDJ-SB3 drives it, with the library ([audio], [controller] and
+# [ui] in the configuration file set the device, the mapping and the waveforms)
+cargo run --release -p open-jockey
+
 # List output devices and their channel counts
 cargo run --release -p open-jockey -- devices
 

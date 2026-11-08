@@ -13,7 +13,7 @@ mod stem_jobs;
 mod worker;
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread::JoinHandle;
@@ -57,6 +57,9 @@ type FileStamp = (Option<i64>, Option<i64>);
 /// The library track on a deck.
 struct DeckTrack {
     row: TrackRow,
+    path: PathBuf,
+    /// The deck's `load_seq` once the engine has applied this track's `Load`.
+    load_seq: u64,
     memory: MemorySync,
     /// The grid last sent to the deck (with the `Load` or a `SetGrid`).
     grid: Option<Grid>,
@@ -511,6 +514,8 @@ impl LibraryMode {
         }
         let incoming = DeckTrack {
             row: loaded.row,
+            path: loaded.path,
+            load_seq: after + 1,
             memory,
             grid: loaded.memory.clamped(frames).grid,
             buffer,
@@ -962,6 +967,24 @@ impl LibraryMode {
         }
     }
 
+    /// What the browser shows, once read.
+    pub fn browser(&self) -> Option<&BrowserView> {
+        self.browser.as_ref()
+    }
+
+    /// The library track last loaded on `deck` (it may not have reached the engine yet:
+    /// see [`DeckView::load_seq`]), with the stems' state as `snap`, the deck's snapshot,
+    /// shows it.
+    pub fn deck_view(&self, deck: DeckId, snap: &DeckSnapshot) -> Option<DeckView<'_>> {
+        let track = self.decks[deck.index()].as_ref()?;
+        Some(DeckView {
+            row: &track.row,
+            path: &track.path,
+            load_seq: track.load_seq,
+            stems: self.stems_text(Some(track), snap),
+        })
+    }
+
     /// The browser line, then one line per loaded deck.
     pub fn status_lines(
         &self,
@@ -1026,6 +1049,16 @@ impl LibraryMode {
         let _ = self.writer.submit_wait(WriteOp::Batch(Vec::new()));
         self.report_failed_writes(printer);
     }
+}
+
+/// A library track on a deck, as [`LibraryMode::deck_view`] shows it.
+pub struct DeckView<'a> {
+    pub row: &'a TrackRow,
+    pub path: &'a Path,
+    /// The deck's `load_seq` from which the engine plays this track.
+    pub load_seq: u64,
+    /// The stems' state: `stems`, `stems 40%`, `no stems (too long)`.
+    pub stems: Option<String>,
 }
 
 /// A cue point or one hotcue slot of a track.
@@ -1154,12 +1187,17 @@ fn deck_status(
     line
 }
 
+/// Library-mode fixtures, for this module's tests and the window session's.
 #[cfg(test)]
-mod tests {
+pub(crate) mod testing {
     use super::*;
-    use library::Focus;
 
-    fn row() -> TrackRow {
+    /// Library mode on a new library at `db`, without stems.
+    pub(crate) fn start(db: &Path) -> LibraryMode {
+        LibraryMode::start_with(Some(db), None).unwrap()
+    }
+
+    pub(crate) fn row() -> TrackRow {
         TrackRow {
             id: 7,
             title: Some("Title".into()),
@@ -1172,6 +1210,54 @@ mod tests {
             missing: false,
         }
     }
+
+    /// Adds track 7 to the library, so cue and hotcue writes for it succeed.
+    pub(crate) fn add_track_7(mode: &LibraryMode) {
+        mode.writer
+            .submit_wait(WriteOp::Raw(vec![library::RawStatement {
+                sql: "INSERT INTO tracks(id, path, fingerprint, added_at) \
+                      VALUES (7, '/m/7.wav', x'00', 0)"
+                    .into(),
+                params: vec![],
+            }]))
+            .unwrap();
+    }
+
+    /// Loads track 7 (see [`loaded`]) on `deck`.
+    pub(crate) fn load_7(
+        mode: &mut LibraryMode,
+        deck: usize,
+        engine: &mut EngineController,
+        printer: &Printer,
+    ) {
+        let deck = DeckId::new(deck).unwrap();
+        let seq = mode.next_seq(deck);
+        let next = worker::Loaded {
+            deck,
+            seq,
+            ..loaded(seq)
+        };
+        mode.load(next, engine, printer);
+    }
+
+    pub(crate) fn loaded(seq: u64) -> worker::Loaded {
+        worker::Loaded {
+            deck: DeckId::new(0).unwrap(),
+            seq,
+            row: row(),
+            path: PathBuf::from("/m/7.wav"),
+            buffer: Arc::new(engine::TrackBuffer::new(44_100, vec![0.0; 2 * 4410]).unwrap()),
+            memory: engine::TrackMemory::default(),
+            hotcues_read: true,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::testing::*;
+    use super::*;
+    use library::Focus;
 
     /// A view of an empty tree and list.
     fn empty_view() -> BrowserView {
@@ -1314,35 +1400,6 @@ mod tests {
         renderer.render(&mut master, &mut headphones);
     }
 
-    /// Adds track 7 to the library, so cue and hotcue writes for it succeed.
-    fn add_track_7(mode: &LibraryMode) {
-        mode.writer
-            .submit_wait(WriteOp::Raw(vec![library::RawStatement {
-                sql: "INSERT INTO tracks(id, path, fingerprint, added_at) \
-                      VALUES (7, '/m/7.wav', x'00', 0)"
-                    .into(),
-                params: vec![],
-            }]))
-            .unwrap();
-    }
-
-    /// Loads track 7 (see [`loaded`]) on `deck`.
-    fn load_7(
-        mode: &mut LibraryMode,
-        deck: usize,
-        engine: &mut EngineController,
-        printer: &Printer,
-    ) {
-        let deck = DeckId::new(deck).unwrap();
-        let seq = mode.next_seq(deck);
-        let next = worker::Loaded {
-            deck,
-            seq,
-            ..loaded(seq)
-        };
-        mode.load(next, engine, printer);
-    }
-
     fn stored_hotcues(mode: &LibraryMode) -> [Option<f64>; engine::HOTCUES] {
         flush(mode);
         mode.lib.reader().unwrap().hotcues(7).unwrap()
@@ -1469,17 +1526,6 @@ mod tests {
         printer.finish();
     }
 
-    fn loaded(seq: u64) -> worker::Loaded {
-        worker::Loaded {
-            deck: DeckId::new(0).unwrap(),
-            seq,
-            row: row(),
-            buffer: Arc::new(engine::TrackBuffer::new(44_100, vec![0.0; 2 * 4410]).unwrap()),
-            memory: engine::TrackMemory::default(),
-            hotcues_read: true,
-        }
-    }
-
     #[test]
     fn a_stale_decode_is_dropped() {
         let (_dir, mut mode, mut engine, printer) = mode();
@@ -1566,6 +1612,8 @@ mod tests {
                 sample_rate: Some(48_000),
                 ..row()
             },
+            path: PathBuf::from("/m/7.wav"),
+            load_seq: 1,
             memory,
             grid: None,
             buffer: None,

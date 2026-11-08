@@ -82,6 +82,7 @@ pub struct Loaded {
     pub deck: DeckId,
     pub seq: u64,
     pub row: TrackRow,
+    pub path: PathBuf,
     pub buffer: Arc<TrackBuffer>,
     /// The remembered cue point, hotcues and beatgrid (at the decoded rate).
     pub memory: TrackMemory,
@@ -452,6 +453,7 @@ fn load_one(reader: &Reader, job: LoadJob, events: &Sender<Event>, decode: Decod
                 deck: job.deck,
                 seq: job.seq,
                 row: job.row,
+                path: job.path,
                 buffer: Arc::new(decoded.track),
                 memory,
                 hotcues_read,
