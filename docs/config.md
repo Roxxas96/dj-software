@@ -29,7 +29,7 @@ optional; a key left out keeps its default, and so does a missing file.
 | `backspin.short`     | `1.0`                                        | Seconds of the short backspin (`deck.backspin_short`), from 0.2 to 10 |
 | `backspin.long`      | `2.0`                                        | Seconds of the long backspin (`deck.backspin_long`), from 0.2 to 10 |
 | `stems.enabled`      | `false`                                      | `true`: tracks loaded from the library are separated into stems (and cached); `false`: no separation and no cache, nothing is paid |
-| `stems.eq_mode`      | `"eq"`                                       | What the EQ knobs control: `"eq"` (the frequency bands) or `"stems"` (HI vocals, MID instruments, LOW bass, on a deck whose stems are ready). `"stems"` without `enabled = true` is not an error: `play` starts with the plain EQ |
+| `stems.eq_mode`      | `"eq"`                                       | What the EQ knobs control: `"eq"` (the frequency bands) or `"stems"` (the stems, laid out by `stems.knobs`, on a deck whose stems are ready). `"stems"` without `enabled = true` is not an error: `play` starts with the plain EQ |
 | `stems.knobs`        | `"vdj"`                                      | What the knobs control in stems mode: `"vdj"` (LOW the kicks, MID the melody (vocals, instruments and bass), HI the hats) or `"raw"` (HI the vocals, MID the instruments, LOW the bass) |
 | `stems.cache_gb`     | `5`                                          | The most disk the stems cache may use, in gigabytes, from 0.5 to 1000 |
 
