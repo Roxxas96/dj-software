@@ -818,7 +818,14 @@ impl LibraryMode {
                 .chain(self.outgoing.iter().flatten().map(|(t, _)| t))
                 .map(|t| t.row.id)
                 .collect();
-            stems.update(playing, playheads, loaded);
+            let job_decks = DeckId::ALL
+                .into_iter()
+                .filter_map(|d| match self.decks[d.index()].as_ref()?.stems {
+                    DeckStems::Job(job) => Some((job, d)),
+                    _ => None,
+                })
+                .collect();
+            stems.update(playing, playheads, loaded, job_decks);
         }
     }
 
@@ -846,7 +853,7 @@ impl LibraryMode {
                     DeckStems::TooLong
                 } else {
                     stems
-                        .request(deck, id, buffer)
+                        .request(deck, id, track_name(&track.row), buffer)
                         .map_or(DeckStems::Done, DeckStems::Job)
                 }
             }
@@ -1907,9 +1914,9 @@ mod tests {
 
     impl StemSeparator for Counting {}
 
-    /// Separates once: reports `report` done, says it `entered`, waits to be released, then
-    /// returns the synthetic stems whatever the cancel flag says (a result that lost the
-    /// race with a newer load). Later runs fail.
+    /// Separates once: says it `entered`, then reports `report` done every few milliseconds
+    /// (as after each chunk) until released, then returns the synthetic stems whatever the
+    /// cancel flag says (a result that lost the race with a newer load). Later runs fail.
     struct Scripted {
         calls: Arc<AtomicUsize>,
         report: f32,
@@ -1927,9 +1934,14 @@ mod tests {
             if self.calls.fetch_add(1, AtomicOrdering::Relaxed) > 0 {
                 return Err(stems::SeparateError::Model("only once".into()));
             }
-            progress(self.report);
             let _ = self.entered.send(());
-            let _ = self.release.recv();
+            loop {
+                progress(self.report);
+                match self.release.recv_timeout(Duration::from_millis(2)) {
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                    _ => break,
+                }
+            }
             stems::SyntheticSeparator::new().separate(
                 track,
                 &|_| {},
@@ -2189,7 +2201,11 @@ mod tests {
             !engine.deck(d1).stems,
             "track 7's stems never reach track 8"
         );
-        assert_eq!(stems_rows(&mode, 7), 0, "a discarded result is not kept");
+        assert_eq!(
+            stems_rows(&mode, 7),
+            1,
+            "a result no deck wanted is still kept (Ruling R14)"
+        );
         // Even a result for the old job that does reach the control loop is dropped.
         let set = stems::SyntheticSeparator::new()
             .separate(
@@ -2201,6 +2217,47 @@ mod tests {
         mode.on_stems_reply(Reply::Stems(old_job, Arc::new(set)), &mut engine, &printer);
         render(&mut renderer);
         assert!(!engine.deck(d1).stems);
+        mode.shutdown(&mut engine, &printer);
+        printer.finish();
+    }
+
+    #[test]
+    fn cached_stems_arrive_during_a_separation() {
+        let set = stems::SyntheticSeparator::new()
+            .separate(
+                &short_track(),
+                &|_| {},
+                &std::sync::atomic::AtomicBool::new(false),
+            )
+            .unwrap();
+        let (source, _calls, entered, release) = scripted(0.5);
+        let (_dir, mut mode, mut engine, mut renderer, printer, _events) =
+            stems_mode(Some(setup(source)), |lib| {
+                let dir = crate::library_cmd::stems_dir(lib.path());
+                let mut cache = library::StemCache::new(lib, dir, 1_000_000_000).unwrap();
+                let key = library::StemKey {
+                    track: 8,
+                    fingerprint: &[0],
+                    sample_rate: 44_100,
+                    frames: 4410,
+                };
+                cache.put(&key, &set, false, &[]).unwrap();
+            });
+        let (d1, d2) = (DeckId::new(0).unwrap(), DeckId::new(1).unwrap());
+        load_track(&mut mode, 0, 7, short_track(), &mut engine, &printer);
+        run_until(&mut mode, &mut engine, &mut renderer, &printer, |_, _| {
+            entered.try_recv().is_ok()
+        });
+        // Track 7 is separating (and stays so until released): cached track 8 still comes.
+        load_track(&mut mode, 1, 8, short_track(), &mut engine, &printer);
+        run_until(&mut mode, &mut engine, &mut renderer, &printer, |_, e| {
+            e.deck(d2).stems
+        });
+        assert!(!engine.deck(d1).stems, "track 7 is still separating");
+        release.send(()).unwrap();
+        run_until(&mut mode, &mut engine, &mut renderer, &printer, |_, e| {
+            e.deck(d1).stems
+        });
         mode.shutdown(&mut engine, &printer);
         printer.finish();
     }
