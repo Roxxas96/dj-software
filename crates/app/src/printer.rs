@@ -55,6 +55,31 @@ impl Printer {
         }
     }
 
+    /// A printer that keeps its events instead of printing them (status lines are
+    /// dropped), for tests.
+    #[cfg(test)]
+    pub fn capturing() -> (Self, Arc<std::sync::Mutex<Vec<String>>>) {
+        let (tx, rx) = channel::<Line>();
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let kept = Arc::clone(&events);
+        let status_pending = Arc::new(AtomicBool::new(false));
+        let pending = Arc::clone(&status_pending);
+        let thread = std::thread::spawn(move || {
+            for line in rx {
+                match line {
+                    Line::Status(_) => pending.store(false, Ordering::Relaxed),
+                    Line::Event(text) => kept.lock().unwrap().push(text),
+                }
+            }
+        });
+        let printer = Self {
+            tx,
+            status_pending,
+            thread,
+        };
+        (printer, events)
+    }
+
     /// Prints what is still queued, then stops the thread.
     pub fn finish(self) {
         drop(self.tx);

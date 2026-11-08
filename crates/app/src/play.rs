@@ -376,7 +376,7 @@ pub fn play(args: &PlayArgs) -> anyhow::Result<()> {
     // Open the library before the slow decodes too.
     let library = args
         .library
-        .then(|| LibraryMode::start(args.library_db.as_deref()))
+        .then(|| LibraryMode::start(args.library_db.as_deref(), &config.stems))
         .transpose()?;
     let samples = load_samples(&config, library.as_ref());
     let track = args.track.as_deref().map(decode).transpose()?;

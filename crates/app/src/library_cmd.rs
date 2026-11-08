@@ -793,14 +793,14 @@ struct StemsRequest<'a> {
 
 /// `cache_gb` gigabytes (10^9 bytes) as bytes.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn gb_to_bytes(gb: f64) -> u64 {
+pub(crate) fn gb_to_bytes(gb: f64) -> u64 {
     // `as` saturates; the config keeps `cache_gb` within 0.5-1000.
     (gb * 1e9) as u64
 }
 
 /// The stems cache folder for the library at `db`: `stems` beside it, which is
 /// `<data dir>/stems` for the default library.
-fn stems_dir(db: &Path) -> PathBuf {
+pub(crate) fn stems_dir(db: &Path) -> PathBuf {
     db.parent().unwrap_or_else(|| Path::new(".")).join("stems")
 }
 
