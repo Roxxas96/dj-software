@@ -3,6 +3,7 @@
 //! terminal (the controller, library mode and the stems jobs) and publishes a
 //! [`ui::ControlFrame`] for the window, which reads the engine through its monitor.
 
+mod detail;
 mod frame;
 
 use std::path::Path;
@@ -22,6 +23,7 @@ use crate::config::Config;
 use crate::library_mode::LibraryMode;
 use crate::play::{ControllerPorts, LoopOutput, Pass};
 use crate::printer::{Line, Printer};
+use detail::DetailJobs;
 use frame::FrameParts;
 
 /// How often a missing audio device or MIDI backend is tried again.
@@ -156,6 +158,7 @@ fn run_session(
     let (lines_tx, lines) = channel();
     let printer = Printer::to_channel(lines_tx);
     let mut parts = FrameParts::new(config);
+    parts.detail = Some(DetailJobs::new(library.library()));
     parts.samples_loaded = start.samples_loaded;
     for text in start.events.drain(..) {
         parts.event(text);
