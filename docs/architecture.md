@@ -25,7 +25,10 @@ Each plan that adds or changes a crate updates this page. The full design is in
   `EngineController::deck_consistent` returns a snapshot only when it was read that way, and
   the library mode saves cues and hotcues only from such snapshots, so a torn read
   can never write one track's cues onto another. A per-deck `load_seq` counts loads, so the
-  app can tell when a `Load` has been applied.
+  app can tell when a `Load` has been applied. Next to each snapshot the renderer stores when
+  its block began rendering (on `engine::clock`, read with
+  `EngineMonitor::deck_rendered_at`), so the window moves its playheads on from the block's
+  own time rather than from when it first saw the snapshot.
 - **Loader/analysis workers:** decode tracks into memory ahead of playback (no streaming from
   disk on the audio thread), and run BPM/key/waveform analysis in the background.
   In library mode (`play --library`) the control loop never waits on the database or a
@@ -48,7 +51,8 @@ Each plan that adds or changes a crate updates this page. The full design is in
   scrolling waveforms off the control loop, and a **cover thread** (`ui`) that reads and
   decodes cover art. The session waits for the audio
   device (retrying every 2 s), and closing the window ends the loop, which saves the last
-  cues and hotcues.
+  cues and hotcues. A session that cannot run (a bad configuration file or mapping) leaves
+  the window open with the error shown, until the window is closed.
 - **Database writer:** one thread owns the write connection to the library DB. Every change
   (scan results, cues, grid edits, analysis, playlists, settings) is a write operation sent
   to it and applied in one transaction, so writes are serialized and never run on the UI or

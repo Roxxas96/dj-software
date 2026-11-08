@@ -25,6 +25,13 @@ impl EngineMonitor {
         self.shared.load_deck(id)
     }
 
+    /// [`EngineMonitor::deck`], with when its block began rendering in microseconds on
+    /// [`crate::clock`]. Both are from one block unless the renderer kept publishing while
+    /// they were read (then, as for [`EngineMonitor::deck`], they may mix two).
+    pub fn deck_rendered_at(&self, id: DeckId) -> (DeckSnapshot, u64) {
+        self.shared.load_deck_rendered_at(id)
+    }
+
     /// The deck's state from one rendered block, every field together, or `None` if the
     /// renderer kept publishing while it was read (try again later). Use it when acting on
     /// several fields together, such as telling which track the cue points belong to;

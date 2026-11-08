@@ -89,6 +89,36 @@ impl Tree {
         tree
     }
 
+    /// Replaces the drives with `roots`, in their order. A drive still there (at the same
+    /// path) keeps its row and the folders open below it; a new one comes in closed.
+    pub(super) fn set_drives(&mut self, roots: Vec<Drive>) {
+        let at = self
+            .nodes
+            .iter()
+            .position(|n| n.target == Target::Playlists)
+            .unwrap_or(self.nodes.len() - 1);
+        let old: Vec<Node> = self.nodes.drain(..at).collect();
+        let mut drives = Vec::with_capacity(old.len().max(roots.len()));
+        for drive in roots {
+            let target = Target::Dir(drive.path);
+            match old
+                .iter()
+                .position(|n| n.row.depth == 0 && n.target == target)
+            {
+                Some(i) => {
+                    let start = drives.len();
+                    drives.extend(old[i..subtree_end(&old, i)].iter().cloned());
+                    drives[start].row.label = drive.name;
+                }
+                None => drives.push(Node {
+                    row: row(drive.name, 0, TreeKind::Drive),
+                    target,
+                }),
+            }
+        }
+        self.nodes.splice(0..0, drives);
+    }
+
     pub(super) fn len(&self) -> usize {
         self.nodes.len()
     }
@@ -176,12 +206,17 @@ impl Tree {
 
     /// The index just past the rows below row `index`.
     fn subtree_end(&self, index: usize) -> usize {
-        let depth = self.nodes[index].row.depth;
-        self.nodes[index + 1..]
-            .iter()
-            .position(|n| n.row.depth <= depth)
-            .map_or(self.nodes.len(), |i| index + 1 + i)
+        subtree_end(&self.nodes, index)
     }
+}
+
+/// The index just past the rows below `nodes[index]`.
+fn subtree_end(nodes: &[Node], index: usize) -> usize {
+    let depth = nodes[index].row.depth;
+    nodes[index + 1..]
+        .iter()
+        .position(|n| n.row.depth <= depth)
+        .map_or(nodes.len(), |i| index + 1 + i)
 }
 
 fn row(label: String, depth: u8, kind: TreeKind) -> TreeRow {

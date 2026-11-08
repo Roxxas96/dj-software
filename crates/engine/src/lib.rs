@@ -4,6 +4,7 @@
 //! (UI, MIDI) and sends [`Command`]s, while the [`EngineRenderer`] lives on the audio thread
 //! and renders output blocks without allocating, freeing or locking.
 
+pub mod clock;
 mod command;
 mod controller;
 mod deck;
@@ -66,6 +67,8 @@ pub fn engine(config: EngineConfig) -> (EngineController, EngineRenderer) {
         "max block size must be positive"
     );
 
+    // Fixes the clock's epoch here, so the audio thread never has to.
+    clock::micros_at(std::time::Instant::now());
     let (command_tx, command_rx) = rtrb::RingBuffer::new(COMMAND_QUEUE_CAPACITY);
     let (garbage_tx, garbage_rx) = rtrb::RingBuffer::new(GARBAGE_QUEUE_CAPACITY);
     let renderer = EngineRenderer::new(config, command_rx, garbage_tx);

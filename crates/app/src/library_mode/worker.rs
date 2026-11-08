@@ -107,7 +107,7 @@ pub fn spawn(
 ) -> std::io::Result<(Sender<Job>, JoinHandle<()>)> {
     // Unit tests must not read the real disks.
     let roots = move || {
-        drives.unwrap_or_else(|| {
+        drives.clone().unwrap_or_else(|| {
             if cfg!(test) {
                 Vec::new()
             } else {
@@ -119,17 +119,17 @@ pub fn spawn(
 }
 
 /// [`spawn`] with the loader decoding through `decode` and the browser's tree starting
-/// at the drives `roots` gives (called on the worker thread).
+/// at the drives `roots` gives (called on the worker thread, again at each refresh).
 fn spawn_with(
     lib: Arc<Library>,
     events: Sender<Event>,
     decode: DecodeFn,
-    roots: impl FnOnce() -> Vec<Drive> + Send + 'static,
+    roots: impl Fn() -> Vec<Drive> + Send + 'static,
 ) -> std::io::Result<(Sender<Job>, JoinHandle<()>)> {
     let (tx, rx) = channel();
     let handle = std::thread::Builder::new()
         .name("library-worker".into())
-        .spawn(move || run(&lib, &rx, &events, decode, roots()))?;
+        .spawn(move || run(&lib, &rx, &events, decode, roots))?;
     Ok((tx, handle))
 }
 
@@ -145,7 +145,7 @@ fn run(
     jobs: &Receiver<Job>,
     events: &Sender<Event>,
     decode: DecodeFn,
-    roots: Vec<Drive>,
+    roots: impl Fn() -> Vec<Drive> + Send + 'static,
 ) {
     let say = |text: String| {
         let _ = events.send(Event::Message(text));
@@ -751,8 +751,10 @@ mod tests {
             name: "music".into(),
             path: s.music.clone(),
         }];
-        let (jobs, _worker) =
-            spawn_with(Arc::clone(&s.lib), tx, decode::decode_file, move || roots).unwrap();
+        let (jobs, _worker) = spawn_with(Arc::clone(&s.lib), tx, decode::decode_file, move || {
+            roots.clone()
+        })
+        .unwrap();
         let view = |events: &Receiver<Event>| {
             wait_for(events, |e| match e {
                 Event::Browser(v) => Some(v),
@@ -818,8 +820,10 @@ mod tests {
             path: music.clone(),
         }];
         let (tx, events) = channel();
-        let (jobs, _worker) =
-            spawn_with(Arc::clone(&lib), tx, decode::decode_file, move || roots).unwrap();
+        let (jobs, _worker) = spawn_with(Arc::clone(&lib), tx, decode::decode_file, move || {
+            roots.clone()
+        })
+        .unwrap();
         // Highlighting the drive adds its two files, and only those.
         wait_for(&events, |e| matches!(e, Event::FolderAdded).then_some(()));
         assert_eq!(ids(&lib).len(), 2);

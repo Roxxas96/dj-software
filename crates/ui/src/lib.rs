@@ -124,7 +124,15 @@ pub fn root(
     egui::CentralPanel::default()
         .frame(egui::Frame::new().fill(theme::BACKGROUND))
         .show(ui, |ui| {
-            if let Some(view) = &frame.browser {
+            if let Some(error) = &frame.error {
+                ui.centered_and_justified(|ui| {
+                    ui.label(
+                        egui::RichText::new(error.as_str())
+                            .color(theme::ERROR)
+                            .size(18.0),
+                    );
+                });
+            } else if let Some(view) = &frame.browser {
                 browser::show(ui, view, frame.key_notation, &mut screen.covers);
             }
         });

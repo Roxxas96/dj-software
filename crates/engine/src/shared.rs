@@ -148,8 +148,13 @@ impl Shared {
         id: DeckId,
         snapshot: &DeckSnapshot,
         channel: &ChannelSnapshot,
+        rendered_at_micros: u64,
     ) {
-        self.decks[id.index()].store(snapshot, channel);
+        self.decks[id.index()].store(snapshot, channel, rendered_at_micros);
+    }
+
+    pub(crate) fn load_deck_rendered_at(&self, id: DeckId) -> (DeckSnapshot, u64) {
+        self.decks[id.index()].load_rendered_at()
     }
 
     pub(crate) fn load_channel(&self, id: DeckId) -> ChannelSnapshot {
@@ -222,6 +227,8 @@ struct DeckShared {
     loaded: AtomicBool,
     playing: AtomicBool,
     position_frames: AtomicU64,
+    /// When the block of the stored snapshot began rendering, on [`crate::clock`].
+    rendered_at_micros: AtomicU64,
     duration_frames: AtomicUsize,
     track_sample_rate: AtomicU32,
     tempo_ratio: AtomicU64,
@@ -259,13 +266,16 @@ fn bits_opt(bits: u64) -> Option<f64> {
 }
 
 impl DeckShared {
-    /// Publishes `s`. Only the renderer calls this, so the sequence has one writer.
-    fn store(&self, s: &DeckSnapshot, channel: &ChannelSnapshot) {
+    /// Publishes `s`, from the block that began rendering at `rendered_at_micros`. Only the
+    /// renderer calls this, so the sequence has one writer.
+    fn store(&self, s: &DeckSnapshot, channel: &ChannelSnapshot, rendered_at_micros: u64) {
         let seq = self.seq.load(Ordering::Relaxed);
         self.seq.store(seq.wrapping_add(1), Ordering::Relaxed);
         // The odd sequence is visible before any field store.
         fence(Ordering::Release);
         self.store_fields(s);
+        self.rendered_at_micros
+            .store(rendered_at_micros, Ordering::Relaxed);
         self.store_channel(channel);
         // Every field store is visible before the even sequence.
         self.seq.store(seq.wrapping_add(2), Ordering::Release);
@@ -336,17 +346,30 @@ impl DeckShared {
     /// One block's snapshot whole, or `None` if the renderer was storing one at each of
     /// [`CONSISTENT_READ_TRIES`] tries.
     fn load_consistent(&self) -> Option<DeckSnapshot> {
+        self.consistent(|| self.load())
+    }
+
+    /// The snapshot with when its block began rendering, from one block when a
+    /// [`consistent`](Self::consistent) read succeeds, else as they are now.
+    fn load_rendered_at(&self) -> (DeckSnapshot, u64) {
+        let read = || (self.load(), self.rendered_at_micros.load(Ordering::Relaxed));
+        self.consistent(read).unwrap_or_else(read)
+    }
+
+    /// `read` of one block's fields, or `None` if the renderer was storing them at each of
+    /// [`CONSISTENT_READ_TRIES`] tries.
+    fn consistent<T>(&self, read: impl Fn() -> T) -> Option<T> {
         for _ in 0..CONSISTENT_READ_TRIES {
             let before = self.seq.load(Ordering::Acquire);
             if before % 2 == 1 {
                 std::hint::spin_loop();
                 continue;
             }
-            let snapshot = self.load();
+            let value = read();
             // The field loads happen before the second sequence load.
             fence(Ordering::Acquire);
             if self.seq.load(Ordering::Relaxed) == before {
-                return Some(snapshot);
+                return Some(value);
             }
         }
         None
@@ -412,7 +435,7 @@ mod tests {
     #[test]
     fn a_read_during_a_store_is_not_consistent() {
         let deck = DeckShared::default();
-        deck.store(&numbered(3), &ChannelSnapshot::default());
+        deck.store(&numbered(3), &ChannelSnapshot::default(), 0);
         assert_eq!(deck.load_consistent(), Some(numbered(3)));
         // The renderer is in the middle of a store: odd sequence, fields half written.
         let seq = deck.seq.load(Ordering::Relaxed);
@@ -438,7 +461,7 @@ mod tests {
             let deck = Arc::clone(&deck);
             std::thread::spawn(move || {
                 for n in 0..200_000 {
-                    deck.store(&numbered(n), &ChannelSnapshot::default());
+                    deck.store(&numbered(n), &ChannelSnapshot::default(), n);
                 }
             })
         };

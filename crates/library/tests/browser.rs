@@ -3,6 +3,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use library::{
@@ -77,7 +78,7 @@ fn drive(name: &str, path: &Path) -> Drive {
 
 /// A browser on `roots` (and the library's playlists).
 fn browser(lib: &Library, roots: Vec<Drive>) -> Browser {
-    Browser::with_roots(lib.reader().unwrap(), roots).unwrap()
+    Browser::with_roots(lib.reader().unwrap(), move || roots.clone()).unwrap()
 }
 
 fn scroll(b: &mut Browser, steps: i32) -> BrowserView {
@@ -557,6 +558,35 @@ fn refresh_rereads_the_folder() {
     fs::remove_file(a.join("a2.wav")).unwrap();
     let view = b.refresh().unwrap();
     assert_eq!((view.list_cursor, view.list_count), (1, 2));
+}
+
+#[test]
+fn refresh_rereads_the_drives() {
+    let (_lib_dir, lib) = open();
+    let (_d1, root1) = disk();
+    let (_d2, root2) = disk();
+    let plugged = Arc::new(Mutex::new(vec![drive("root1", &root1)]));
+    let roots = {
+        let plugged = Arc::clone(&plugged);
+        move || plugged.lock().unwrap().clone()
+    };
+    let mut b = Browser::with_roots(lib.reader().unwrap(), roots).unwrap();
+    toggle_folder(&mut b);
+    let view = scroll(&mut b, 1);
+    assert_eq!(view.path, "root1 ▸ A");
+
+    // A drive is plugged in above the open one: the open one keeps its folders and the
+    // highlight.
+    plugged.lock().unwrap().insert(0, drive("root2", &root2));
+    let view = b.refresh().unwrap();
+    assert_eq!(labels(&view), ["root2", "root1", "A", "B", "Playlists"]);
+    assert_eq!((view.path.as_str(), view.tree_cursor), ("root1 ▸ A", 2));
+
+    // The open drive is unplugged: its rows go, the cursor stays on the same row.
+    plugged.lock().unwrap().remove(1);
+    let view = b.refresh().unwrap();
+    assert_eq!(labels(&view), ["root2", "Playlists"]);
+    assert_eq!(view.tree_cursor, 1);
 }
 
 #[test]

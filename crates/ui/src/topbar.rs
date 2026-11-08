@@ -1,4 +1,4 @@
-//! The top bar: the status line on the left; the master meter, the CPU load, the clock and
+//! The top bar: the status line (or the error that stopped the session) on the left; the master meter, the CPU load, the clock and
 //! the controller and audio state on the right.
 
 use std::time::Instant;
@@ -18,7 +18,10 @@ const METER_CLIP: Color32 = Color32::from_rgb(0xff, 0x3b, 0x3b);
 
 pub fn show(ui: &mut Ui, frame: &ControlFrame, monitor: Option<&EngineMonitor>) {
     ui.horizontal(|ui| {
-        ui.label(frame.status_line(Instant::now()));
+        match &frame.error {
+            Some(error) => ui.label(RichText::new(error.as_str()).color(theme::ERROR).strong()),
+            None => ui.label(frame.status_line(Instant::now())),
+        };
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             match &frame.audio {
                 Ok(device) => ui.label(device.as_str()),

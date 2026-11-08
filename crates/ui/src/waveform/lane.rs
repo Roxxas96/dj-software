@@ -62,10 +62,12 @@ impl Lanes {
     /// `monitor` every deck is empty.
     pub fn show(&mut self, ui: &mut Ui, frame: &ControlFrame, monitor: Option<&EngineMonitor>) {
         let now = Instant::now();
-        let snapshots = DeckId::ALL.map(|id| monitor.map(|m| m.deck(id)).unwrap_or_default());
-        for (head, snapshot) in self.playheads.iter_mut().zip(&snapshots) {
-            head.observe(snapshot, now);
+        let read =
+            DeckId::ALL.map(|id| monitor.map(|m| m.deck_rendered_at(id)).unwrap_or_default());
+        for (head, (snapshot, rendered_at)) in self.playheads.iter_mut().zip(&read) {
+            head.observe(snapshot, *rendered_at);
         }
+        let snapshots = read.map(|(snapshot, _)| snapshot);
         let shown = lanes(
             Side::ALL.map(|side| frame.control.sides[side.index()].active_deck),
             snapshots.each_ref().map(|s| s.playing),

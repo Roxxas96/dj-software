@@ -1143,7 +1143,7 @@ mod tests {
         use actions::{Action, Side};
         use engine::DeckId;
 
-        let mapping = controller::builtin::load_mapping("ddj-sb3").unwrap();
+        let mapping = controller::builtin::load_mapping_from("ddj-sb3", None).unwrap();
         let play = MidiMessage::NoteOn {
             channel: 0,
             note: 0x0B,

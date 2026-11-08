@@ -144,13 +144,26 @@ impl List {
 
 /// The browser state: the tree, its cursor, the focused pane and the highlighted entry's
 /// list.
-#[derive(Debug)]
 pub struct Browser {
     reader: Reader,
+    /// Reads the drives at the top of the tree.
+    roots: Box<dyn Fn() -> Vec<Drive> + Send>,
     tree: Tree,
     tree_cursor: usize,
     list: List,
     focus: Focus,
+}
+
+impl std::fmt::Debug for Browser {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Browser")
+            .field("reader", &self.reader)
+            .field("tree", &self.tree)
+            .field("tree_cursor", &self.tree_cursor)
+            .field("list", &self.list)
+            .field("focus", &self.focus)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Browser {
@@ -160,20 +173,25 @@ impl Browser {
     ///
     /// Any database error.
     pub fn new(reader: Reader) -> Result<Self, LibraryError> {
-        Self::with_roots(reader, drives())
+        Self::with_roots(reader, drives)
     }
 
-    /// A browser whose tree starts with `roots`, closed, then the playlists, with the
-    /// first row highlighted, its list at the top and the tree focused.
+    /// A browser whose tree starts with the drives `roots` gives, closed, then the
+    /// playlists, with the first row highlighted, its list at the top and the tree
+    /// focused. Each [`refresh`](Self::refresh) asks `roots` again.
     ///
     /// # Errors
     ///
     /// Any database error.
-    pub fn with_roots(reader: Reader, roots: Vec<Drive>) -> Result<Self, LibraryError> {
-        let tree = Tree::new(roots, &reader.playlists()?);
+    pub fn with_roots(
+        reader: Reader,
+        roots: impl Fn() -> Vec<Drive> + Send + 'static,
+    ) -> Result<Self, LibraryError> {
+        let tree = Tree::new(roots(), &reader.playlists()?);
         let list = List::open(&reader, tree.target(0))?;
         Ok(Self {
             reader,
+            roots: Box::new(roots),
             tree,
             tree_cursor: 0,
             list,
@@ -212,9 +230,9 @@ impl Browser {
         Ok(self.view())
     }
 
-    /// Reads the playlists and the highlighted list again, to see library and disk
-    /// changes (new playlists, scanned tracks, files added to the folder). Open folders
-    /// stay open. The highlighted entry stays highlighted and so does the selected row,
+    /// Reads the drives, the playlists and the highlighted list again, to see library and
+    /// disk changes (a drive plugged in or out, new playlists, scanned tracks, files added
+    /// to the folder). Open folders stay open, on the drives still there. The highlighted entry stays highlighted and so does the selected row,
     /// wherever it moved in the list (in a playlist, the occurrence of its track nearest
     /// the old cursor); if the row left the list, the cursor stays on the same row where
     /// it fits. If the entry is gone, the cursor stays at the same tree row.
@@ -224,6 +242,7 @@ impl Browser {
     /// Any database error; the browser is then unchanged.
     pub fn refresh(&mut self) -> Result<BrowserView, LibraryError> {
         let mut tree = self.tree.clone();
+        tree.set_drives((self.roots)());
         tree.set_playlists(&self.reader.playlists()?);
         let current = self.tree.target(self.tree_cursor);
         let same_row =

@@ -22,8 +22,10 @@ From the configuration file ([config.md](config.md)):
 | `ui.waveform_beats` | `16` | Beats across a waveform lane, 4 to 64 |
 
 The library opens at the default database. A missing DDJ-SB3 or audio device does not stop the
-window: it tries again every 2 seconds, and the top bar says what is missing. Closing the
-window saves cues and hotcues, like Ctrl-C in `play`.
+window: it tries again every 2 seconds, and the top bar says what is missing. A bad
+configuration file or mapping does not close it either: the window shows the error, naming
+the file and the problem, until it is closed. Closing the window saves cues and hotcues,
+like Ctrl-C in `play`.
 
 ## What each area shows
 
@@ -42,7 +44,8 @@ window saves cues and hotcues, like Ctrl-C in `play`.
   stems are active HIHAT, MEL/VOX, KICK (`vdj` knobs) or VOCALS, INSTRU, BASS (`raw` knobs).
   Ghost markers show where a physical control is while soft takeover has not caught up with
   the value on screen (after a DECK switch, for instance).
-- **Browser:** the drives and real folders, then playlists, as a tree. Columns are Title,
+- **Browser:** the drives and real folders, then playlists, as a tree. A drive plugged in or
+  out shows at the next refresh, which follows library changes. Columns are Title,
   Artist, Remix, Length, BPM and Key. "•" marks a track with saved cues, and "missing" a file
   that is gone. An info panel shows the selected track. The own files of a folder that was
   never scanned are added and analysed in the background, so BPM and key fill in as they
