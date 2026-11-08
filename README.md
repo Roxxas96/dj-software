@@ -43,7 +43,7 @@ How it works:
   the playhead outward, and plays normally meanwhile. Tracks played with plain `play <file>`
   get no stems. Until a deck's stems are ready the knobs are the normal EQ; the changeover is
   smooth. The deck's status line shows `stems: preparing model` while the model opens, then
-  `stems 40%` while separating, then `stems` once they are active. A track longer than 20
+  `stems 40%` while separating, then `stems` once they are ready. A track longer than 20
   minutes gets `no stems (too long)`.
 - Knob law, with 12 o'clock as the middle. Turning a knob left from the middle fades its stem
   from normal down to silent. Turning it right from the middle fades every stem that no knob
