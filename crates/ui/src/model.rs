@@ -13,6 +13,15 @@ use library::{BrowserView, TrackRow};
 
 /// The soft-takeover targets of a deck that can show a pickup value.
 pub const GHOSTS: usize = 7;
+// Each target's place in `ControlFrame::ghosts`.
+pub(crate) const GHOST_TRIM: usize = 0;
+pub(crate) const GHOST_EQ_HIGH: usize = 1;
+pub(crate) const GHOST_EQ_MID: usize = 2;
+pub(crate) const GHOST_EQ_LOW: usize = 3;
+pub(crate) const GHOST_FILTER: usize = 4;
+pub(crate) const GHOST_FADER: usize = 5;
+pub(crate) const GHOST_TEMPO: usize = 6;
+const _: () = assert!(GHOSTS > GHOST_TEMPO);
 /// How many events a frame keeps, newest last.
 pub const EVENTS_KEPT: usize = 20;
 /// How long an event shows in the top bar.
@@ -119,6 +128,9 @@ pub struct ControlFrame {
     pub waveform_beats: f64,
     /// How keys are shown: the library's `key_notation` setting.
     pub key_notation: KeyNotation,
+    /// Why the session stopped (a bad configuration or mapping, say), shown until the
+    /// window is closed.
+    pub error: Option<String>,
 }
 
 impl Default for ControlFrame {
@@ -140,6 +152,7 @@ impl Default for ControlFrame {
             audio: Err("no audio device yet".to_owned()),
             waveform_beats: 16.0,
             key_notation: KeyNotation::default(),
+            error: None,
         }
     }
 }

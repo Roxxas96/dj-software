@@ -20,7 +20,8 @@ pub enum AppRequest {
 pub enum BrowserRequest {
     /// Move the cursor of the focused pane by this many rows (positive is down the list).
     Scroll(i32),
-    /// Switch focus between the tree (playlists, folders, all tracks) and the track list.
+    /// Switch focus between the tree (the drives and their folders, then the playlists)
+    /// and the list of the highlighted entry.
     ToggleFocus,
     /// Open or close the highlighted folder in the tree.
     ToggleFolder,

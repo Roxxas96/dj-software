@@ -18,13 +18,11 @@ use engine::{
 
 use crate::cover::{self, Covers};
 use crate::mixer;
-use crate::model::ControlFrame;
+use crate::model::{ControlFrame, GHOST_TEMPO};
 use crate::theme;
 use crate::waveform::{Playhead, colour};
 
 /// A record's speed: the jog's marker turns at this at the original tempo.
-/// The tempo's place in `ControlFrame::ghosts`.
-const GHOST_TEMPO: usize = 6;
 const JOG_RPM: f64 = 100.0 / 3.0;
 /// The share of the panels' width each deck panel takes; the mixer has the rest.
 const PANEL_SHARE: f32 = 0.38;
@@ -339,10 +337,12 @@ impl DeckPanels {
         let sampler = monitor.map(EngineMonitor::sampler).unwrap_or_default();
         for (side, rect) in Side::ALL.into_iter().zip([left, right]) {
             let deck = frame.control.side(side).active_deck;
-            let mut snapshot = monitor.map(|m| m.deck(deck)).unwrap_or_default();
+            let (mut snapshot, rendered_at) = monitor
+                .map(|m| m.deck_rendered_at(deck))
+                .unwrap_or_default();
             let channel = monitor.map(|m| m.channel(deck)).unwrap_or_default();
             let head = &mut self.playheads[deck.index()];
-            head.observe(&snapshot, now);
+            head.observe(&snapshot, rendered_at);
             snapshot.position_frames = head.position(now, frame.output_latency);
             let view = DeckView::new(deck, &snapshot, &channel, frame, &sampler);
             let cover = view

@@ -42,7 +42,7 @@ impl EngineRenderer {
             eq_mode: EqMode::default(),
             stem_knobs: StemKnobs::default(),
         };
-        renderer.publish();
+        renderer.publish(crate::clock::micros_at(Instant::now()));
         renderer
     }
 
@@ -92,7 +92,7 @@ impl EngineRenderer {
             meters.merge(&self.mixer.process(master, headphones, sampler));
         }
 
-        self.publish();
+        self.publish(crate::clock::micros_at(started));
         self.shared.store_meters(&meters);
         let block_seconds = (samples / 2) as f64 / f64::from(self.config.sample_rate);
         if block_seconds > 0.0 {
@@ -205,10 +205,15 @@ impl EngineRenderer {
         }
     }
 
-    fn publish(&self) {
+    /// Publishes the decks' state, stamped `rendered_at_micros` on [`crate::clock`].
+    fn publish(&self, rendered_at_micros: u64) {
         for (id, deck) in DeckId::ALL.into_iter().zip(&self.decks) {
-            self.shared
-                .store_deck(id, &deck.snapshot(), &self.mixer.channel_snapshot(id));
+            self.shared.store_deck(
+                id,
+                &deck.snapshot(),
+                &self.mixer.channel_snapshot(id),
+                rendered_at_micros,
+            );
         }
         self.shared.store_sampler(&self.sampler.snapshot());
     }

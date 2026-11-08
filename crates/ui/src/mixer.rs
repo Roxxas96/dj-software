@@ -11,7 +11,9 @@ use egui::{
 };
 use engine::{DeckId, EngineMonitor, EqMode, StemKnobs};
 
-use crate::model::{ControlFrame, GHOSTS};
+use crate::model::{
+    ControlFrame, GHOST_EQ_HIGH, GHOST_EQ_LOW, GHOST_EQ_MID, GHOST_FADER, GHOST_FILTER, GHOST_TRIM,
+};
 use crate::theme;
 
 /// How long a channel's meter keeps its highest peak.
@@ -25,14 +27,6 @@ const FADER_WIDTH: f32 = 14.0;
 const METER_WIDTH: f32 = 8.0;
 /// A knob's travel, either side of straight up, in radians.
 const KNOB_SWEEP: f32 = 0.75 * std::f32::consts::PI;
-/// Positions in `ControlFrame::ghosts`.
-const GHOST_TRIM: usize = 0;
-const GHOST_EQ_HIGH: usize = 1;
-const GHOST_EQ_MID: usize = 2;
-const GHOST_EQ_LOW: usize = 3;
-const GHOST_FILTER: usize = 4;
-const GHOST_FADER: usize = 5;
-const _: () = assert!(GHOSTS > GHOST_FADER);
 pub const GHOST: Color32 = theme::CUE;
 const METER_OK: Color32 = Color32::from_rgb(0x4c, 0xc2, 0x6a);
 const METER_CLIP: Color32 = Color32::from_rgb(0xff, 0x3b, 0x3b);

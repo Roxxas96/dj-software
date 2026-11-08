@@ -50,3 +50,25 @@ fn dsp_load_is_published() {
     assert!(0.0 < load && load < 10.0, "load {load}");
     assert_eq!(monitor.sample_rate(), 44_100);
 }
+
+#[test]
+fn each_block_stamps_when_it_began_rendering() {
+    let (c, mut r) = setup();
+    let monitor = c.monitor();
+    let id = DeckId::new(0).unwrap();
+    let mut master = vec![0.0; BLOCK * 2];
+    let mut headphones = vec![0.0; BLOCK * 2];
+    let before = engine::clock::micros_at(std::time::Instant::now());
+    r.render(&mut master, &mut headphones);
+    let after = engine::clock::micros_at(std::time::Instant::now());
+    let (snapshot, rendered_at) = monitor.deck_rendered_at(id);
+    assert_eq!(snapshot, monitor.deck(id));
+    assert!(
+        before <= rendered_at && rendered_at <= after,
+        "{before} {rendered_at} {after}"
+    );
+
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    r.render(&mut master, &mut headphones);
+    assert!(monitor.deck_rendered_at(id).1 >= after);
+}

@@ -51,27 +51,24 @@ struct Audio {
 }
 
 /// Opens the window and runs the session behind it until the window is closed (or Ctrl-C),
-/// then saves library mode's cues and hotcues.
+/// then saves library mode's cues and hotcues. A session that cannot run (a bad
+/// configuration or mapping) leaves the window open, showing why, and returns that error
+/// once the window is closed.
 pub fn run_window(config_path: Option<&Path>) -> anyhow::Result<()> {
-    let config = crate::config::load(config_path)?;
     let quit = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&quit);
     ctrlc::set_handler(move || flag.store(true, Ordering::Relaxed))
         .context("installing the Ctrl-C handler")?;
     let shared = Shared {
-        frame: Published::new(FrameParts::new(&config).idle()),
+        frame: Published::new(ControlFrame::default()),
         monitor: Published::new(None),
     };
     let session = {
         let (shared, quit) = (shared.clone(), Arc::clone(&quit));
+        let config_path = config_path.map(Path::to_owned);
         std::thread::Builder::new()
             .name("session".to_owned())
-            .spawn(move || {
-                let result = session(&config, &shared, &quit);
-                // The window closes once the session ends, whatever ended it.
-                quit.store(true, Ordering::Relaxed);
-                result
-            })
+            .spawn(move || session(config_path.as_deref(), &shared, &quit))
             .context("starting the session thread")?
     };
     let shown = ui::run(shared.frame, shared.monitor, Arc::clone(&quit));
@@ -82,8 +79,30 @@ pub fn run_window(config_path: Option<&Path>) -> anyhow::Result<()> {
     ran.and(shown)
 }
 
-/// The session thread: opens the mapping and the library, then runs until `quit`.
-fn session(config: &Config, shared: &Shared, quit: &AtomicBool) -> anyhow::Result<()> {
+/// The session thread: loads the configuration, then [`run_config`]. When that ends the
+/// window closes, unless it ended in an error: the window then shows the error until it is
+/// closed.
+fn session(config_path: Option<&Path>, shared: &Shared, quit: &AtomicBool) -> anyhow::Result<()> {
+    let result = crate::config::load(config_path).and_then(|config| {
+        shared.frame.publish(FrameParts::new(&config).idle());
+        run_config(&config, shared, quit)
+    });
+    match &result {
+        Ok(()) => quit.store(true, Ordering::Relaxed),
+        Err(error) => {
+            // The engine, if one ran, is gone.
+            shared.monitor.publish(None);
+            shared.frame.publish(ControlFrame {
+                error: Some(crate::format::safe(format!("{error:#}"))),
+                ..ControlFrame::default()
+            });
+        }
+    }
+    result
+}
+
+/// Opens the mapping and the library, then runs until `quit`.
+fn run_config(config: &Config, shared: &Shared, quit: &AtomicBool) -> anyhow::Result<()> {
     let mapping = crate::legacy_dirs::load_mapping(&config.controller.mapping)
         .context("loading the controller mapping")?;
     let library = LibraryMode::start(None, &config.stems)?;
@@ -180,11 +199,15 @@ fn run_session(
         library.shutdown(&mut engine, &printer);
         return finish(printer, &lines);
     };
-    crate::play::configure_engine(
+    if let Err(error) = crate::play::configure_engine(
         &mut audio.engine,
         config,
         std::mem::take(&mut start.samples),
-    )?;
+    ) {
+        library.shutdown(&mut audio.engine, &printer);
+        finish(printer, &lines)?;
+        return Err(error);
+    }
     shared.monitor.publish(Some(audio.engine.monitor()));
     parts.audio = Ok(audio.device.clone());
     parts.output_latency = audio.output_latency;
@@ -306,9 +329,31 @@ mod tests {
     /// The built-in mapping on a port nothing has, so a plugged-in controller stays out of
     /// the test.
     fn mapping() -> Mapping {
-        let mut mapping = crate::legacy_dirs::load_mapping("ddj-sb3").unwrap();
+        let mut mapping = controller::builtin::load_mapping_from("ddj-sb3", None).unwrap();
         mapping.controller.port = "open-jockey test: no such port".to_owned();
         mapping
+    }
+
+    #[test]
+    fn a_bad_config_is_shown_and_keeps_the_window_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[beat_jump]\npads = [1, 2, 3]\n").unwrap();
+        let shared = Shared {
+            frame: Published::new(ControlFrame::default()),
+            monitor: Published::new(None),
+        };
+        let quit = AtomicBool::new(false);
+
+        assert!(session(Some(&path), &shared, &quit).is_err());
+
+        let frame = shared.frame.latest();
+        let error = frame.error.as_deref().expect("the frame carries the error");
+        assert!(
+            error.contains("config.toml: beat_jump.pads: expected exactly 8 numbers, got 3"),
+            "{error}"
+        );
+        assert!(!quit.load(Ordering::Relaxed));
     }
 
     #[test]
