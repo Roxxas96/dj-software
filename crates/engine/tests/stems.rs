@@ -294,6 +294,24 @@ fn kicks_split_low_frequencies() {
             high < 0.01,
             "{rate} Hz: kicks keep {high} of the 5 kHz energy"
         );
+        // The split sits at 250 Hz: half the amplitude there, whatever the rate (a filter
+        // built for another rate would read about 0.58).
+        let probe: Vec<f32> = (0..frames)
+            .flat_map(|n| {
+                let v = sine(250.0, 0.4, n);
+                [v, v]
+            })
+            .collect();
+        let probe = to_i16(&probe);
+        let silent = vec![0_i16; frames * 2].into_boxed_slice();
+        let probed =
+            StemSet::new(silent.clone(), silent, probe.clone().into(), frames, rate).unwrap();
+        let ratio = amplitude(&left(probed.stored(Stem::Kicks).unwrap()), 250.0, rate)
+            / amplitude(&left(&probe), 250.0, rate);
+        assert!(
+            (ratio - 0.5).abs() <= 0.03,
+            "{rate} Hz: kicks keep {ratio} of the 250 Hz amplitude"
+        );
         // Hats, what kicks leave of rhythm, sums back to it with kicks: played with only
         // kicks and hats, the deck plays rhythm itself (here, the whole mix).
         let track = Arc::new(TrackBuffer::new(rate, from_i16(&rhythm)).unwrap());
@@ -729,14 +747,12 @@ fn bass_levels(samples: &[f32]) -> Vec<f32> {
         .collect()
 }
 
-#[test]
-fn keylock_changeover_keeps_the_bass_level() {
-    // In the raw layout, LOW at 0.25 plays the bass at 0.25 through the EQ band and through
-    // the stems. Changing over early or late under keylock would play it at 1.0 (bands at
-    // unity over the mix) or 0.0625 (both).
-    let fx = Fixture::new();
+/// Under keylock, LOW at 0.25 plays the 60 Hz part at 0.25 through the EQ band and through
+/// the stems. Changing over early or late would play it at 1.0 (bands at unity over the
+/// mix) or 0.0625 (both).
+fn check_keylock_changeover(fx: &Fixture, layout: StemKnobs) {
     let start = |low: f32| {
-        let (mut c, mut r) = loaded_with(&fx.mix, EqMode::Eq, StemKnobs::Raw);
+        let (mut c, mut r) = loaded_with(&fx.mix, EqMode::Eq, layout);
         c.send(Command::Channel(deck(), ChannelCommand::EqLow(low)))
             .unwrap();
         send_all(
@@ -750,7 +766,7 @@ fn keylock_changeover_keeps_the_bass_level() {
         send_all(&mut c, &[DeckCommand::Play]);
         (c, r)
     };
-    // The bass at full level, as heard through keylock.
+    // The 60 Hz part at full level, as heard through keylock.
     let (_full_c, mut full_r) = start(0.5);
     let full_levels = bass_levels(&render(&mut full_r, BLOCK * 100).0);
     let full = full_levels[10..].iter().sum::<f32>() / (full_levels.len() - 10) as f32;
@@ -774,9 +790,21 @@ fn keylock_changeover_keeps_the_bass_level() {
         let level = level / full;
         assert!(
             (0.2..=0.6).contains(&level),
-            "window {n}: the bass at {level} of its level"
+            "{layout:?}: window {n}: the 60 Hz part at {level} of its level"
         );
     }
+}
+
+#[test]
+fn keylock_changeover_keeps_the_bass_level() {
+    // Raw: LOW is the bass.
+    check_keylock_changeover(&Fixture::new(), StemKnobs::Raw);
+}
+
+#[test]
+fn keylock_changeover_keeps_the_kick_level() {
+    // Vdj: LOW is the kicks, here the 60 Hz kick in rhythm.
+    check_keylock_changeover(&Fixture::kick_and_hat(), StemKnobs::Vdj);
 }
 
 #[test]
