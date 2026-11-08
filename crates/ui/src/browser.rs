@@ -13,7 +13,7 @@ use library::{BrowserView, Focus, ListRow, TreeKind, TreeRow};
 
 use crate::cover::{self, Covers};
 use crate::deck::{key_text, split_remix};
-use crate::theme;
+use crate::theme::{self, Palette};
 
 const ROW_HEIGHT: f32 = 20.0;
 /// The share of the browser's width the folder tree takes.
@@ -47,8 +47,9 @@ pub fn format_length(frames: u64, rate: u32) -> String {
 
 /// Draws the browser into all of `ui`'s space.
 pub fn show(ui: &mut Ui, view: &BrowserView, notation: KeyNotation, covers: &mut Covers) {
+    let p = theme::palette(ui.ctx());
     let area = ui.available_rect_before_wrap();
-    ui.painter().rect_filled(area, 0.0, theme::BACKGROUND);
+    ui.painter().rect_filled(area, 0.0, p.background);
     let tree_width = area.width() * TREE_SHARE;
     let info_width = area.width() * INFO_SHARE;
     let tree = Rect::from_min_max(area.min, pos2(area.min.x + tree_width, area.max.y));
@@ -80,11 +81,11 @@ fn row(ui: &mut Ui, fill: Option<Color32>) -> Rect {
     rect
 }
 
-fn highlight(selected: bool, focused: bool) -> Option<Color32> {
+fn highlight(p: &Palette, selected: bool, focused: bool) -> Option<Color32> {
     selected.then_some(if focused {
-        theme::HIGHLIGHT
+        p.highlight
     } else {
-        theme::HIGHLIGHT_DIM
+        p.highlight_dim
     })
 }
 
@@ -98,6 +99,7 @@ fn tree_pane(ui: &mut Ui, view: &BrowserView) {
     let rows = rows_fitting(ui.available_height());
     let window = visible_window(view.tree_cursor, view.tree.len(), rows);
     let focused = view.focus == Focus::Tree;
+    let p = theme::palette(ui.ctx());
     for (at, entry) in view
         .tree
         .iter()
@@ -105,12 +107,13 @@ fn tree_pane(ui: &mut Ui, view: &BrowserView) {
         .take(window.end)
         .skip(window.start)
     {
-        let rect = row(ui, highlight(at == view.tree_cursor, focused));
+        let rect = row(ui, highlight(&p, at == view.tree_cursor, focused));
         tree_row(ui, rect, entry);
     }
 }
 
 fn tree_row(ui: &mut Ui, rect: Rect, entry: &TreeRow) {
+    let p = theme::palette(ui.ctx());
     let x = rect.min.x + 4.0 + f32::from(entry.depth) * INDENT;
     let mid = rect.center().y;
     // Only the nodes that can open get a triangle.
@@ -131,7 +134,7 @@ fn tree_row(ui: &mut Ui, rect: Rect, entry: &TreeRow) {
         };
         ui.painter().add(egui::Shape::convex_polygon(
             points,
-            theme::TEXT_DIM,
+            p.text_dim,
             Stroke::NONE,
         ));
     }
@@ -144,7 +147,7 @@ fn tree_row(ui: &mut Ui, rect: Rect, entry: &TreeRow) {
     };
     // The note follows the label, dimmed.
     let font = egui::TextStyle::Body.resolve(ui.style());
-    let label = ui.fonts_mut(|f| f.layout_no_wrap(entry.label.clone(), font, theme::TEXT));
+    let label = ui.fonts_mut(|f| f.layout_no_wrap(entry.label.clone(), font, p.text));
     let label_width = label.size().x.min(width * 0.7);
     cell(ui, rect, label_x, label_width, RichText::new(&entry.label));
     cell(
@@ -152,19 +155,20 @@ fn tree_row(ui: &mut Ui, rect: Rect, entry: &TreeRow) {
         rect,
         label_x + label_width + 6.0,
         width - label_width - 6.0,
-        RichText::new(note).color(theme::TEXT_DIM),
+        RichText::new(note).color(p.text_dim),
     );
 }
 
 /// A small drive, folder or playlist icon centred on `at` (egui's fonts have no such glyphs).
 fn glyph(ui: &Ui, kind: TreeKind, at: egui::Pos2) {
+    let p = theme::palette(ui.ctx());
     let painter = ui.painter();
-    let colour = theme::TEXT_DIM;
+    let colour = p.text_dim;
     match kind {
         TreeKind::Drive => {
             let body = Rect::from_center_size(at, vec2(11.0, 6.0));
             painter.rect_filled(body, CornerRadius::same(1), colour);
-            painter.circle_filled(body.right_center() - vec2(2.0, 0.0), 0.9, theme::BACKGROUND);
+            painter.circle_filled(body.right_center() - vec2(2.0, 0.0), 0.9, p.background);
         }
         TreeKind::Folder => {
             let body = Rect::from_center_size(at + vec2(0.0, 1.0), vec2(11.0, 7.0));
@@ -198,6 +202,7 @@ fn drawn_rows(view: &BrowserView, rows: usize) -> impl Iterator<Item = (usize, &
 }
 
 fn list_pane(ui: &mut Ui, view: &BrowserView, notation: KeyNotation) {
+    let p = theme::palette(ui.ctx());
     let header = row(ui, None);
     // The library separates the path with "▸" (U+25B8), which egui's bundled fonts lack and
     // the system fallbacks may too.
@@ -214,17 +219,18 @@ fn list_pane(ui: &mut Ui, view: &BrowserView, notation: KeyNotation) {
         header,
         header.min.x,
         header.width() - count_width - 6.0,
-        RichText::new(path).color(theme::TEXT_DIM),
+        RichText::new(path).color(p.text_dim),
     );
     cell(
         ui,
         header,
         header.max.x - count_width,
         count_width,
-        RichText::new(count).color(theme::TEXT_DIM),
+        RichText::new(count).color(p.text_dim),
     );
     let rows = rows_fitting(ui.available_height());
     let focused = view.focus == Focus::List;
+    let p = theme::palette(ui.ctx());
     let total = ui.available_width();
     let fixed = CUE_WIDTH + LENGTH_WIDTH + BPM_WIDTH + KEY_WIDTH;
     let flexible = (total - fixed).max(0.0);
@@ -232,13 +238,9 @@ fn list_pane(ui: &mut Ui, view: &BrowserView, notation: KeyNotation) {
     let remix = flexible * REMIX_SHARE;
     let title = flexible - artist - remix;
     for (at, entry) in drawn_rows(view, rows) {
-        let rect = row(ui, highlight(at == view.list_cursor, focused));
+        let rect = row(ui, highlight(&p, at == view.list_cursor, focused));
         let fields = Fields::of(entry, notation);
-        let colour = if fields.missing {
-            theme::TEXT_DIM
-        } else {
-            theme::TEXT
-        };
+        let colour = if fields.missing { p.text_dim } else { p.text };
         let mut x = rect.min.x;
         let mut put = |ui: &mut Ui, width: f32, text: &str| {
             cell(ui, rect, x, width, RichText::new(text).color(colour));
@@ -305,6 +307,7 @@ impl Fields {
 }
 
 fn info_pane(ui: &mut Ui, view: &BrowserView, notation: KeyNotation, covers: &mut Covers) {
+    let p = theme::palette(ui.ctx());
     // The highlighted row, when its page is loaded.
     let entry = view
         .list_cursor
@@ -331,7 +334,7 @@ fn info_pane(ui: &mut Ui, view: &BrowserView, notation: KeyNotation, covers: &mu
     ] {
         if !value.is_empty() {
             ui.horizontal(|ui| {
-                ui.label(RichText::new(name).color(theme::TEXT_DIM));
+                ui.label(RichText::new(name).color(p.text_dim));
                 ui.add(Label::new(value).truncate());
             });
         }

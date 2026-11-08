@@ -7,8 +7,8 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
 use egui::{
-    Color32, ColorImage, Context, CornerRadius, Rect, Sense, Stroke, TextureHandle, TextureOptions,
-    Ui, Vec2, pos2, vec2,
+    ColorImage, Context, CornerRadius, Rect, Sense, Stroke, TextureHandle, TextureOptions, Ui,
+    Vec2, pos2, vec2,
 };
 use lofty::config::ParseOptions;
 use lofty::file::TaggedFileExt;
@@ -21,9 +21,6 @@ use crate::theme;
 pub const COVERS_KEPT: usize = 32;
 /// The longest side of a decoded cover, in pixels: larger pictures are scaled down.
 pub const COVER_PIXELS: u32 = 256;
-/// The note on a track without a cover, drawn (egui's fonts have no note glyph).
-const NOTE: Color32 = Color32::from_gray(0x55);
-
 /// The covers asked for, each loading or loaded. The thread that reads them starts at the
 /// first request and ends once this is dropped.
 #[derive(Default)]
@@ -166,13 +163,14 @@ pub fn tile(ui: &mut Ui, cover: Option<&TextureHandle>, side: f32) {
 
 /// A plain tile with an eighth note in its middle.
 fn no_cover(ui: &Ui, rect: Rect) {
+    let p = theme::palette(ui.ctx());
     let painter = ui.painter();
-    painter.rect_filled(rect, CornerRadius::same(2), theme::LANE);
+    painter.rect_filled(rect, CornerRadius::same(2), p.lane);
     let unit = rect.height() / 8.0;
     let head = rect.center() + vec2(-unit, 1.5 * unit);
-    painter.circle_filled(head, unit, NOTE);
+    painter.circle_filled(head, unit, p.note);
     let stem_x = head.x + unit * 0.9;
-    let stem = Stroke::new(unit * 0.35, NOTE);
+    let stem = Stroke::new(unit * 0.35, p.note);
     let top = pos2(stem_x, head.y - 4.0 * unit);
     painter.line_segment([pos2(stem_x, head.y), top], stem);
     painter.line_segment([top, top + vec2(1.5 * unit, 1.5 * unit)], stem);
@@ -197,7 +195,7 @@ mod tests {
     fn a_cover_decodes_and_large_ones_shrink() {
         let small = decode(&png(4, 2)).unwrap();
         assert_eq!(small.size, [4, 2]);
-        assert_eq!(small.pixels[0], Color32::RED);
+        assert_eq!(small.pixels[0], egui::Color32::RED);
         let large = decode(&png(1024, 512)).unwrap();
         assert_eq!(large.size, [256, 128]);
         assert!(decode(b"not an image").is_none());

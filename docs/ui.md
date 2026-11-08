@@ -30,8 +30,11 @@ like Ctrl-C in `play`.
 
 ## What each area shows
 
-- **Top bar:** status and events, the master meter, CPU load, the clock, and the controller
-  and audio state.
+- **Top bar:** the LAYOUT menu, status and events, the master meter, CPU load, the clock, and
+  the controller and audio state. The LAYOUT menu asks for a layout, a colour scheme (dark or
+  light), waveform and jogwheel displays, the beat counter, 4 decks and the info and side
+  panels; the colour scheme already changes the window, the other entries take effect in
+  later plan 10 tasks.
 - **Waveform lanes:** the decks both sides show, plus any other deck that is playing. Colour
   follows frequency. Beat ticks are drawn, with a red tick on the first beat of each bar.
   Cue and hotcue markers and the loop band show on the lane. The playhead is fixed at the

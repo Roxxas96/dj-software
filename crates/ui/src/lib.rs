@@ -8,6 +8,7 @@ mod command;
 pub mod cover;
 pub mod deck;
 mod fonts;
+mod menu;
 pub mod mixer;
 mod model;
 pub mod theme;
@@ -61,7 +62,7 @@ pub fn run(
         TITLE,
         options,
         Box::new(|cc| {
-            theme::apply(&cc.egui_ctx);
+            theme::apply(&cc.egui_ctx, ColourScheme::default());
             fonts::install(&cc.egui_ctx);
             Ok(Box::new(app))
         }),
@@ -130,12 +131,14 @@ pub fn root(
     monitor: Option<&EngineMonitor>,
     screen: &mut Screen,
 ) {
+    theme::apply(ui.ctx(), frame.view.colour_scheme);
+    let p = theme::palette(ui.ctx());
     let window_height = ui.max_rect().height();
     egui::Panel::top("top_bar")
-        .frame(egui::Frame::new().fill(theme::PANEL).inner_margin(6))
-        .show(ui, |ui| topbar::show(ui, frame, monitor));
+        .frame(egui::Frame::new().fill(p.panel).inner_margin(6))
+        .show(ui, |ui| topbar::show(ui, frame, monitor, &screen.commands));
     egui::Panel::top("waveform_lanes")
-        .frame(egui::Frame::new().fill(theme::BACKGROUND))
+        .frame(egui::Frame::new().fill(p.background))
         .exact_size(window_height * LANES_HEIGHT)
         .resizable(false)
         .show_separator_line(false)
@@ -143,7 +146,7 @@ pub fn root(
             screen.lanes.show(ui, frame, monitor, &screen.commands)
         });
     egui::Panel::top("deck_panels")
-        .frame(egui::Frame::new().fill(theme::BACKGROUND))
+        .frame(egui::Frame::new().fill(p.background))
         .exact_size(window_height * DECKS_HEIGHT)
         .resizable(false)
         .show_separator_line(false)
@@ -153,13 +156,13 @@ pub fn root(
             screen.mixer.show(ui, space, frame, monitor);
         });
     egui::CentralPanel::default()
-        .frame(egui::Frame::new().fill(theme::BACKGROUND))
+        .frame(egui::Frame::new().fill(p.background))
         .show(ui, |ui| {
             if let Some(error) = &frame.error {
                 ui.centered_and_justified(|ui| {
                     ui.label(
                         egui::RichText::new(error.as_str())
-                            .color(theme::ERROR)
+                            .color(p.error)
                             .size(18.0),
                     );
                 });

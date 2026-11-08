@@ -51,10 +51,6 @@ const PAD_GAP: f32 = 4.0;
 const SMALL_FONT: f32 = 11.0;
 const TITLE_FONT: f32 = 16.0;
 const BPM_FONT: f32 = 22.0;
-/// PLAY while playing.
-const PLAY_LIT: Color32 = Color32::from_rgb(0x4c, 0xc2, 0x6a);
-/// An indicator that is off.
-const OFF_TEXT: Color32 = theme::TEXT_DIM;
 
 /// One performance pad as the panel shows it.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -362,9 +358,10 @@ impl DeckPanels {
 
 /// Draws `view` filling `ui`, with `cover` (the plain tile without one).
 pub fn panel(ui: &mut Ui, view: &DeckView, cover: Option<&TextureHandle>) {
-    let accent = theme::deck_accent(view.deck);
+    let p = theme::palette(ui.ctx());
+    let accent = p.deck_accent(view.deck);
     egui::Frame::new()
-        .fill(theme::PANEL)
+        .fill(p.panel)
         .inner_margin(PANEL_MARGIN)
         .show(ui, |ui| {
             ui.set_min_size(ui.available_size());
@@ -387,6 +384,7 @@ pub fn panel(ui: &mut Ui, view: &DeckView, cover: Option<&TextureHandle>) {
 
 /// The cover, title, artist, remix and stems, then BPM, key and times on the right.
 fn header(ui: &mut Ui, view: &DeckView, cover: Option<&TextureHandle>, accent: Color32) {
+    let p = theme::palette(ui.ctx());
     ui.horizontal_top(|ui| {
         cover::tile(ui, cover, COVER_SIDE);
         let text_width = (ui.available_width() - TIMES_WIDTH).max(0.0);
@@ -402,9 +400,9 @@ fn header(ui: &mut Ui, view: &DeckView, cover: Option<&TextureHandle>, accent: C
                 );
                 ui.add(Label::new(RichText::new(&view.title).strong().size(TITLE_FONT)).truncate());
             });
-            ui.add(Label::new(RichText::new(&view.artist).color(theme::TEXT_DIM)).truncate());
+            ui.add(Label::new(RichText::new(&view.artist).color(p.text_dim)).truncate());
             if let Some(remix) = &view.remix {
-                ui.add(Label::new(RichText::new(remix).color(theme::TEXT_DIM)).truncate());
+                ui.add(Label::new(RichText::new(remix).color(p.text_dim)).truncate());
             }
             if let Some(stems) = &view.stems {
                 ui.label(RichText::new(stems).color(accent).size(SMALL_FONT));
@@ -422,7 +420,7 @@ fn header(ui: &mut Ui, view: &DeckView, cover: Option<&TextureHandle>, accent: C
             }
             if !view.elapsed.is_empty() {
                 ui.label(&view.elapsed);
-                ui.label(RichText::new(format!("−{}", view.remaining)).color(theme::TEXT_DIM));
+                ui.label(RichText::new(format!("−{}", view.remaining)).color(p.text_dim));
             }
         });
     });
@@ -430,25 +428,26 @@ fn header(ui: &mut Ui, view: &DeckView, cover: Option<&TextureHandle>, accent: C
 
 /// The whole track's waveform with the playhead.
 fn overview(ui: &mut Ui, view: &DeckView) {
+    let p = theme::palette(ui.ctx());
     let size = vec2(ui.available_width(), OVERVIEW_HEIGHT);
     let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, CornerRadius::ZERO, theme::LANE);
+    painter.rect_filled(rect, CornerRadius::ZERO, p.lane);
     let mut mesh = Mesh::default();
     if let Some(waveform) = view.overview.as_deref() {
-        overview_columns(&mut mesh, rect, waveform);
+        overview_columns(&mut mesh, rect, waveform, p.text_dim);
     }
     if let Some(progress) = view.progress {
         let x = rect.left() + rect.width() * progress.clamp(0.0, 1.0);
         let head = Rect::from_x_y_ranges(x - 1.0..=x + 1.0, rect.y_range());
-        mesh.add_colored_rect(head, theme::PLAYHEAD);
+        mesh.add_colored_rect(head, p.playhead);
     }
     painter.add(Shape::mesh(mesh));
 }
 
 /// One column per point, mirrored around the middle, as tall as the loudest bucket under
 /// it and in its colour.
-fn overview_columns(mesh: &mut Mesh, rect: Rect, waveform: &Waveform) {
+fn overview_columns(mesh: &mut Mesh, rect: Rect, waveform: &Waveform, silent: Color32) {
     let buckets = &waveform.buckets;
     let columns = rect.width().floor().max(0.0) as usize;
     if buckets.is_empty() || columns == 0 {
@@ -465,12 +464,13 @@ fn overview_columns(mesh: &mut Mesh, rect: Rect, waveform: &Waveform) {
         let reach = half_height * f32::from(loudest[0]) / 255.0;
         let x = rect.left() + column as f32;
         let bar = Rect::from_min_max(pos2(x, middle - reach), pos2(x + 1.0, middle + reach));
-        mesh.add_colored_rect(bar, colour(*loudest));
+        mesh.add_colored_rect(bar, colour(*loudest, silent));
     }
 }
 
 /// The three FX slots, each lit while on, over the effect level.
 fn fx(ui: &mut Ui, view: &DeckView, accent: Color32) {
+    let p = theme::palette(ui.ctx());
     ui.vertical(|ui| {
         ui.set_width(FX_WIDTH);
         for (label, on) in &view.fx {
@@ -478,13 +478,13 @@ fn fx(ui: &mut Ui, view: &DeckView, accent: Color32) {
         }
         let (rect, _) = ui.allocate_exact_size(vec2(FX_WIDTH, FX_LEVEL_HEIGHT), Sense::hover());
         let painter = ui.painter();
-        painter.rect_filled(rect, CornerRadius::ZERO, theme::LANE);
+        painter.rect_filled(rect, CornerRadius::ZERO, p.lane);
         let level = rect.width() * view.fx_level.clamp(0.0, 1.0);
         let filled = Rect::from_min_size(rect.min, vec2(level, rect.height()));
         painter.rect_filled(filled, CornerRadius::ZERO, accent);
         ui.label(
             RichText::new(format!("FX {:.0}%", view.fx_level * 100.0))
-                .color(theme::TEXT_DIM)
+                .color(p.text_dim)
                 .size(SMALL_FONT),
         );
     });
@@ -492,19 +492,15 @@ fn fx(ui: &mut Ui, view: &DeckView, accent: Color32) {
 
 /// The platter: a circle with a marker that turns with the playhead.
 fn jog(ui: &mut Ui, view: &DeckView, accent: Color32) {
+    let p = theme::palette(ui.ctx());
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(JOG_SIDE), Sense::hover());
     let painter = ui.painter();
     let centre = rect.center();
     let radius = JOG_SIDE / 2.0 - JOG_STROKE;
-    painter.circle(
-        centre,
-        radius,
-        theme::LANE,
-        Stroke::new(JOG_STROKE, theme::TEXT_DIM),
-    );
+    painter.circle(centre, radius, p.lane, Stroke::new(JOG_STROKE, p.text_dim));
     let angle = view.jog_turn * std::f32::consts::TAU;
     let direction = vec2(angle.sin(), -angle.cos());
-    let colour = if view.playing { accent } else { theme::TEXT };
+    let colour = if view.playing { accent } else { p.text };
     painter.line_segment(
         [
             centre + direction * radius * 0.55,
@@ -516,6 +512,7 @@ fn jog(ui: &mut Ui, view: &DeckView, accent: Color32) {
 
 /// The tempo slider (faster toward the bottom, as on the SB3) with the pitch in percent.
 fn pitch(ui: &mut Ui, view: &DeckView, accent: Color32) {
+    let p = theme::palette(ui.ctx());
     ui.vertical_centered(|ui| {
         ui.set_width(PITCH_WIDTH);
         let track_height = MIDDLE_HEIGHT - PITCH_LABEL_HEIGHT;
@@ -526,10 +523,10 @@ fn pitch(ui: &mut Ui, view: &DeckView, accent: Color32) {
             x - PITCH_TRACK / 2.0..=x + PITCH_TRACK / 2.0,
             rect.top() + PITCH_HANDLE.y / 2.0..=rect.bottom() - PITCH_HANDLE.y / 2.0,
         );
-        painter.rect_filled(track, CornerRadius::ZERO, theme::LANE);
+        painter.rect_filled(track, CornerRadius::ZERO, p.lane);
         let centre_mark =
             Rect::from_center_size(pos2(x, track.center().y), vec2(PITCH_HANDLE.x * 0.6, 1.0));
-        painter.rect_filled(centre_mark, CornerRadius::ZERO, theme::TEXT_DIM);
+        painter.rect_filled(centre_mark, CornerRadius::ZERO, p.text_dim);
         let y = track.top() + track.height() * view.pitch_slider.clamp(0.0, 1.0);
         let handle = Rect::from_center_size(pos2(x, y), PITCH_HANDLE);
         painter.rect_filled(handle, CornerRadius::same(1), accent);
@@ -539,7 +536,7 @@ fn pitch(ui: &mut Ui, view: &DeckView, accent: Color32) {
             painter.rect_stroke(
                 marker,
                 CornerRadius::same(1),
-                Stroke::new(1.5, mixer::GHOST),
+                Stroke::new(1.5, p.cue),
                 StrokeKind::Outside,
             );
         }
@@ -559,18 +556,20 @@ fn states(ui: &mut Ui, view: &DeckView, accent: Color32) {
 
 /// CUE (lit while previewing), PLAY (lit while playing) and SYNC (one-shot: never lit).
 fn transport(ui: &mut Ui, view: &DeckView) {
+    let p = theme::palette(ui.ctx());
     ui.vertical(|ui| {
         let size = vec2(TRANSPORT_WIDTH, BUTTON_HEIGHT);
         // Line up with the pads, below the mode's name.
         ui.add_space(SMALL_FONT + 4.0);
-        indicator(ui, size, "CUE", view.cueing.then_some(theme::CUE));
-        indicator(ui, size, "PLAY", view.playing.then_some(PLAY_LIT));
+        indicator(ui, size, "CUE", view.cueing.then_some(p.cue));
+        indicator(ui, size, "PLAY", view.playing.then_some(p.play_lit));
         indicator(ui, size, "SYNC", None);
     });
 }
 
 /// The pad mode's name over the 2×4 pads, then the loop: its size, IN and OUT.
 fn pads_grid(ui: &mut Ui, view: &DeckView, accent: Color32) {
+    let p = theme::palette(ui.ctx());
     let pads_width = (ui.available_width() - LOOP_WIDTH - PAD_GAP * 2.0).max(0.0);
     ui.vertical(|ui| {
         ui.set_width(pads_width);
@@ -587,12 +586,8 @@ fn pads_grid(ui: &mut Ui, view: &DeckView, accent: Color32) {
     });
     ui.vertical(|ui| {
         let size = vec2(LOOP_WIDTH, BUTTON_HEIGHT);
-        ui.label(
-            RichText::new("LOOP")
-                .color(theme::TEXT_DIM)
-                .size(SMALL_FONT),
-        );
-        let looping = view.loop_active.then_some(theme::HOTCUE);
+        ui.label(RichText::new("LOOP").color(p.text_dim).size(SMALL_FONT));
+        let looping = view.loop_active.then_some(p.hotcue);
         indicator(ui, size, &view.loop_beats, looping);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = PAD_GAP;
@@ -605,10 +600,11 @@ fn pads_grid(ui: &mut Ui, view: &DeckView, accent: Color32) {
 
 /// A box of `size` with `text`, filled with `lit`'s colour when lit.
 fn indicator(ui: &mut Ui, size: Vec2, text: &str, lit: Option<Color32>) {
+    let p = theme::palette(ui.ctx());
     let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
     let (fill, colour) = match lit {
-        Some(colour) => (colour, theme::BACKGROUND),
-        None => (theme::LANE, OFF_TEXT),
+        Some(colour) => (colour, p.background),
+        None => (p.lane, p.text_dim),
     };
     ui.painter().rect_filled(rect, CornerRadius::same(2), fill);
     if !text.is_empty() {
