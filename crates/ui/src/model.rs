@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use actions::ControlState;
-use analysis::Waveform;
+use analysis::{KeyNotation, Waveform};
 use engine::{EffectKind, EqMode, SAMPLER_SLOTS, StemKnobs};
 use library::{BrowserView, TrackRow};
 
@@ -117,6 +117,8 @@ pub struct ControlFrame {
     /// The audio device's name, or why there is none.
     pub audio: Result<String, String>,
     pub waveform_beats: f64,
+    /// How keys are shown: the library's `key_notation` setting.
+    pub key_notation: KeyNotation,
 }
 
 impl Default for ControlFrame {
@@ -137,6 +139,7 @@ impl Default for ControlFrame {
             controller: None,
             audio: Err("no audio device yet".to_owned()),
             waveform_beats: 16.0,
+            key_notation: KeyNotation::default(),
         }
     }
 }

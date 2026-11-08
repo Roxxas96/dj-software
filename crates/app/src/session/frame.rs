@@ -7,6 +7,7 @@ use engine::{DeckId, SAMPLER_SLOTS};
 use ui::{ControlFrame, DeckInfo, EVENTS_KEPT};
 
 use crate::config::Config;
+use crate::library_mode::LibraryMode;
 use crate::play::Pass;
 use crate::printer::Line;
 
@@ -120,6 +121,7 @@ impl FrameParts {
             decks,
             browser: pass.library.and_then(|l| l.browser().cloned()),
             controller: pass.controller.map(str::to_owned),
+            key_notation: pass.library.map(LibraryMode::notation).unwrap_or_default(),
             ..self.idle()
         }
     }

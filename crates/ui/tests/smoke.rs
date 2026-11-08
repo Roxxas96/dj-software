@@ -11,10 +11,10 @@ use ui::{ControlFrame, Published};
 fn window_draws_a_default_frame() {
     let frame = ControlFrame::default();
     let audio = frame.audio.clone().unwrap_err();
-    let mut lanes = ui::waveform::Lanes::default();
+    let mut screen = ui::Screen::default();
     let mut harness = Harness::builder()
         .with_size([1440.0, 900.0])
-        .build_ui(|ui| ui::root(ui, &frame, None, &mut lanes));
+        .build_ui(|ui| ui::root(ui, &frame, None, &mut screen));
     harness.run_steps(3);
     harness.get_by_label("no controller");
     harness.get_by_label(&audio);
