@@ -632,6 +632,25 @@ impl Reader {
             analyzed_at: at,
         }))
     }
+
+    /// Track `track_id`'s stored waveform; `None` if it has not been analyzed or has no
+    /// waveform.
+    ///
+    /// # Errors
+    ///
+    /// Any database error, or [`LibraryError::CorruptWaveform`] if the stored waveform
+    /// cannot be read.
+    pub fn waveform(&self, track_id: i64) -> Result<Option<Waveform>, LibraryError> {
+        let blob: Option<Vec<u8>> = self
+            .connection()
+            .prepare_cached("SELECT waveform FROM analysis WHERE track_id = ?1")?
+            .query_row([track_id], |r| r.get(0))
+            .optional()?
+            .flatten();
+        blob.map(|b| Waveform::from_bytes(&b))
+            .transpose()
+            .map_err(|source| LibraryError::CorruptWaveform { track_id, source })
+    }
 }
 
 impl Library {

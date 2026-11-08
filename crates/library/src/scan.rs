@@ -676,11 +676,13 @@ fn is_under(path: &str, dir: &str) -> bool {
         .is_some_and(|rest| dir.ends_with(MAIN_SEPARATOR) || rest.starts_with(MAIN_SEPARATOR))
 }
 
-fn is_hidden(name: &std::ffi::OsStr) -> bool {
+/// A `.`-prefixed name, skipped by scans and the browser.
+pub(crate) fn is_hidden(name: &std::ffi::OsStr) -> bool {
     name.as_encoded_bytes().first() == Some(&b'.')
 }
 
-fn is_supported(path: &Path) -> bool {
+/// Whether `path` has one of the [`EXTENSIONS`].
+pub(crate) fn is_supported(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| EXTENSIONS.iter().any(|x| x.eq_ignore_ascii_case(e)))

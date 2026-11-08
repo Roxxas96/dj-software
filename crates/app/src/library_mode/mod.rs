@@ -1159,6 +1159,23 @@ mod tests {
         }
     }
 
+    /// A view of an empty tree and list.
+    fn empty_view() -> BrowserView {
+        BrowserView {
+            path: String::new(),
+            index: 0,
+            count: 0,
+            track: None,
+            focus: Focus::Tree,
+            tree: Vec::new(),
+            tree_cursor: 0,
+            list: Vec::new(),
+            list_offset: 0,
+            list_count: 0,
+            list_cursor: 0,
+        }
+    }
+
     #[test]
     fn browser_line_matches_the_spec() {
         let view = BrowserView {
@@ -1167,21 +1184,19 @@ mod tests {
             count: 48,
             track: Some(row()),
             focus: Focus::List,
+            ..empty_view()
         };
         assert_eq!(
             browser_line(Some(&view), KeyNotation::Camelot, None),
             "▸ Playlists ▸ Peak time  12/48  Artist – Title  128.00 BPM  8A  •"
         );
         let empty = BrowserView {
-            path: "All tracks".into(),
-            index: 0,
-            count: 0,
-            track: None,
-            focus: Focus::Tree,
+            path: "Macintosh HD".into(),
+            ..empty_view()
         };
         assert_eq!(
             browser_line(Some(&empty), KeyNotation::Camelot, Some("analyzing 12/340")),
-            "▸ All tracks  0/0   analyzing 12/340"
+            "▸ Macintosh HD  0/0   analyzing 12/340"
         );
     }
 

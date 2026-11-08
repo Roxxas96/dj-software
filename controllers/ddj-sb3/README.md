@@ -44,8 +44,8 @@ knobs and faders use soft takeover: they act once they reach the new deck's valu
 ## Browsing and loading
 
 With `play --library`, the BROWSE knob scrolls the library browser (clockwise moves
-down), and pressing it switches between the tree (playlists, folders, all tracks) and the
-track list; SHIFT + BROWSE press opens or closes the highlighted folder. LOAD loads the selected track onto the deck its side currently shows: the left
+down), and pressing it switches between the tree (the drives' folders, then the playlists) and
+the track list; SHIFT + BROWSE press opens or closes the highlighted folder. LOAD loads the selected track onto the deck its side currently shows: the left
 LOAD onto deck 1 or 3, the right LOAD onto deck 2 or 4, following the DECK buttons. A cue
 point you set is remembered and comes back when the track is loaded again. See
 [docs/library.md](../../docs/library.md).
