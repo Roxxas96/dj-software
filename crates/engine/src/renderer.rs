@@ -169,10 +169,9 @@ impl EngineRenderer {
     }
 
     /// Before a chunk renders: sets each deck's stem gains from its channel's EQ knobs (in
-    /// the knob layout) and
-    /// bypasses the EQ bands of the channels whose stems take the knobs. A change of
-    /// either ramps over a chunk, which is the changeover's crossfade; under keylock the
-    /// bands change once the stem gains come out of the stretcher.
+    /// the knob layout) and bypasses the EQ bands of the channels whose stems take the
+    /// knobs. A change of either ramps over a chunk, which is the changeover's crossfade;
+    /// under keylock the bands change once the stem gains come out of the stretcher.
     fn update_stems(&mut self, frames: usize) {
         for id in DeckId::ALL {
             let knobs = self.mixer.eq_positions(id);

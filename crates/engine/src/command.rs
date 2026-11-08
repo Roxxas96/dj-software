@@ -41,9 +41,9 @@ pub enum DeckCommand {
     /// Unloads the track and its stems.
     Unload,
     /// Gives the loaded track its stems (`None` drops them). A set whose frame count or
-    /// sample rate is not the track's, or one sent to an empty deck, is ignored. A replaced or ignored set goes
-    /// back to the controller to be freed, like a track. Stems arriving or leaving while the
-    /// knobs control them crossfade over one block.
+    /// sample rate is not the track's, or one sent to an empty deck, is ignored. A
+    /// replaced or ignored set goes back to the controller to be freed, like a track.
+    /// Stems arriving or leaving while the knobs control them crossfade over one block.
     SetStems(Option<Arc<StemSet>>),
     /// A stem pad: turns one stem or knob part on or off, ramped over one block. A part
     /// plays only while every pad covering it is on ([`pad_gains`](crate::pad_gains)). It

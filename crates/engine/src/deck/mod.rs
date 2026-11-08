@@ -310,9 +310,8 @@ impl Deck {
 
     /// Before a block: sets the stem gains the block ramps to, from the EQ knob positions
     /// `[low, mid, high]` under `mode` in the `layout`, and returns whether the knobs
-    /// control the stems,
-    /// with a dropped set to discard once its gains are back at the mix. In
-    /// [`EqMode::Eq`] the gains are the pads alone.
+    /// control the stems, with a dropped set to discard once its gains are back at the
+    /// mix. In [`EqMode::Eq`] the gains are the pads alone.
     pub(crate) fn update_stems(
         &mut self,
         mode: EqMode,
