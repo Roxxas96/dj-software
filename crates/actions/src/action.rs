@@ -278,8 +278,8 @@ const SAMPLER_STOP_IDS: [&str; 8] = [
 
 impl ActionKind {
     /// Every kind: each slot family (hotcues, beat jumps, rolls, slices, sampler) once per slot.
-    pub const ALL: [ActionKind; 129] = {
-        let mut all = [ActionKind::PlayPause; 129];
+    pub const ALL: [ActionKind; 132] = {
+        let mut all = [ActionKind::PlayPause; 132];
         let fixed = [
             ActionKind::PlayPause,
             ActionKind::Cue,
@@ -346,6 +346,9 @@ impl ActionKind {
             ActionKind::StemToggle(Stem::Instruments),
             ActionKind::StemToggle(Stem::Bass),
             ActionKind::StemToggle(Stem::Rhythm),
+            ActionKind::StemToggle(Stem::Kicks),
+            ActionKind::StemToggle(Stem::Melody),
+            ActionKind::StemToggle(Stem::Hats),
         ];
         let mut i = 0;
         while i < fixed.len() {
@@ -441,7 +444,6 @@ impl ActionKind {
             ActionKind::StemToggle(Stem::Instruments) => "deck.stem_toggle_instruments",
             ActionKind::StemToggle(Stem::Bass) => "deck.stem_toggle_bass",
             ActionKind::StemToggle(Stem::Rhythm) => "deck.stem_toggle_rhythm",
-            // Not in `ALL` yet: the knob-part pads join the actions with their state.
             ActionKind::StemToggle(Stem::Kicks) => "deck.stem_toggle_kicks",
             ActionKind::StemToggle(Stem::Melody) => "deck.stem_toggle_melody",
             ActionKind::StemToggle(Stem::Hats) => "deck.stem_toggle_hats",

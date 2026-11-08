@@ -193,6 +193,9 @@ fn ids_round_trip_for_every_action() {
         "deck.stem_toggle_instruments",
         "deck.stem_toggle_bass",
         "deck.stem_toggle_rhythm",
+        "deck.stem_toggle_kicks",
+        "deck.stem_toggle_melody",
+        "deck.stem_toggle_hats",
         "sampler.play_1",
         "sampler.play_2",
         "sampler.play_3",
@@ -242,7 +245,7 @@ fn ids_round_trip_for_every_action() {
         .into_iter()
         .filter(|k| k.takes_release())
         .collect();
-    assert_eq!(ActionKind::ALL.len(), 129);
+    assert_eq!(ActionKind::ALL.len(), 132);
     let hotcue = |n| ActionKind::Hotcue(HotcueSlot::new(n).unwrap());
     let hotcue_delete = |n| ActionKind::HotcueDelete(HotcueSlot::new(n).unwrap());
     let mut expected_release = vec![
@@ -1375,6 +1378,24 @@ fn stem_toggles_flip_and_send() {
         assert_eq!(rig.apply(action, Input::Press), ApplyResult::Sent(1));
         assert_eq!(rig.state.deck(d(0)).stems_on, [true; 7]);
         assert_eq!(rig.state.deck(d(1)).stems_on, [true; 7]);
+    }
+}
+
+#[test]
+fn new_stem_toggles_flip_and_send() {
+    let mut rig = Rig::new();
+    for stem in [
+        engine::Stem::Kicks,
+        engine::Stem::Melody,
+        engine::Stem::Hats,
+    ] {
+        let kind = ActionKind::StemToggle(stem);
+        assert_eq!(ActionKind::from_id(kind.id()), Some(kind));
+        let action = deck_action(kind, 0);
+        assert_eq!(rig.apply(action, Input::Press), ApplyResult::Sent(1));
+        assert!(!rig.state.deck(d(0)).stems_on[stem.index()]);
+        assert_eq!(rig.apply(action, Input::Press), ApplyResult::Sent(1));
+        assert_eq!(rig.state.deck(d(0)).stems_on, [true; 7]);
     }
 }
 
