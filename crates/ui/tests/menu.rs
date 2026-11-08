@@ -55,4 +55,5 @@ fn the_light_scheme_draws() {
         .build_ui(|ui| ui::root(ui, &frame, None, &mut screen));
     harness.run_steps(3);
     harness.get_by_label("LAYOUT");
+    assert_eq!(ui::theme::palette(&harness.ctx), ui::theme::Palette::LIGHT);
 }
