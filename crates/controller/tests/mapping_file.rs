@@ -941,13 +941,14 @@ midi = { channel = 16, note = 0x7F }
 }
 
 /// The example user file in the mapping reference: the TOML block holding the
-/// `# SAMPLER pads 1-4` comment.
+/// `# SAMPLER pads 1-4` comment. Line endings may be CRLF (a Windows checkout).
 fn reference_stems_example() -> &'static str {
     let doc = include_str!("../../../docs/controllers/mapping-reference.md");
     let comment = doc
-        .find("\n# SAMPLER pads 1-4")
+        .find("# SAMPLER pads 1-4")
         .expect("the reference has the stems example");
-    let start = doc[..comment].rfind("```toml\n").unwrap() + "```toml\n".len();
+    let fence = doc[..comment].rfind("```toml").unwrap();
+    let start = fence + doc[fence..].find('\n').unwrap() + 1;
     let len = doc[start..].find("```").unwrap();
     assert!(start + len > comment, "the comment is in the block");
     &doc[start..start + len]
