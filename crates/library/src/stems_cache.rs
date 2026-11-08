@@ -12,7 +12,7 @@
 
 use std::collections::HashSet;
 use std::fs::{self, File};
-use std::io::BufWriter;
+use std::io::{BufWriter, Write};
 use std::num::{NonZeroU8, NonZeroU32};
 use std::path::{Path, PathBuf};
 
@@ -215,9 +215,13 @@ impl StemCache {
             let _ = remove_folder(&self.dir.join(&old.path));
         }
         let target = self.dir.join(&name);
+        // Windows cannot rename a folder onto an existing one (Unix can only onto an empty
+        // one), so any previous entry under this name goes first: a crash in between leaves
+        // a row without its folder, which is a miss.
         remove_folder(&target)?;
+        // Every file in `temp` was closed by `write_entry`; the guard holds no handle.
         let temp = temp.keep();
-        if let Err(e) = fs::rename(&temp, &target) {
+        if let Err(e) = rename_folder(&temp, &target) {
             let _ = fs::remove_dir_all(&temp);
             return Err(e.into());
         }
@@ -475,6 +479,29 @@ fn remove_folder(path: &Path) -> std::io::Result<()> {
     }
 }
 
+/// Renames folder `from` to `to` (which must not exist).
+///
+/// Windows: right after files are written, a virus scanner or the search indexer may
+/// briefly hold one of them open, and the folder's rename then fails with "Access is
+/// denied" (os 5); it is retried a few times over about a second.
+fn rename_folder(from: &Path, to: &Path) -> std::io::Result<()> {
+    const ATTEMPTS: u32 = 6;
+    let mut attempt = 1;
+    loop {
+        match fs::rename(from, to) {
+            Err(e)
+                if cfg!(windows)
+                    && e.kind() == std::io::ErrorKind::PermissionDenied
+                    && attempt < ATTEMPTS =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(50 * u64::from(attempt)));
+                attempt += 1;
+            }
+            result => return result,
+        }
+    }
+}
+
 /// The total size of the files in `dir`.
 fn folder_bytes(dir: &Path) -> std::io::Result<u64> {
     let mut total = 0;
@@ -528,9 +555,12 @@ fn write_entry(dir: &Path, set: &StemSet, sample_rate: u32) -> Result<(), Librar
                 .unwrap_or_else(|_| Err(LibraryError::StemEncode("the encoder panicked".into())))
         })
     })?;
-    let manifest = dir.join(MANIFEST);
-    fs::write(&manifest, manifest_text(sample_rate, set.frames()))?;
-    File::open(&manifest)?.sync_all()?;
+    // Written and flushed through one writable handle, dropped before the folder is
+    // renamed. Windows: `sync_all` is `FlushFileBuffers`, which needs a handle with write
+    // access; on a read-only `File::open` handle it fails with "Access is denied" (os 5).
+    let mut manifest = File::create(dir.join(MANIFEST))?;
+    manifest.write_all(manifest_text(sample_rate, set.frames()).as_bytes())?;
+    manifest.sync_all()?;
     Ok(())
 }
 
