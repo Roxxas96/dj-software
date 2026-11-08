@@ -11,6 +11,7 @@ mod midi_cmd;
 mod play;
 mod printer;
 mod samples;
+mod session;
 mod stems_cmd;
 
 #[cfg(test)]
@@ -28,10 +29,18 @@ use library_cmd::LibraryCommand;
 use play::{PlayArgs, play};
 
 #[derive(Debug, Parser)]
-#[command(version, about = "Open Jockey: open-source DJ software")]
+#[command(
+    version,
+    about = "Open Jockey: open-source DJ software",
+    long_about = "Open Jockey: open-source DJ software. Without a command, opens the window."
+)]
 struct Cli {
+    /// Configuration file for the window (default: config.toml in the per-user
+    /// configuration folder)
+    #[arg(long, value_name = "PATH")]
+    config: Option<PathBuf>,
     #[command(subcommand)]
-    command: Sub,
+    command: Option<Sub>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -131,7 +140,10 @@ enum MidiCommand {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    let result = match cli.command {
+    let Some(command) = cli.command else {
+        return finish(session::run_window(cli.config.as_deref()));
+    };
+    let result = match command {
         Sub::Devices => devices(),
         Sub::Play(args) => {
             if let Some(problem) = args.conflict() {
@@ -176,6 +188,10 @@ fn main() -> ExitCode {
             None => led_scan::run(port.as_deref(), &channels, velocity, kind, &out),
         },
     };
+    finish(result)
+}
+
+fn finish(result: anyhow::Result<()>) -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
@@ -208,10 +224,23 @@ mod tests {
     }
 
     fn play_args(args: &[&str]) -> PlayArgs {
-        match parse(args).unwrap().command {
+        match parse(args).unwrap().command.unwrap() {
             Sub::Play(play) => play,
             _ => panic!("expected play"),
         }
+    }
+
+    #[test]
+    fn no_command_opens_the_window_with_its_config() {
+        let cli = parse(&["open-jockey"]).unwrap();
+        assert!(cli.command.is_none());
+        assert_eq!(cli.config, None);
+        let cli = parse(&["open-jockey", "--config", "/tmp/c.toml"]).unwrap();
+        assert!(cli.command.is_none());
+        assert_eq!(cli.config, Some(PathBuf::from("/tmp/c.toml")));
+        // `play` keeps its own `--config`.
+        let play = play_args(&["open-jockey", "play", "a.mp3", "--config", "/tmp/p.toml"]);
+        assert_eq!(play.config, Some(PathBuf::from("/tmp/p.toml")));
     }
 
     #[test]
@@ -236,7 +265,10 @@ mod tests {
     #[test]
     fn parses_stems_setup() {
         assert!(matches!(
-            parse(&["open-jockey", "stems", "setup"]).unwrap().command,
+            parse(&["open-jockey", "stems", "setup"])
+                .unwrap()
+                .command
+                .unwrap(),
             Sub::Stems(StemsCommand::Setup)
         ));
         assert!(parse(&["open-jockey", "stems"]).is_err());
@@ -245,7 +277,10 @@ mod tests {
     #[test]
     fn parses_midi_ports() {
         assert!(matches!(
-            parse(&["open-jockey", "midi", "ports"]).unwrap().command,
+            parse(&["open-jockey", "midi", "ports"])
+                .unwrap()
+                .command
+                .unwrap(),
             Sub::Midi(MidiCommand::Ports)
         ));
     }
@@ -255,6 +290,7 @@ mod tests {
         match parse(&["open-jockey", "midi", "monitor", "--port", "DDJ"])
             .unwrap()
             .command
+            .unwrap()
         {
             Sub::Midi(MidiCommand::Monitor {
                 port, controller, ..
@@ -265,7 +301,10 @@ mod tests {
             _ => panic!("expected midi monitor"),
         }
         assert!(matches!(
-            parse(&["open-jockey", "midi", "monitor"]).unwrap().command,
+            parse(&["open-jockey", "midi", "monitor"])
+                .unwrap()
+                .command
+                .unwrap(),
             Sub::Midi(MidiCommand::Monitor {
                 port: None,
                 controller: None,
@@ -306,6 +345,7 @@ mod tests {
         match parse(&["open-jockey", "midi", "monitor", "--controller", "ddj-sb3"])
             .unwrap()
             .command
+            .unwrap()
         {
             Sub::Midi(MidiCommand::Monitor {
                 port, controller, ..
@@ -364,7 +404,11 @@ mod tests {
 
     #[test]
     fn parses_midi_led_scan() {
-        match parse(&["open-jockey", "midi", "led-scan"]).unwrap().command {
+        match parse(&["open-jockey", "midi", "led-scan"])
+            .unwrap()
+            .command
+            .unwrap()
+        {
             Sub::Midi(MidiCommand::LedScan {
                 channels,
                 velocity,
@@ -396,6 +440,7 @@ mod tests {
         ])
         .unwrap()
         .command
+        .unwrap()
         {
             Sub::Midi(MidiCommand::LedScan {
                 channels,
@@ -424,6 +469,7 @@ mod tests {
         ])
         .unwrap()
         .command
+        .unwrap()
         {
             Sub::Midi(MidiCommand::Capture {
                 checklist,
@@ -454,6 +500,7 @@ mod tests {
         ])
         .unwrap()
         .command
+        .unwrap()
         {
             Sub::Midi(MidiCommand::Capture { redo, .. }) => {
                 assert_eq!(redo, ["deck1.play", "deck1.cue"]);
@@ -465,7 +512,7 @@ mod tests {
     fn library(args: &[&str]) -> LibraryArgs {
         let mut full = vec!["open-jockey", "library"];
         full.extend_from_slice(args);
-        match parse(&full).unwrap().command {
+        match parse(&full).unwrap().command.unwrap() {
             Sub::Library(library) => library,
             _ => panic!("expected library"),
         }

@@ -202,10 +202,6 @@ impl Default for AudioConfig {
 
 impl AudioConfig {
     /// Routing with 0-based channel indices.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the window (a later task) uses it")
-    )]
     pub fn routing(&self) -> OutputRouting {
         OutputRouting {
             master: self.master.map(|c| c - 1),

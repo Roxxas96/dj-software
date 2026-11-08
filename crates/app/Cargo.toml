@@ -29,6 +29,7 @@ library = { path = "../library" }
 stems = { path = "../stems" }
 toml.workspace = true
 analysis = { path = "../analysis" }
+ui = { path = "../ui" }
 
 [dev-dependencies]
 tempfile.workspace = true

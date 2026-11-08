@@ -1,4 +1,5 @@
-//! Prints on its own thread, so a slow or blocked stdout never stalls the control loop.
+//! Prints on its own thread, so a slow or blocked stdout never stalls the control loop;
+//! or, for the window, forwards what it would print.
 
 use std::io::{IsTerminal, Write};
 use std::sync::Arc;
@@ -20,7 +21,8 @@ pub struct Printer {
     thread: std::thread::JoinHandle<()>,
 }
 
-enum Line {
+/// What the printer is asked to show.
+pub enum Line {
     /// Replaces the status lines.
     Status(Vec<String>),
     /// A message on its own line, above the status lines.
@@ -46,6 +48,28 @@ impl Printer {
                 }
                 let _ = stdout.write_all(&out);
                 let _ = stdout.flush();
+            }
+        });
+        Self {
+            tx,
+            status_pending,
+            thread,
+        }
+    }
+
+    /// A printer that forwards what it is asked to show to `out` instead of printing it,
+    /// for the window. Status updates are dropped as [`Printer::spawn`]'s are, while one is
+    /// still on its way.
+    pub fn to_channel(out: Sender<Line>) -> Self {
+        let (tx, rx) = channel::<Line>();
+        let status_pending = Arc::new(AtomicBool::new(false));
+        let pending = Arc::clone(&status_pending);
+        let thread = std::thread::spawn(move || {
+            for line in rx {
+                if let Line::Status(_) = line {
+                    pending.store(false, Ordering::Relaxed);
+                }
+                let _ = out.send(line);
             }
         });
         Self {

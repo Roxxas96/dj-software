@@ -13,7 +13,8 @@ optional; a key left out keeps its default, and so does a missing file.
 | Linux   | `~/.config/open-jockey/config.toml`                      |
 | Windows | `%APPDATA%\open-jockey\config.toml`                      |
 
-`play --config <PATH>` reads another file instead (and then the file must exist).
+`play --config <PATH>`, and `open-jockey --config <PATH>` for the window, read another file
+instead (and then the file must exist).
 
 ## Keys
 

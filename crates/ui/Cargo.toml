@@ -1,0 +1,24 @@
+[package]
+name = "ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+actions = { path = "../actions" }
+analysis = { path = "../analysis" }
+anyhow.workspace = true
+eframe.workspace = true
+egui.workspace = true
+engine = { path = "../engine" }
+jiff.workspace = true
+library = { path = "../library" }
+
+[dev-dependencies]
+egui_kittest.workspace = true
