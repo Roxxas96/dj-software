@@ -4,6 +4,7 @@
 
 pub mod cover;
 pub mod deck;
+pub mod mixer;
 mod model;
 pub mod theme;
 mod topbar;
@@ -87,6 +88,7 @@ pub struct Screen {
     pub lanes: waveform::Lanes,
     pub decks: deck::DeckPanels,
     pub covers: cover::Covers,
+    pub mixer: mixer::Mixer,
 }
 
 /// Draws the whole window for `frame`; `monitor` is `None` until the audio device opens.
@@ -113,7 +115,8 @@ pub fn root(
         .show_separator_line(false)
         .show(ui, |ui| {
             // The space between the decks is the mixer's.
-            let _mixer = screen.decks.show(ui, frame, monitor, &mut screen.covers);
+            let space = screen.decks.show(ui, frame, monitor, &mut screen.covers);
+            screen.mixer.show(ui, space, frame, monitor);
         });
     egui::CentralPanel::default()
         .frame(egui::Frame::new().fill(theme::BACKGROUND))
