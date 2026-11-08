@@ -4,15 +4,17 @@
 //!
 //! One job per track: decks holding the same track share it. The thread looks a job up in
 //! the stems cache as soon as it arrives; a miss waits its turn for the separator, one
-//! separation at a time, so a separation's memory peak never meets another one's or a
-//! cache hit's decode. A job no deck wants any more is cancelled (its flag is checked once
-//! per chunk), and its result, if it still comes, is discarded.
+//! separation at a time, so a separation's memory peak never meets another one's. Between a separation's chunks, newly requested tracks are looked up
+//! in the cache (on the same thread: one decoded set more at most), so a cached track
+//! never waits for the whole separation (Ruling R12). A
+//! job no deck wants any more is cancelled (its flag is checked once per chunk); a result
+//! that still completes is kept in the cache but sent to no deck (Ruling R14).
 //!
 //! The separator opens on its own thread at startup (the CoreML compile cache is per
 //! executable, so the first open after an update takes about a minute); cache hits are
 //! served meanwhile and separations wait for it.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -88,15 +90,22 @@ impl StemsSetup {
     }
 }
 
+/// Opens the model and runs it once, so a model that opens but cannot run fails here, with
+/// the one message.
 fn open_model(model: &Path) -> Result<Box<dyn StemSeparator>, String> {
     let options = stems::ModelOptions {
-        // On the CPU path, leave a core free, as the analyzer does.
-        threads: Some(library::default_threads()),
+        threads: Some(cpu_threads()),
         ..stems::ModelOptions::default()
     };
-    stems::ModelSeparator::new(model, &options)
-        .map(|separator| Box::new(separator) as Box<dyn StemSeparator>)
-        .map_err(|e| e.to_string())
+    let mut separator = stems::ModelSeparator::new(model, &options).map_err(|e| e.to_string())?;
+    separator.warm_up().map_err(|e| e.to_string())?;
+    Ok(Box::new(separator))
+}
+
+/// The CPU path's intra-op threads: half the cores, at least one, so playback keeps room
+/// (Ruling R13; CoreML ignores it).
+fn cpu_threads() -> usize {
+    std::thread::available_parallelism().map_or(1, |n| (n.get() / 2).max(1))
 }
 
 /// What the control loop tells the thread without a message: whether a deck plays, the
@@ -108,6 +117,8 @@ struct Shared {
     playheads: [AtomicU64; 4],
     /// The library tracks the decks hold (or are still replacing): never evicted.
     loaded: Mutex<Vec<i64>>,
+    /// The jobs decks wait on, with one such deck each.
+    job_decks: Mutex<Vec<(u64, DeckId)>>,
 }
 
 /// A job's state, as the status line shows it.
@@ -140,6 +151,8 @@ struct Job {
     /// The deck that asked first: the separation starts around its playhead.
     deck: DeckId,
     track: i64,
+    /// The track's name, for messages.
+    name: String,
     buffer: Arc<TrackBuffer>,
     cancel: Arc<AtomicBool>,
 }
@@ -189,7 +202,7 @@ impl StemsControl {
                         let result = open();
                         if let Err(e) = &result {
                             let _ = replies.send(Reply::Message(format!(
-                                "stems: the model could not be opened, the EQ knobs stay EQ: {}",
+                                "stems: the model could not be opened, so tracks not separated yet keep the EQ: {}",
                                 safe(e)
                             )));
                         }
@@ -199,7 +212,7 @@ impl StemsControl {
                     Ok(_) => Model::Opening(model_rx),
                     Err(e) => {
                         let _ = replies_tx.send(Reply::Message(format!(
-                            "stems: the model could not be opened, the EQ knobs stay EQ: {e}"
+                            "stems: the model could not be opened, so tracks not separated yet keep the EQ: {e}"
                         )));
                         Model::Unavailable
                     }
@@ -243,7 +256,13 @@ impl StemsControl {
     /// Asks for the stems of `track`, decoded as `buffer`, for `deck`: joins the job
     /// already running for the same track and decode, if any. Returns the job, or `None`
     /// if the thread has stopped (it said why).
-    pub fn request(&mut self, deck: DeckId, track: i64, buffer: Arc<TrackBuffer>) -> Option<u64> {
+    pub fn request(
+        &mut self,
+        deck: DeckId,
+        track: i64,
+        name: String,
+        buffer: Arc<TrackBuffer>,
+    ) -> Option<u64> {
         let same = self.running.iter().find(|(_, j)| {
             j.track == track
                 && j.frames == buffer.frames()
@@ -270,6 +289,7 @@ impl StemsControl {
             id,
             deck,
             track,
+            name,
             buffer,
             cancel,
         };
@@ -345,14 +365,25 @@ impl StemsControl {
         lines
     }
 
-    /// Tells the thread whether a deck plays, where the playheads are and which tracks
-    /// the decks hold.
-    pub fn update(&self, playing: bool, playheads: [f64; 4], loaded: Vec<i64>) {
+    /// Tells the thread whether a deck plays, where the playheads are, which tracks the
+    /// decks hold and which jobs they wait on (with a deck each).
+    pub fn update(
+        &self,
+        playing: bool,
+        playheads: [f64; 4],
+        loaded: Vec<i64>,
+        job_decks: Vec<(u64, DeckId)>,
+    ) {
         self.shared.playing.store(playing, Ordering::Relaxed);
         for (slot, frame) in self.shared.playheads.iter().zip(playheads) {
             slot.store(frame.to_bits(), Ordering::Relaxed);
         }
         *self.shared.loaded.lock().unwrap_or_else(|e| e.into_inner()) = loaded;
+        *self
+            .shared
+            .job_decks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = job_decks;
     }
 
     /// Cancels every job and stops the thread, waiting up to [`SHUTDOWN_WAIT`] for it.
@@ -445,10 +476,10 @@ impl Worker {
                     Err(RecvTimeoutError::Disconnected) => return,
                 }
             };
+            let separable = !matches!(self.model, Model::Unavailable);
             let arrived: Vec<Job> = first.into_iter().chain(jobs.try_iter()).collect();
             for job in arrived {
-                if let Some(miss) = self.look_up(job) {
-                    self.reply(Reply::Status(miss.0.id, JobStatus::Queued));
+                if let Some(miss) = look_up(&self.cache, &self.replies, separable, job) {
                     pending.push_back(miss);
                 }
             }
@@ -475,68 +506,60 @@ impl Worker {
                 }
                 Model::Ready(_) => {
                     let (job, fingerprint) = pending.pop_front().expect("a front job");
-                    self.separate(job, &fingerprint);
+                    let misses = self.separate(job, &fingerprint, jobs);
+                    pending.extend(misses);
                 }
             }
         }
     }
 
-    /// Sends `job`'s cached stems, or returns it with its fingerprint when it has to be
-    /// separated. A track the library cannot key, or a miss with no separator, ends there.
-    fn look_up(&self, job: Job) -> Option<(Job, Vec<u8>)> {
-        if job.cancel.load(Ordering::Relaxed) {
-            self.reply(Reply::Done(job.id));
-            return None;
-        }
-        let fingerprint = match self.cache.fingerprint(job.track) {
-            Ok(Some(fingerprint)) => fingerprint,
-            Ok(None) => {
-                self.reply(Reply::Done(job.id));
-                return None;
-            }
-            Err(e) => {
-                self.reply(Reply::Message(format!(
-                    "warning: stems: cannot read track {}: {}",
-                    job.track,
-                    safe(e)
-                )));
-                self.reply(Reply::Done(job.id));
-                return None;
-            }
-        };
-        let key = key(&job, &fingerprint);
-        if let Some(set) = self.cache.get(&key) {
-            self.reply(Reply::Stems(job.id, Arc::new(set)));
-            self.reply(Reply::Done(job.id));
-            return None;
-        }
-        if matches!(self.model, Model::Unavailable) {
-            self.reply(Reply::Done(job.id));
-            return None;
-        }
-        Some((job, fingerprint))
-    }
-
-    /// Separates `job` around its deck's playhead, sends the stems unless the job was
-    /// cancelled meanwhile, and keeps them in the cache.
-    fn separate(&mut self, job: Job, fingerprint: &[u8]) {
-        let Model::Ready(separator) = &mut self.model else {
-            return;
-        };
-        let playhead =
-            f64::from_bits(self.shared.playheads[job.deck.index()].load(Ordering::Relaxed));
+    /// The playhead of a deck still waiting on job `id` (the first requester's if none is
+    /// known), in frames.
+    fn playhead(&self, job: &Job) -> usize {
+        let deck = self
+            .shared
+            .job_decks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .find(|(id, _)| *id == job.id)
+            .map_or(job.deck, |&(_, deck)| deck);
+        let frame = f64::from_bits(self.shared.playheads[deck.index()].load(Ordering::Relaxed));
         // A playhead in frames, never negative.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        separator.start_at(playhead.max(0.0) as usize);
+        let frame = frame.max(0.0) as usize;
+        frame
+    }
+
+    /// Separates `job` around the playhead of a deck waiting on it, sends the stems unless
+    /// the job was cancelled meanwhile, and keeps them in the cache either way (Ruling
+    /// R14). Between chunks, newly arrived jobs are looked up in the cache, so a cached
+    /// track never waits for the whole separation (Ruling R12); their misses are returned.
+    fn separate(
+        &mut self,
+        job: Job,
+        fingerprint: &[u8],
+        jobs: &Receiver<Job>,
+    ) -> Vec<(Job, Vec<u8>)> {
+        let start = self.playhead(&job);
+        let Model::Ready(separator) = &mut self.model else {
+            return Vec::new();
+        };
+        separator.start_at(start);
         let _ = self
             .replies
             .send(Reply::Status(job.id, JobStatus::Separating(0.0)));
+        let misses = RefCell::new(Vec::new());
         let chunk_start = Cell::new(Instant::now());
+        let (cache, replies, shared) = (&self.cache, &self.replies, &self.shared);
         let progress = |done: f32| {
-            let _ = self
-                .replies
-                .send(Reply::Status(job.id, JobStatus::Separating(done)));
-            if self.shared.playing.load(Ordering::Relaxed) {
+            let _ = replies.send(Reply::Status(job.id, JobStatus::Separating(done)));
+            for arrived in jobs.try_iter() {
+                if let Some(miss) = look_up(cache, replies, true, arrived) {
+                    misses.borrow_mut().push(miss);
+                }
+            }
+            if shared.playing.load(Ordering::Relaxed) {
                 let pause = chunk_start.get().elapsed().mul_f64(PAUSE_WHILE_PLAYING);
                 std::thread::sleep(pause.min(MAX_PAUSE));
             }
@@ -544,11 +567,12 @@ impl Worker {
         };
         let result = separator.separate(&job.buffer, &progress, &job.cancel);
         match result {
-            // Cancelled meanwhile: no deck wants it now, so it is neither sent nor kept.
-            Ok(_) if job.cancel.load(Ordering::Relaxed) => {}
             Ok(set) => {
                 let set = Arc::new(set);
-                self.reply(Reply::Stems(job.id, Arc::clone(&set)));
+                // No deck wants it now: kept, not sent.
+                if !job.cancel.load(Ordering::Relaxed) {
+                    self.reply(Reply::Stems(job.id, Arc::clone(&set)));
+                }
                 let loaded = self
                     .shared
                     .loaded
@@ -561,8 +585,8 @@ impl Worker {
                 {
                     Ok(eviction) => self.reply(Reply::Evicted(eviction)),
                     Err(e) => self.reply(Reply::Message(format!(
-                        "warning: stems: could not keep the stems of track {}: {}",
-                        job.track,
+                        "warning: stems: could not keep the stems of {}: {}",
+                        job.name,
                         safe(e)
                     ))),
                 }
@@ -570,13 +594,59 @@ impl Worker {
             // The control loop refuses long tracks before asking.
             Err(SeparateError::Cancelled | SeparateError::TooLong { .. }) => {}
             Err(e) => self.reply(Reply::Message(format!(
-                "stems: track {} could not be separated: {}",
-                job.track,
+                "stems: {} could not be separated: {}",
+                job.name,
                 safe(e)
             ))),
         }
         self.reply(Reply::Done(job.id));
+        misses.into_inner()
     }
+}
+
+/// Sends `job`'s cached stems, or returns it with its fingerprint (queued) when it has to
+/// be separated. A track the library cannot key, or a miss that cannot be `separable`,
+/// ends there.
+fn look_up(
+    cache: &StemCache,
+    replies: &Sender<Reply>,
+    separable: bool,
+    job: Job,
+) -> Option<(Job, Vec<u8>)> {
+    let reply = |reply| {
+        let _ = replies.send(reply);
+    };
+    if job.cancel.load(Ordering::Relaxed) {
+        reply(Reply::Done(job.id));
+        return None;
+    }
+    let fingerprint = match cache.fingerprint(job.track) {
+        Ok(Some(fingerprint)) => fingerprint,
+        Ok(None) => {
+            reply(Reply::Done(job.id));
+            return None;
+        }
+        Err(e) => {
+            reply(Reply::Message(format!(
+                "warning: stems: cannot read {} in the library: {}",
+                job.name,
+                safe(e)
+            )));
+            reply(Reply::Done(job.id));
+            return None;
+        }
+    };
+    if let Some(set) = cache.get(&key(&job, &fingerprint)) {
+        reply(Reply::Stems(job.id, Arc::new(set)));
+        reply(Reply::Done(job.id));
+        return None;
+    }
+    if !separable {
+        reply(Reply::Done(job.id));
+        return None;
+    }
+    reply(Reply::Status(job.id, JobStatus::Queued));
+    Some((job, fingerprint))
 }
 
 fn key<'a>(job: &Job, fingerprint: &'a [u8]) -> StemKey<'a> {
