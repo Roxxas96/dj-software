@@ -837,3 +837,31 @@ fn changed_audio_keeps_a_locked_grid() {
         .unwrap();
     assert_eq!(key, None);
 }
+
+#[test]
+fn add_folder_files_is_shallow_and_unregistered() {
+    let s = setup();
+    copy_fixture("sine440.wav", &s.music.join("a1.wav"));
+    copy_fixture("sine440_mono.wav", &s.music.join("sub/s1.wav"));
+    let reader = s.lib.reader().unwrap();
+    let report = library::add_folder_files(&s.lib.writer(), reader.connection(), &s.music).unwrap();
+    assert!(s.lib.take_failed_writes().is_empty());
+    assert_eq!((report.added, report.missing), (1, 0));
+    let paths: Vec<String> = reader
+        .tracks(&Default::default(), library::TrackSort::default(), 0, 100)
+        .unwrap()
+        .into_iter()
+        .map(|t| {
+            reader
+                .track(t.id)
+                .unwrap()
+                .unwrap()
+                .path
+                .display()
+                .to_string()
+        })
+        .collect();
+    assert_eq!(paths.len(), 1);
+    assert!(paths[0].ends_with("a1.wav"), "{paths:?}");
+    assert!(reader.folders().unwrap().is_empty());
+}

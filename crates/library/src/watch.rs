@@ -385,6 +385,7 @@ impl Worker {
             root,
             None,
             Some(&self.stop),
+            None,
             &mut |_| {},
         );
         self.finish(root, result)

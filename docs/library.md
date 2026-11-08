@@ -284,8 +284,12 @@ open-jockey play --library --controller ddj-sb3 --device "DDJ-SB3" --master 3,4
   then each volume in `/Volumes`) and the folders opened below them, read from the disk,
   then "Playlists" with one row per playlist. The list beside it shows the highlighted
   folder's own audio files (not its subfolders'), sorted by file name, or the
-  highlighted playlist's tracks. A file the library has shows its title, BPM and key (only
-  those load for now); a folder that can't be read opens empty, marked "cannot read". Hidden (`.`) folders and
+  highlighted playlist's tracks. A file the library has shows its title, BPM and key. Highlighting a
+  folder adds its own audio files that the library lacks, in the background (not those
+  of its subfolders, and the folder is not registered or watched): they show their file
+  name until the next refresh, then get their tags, and BPM and key follow as the
+  analysis runs. LOAD on a file not added yet says nothing is selected; it works once the
+  file shows its tags. A folder that can't be read opens empty, marked "cannot read". Hidden (`.`) folders and
   files are not shown.
 - The BROWSE knob scrolls the focused pane, pressing it switches between the tree and the
   list, SHIFT + BROWSE press opens or closes the highlighted drive or folder, and

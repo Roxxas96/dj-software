@@ -144,6 +144,16 @@ impl LibraryMode {
 
     /// [`LibraryMode::start`] with stems set up as `stems` says (`None`: disabled).
     fn start_with(db: Option<&Path>, stems: Option<StemsSetup>) -> anyhow::Result<Self> {
+        Self::start_browsing(db, stems, None)
+    }
+
+    /// [`LibraryMode::start_with`] with the browser's tree starting at `drives` (`None`:
+    /// the computer's drives).
+    fn start_browsing(
+        db: Option<&Path>,
+        stems: Option<StemsSetup>,
+        drives: Option<Vec<library::Drive>>,
+    ) -> anyhow::Result<Self> {
         let lib = Arc::new(crate::library_cmd::open_library(db)?);
         let reader = lib.reader()?;
         let notation = notation_from_setting(reader.setting(KEY_NOTATION)?.as_deref());
@@ -169,8 +179,8 @@ impl LibraryMode {
         };
 
         let (events_tx, events) = channel();
-        let (jobs, worker) =
-            worker::spawn(Arc::clone(&lib), events_tx).context("starting the library worker")?;
+        let (jobs, worker) = worker::spawn(Arc::clone(&lib), events_tx, drives)
+            .context("starting the library worker")?;
         let stems = stems
             .map(|setup| StemsControl::start(Arc::clone(&lib), setup))
             .transpose()
@@ -407,6 +417,10 @@ impl LibraryMode {
                 self.refresh_wanted = true;
             }
             Event::NewTracks(ids) => self.enqueue_new(&ids),
+            Event::FolderAdded => {
+                self.refresh_wanted = true;
+                self.find_new_tracks = true;
+            }
             Event::Track { deck, row, grid } => {
                 let id = row.id;
                 if let Some(t) = self.decks[deck.index()].as_mut().filter(|t| t.row.id == id) {
@@ -2455,6 +2469,38 @@ mod tests {
         run_until(&mut mode, &mut engine, &mut renderer, &printer, |m, e| {
             deck_line_of(m, e, 0).contains("  stems  ")
         });
+        mode.shutdown(&mut engine, &printer);
+        printer.finish();
+    }
+
+    #[test]
+    fn browsing_a_new_folder_adds_its_files_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let music = dunce::canonicalize(dir.path()).unwrap().join("music");
+        std::fs::create_dir_all(&music).unwrap();
+        let fixtures = concat!(env!("CARGO_MANIFEST_DIR"), "/../decode/tests/fixtures/");
+        std::fs::copy(format!("{fixtures}sine440.wav"), music.join("a.wav")).unwrap();
+        std::fs::copy(format!("{fixtures}sine440_mono.wav"), music.join("b.wav")).unwrap();
+        let drives = vec![library::Drive {
+            name: "music".into(),
+            path: music,
+        }];
+        let db = dir.path().join("library.sqlite3");
+        let mut mode = LibraryMode::start_browsing(Some(&db), None, Some(drives)).unwrap();
+        let (mut engine, mut renderer) = engine::engine(engine::EngineConfig {
+            sample_rate: 44_100,
+            max_block_frames: 512,
+        });
+        let printer = Printer::spawn();
+        run_until(&mut mode, &mut engine, &mut renderer, &printer, |m, _| {
+            m.browser
+                .as_ref()
+                .is_some_and(|b| b.list.len() == 2 && b.list.iter().all(|r| r.track.is_some()))
+        });
+        assert_eq!(
+            mode.reader().unwrap().folders().unwrap(),
+            Vec::<std::path::PathBuf>::new()
+        );
         mode.shutdown(&mut engine, &printer);
         printer.finish();
     }

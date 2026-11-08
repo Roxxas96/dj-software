@@ -283,6 +283,20 @@ impl Browser {
         self.list.selected().and_then(|r| r.track.clone())
     }
 
+    /// The highlighted folder, when its list has audio files the library doesn't have.
+    #[must_use]
+    pub fn folder_with_unknown_files(&self) -> Option<PathBuf> {
+        let Target::Dir(dir) = self.tree.target(self.tree_cursor) else {
+            return None;
+        };
+        match &self.list.items {
+            Items::Files { files, tracks } if files.iter().any(|f| !tracks.contains_key(f)) => {
+                Some(dir.clone())
+            }
+            _ => None,
+        }
+    }
+
     fn move_tree(&mut self, steps: i32) -> Result<(), LibraryError> {
         let to = step(self.tree_cursor, steps, self.tree.len());
         if to != self.tree_cursor {
