@@ -375,7 +375,7 @@ fn put_all(f: &Fixture, tracks: &[(i64, bool)]) -> u64 {
 #[test]
 fn eviction_order_follows_the_spec() {
     let f = fixture();
-    let ids: Vec<i64> = (1..=7).map(|seed| add_track(&f.lib, seed)).collect();
+    let ids: Vec<i64> = (1..=8).map(|seed| add_track(&f.lib, seed)).collect();
     let [
         never,
         old,
@@ -384,6 +384,7 @@ fn eviction_order_follows_the_spec() {
         hotcue,
         prepared,
         recent,
+        cued,
     ] = ids.clone().try_into().unwrap();
     let entry = put_all(
         &f,
@@ -399,9 +400,15 @@ fn eviction_order_follows_the_spec() {
     set_loaded_at(&f.lib, hotcue, Some(t - 50 * DAY));
     set_loaded_at(&f.lib, prepared, Some(t - 35 * DAY));
     set_loaded_at(&f.lib, recent, Some(t - 5 * DAY));
+    set_loaded_at(&f.lib, cued, Some(t - 55 * DAY));
     w.submit_wait(WriteOp::SetCue {
         track: cue_at_zero,
         frames: 0.0,
+    })
+    .unwrap();
+    w.submit_wait(WriteOp::SetCue {
+        track: cued,
+        frames: 500.0,
     })
     .unwrap();
     w.submit_wait(WriteOp::SetHotcue {
@@ -431,6 +438,7 @@ fn eviction_order_follows_the_spec() {
         cue_at_zero,
         old,
         in_playlist,
+        cued,
         hotcue,
         prepared,
         recent,
@@ -491,8 +499,16 @@ fn orphan_entries_are_swept_on_new() {
     let orphan = entry_dir(&f.stems, 99, &[9; 32]);
     std::fs::create_dir_all(&orphan).unwrap();
     std::fs::write(orphan.join("vocals.ogg"), b"x").unwrap();
-    let partial = f.stems.join(".tmp-1-abc");
-    std::fs::create_dir_all(&partial).unwrap();
+    // A temporary folder another process may still be writing (fresh) is kept.
+    let writing = f.stems.join(".tmp-1-abc");
+    std::fs::create_dir_all(&writing).unwrap();
+    #[cfg(unix)]
+    let partial = {
+        let partial = f.stems.join(".tmp-2-def");
+        std::fs::create_dir_all(&partial).unwrap();
+        age(&partial, 2 * 3600);
+        partial
+    };
     let coreml = f.stems.join("coreml-cache");
     std::fs::create_dir_all(&coreml).unwrap();
     std::fs::write(coreml.join("model.mlmodelc"), b"keep").unwrap();
@@ -511,7 +527,10 @@ fn orphan_entries_are_swept_on_new() {
         .unwrap();
 
     let cache = StemCache::new(&f.lib, &f.stems, u64::MAX).unwrap();
-    assert!(!orphan.exists() && !partial.exists());
+    assert!(!orphan.exists());
+    assert!(writing.exists(), "a fresh temporary folder is not swept");
+    #[cfg(unix)]
+    assert!(!partial.exists(), "an hour-old temporary folder is swept");
     assert!(coreml.join("model.mlmodelc").exists());
     assert!(entry_dir(&f.stems, a, &[a as u8; 32]).exists());
     assert_eq!(cached_tracks(&f.lib), vec![a]);
@@ -550,6 +569,10 @@ fn migration_adds_columns_and_keeps_data() {
         .unwrap();
     assert_eq!(fingerprint, vec![5; 32]);
     assert_eq!(loaded, None);
+    let prepared: i64 = conn
+        .query_row("SELECT stems_prepared FROM tracks", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(prepared, 0);
     assert_eq!(reader.cue(1).unwrap(), Some(1234.0));
     let columns: Vec<String> = conn
         .prepare("SELECT name FROM pragma_table_info('stems') ORDER BY cid")
@@ -613,4 +636,106 @@ fn rates_without_a_bitrate_table_still_cache() {
         let decoded = cache.get(&k).unwrap_or_else(|| panic!("{rate} Hz"));
         assert_eq!(decoded.frames(), set.frames(), "{rate} Hz");
     }
+}
+
+/// Makes `path` (a folder) look `seconds` old. Opening a folder as a file works on Unix.
+#[cfg(unix)]
+fn age(path: &Path, seconds: u64) {
+    std::fs::File::open(path)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(seconds))
+        .unwrap();
+}
+
+/// Replaces track `track`'s entry folder with a file, which no folder removal can delete.
+fn make_unremovable(stems: &Path, track: i64) {
+    let dir = entry_dir(stems, track, &[track as u8; 32]);
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::write(&dir, b"not a folder").unwrap();
+}
+
+#[test]
+fn a_failed_removal_is_skipped_and_retried() {
+    let f = fixture();
+    let ids: Vec<i64> = (1..=3).map(|seed| add_track(&f.lib, seed)).collect();
+    put_all(&f, &ids.iter().map(|&t| (t, false)).collect::<Vec<_>>());
+    let t = now();
+    for (i, &track) in ids.iter().enumerate() {
+        set_loaded_at(&f.lib, track, Some(t - (40 + 10 * (3 - i as i64)) * DAY));
+    }
+    // The oldest entry cannot be removed: eviction skips it and goes on.
+    make_unremovable(&f.stems, ids[0]);
+    let mut cache = StemCache::new(&f.lib, &f.stems, 0).unwrap();
+    let report = cache.evict(&[]).unwrap();
+    assert_eq!(report.failed, 1);
+    assert_eq!(report.removed, vec![ids[1], ids[2]]);
+    assert_eq!(
+        cached_tracks(&f.lib),
+        vec![ids[0]],
+        "its row is kept, to retry"
+    );
+    assert!(report.over_budget && report.notice.is_some());
+
+    // A put whose entry is stored succeeds even though eviction fails again.
+    let d = add_track(&f.lib, 4);
+    let set = stems_at(44_100, 0.25);
+    let report = cache
+        .put(&key(d, &[4; 32], 44_100, set.frames()), &set, false, &[])
+        .unwrap();
+    assert_eq!(report.failed, 1);
+    assert!(cache.get(&key(d, &[4; 32], 44_100, set.frames())).is_some());
+
+    // Once removable, a later pass removes it.
+    let dir = entry_dir(&f.stems, ids[0], &[ids[0] as u8; 32]);
+    std::fs::remove_file(&dir).unwrap();
+    let report = cache.evict(&[d]).unwrap();
+    assert_eq!((report.removed, report.failed), (vec![ids[0]], 0));
+}
+
+#[cfg(unix)]
+#[test]
+fn sweep_skips_what_it_cannot_remove() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = fixture();
+    std::fs::create_dir_all(&f.stems).unwrap();
+    // Two orphans; the first holds a read-only folder, so its files cannot be deleted.
+    let stuck = entry_dir(&f.stems, 98, &[8; 32]);
+    let locked = stuck.join("locked");
+    std::fs::create_dir_all(&locked).unwrap();
+    std::fs::write(locked.join("vocals.ogg"), b"x").unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let orphan = entry_dir(&f.stems, 99, &[9; 32]);
+    std::fs::create_dir_all(&orphan).unwrap();
+
+    let opened = StemCache::new(&f.lib, &f.stems, u64::MAX);
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    opened.expect("a folder that cannot be removed does not fail opening the cache");
+    assert!(locked.join("vocals.ogg").exists(), "skipped");
+    assert!(!orphan.exists(), "the sweep went on");
+}
+
+#[test]
+fn a_redone_entry_stays_prepared() {
+    let f = fixture();
+    let track = add_track(&f.lib, 1);
+    let set = stems_at(44_100, 0.25);
+    let k = key(track, &[1; 32], 44_100, set.frames());
+    let mut cache = StemCache::new(&f.lib, &f.stems, u64::MAX).unwrap();
+    cache.put(&k, &set, true, &[]).unwrap();
+    std::fs::remove_file(entry_dir(&f.stems, track, &[1; 32]).join("bass.ogg")).unwrap();
+    assert!(cache.get(&k).is_none());
+    // Separated again on load, not with `library stems`: still prepared.
+    cache.put(&k, &set, false, &[]).unwrap();
+    let prepared: bool = f
+        .lib
+        .reader()
+        .unwrap()
+        .connection()
+        .query_row(
+            "SELECT prepared FROM stems WHERE track_id = ?1",
+            [track],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(prepared);
 }

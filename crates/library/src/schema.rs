@@ -83,11 +83,13 @@ CREATE TABLE settings (
 ";
 
 /// Version 2: stems. `tracks.last_loaded_at` (seconds since the Unix epoch, set at each
-/// deck load) and the stems cache's entries, one per track: the fingerprint the stems were
-/// separated from, the entry's folder relative to the stems folder, its size on disk, and
-/// whether it was prepared ahead with `library stems`.
+/// deck load), `tracks.stems_prepared` (stems were prepared ahead with `library stems`;
+/// kept when the entry itself is removed) and the stems cache's entries, one per track:
+/// the fingerprint the stems were separated from, the entry's folder relative to the stems
+/// folder, its size on disk, and whether it was prepared ahead.
 const V2: &str = "
 ALTER TABLE tracks ADD COLUMN last_loaded_at INTEGER;
+ALTER TABLE tracks ADD COLUMN stems_prepared INTEGER NOT NULL DEFAULT 0;
 
 CREATE TABLE stems (
     track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
