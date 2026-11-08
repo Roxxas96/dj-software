@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, anyhow};
 use toml::{Table, Value};
 
+use audio_io::OutputRouting;
 use engine::{EffectKind, EqMode, StemKnobs};
 
 use crate::format::safe;
@@ -37,6 +38,9 @@ pub struct Config {
     /// Seconds of the long backspin, when the file sets it.
     pub backspin_long: Option<f64>,
     pub stems: StemsConfig,
+    pub audio: AudioConfig,
+    pub controller: ControllerConfig,
+    pub ui: UiConfig,
 }
 
 impl Default for Config {
@@ -51,6 +55,9 @@ impl Default for Config {
             backspin_short: None,
             backspin_long: None,
             stems: StemsConfig::default(),
+            audio: AudioConfig::default(),
+            controller: ControllerConfig::default(),
+            ui: UiConfig::default(),
         }
     }
 }
@@ -166,6 +173,159 @@ fn parse_stems(table: &Table, file: &str) -> anyhow::Result<StemsConfig> {
         }
     }
     Ok(stems)
+}
+
+/// The range of `ui.waveform_beats`.
+const WAVEFORM_BEATS_RANGE: (f64, f64) = (4.0, 64.0);
+
+/// The `[audio]` section: the output the window plays to, with 1-based channel pairs as in
+/// `play`'s flags.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioConfig {
+    /// The output device (a name or part of one); `None` is the system default.
+    pub device: Option<String>,
+    /// The channels carrying the master output, left then right.
+    pub master: [usize; 2],
+    /// The channels carrying the headphone output, when it has its own.
+    pub headphones: Option<[usize; 2]>,
+}
+
+impl Default for AudioConfig {
+    fn default() -> Self {
+        Self {
+            device: None,
+            master: [1, 2],
+            headphones: None,
+        }
+    }
+}
+
+impl AudioConfig {
+    /// Routing with 0-based channel indices.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the window (a later task) uses it")
+    )]
+    pub fn routing(&self) -> OutputRouting {
+        OutputRouting {
+            master: self.master.map(|c| c - 1),
+            headphones: self.headphones.map(|pair| pair.map(|c| c - 1)),
+        }
+    }
+}
+
+/// The `[controller]` section.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ControllerConfig {
+    /// A built-in mapping name or a mapping file path.
+    pub mapping: String,
+}
+
+impl Default for ControllerConfig {
+    fn default() -> Self {
+        Self {
+            mapping: "ddj-sb3".to_owned(),
+        }
+    }
+}
+
+/// The `[ui]` section.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UiConfig {
+    /// The beats visible across a waveform lane.
+    pub waveform_beats: f64,
+}
+
+impl Default for UiConfig {
+    fn default() -> Self {
+        Self {
+            waveform_beats: 16.0,
+        }
+    }
+}
+
+/// A 1-based channel pair `[left, right]`.
+fn channel_pair(value: &Value) -> Option<[usize; 2]> {
+    let [left, right] = value.as_array()?.as_slice() else {
+        return None;
+    };
+    let channel = |value: &Value| {
+        usize::try_from(value.as_integer()?)
+            .ok()
+            .filter(|c| *c >= 1)
+    };
+    Some([channel(left)?, channel(right)?])
+}
+
+fn parse_audio(table: &Table, file: &str) -> anyhow::Result<AudioConfig> {
+    let mut audio = AudioConfig::default();
+    let pair = |value: &Value, key: &str| {
+        channel_pair(value).ok_or_else(|| invalid(file, key, "expected two channel numbers from 1"))
+    };
+    for (key, value) in table {
+        match key.as_str() {
+            "device" => {
+                audio.device = Some(
+                    value
+                        .as_str()
+                        .ok_or_else(|| invalid(file, "audio.device", "expected a device name"))?
+                        .to_owned(),
+                );
+            }
+            "master" => audio.master = pair(value, "audio.master")?,
+            "headphones" => audio.headphones = Some(pair(value, "audio.headphones")?),
+            _ => return Err(unknown(file, "audio", key)),
+        }
+    }
+    Ok(audio)
+}
+
+fn parse_controller(table: &Table, file: &str) -> anyhow::Result<ControllerConfig> {
+    let mut controller = ControllerConfig::default();
+    for (key, value) in table {
+        match key.as_str() {
+            "mapping" => {
+                controller.mapping = value
+                    .as_str()
+                    .ok_or_else(|| {
+                        invalid(
+                            file,
+                            "controller.mapping",
+                            "expected a mapping name or file",
+                        )
+                    })?
+                    .to_owned();
+            }
+            _ => return Err(unknown(file, "controller", key)),
+        }
+    }
+    Ok(controller)
+}
+
+fn parse_ui(table: &Table, file: &str) -> anyhow::Result<UiConfig> {
+    let mut ui = UiConfig::default();
+    for (key, value) in table {
+        match key.as_str() {
+            "waveform_beats" => {
+                ui.waveform_beats = number(value)
+                    .filter(|beats| {
+                        (WAVEFORM_BEATS_RANGE.0..=WAVEFORM_BEATS_RANGE.1).contains(beats)
+                    })
+                    .ok_or_else(|| {
+                        invalid(
+                            file,
+                            "ui.waveform_beats",
+                            format!(
+                                "expected a number from {} to {}",
+                                WAVEFORM_BEATS_RANGE.0, WAVEFORM_BEATS_RANGE.1
+                            ),
+                        )
+                    })?;
+            }
+            _ => return Err(unknown(file, "ui", key)),
+        }
+    }
+    Ok(ui)
 }
 
 /// The `[sampler]` section.
@@ -310,6 +470,11 @@ fn parse(text: &str, file: &str, home: Option<&Path>) -> anyhow::Result<Config> 
                 }
             }
             "stems" => config.stems = parse_stems(section(file, name, value)?, file)?,
+            "audio" => config.audio = parse_audio(section(file, name, value)?, file)?,
+            "controller" => {
+                config.controller = parse_controller(section(file, name, value)?, file)?;
+            }
+            "ui" => config.ui = parse_ui(section(file, name, value)?, file)?,
             _ => return Err(invalid(file, name, "unknown key")),
         }
     }
@@ -850,6 +1015,62 @@ cache_gb = 5
                 "config.toml: stems.kicks_hz: expected a number from 50 to 1000",
             ),
             ("stems = 1", "config.toml: stems: expected a table"),
+        ];
+        for (text, expected) in cases {
+            let error = error_of(text);
+            assert!(error.starts_with(expected), "{text:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn audio_controller_ui_parse_and_reject() {
+        let defaults = parse_text("").unwrap();
+        assert_eq!(defaults.audio, AudioConfig::default());
+        assert_eq!(defaults.audio.device, None);
+        assert_eq!(defaults.audio.master, [1, 2]);
+        assert_eq!(defaults.audio.headphones, None);
+        assert_eq!(defaults.controller.mapping, "ddj-sb3");
+        assert_eq!(defaults.ui.waveform_beats, 16.0);
+
+        let config = parse_text(
+            "[audio]\ndevice = \"DDJ-SB3\"\nmaster = [1, 2]\nheadphones = [3, 4]\n\
+             [controller]\nmapping = \"my.toml\"\n[ui]\nwaveform_beats = 32",
+        )
+        .unwrap();
+        assert_eq!(config.audio.device.as_deref(), Some("DDJ-SB3"));
+        assert_eq!(config.audio.headphones, Some([3, 4]));
+        assert_eq!(config.audio.routing().master, [0, 1]);
+        assert_eq!(config.audio.routing().headphones, Some([2, 3]));
+        assert_eq!(config.controller.mapping, "my.toml");
+        assert_eq!(config.ui.waveform_beats, 32.0);
+
+        let cases: &[(&str, &str)] = &[
+            (
+                "[audio]\nmaster = [0, 2]",
+                "config.toml: audio.master: expected two channel numbers from 1",
+            ),
+            (
+                "[audio]\nheadphones = [3]",
+                "config.toml: audio.headphones: expected two channel numbers from 1",
+            ),
+            (
+                "[audio]\ndevice = 1",
+                "config.toml: audio.device: expected a device name",
+            ),
+            (
+                "[ui]\nwaveform_beats = 2",
+                "config.toml: ui.waveform_beats: expected a number from 4 to 64",
+            ),
+            (
+                "[controller]\nmapping = 1",
+                "config.toml: controller.mapping: expected a mapping name or file",
+            ),
+            ("[audio]\nrate = 1", "config.toml: audio.rate: unknown key"),
+            (
+                "[controller]\nport = 1",
+                "config.toml: controller.port: unknown key",
+            ),
+            ("[ui]\ntheme = 1", "config.toml: ui.theme: unknown key"),
         ];
         for (text, expected) in cases {
             let error = error_of(text);
