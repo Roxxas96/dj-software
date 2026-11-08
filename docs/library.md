@@ -262,7 +262,8 @@ track (`stems ready`, `already cached, marked prepared`, `skipped, <reason>` or
 `failed: <reason>`) and a total with the cache size. It needs the model and stops with the
 `stems setup` hint without it. Ctrl-C stops after the current chunk. `--config <PATH>` reads
 the budget from another config file. A whole track takes about 20 s on an Apple-silicon Mac
-and one to two minutes on a CPU.
+(measured). On a CPU it is an estimate, not measured yet: roughly 1–3 minutes per 5-minute
+track, depending on the CPU.
 
 ## Listing tracks
 
