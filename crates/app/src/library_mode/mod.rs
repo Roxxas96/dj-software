@@ -981,6 +981,11 @@ impl LibraryMode {
         self.browser.as_ref()
     }
 
+    /// How keys are shown: the library's `key_notation` setting.
+    pub fn notation(&self) -> KeyNotation {
+        self.notation
+    }
+
     /// The library track last loaded on `deck` (it may not have reached the engine yet:
     /// see [`DeckView::load_seq`]), with the stems' state as `snap`, the deck's snapshot,
     /// shows it.

@@ -2,6 +2,8 @@
 //! publishes and reads the engine's state through an [`EngineMonitor`]. It never sends
 //! the engine anything, and the control thread never waits on it.
 
+pub mod cover;
+pub mod deck;
 mod model;
 pub mod theme;
 mod topbar;
@@ -36,7 +38,7 @@ pub fn run(
         frame,
         monitor,
         quit: Arc::clone(&quit),
-        lanes: waveform::Lanes::default(),
+        screen: Screen::default(),
     };
     let result = eframe::run_native(
         TITLE,
@@ -54,7 +56,7 @@ struct App {
     frame: Published<ControlFrame>,
     monitor: Published<Option<EngineMonitor>>,
     quit: Arc<AtomicBool>,
-    lanes: waveform::Lanes,
+    screen: Screen,
 }
 
 impl eframe::App for App {
@@ -64,7 +66,7 @@ impl eframe::App for App {
         }
         let frame = self.frame.latest();
         let monitor = self.monitor.latest();
-        root(ui, &frame, monitor.as_ref().as_ref(), &mut self.lanes);
+        root(ui, &frame, monitor.as_ref().as_ref(), &mut self.screen);
         // The decks move on their own: draw at the display's rate.
         ui.ctx().request_repaint();
     }
@@ -76,14 +78,23 @@ impl eframe::App for App {
 
 /// The share of the window's height the waveform lanes take.
 const LANES_HEIGHT: f32 = 0.22;
+/// The share of the window's height the deck panels and the mixer take.
+const DECKS_HEIGHT: f32 = 0.38;
+
+/// What the window keeps from one frame to the next.
+#[derive(Debug, Default)]
+pub struct Screen {
+    pub lanes: waveform::Lanes,
+    pub decks: deck::DeckPanels,
+    pub covers: cover::Covers,
+}
 
 /// Draws the whole window for `frame`; `monitor` is `None` until the audio device opens.
-/// `lanes` is kept from one frame to the next.
 pub fn root(
     ui: &mut egui::Ui,
     frame: &ControlFrame,
     monitor: Option<&EngineMonitor>,
-    lanes: &mut waveform::Lanes,
+    screen: &mut Screen,
 ) {
     let window_height = ui.max_rect().height();
     egui::Panel::top("top_bar")
@@ -94,7 +105,16 @@ pub fn root(
         .exact_size(window_height * LANES_HEIGHT)
         .resizable(false)
         .show_separator_line(false)
-        .show(ui, |ui| lanes.show(ui, frame, monitor));
+        .show(ui, |ui| screen.lanes.show(ui, frame, monitor));
+    egui::Panel::top("deck_panels")
+        .frame(egui::Frame::new().fill(theme::BACKGROUND))
+        .exact_size(window_height * DECKS_HEIGHT)
+        .resizable(false)
+        .show_separator_line(false)
+        .show(ui, |ui| {
+            // The space between the decks is the mixer's.
+            let _mixer = screen.decks.show(ui, frame, monitor, &mut screen.covers);
+        });
     egui::CentralPanel::default()
         .frame(egui::Frame::new().fill(theme::BACKGROUND))
         .show(ui, |_ui| {});

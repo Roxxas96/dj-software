@@ -2311,6 +2311,8 @@ dependencies = [
  "num-traits",
  "png",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -5307,8 +5309,10 @@ dependencies = [
  "egui",
  "egui_kittest",
  "engine",
+ "image",
  "jiff",
  "library",
+ "lofty",
 ]
 
 [[package]]

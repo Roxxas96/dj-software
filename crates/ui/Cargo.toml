@@ -17,8 +17,10 @@ anyhow.workspace = true
 eframe.workspace = true
 egui.workspace = true
 engine = { path = "../engine" }
+image.workspace = true
 jiff.workspace = true
 library = { path = "../library" }
+lofty.workspace = true
 
 [dev-dependencies]
 egui_kittest.workspace = true
