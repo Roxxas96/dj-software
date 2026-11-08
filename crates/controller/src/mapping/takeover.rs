@@ -137,6 +137,15 @@ impl Takeover {
                 .then_some((*target, entry.waiting_on?, entry.phys?))
         })
     }
+
+    /// The last physical value of `target` when it is armed and the control has not yet
+    /// reached the target's value; `None` once picked up (or with no value seen).
+    pub fn pickup(&self, target: ValueTarget) -> Option<f32> {
+        let entry = self.entries.get(&target)?;
+        (entry.armed && entry.waiting_on.is_some())
+            .then_some(entry.phys)
+            .flatten()
+    }
 }
 
 #[cfg(test)]

@@ -118,6 +118,7 @@ impl FrameParts {
         });
         ControlFrame {
             control: pass.state.clone(),
+            ghosts: pass.ghosts,
             decks,
             browser: pass.library.and_then(|l| l.browser().cloned()),
             controller: pass.controller.map(str::to_owned),

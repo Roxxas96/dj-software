@@ -92,6 +92,12 @@ impl Runtime {
         &self.state
     }
 
+    /// Where the physical control of `target` sits while it has not picked the value up
+    /// yet (soft takeover), else `None`.
+    pub fn pickup(&self, target: ValueTarget) -> Option<f32> {
+        self.resolver.takeover().pickup(target)
+    }
+
     /// Mutable access to the control state, for settings made at startup (such as the pad
     /// size tables), which are not engine values and so involve no soft takeover.
     pub fn control_state_mut(&mut self) -> &mut ControlState {

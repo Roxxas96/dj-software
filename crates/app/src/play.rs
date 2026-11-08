@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 use std::time::{Duration, Instant};
 
-use actions::{ControlState, PadMode, Side};
+use actions::{ActionKind, ControlState, PadMode, Side};
 use anyhow::{Context, anyhow};
 use audio_io::{
     AudioError, OutputRouting, OutputStream, RoutingError, StreamError, StreamErrorKind,
@@ -707,6 +707,24 @@ pub(crate) struct Pass<'a> {
     pub library: Option<&'a LibraryMode>,
     /// The connected controller's input port.
     pub controller: Option<&'a str>,
+    /// Per deck and ghost target, where the physical control waits to pick the value up.
+    pub ghosts: [[Option<f32>; ui::GHOSTS]; 4],
+}
+
+/// The soft-takeover targets the window shows a pickup marker for, in [`ui::GHOSTS`] order.
+const GHOST_KINDS: [ActionKind; ui::GHOSTS] = [
+    ActionKind::Trim,
+    ActionKind::EqHigh,
+    ActionKind::EqMid,
+    ActionKind::EqLow,
+    ActionKind::Filter,
+    ActionKind::Fader,
+    ActionKind::Tempo,
+];
+
+/// Where each deck's controls wait to pick their value up.
+fn ghosts(runtime: &Runtime) -> [[Option<f32>; ui::GHOSTS]; 4] {
+    DeckId::ALL.map(|deck| GHOST_KINDS.map(|kind| runtime.pickup((kind, Some(deck)))))
 }
 
 /// The body of [`control_loop`], for `play` and the window: applies the controller's
@@ -882,6 +900,7 @@ pub(crate) fn run_controller(
             engine,
             library: library.as_ref(),
             controller: connection.port_names().map(|(input, _)| input),
+            ghosts: ghosts(&runtime),
         });
     }
     if let Some(library) = library {
