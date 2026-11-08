@@ -57,7 +57,8 @@ How it works:
   four are on after a load.
 - On macOS the first session after an update takes about a minute to prepare the model for
   the GPU and Neural Engine; it runs in the background. On Windows and Linux separation runs on
-  the CPU, a whole track takes one to two minutes, and playback always wins over it.
+  the CPU, with half the cores, and playback always wins over it. How long it takes there is an
+  estimate, not measured yet: roughly 1–3 minutes per 5-minute track, depending on the CPU.
 
 BPM and key come from detectors written for this project and can be wrong: there is no
 confidence value. See [docs/library.md](docs/library.md) for details and known limits.
