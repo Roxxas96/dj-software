@@ -27,11 +27,13 @@ const METER_WIDTH: f32 = 8.0;
 const KNOB_SWEEP: f32 = 0.75 * std::f32::consts::PI;
 /// Positions in `ControlFrame::ghosts`.
 const GHOST_TRIM: usize = 0;
-const GHOST_EQ: usize = 1;
+const GHOST_EQ_HIGH: usize = 1;
+const GHOST_EQ_MID: usize = 2;
+const GHOST_EQ_LOW: usize = 3;
 const GHOST_FILTER: usize = 4;
 const GHOST_FADER: usize = 5;
 const _: () = assert!(GHOSTS > GHOST_FADER);
-const GHOST: Color32 = theme::CUE;
+pub const GHOST: Color32 = theme::CUE;
 const METER_OK: Color32 = Color32::from_rgb(0x4c, 0xc2, 0x6a);
 const METER_CLIP: Color32 = Color32::from_rgb(0xff, 0x3b, 0x3b);
 const METER_HOT: f32 = 0.95;
@@ -46,6 +48,12 @@ pub fn eq_labels(eq_mode: EqMode, stems_active: bool, knobs: StemKnobs) -> [&'st
     }
 }
 
+/// Where a control's pickup marker goes: `at` maps a value (0 to 1) to a point on the
+/// control. `None` when the control has nothing to pick up.
+pub fn ghost_marker(ghost: Option<f32>, at: impl Fn(f32) -> Pos2) -> Option<Pos2> {
+    ghost.map(|v| at(v.clamp(0.0, 1.0)))
+}
+
 /// A meter's highest recent peak.
 #[derive(Debug, Default, Clone, Copy)]
 struct Hold {
@@ -56,7 +64,9 @@ struct Hold {
 impl Hold {
     /// The peak to show for the level `now` measured at `at`.
     fn update(&mut self, level: f32, at: Instant) -> f32 {
-        let expired = self.since.is_none_or(|s| at.duration_since(s) >= PEAK_HOLD);
+        let expired = self
+            .since
+            .is_none_or(|s| at.saturating_duration_since(s) >= PEAK_HOLD);
         if level >= self.peak || expired {
             *self = Hold {
                 peak: level,
@@ -170,9 +180,9 @@ pub fn strip(
     let [high, mid, low] = eq_labels(frame.eq_mode, stems_active, frame.stem_knobs);
     let knobs = [
         ("GAIN", state.trim, ghosts[GHOST_TRIM]),
-        (high, state.eq_high, ghosts[GHOST_EQ]),
-        (mid, state.eq_mid, ghosts[GHOST_EQ + 1]),
-        (low, state.eq_low, ghosts[GHOST_EQ + 2]),
+        (high, state.eq_high, ghosts[GHOST_EQ_HIGH]),
+        (mid, state.eq_mid, ghosts[GHOST_EQ_MID]),
+        (low, state.eq_low, ghosts[GHOST_EQ_LOW]),
         ("FILTER", state.filter, ghosts[GHOST_FILTER]),
     ];
     let knob_x = rect.left() + 8.0 + KNOB_RADIUS + 14.0;
@@ -222,8 +232,8 @@ fn knob(painter: &egui::Painter, centre: Pos2, value: f32, ghost: Option<f32>, a
         [on_rim(value, 10.0), on_rim(value, 1.0)],
         Stroke::new(2.5, accent),
     );
-    if let Some(ghost) = ghost {
-        painter.circle_stroke(on_rim(ghost, -3.0), 3.5, Stroke::new(1.5, GHOST));
+    if let Some(at) = ghost_marker(ghost, |v| on_rim(v, -3.0)) {
+        painter.circle_stroke(at, 3.5, Stroke::new(1.5, GHOST));
     }
 }
 
@@ -234,11 +244,8 @@ fn fader(painter: &egui::Painter, track: Rect, value: f32, ghost: Option<f32>, a
     let y = |v: f32| track.bottom() - v.clamp(0.0, 1.0) * track.height();
     let handle = Rect::from_center_size(pos2(track.center().x, y(value)), vec2(track.width(), 8.0));
     painter.rect_filled(handle, CornerRadius::same(2), accent);
-    if let Some(ghost) = ghost {
-        let wide = Rect::from_center_size(
-            pos2(track.center().x, y(ghost)),
-            vec2(track.width() + 6.0, 8.0),
-        );
+    if let Some(at) = ghost_marker(ghost, |v| pos2(track.center().x, y(v))) {
+        let wide = Rect::from_center_size(at, vec2(track.width() + 6.0, 8.0));
         painter.rect_stroke(
             wide,
             CornerRadius::same(2),
@@ -335,6 +342,14 @@ mod tests {
         assert_eq!(eq_labels(Stems, false, Vdj), ["HIGH", "MID", "LOW"]);
         assert_eq!(eq_labels(Stems, true, Vdj), ["HIHAT", "MEL/VOX", "KICK"]);
         assert_eq!(eq_labels(Stems, true, Raw), ["VOCALS", "INSTRU", "BASS"]);
+    }
+
+    #[test]
+    fn a_ghost_marks_where_the_control_must_go() {
+        let at = |v: f32| pos2(10.0, 100.0 - v * 100.0);
+        assert_eq!(ghost_marker(Some(0.2), at), Some(pos2(10.0, 80.0)));
+        assert_eq!(ghost_marker(Some(1.5), at), Some(pos2(10.0, 0.0)));
+        assert_eq!(ghost_marker(None, at), None);
     }
 
     #[test]
