@@ -941,11 +941,11 @@ midi = { channel = 16, note = 0x7F }
 }
 
 /// The example user file in the mapping reference: the TOML block holding the
-/// `# SAMPLER pads 1-4` comment. Line endings may be CRLF (a Windows checkout).
+/// `# SAMPLER pads 1-7` comment. Line endings may be CRLF (a Windows checkout).
 fn reference_stems_example() -> &'static str {
     let doc = include_str!("../../../docs/controllers/mapping-reference.md");
     let comment = doc
-        .find("# SAMPLER pads 1-4")
+        .find("# SAMPLER pads 1-7")
         .expect("the reference has the stems example");
     let fence = doc[..comment].rfind("```toml").unwrap();
     let start = fence + doc[fence..].find('\n').unwrap() + 1;
@@ -997,8 +997,16 @@ fn stems_on_sampler_example_loads_and_routes() {
         );
         pressed
     };
-    let stems = [Stem::Vocals, Stem::Instruments, Stem::Bass, Stem::Rhythm];
-    // SAMPLER pads 1-4 toggle the stems of the deck each side shows (channels 8 and 9).
+    let stems = [
+        Stem::Vocals,
+        Stem::Instruments,
+        Stem::Bass,
+        Stem::Rhythm,
+        Stem::Kicks,
+        Stem::Melody,
+        Stem::Hats,
+    ];
+    // SAMPLER pads 1-7 toggle the stems of the deck each side shows (channels 8 and 9).
     for (channel, deck) in [(7, d(0)), (8, d(1))] {
         for (i, stem) in stems.into_iter().enumerate() {
             assert_eq!(
@@ -1006,16 +1014,14 @@ fn stems_on_sampler_example_loads_and_routes() {
                 vec![(Action::StemToggle(deck, stem), Input::Press)]
             );
         }
-        // Pads 5-8 still play samples.
-        for i in 4..8u8 {
-            assert_eq!(
-                press(&state, channel, 0x30 + i),
-                vec![(
-                    Action::SamplerPlay(HotcueSlot::new(i + 1).unwrap()),
-                    Input::Press
-                )]
-            );
-        }
+        // Pad 8 still plays sample 8.
+        assert_eq!(
+            press(&state, channel, 0x37),
+            vec![(
+                Action::SamplerPlay(HotcueSlot::new(8).unwrap()),
+                Input::Press
+            )]
+        );
     }
     // The left side switched to deck 3: its stem pads follow.
     state.side_mut(Side::Left).active_deck = d(2);

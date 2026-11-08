@@ -55,7 +55,7 @@ Each plan that adds or changes a crate updates this page. The full design is in
 | `controller` | MIDI ports and messages, the mapping file format, the resolver that turns messages into actions (conditions, soft takeover), LED feedback, the capture tools' logic, and the built-in mappings (`controllers/<name>/mapping.toml`). Tested with fake ports. |
 | `analysis` | Offline track analysis written for this project: three-band waveform, tempo and constant beatgrid, and musical key with Camelot, standard and Open Key notation. Pure functions on decoded audio; no database. |
 | `library` | The SQLite library: schema and migrations, startup backups, folder scans and the watcher, fingerprints, tags, cues, playlists, beatgrid edits, the writer thread, the analyzer pool that stores `analysis` results, and the stems cache with its Ogg Vorbis format (encoded in `library/src/stems_cache.rs`, decoded through `decode`). See [library.md](library.md). |
-| `stems` | Splits a track into vocals, bass and rhythm (instruments are the residual) with the Demucs `htdemucs` model through ONNX Runtime (`ort`; CoreML on macOS, CPU elsewhere), in chunks, with the STFT in Rust. Also `stems setup` (one-time download of the author's weights, filling the weight-free graph embedded in the crate, verification), and a fixed synthetic separator for tests. No database, no audio thread. See [stems-backend.md](stems-backend.md). |
+| `stems` | Splits a track into vocals, bass and rhythm (instruments are the residual; kicks and hats are split from rhythm later, in `engine`) with the Demucs `htdemucs` model through ONNX Runtime (`ort`; CoreML on macOS, CPU elsewhere), in chunks, with the STFT in Rust. Also `stems setup` (one-time download of the author's weights, filling the weight-free graph embedded in the crate, verification), and a fixed synthetic separator for tests. No database, no audio thread. See [stems-backend.md](stems-backend.md). |
 | `open-jockey` (`crates/app`) | The application binary. A command-line player and MIDI tools (`devices`, `play`, `library`, `stems` and `midi` with `ports`, `monitor`, `capture` and `led-scan`) that wire the other crates together. |
 
 ## Track memory, grids and sync
@@ -105,18 +105,25 @@ wins. A finished set travels to the engine like a track buffer, through the comm
 and the replaced one comes back through the garbage queue, which the app collects every
 tick. Tracks over 20 minutes are refused.
 
-**In the engine** (`crates/engine/src/stems.rs`). A `StemSet` holds three stems as 16-bit samples
-at the track's own rate; instruments are the residual `mix - (vocals + bass + rhythm)`
-computed from the deck's track, so the four always sum to the mix. The deck's single
-source reader is the one place that reads stems: with a set, it returns the gain-weighted sum
-of the four. Loops, rolls, scratching, slip and beat jump therefore work unchanged, and
-keylock stretches the stem mix. The sampler is not stemmed.
+**In the engine** (`crates/engine/src/stems.rs`). A `StemSet` holds four stems as 16-bit samples
+at the track's own rate: vocals, bass, rhythm and kicks. Kicks are precomputed when the set is
+built (not cached; a cache hit recomputes them): rhythm through a zero-phase low pass at 250 Hz
+(`KICKS_HZ`), a Butterworth biquad run forward and backward off the audio thread. Instruments are
+the residual `mix - (vocals + bass + rhythm)` and hats are `rhythm - kicks`, both computed per
+frame from the deck's track. So there are five parts (vocals, instruments, bass, kicks, hats)
+and they always sum to the mix. The deck's single source reader is the one place that reads
+stems: with a set, it returns the gain-weighted sum of the five. The split holds no filter
+state at play time, so loops, rolls, scratching, slip and beat jump work unchanged, and keylock
+stretches the stem mix. The sampler is not stemmed.
 
-- **Knob law.** `knob_law` turns the EQ knob positions into four stem gains. A knob at
-  position `p` has own level `min(1, 2p)` and isolation `max(0, 2p - 1)`. With `I` the largest
-  isolation, a knob stem whose own isolation is above 0 keeps its own level; the other knob
-  stems get `own * (1 - I)` and rhythm gets `1 - I`. Each is multiplied by the stem's pad flag.
-  Gains ramp over one block, so no click.
+- **Knob law.** `knob_law(layout, knobs)` turns the EQ knob positions into five part gains.
+  Each knob gives its parts `eq_gain`: silent fully left (squared law), 1 at the centre, +6 dB
+  fully right. In `StemKnobs::Vdj` LOW is kicks, MID is vocals, instruments and bass, and HI is
+  hats. In `StemKnobs::Raw` HI is vocals, MID instruments and LOW bass, with kicks and hats at
+  1. A knob only changes its own parts. `pad_gains` turns the seven pad flags into five part
+  gains (melody covers vocals, instruments and bass; rhythm covers kicks and hats), so two pads
+  covering one part multiply. The knob and pad gains are multiplied. Gains ramp over one block,
+  so no click.
 - **Stem mode** applies when `EqMode::Stems` is set and the deck has a set. The EQ isolator
   keeps running with its band gains at unity (a flat allpass) instead of being bypassed, so
   the EQ-to-stems changeover with centred knobs is exact. The changeover is a one-block ramp
@@ -131,7 +138,7 @@ keylock stretches the stem mix. The sampler is not stemmed.
 - **Real-time rules.** Setting, replacing and freeing stems use the command and garbage
   queues; `crates/engine/tests/no_alloc.rs` covers the stem render paths.
 
-**Pads.** The four `deck.stem_toggle_*` actions flip the deck's stem flags (`DeckControl::stems_on`) and send
+**Pads.** The seven `deck.stem_toggle_*` actions flip the deck's stem flags (`DeckControl::stems_on`) and send
 `StemOn`; the flags reset to all on when the deck's `load_seq` moves, and a press before
 the stems are ready is remembered. A press in the same control-loop iteration as a load
 can be lost (press again).

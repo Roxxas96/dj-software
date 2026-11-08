@@ -24,8 +24,10 @@ start (the 10 newest backups are kept):
 ## Stems
 
 Open Jockey can split a track into four stems (vocals, instruments, bass and rhythm) and let the
-EQ knobs control them: HI is vocals, MID is instruments, LOW is bass. Stem pads switch each stem
-on and off. It is off by default.
+EQ knobs control them. Two knob layouts: by default (`vdj`, like VirtualDJ) LOW is the kicks, MID
+is the melody (vocals, instruments and bass) and HI is the hats; the `raw` layout gives HI to the
+vocals, MID to the instruments and LOW to the bass. Seven stem pads switch parts on and off. It
+is off by default.
 
 - Stems are separated on your computer, in the background, with the open-source Demucs model.
   No audio ever leaves the computer.
@@ -33,7 +35,8 @@ on and off. It is off by default.
   author's own source. Open Jockey never redistributes them. Their license is unclear (the
   author trained them partly on research-only data), so each user fetches them themselves.
   Nothing else ever downloads. Without the model, stems are unavailable and the knobs stay EQ.
-- Turn it on in `config.toml`: `[stems] enabled = true` and `eq_mode = "stems"`.
+- Turn it on in `config.toml`: `[stems] enabled = true` and `eq_mode = "stems"`. The layout is
+  `[stems] knobs = "vdj"` (the default) or `"raw"`.
 - Separated stems are cached; `open-jockey library stems --playlist "<name>"` prepares them ahead
   (see [docs/library.md](docs/library.md#stems)).
 
@@ -45,16 +48,28 @@ How it works:
   smooth. The deck's status line shows `stems: preparing model` while the model opens, then
   `stems 40%` while separating, then `stems` once they are ready. A track longer than 20
   minutes gets `no stems (too long)`.
-- Knob law, with 12 o'clock as the middle. Turning a knob left from the middle fades its stem
-  from normal down to silent. Turning it right from the middle fades every stem that no knob
-  is turned right on, rhythm included, so fully right on one knob leaves only that stem. Every
-  knob turned right keeps its own stem: HI and LOW fully right give vocals and bass only.
-  Moves never click.
-- Stem pads: the actions `deck.stem_toggle_vocals`, `deck.stem_toggle_instruments`,
-  `deck.stem_toggle_bass` and `deck.stem_toggle_rhythm` turn a stem on or off. They are bound to
-  no pad by default; the [mapping reference](docs/controllers/mapping-reference.md#extending-a-mapping)
-  has an example that puts them on the SAMPLER pads. They work whatever `eq_mode` is, and all
-  four are on after a load.
+- Knob layouts (`[stems] knobs`):
+  - `"vdj"` (the default, as in VirtualDJ): LOW is the kicks, MID is the melody (vocals,
+    instruments and bass together) and HI is the hats. All three fully left is silence.
+  - `"raw"`: HI is the vocals, MID is the instruments and LOW is the bass. Rhythm has no knob,
+    so all three fully left still leaves the drums.
+- Knob law, the same in both layouts, with 12 o'clock as the middle. At the middle a part plays
+  at its normal level. Turning its knob left fades it to silent at fully left, with the same
+  curve as the normal EQ's cut. Turning it right raises it, up to +6 dB fully right, like the
+  normal EQ's boost. A knob only changes its own part. Centred knobs sound exactly like the
+  track. Moves never click.
+- Kicks and hats are an approximation. The model separates drums as one rhythm stem, so kicks
+  are the low end of rhythm (below 250 Hz) and hats are the rest. Snares and other percussion
+  land in the hats. It is a filter split, not a separation.
+- Stem pads: seven actions turn a part on or off. The raw stems are `deck.stem_toggle_vocals`,
+  `deck.stem_toggle_instruments`, `deck.stem_toggle_bass` and `deck.stem_toggle_rhythm`; the
+  knob parts are `deck.stem_toggle_kicks`, `deck.stem_toggle_melody` and `deck.stem_toggle_hats`.
+  They are bound to no pad by default; the
+  [mapping reference](docs/controllers/mapping-reference.md#extending-a-mapping) has an example
+  that puts them on SAMPLER pads 1-7. They work with either layout and whatever `eq_mode` is,
+  and all are on after a load. When two pads cover the same sound, it plays only if both are
+  on: rhythm off silences kicks and hats too, kicks off removes only the low end of rhythm, and
+  melody off silences vocals, instruments and bass.
 - On macOS the first session after an update takes about a minute to prepare the model for
   the GPU and Neural Engine; it runs in the background. On Windows and Linux separation runs on
   the CPU, with half the cores, and playback always wins over it. How long it takes there is an
