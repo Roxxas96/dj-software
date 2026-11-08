@@ -395,7 +395,9 @@ browser actions).
 | `modifier.shift` | side | button | Press and release track whether SHIFT is held on that side. |
 | `browser.scroll` | none | relative | Move the cursor of the focused browser pane by the steps sent (positive is down). It stops at the first and last rows. |
 | `browser.toggle_focus` | none | button | Press to switch the browser between the tree (playlists, folders, all tracks) and the track list. |
+| `browser.toggle_folder` | none | button | Press to open or close the highlighted folder in the browser tree. |
 | `pads.mode_hardware` | side | button | Press to set the side's pad mode to hardware (the controller's own pad modes); no sound changes by itself. |
+| `pads.mode_hot_cue`, `pads.mode_fx_fade`, `pads.mode_sampler`, `pads.mode_trans` | side | button | Press to set the side's pad mode to hardware and remember which hardware mode button it was (the window shows its name); no sound changes by itself. |
 | `pads.mode_beat_jump` | side | button | Press to set the side's pad mode to beat jump; no sound changes by itself. |
 | `pads.mode_loop_roll` | side | button | Press to set the side's pad mode to loop roll; no sound changes by itself. |
 | `pads.mode_slicer` | side | button | Press to set the side's pad mode to slicer; no sound changes by itself. |

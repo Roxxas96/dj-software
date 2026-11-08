@@ -624,6 +624,28 @@ fn sb3_mapping_expands_to_the_same_bindings() {
     assert_eq!(actual, expected);
 }
 
+#[test]
+fn sb3_hot_cue_and_shift_browse_resolve_to_the_new_actions() {
+    use actions::HardwarePadMode;
+    let mapping = parse_mapping(
+        "sb3.toml",
+        include_str!("../../../controllers/ddj-sb3/mapping.toml"),
+    )
+    .unwrap();
+    let kind_of = |channel, n| {
+        mapping
+            .inputs
+            .iter()
+            .find(|b| b.midi == (MidiSource::Note { channel, note: n }))
+            .map(|b| b.kind)
+    };
+    assert_eq!(
+        kind_of(0, 0x1B),
+        Some(ActionKind::HardwarePadMode(HardwarePadMode::HotCue))
+    );
+    assert_eq!(kind_of(6, 0x42), Some(ActionKind::BrowserToggleFolder));
+}
+
 // Mapping `extends` and `[[remove]]`.
 
 const SB3: &str = include_str!("../../../controllers/ddj-sb3/mapping.toml");

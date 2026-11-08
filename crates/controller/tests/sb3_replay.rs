@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use actions::{Action, PadMode, Side};
+use actions::{Action, HardwarePadMode, PadMode, Side};
 use controller::builtin::load_mapping_from;
 use controller::capture::{Control, Fixture, parse_fixture};
 use controller::mapping::Mapping;
@@ -412,12 +412,12 @@ fn performance_table() -> Vec<(&'static str, Layer, Action)> {
         (
             "deck1.mode_hot_cue",
             Main,
-            Action::PadMode(l, PadMode::Hardware),
+            Action::HardwarePadMode(l, HardwarePadMode::HotCue),
         ),
         (
             "deck1.mode_fx_fade",
             Main,
-            Action::PadMode(l, PadMode::Hardware),
+            Action::HardwarePadMode(l, HardwarePadMode::FxFade),
         ),
         (
             "deck1.mode_pad_scratch",
@@ -427,12 +427,12 @@ fn performance_table() -> Vec<(&'static str, Layer, Action)> {
         (
             "deck1.mode_sampler",
             Main,
-            Action::PadMode(l, PadMode::Hardware),
+            Action::HardwarePadMode(l, HardwarePadMode::Sampler),
         ),
         (
             "deck1.mode_sampler.shift",
             Main,
-            Action::PadMode(l, PadMode::Hardware),
+            Action::HardwarePadMode(l, HardwarePadMode::Trans),
         ),
         (
             "deck1.mode_hot_cue.shift",
@@ -464,12 +464,12 @@ fn performance_table() -> Vec<(&'static str, Layer, Action)> {
         (
             "deck2.mode_hot_cue",
             Main,
-            Action::PadMode(r, PadMode::Hardware),
+            Action::HardwarePadMode(r, HardwarePadMode::HotCue),
         ),
         (
             "deck2.mode_fx_fade",
             Main,
-            Action::PadMode(r, PadMode::Hardware),
+            Action::HardwarePadMode(r, HardwarePadMode::FxFade),
         ),
         (
             "deck2.mode_pad_scratch",
@@ -479,12 +479,12 @@ fn performance_table() -> Vec<(&'static str, Layer, Action)> {
         (
             "deck2.mode_sampler",
             Main,
-            Action::PadMode(r, PadMode::Hardware),
+            Action::HardwarePadMode(r, HardwarePadMode::Sampler),
         ),
         (
             "deck2.mode_sampler.shift",
             Main,
-            Action::PadMode(r, PadMode::Hardware),
+            Action::HardwarePadMode(r, HardwarePadMode::Trans),
         ),
         (
             "deck2.mode_hot_cue.shift",
@@ -530,7 +530,8 @@ fn performance_table() -> Vec<(&'static str, Layer, Action)> {
 
 /// Controls that send several kinds of messages (jog tops also send a touch and firmware
 /// ring noise, pads are one note each): their own tests check what they drive.
-const MULTI_MESSAGE_CONTROLS: [&str; 27] = [
+const MULTI_MESSAGE_CONTROLS: [&str; 28] = [
+    "browse.press.shift",
     "deck1.pads_fx_fade",
     "deck1.pads_pad_scratch",
     "deck2.pads_fx_fade",
@@ -899,6 +900,13 @@ fn browse_scrolls_and_load_requests_side_deck() {
     assert_eq!(
         stats.requests,
         [AppRequest::Browser(BrowserRequest::ToggleFocus)]
+    );
+
+    // SHIFT + push opens or closes the highlighted folder.
+    let stats = rig.replay("browse.press.shift").1;
+    assert_eq!(
+        stats.requests,
+        [AppRequest::Browser(BrowserRequest::ToggleFolder)]
     );
 
     let load = |deck| AppRequest::LoadSelected { deck };
@@ -1482,6 +1490,10 @@ fn play_from(rig: &mut Rig, deck: usize, at: f64) {
 
 const BEAT: f64 = 22_050.0;
 
+fn hardware(side: Side, mode: HardwarePadMode) -> Action {
+    Action::HardwarePadMode(side, mode)
+}
+
 #[test]
 fn mode_buttons_set_the_side_pad_mode() {
     let mut rig = Rig::attached();
@@ -1491,23 +1503,42 @@ fn mode_buttons_set_the_side_pad_mode() {
         } else {
             Side::Left
         };
-        for (id, mode) in [
-            ("mode_hot_cue.shift", PadMode::BeatJump),
-            ("mode_hot_cue", PadMode::Hardware),
-            ("mode_fx_fade.shift", PadMode::LoopRoll),
-            ("mode_fx_fade", PadMode::Hardware),
-            ("mode_pad_scratch.shift", PadMode::Slicer),
-            ("mode_pad_scratch", PadMode::PadScratch),
-            ("mode_hot_cue.shift", PadMode::BeatJump),
-            ("mode_sampler", PadMode::Hardware),
-            ("mode_pad_scratch.shift", PadMode::Slicer),
-            ("mode_sampler.shift", PadMode::Hardware),
+        for (id, action) in [
+            (
+                "mode_hot_cue.shift",
+                Action::PadMode(side, PadMode::BeatJump),
+            ),
+            ("mode_hot_cue", hardware(side, HardwarePadMode::HotCue)),
+            (
+                "mode_fx_fade.shift",
+                Action::PadMode(side, PadMode::LoopRoll),
+            ),
+            ("mode_fx_fade", hardware(side, HardwarePadMode::FxFade)),
+            (
+                "mode_pad_scratch.shift",
+                Action::PadMode(side, PadMode::Slicer),
+            ),
+            (
+                "mode_pad_scratch",
+                Action::PadMode(side, PadMode::PadScratch),
+            ),
+            (
+                "mode_hot_cue.shift",
+                Action::PadMode(side, PadMode::BeatJump),
+            ),
+            ("mode_sampler", hardware(side, HardwarePadMode::Sampler)),
+            (
+                "mode_pad_scratch.shift",
+                Action::PadMode(side, PadMode::Slicer),
+            ),
+            ("mode_sampler.shift", hardware(side, HardwarePadMode::Trans)),
         ] {
+            let mode = match action {
+                Action::PadMode(_, mode) => mode,
+                _ => PadMode::Hardware,
+            };
             let actions = rig.press(&format!("deck{n}.{id}"));
-            assert_eq!(
-                actions,
-                [Action::PadMode(side, mode), Action::PadMode(side, mode)]
-            );
+            assert_eq!(actions, [action, action]);
             assert_eq!(
                 rig.runtime.state().side(side).pad_mode,
                 mode,

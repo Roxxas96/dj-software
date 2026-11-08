@@ -246,6 +246,11 @@ value = "relative_twos"
 midi = { channel = 7, note = 0x41 }
 action = "browser.toggle_focus"
 
+# SHIFT + BROWSE press opens or closes the highlighted folder.
+[[input]]
+midi = { channel = 7, note = 0x42 }
+action = "browser.toggle_folder"
+
 # LOAD loads the selected track onto the deck the side shows (1/3 left, 2/4 right).
 [[input]]
 midi = { channel = 7, note = 0x46 }
@@ -414,7 +419,7 @@ pad_mode = "hardware"
 #              the routine never touches hotcues
 # Press HOT CUE or SAMPLER before choosing a software mode: while the SB3 is in FX FADE or
 # PAD SCRATCH it runs its own routine on the pads and sends other notes. HOT CUE, FX FADE,
-# SAMPLER and SHIFT + SAMPLER (TRANS) go back to the hardware mode. The
+# SAMPLER and SHIFT + SAMPLER (TRANS) go back to the hardware mode and name it. The
 # SB3 does not light the mode buttons for this, so the status line shows the mode.
 # Capture note: the left SHIFT + SAMPLER pads were captured on 0x30-0x37 (the unshifted
 # notes); the right side sent 0x38-0x3F, and the left side is bound the same.
@@ -422,13 +427,13 @@ pad_mode = "hardware"
 # HOT CUE
 [[input]]
 midi = { channel = 1, note = 0x1B }
-action = "pads.mode_hardware"
+action = "pads.mode_hot_cue"
 side = "left"
 
 # FX FADE
 [[input]]
 midi = { channel = 1, note = 0x1E }
-action = "pads.mode_hardware"
+action = "pads.mode_fx_fade"
 side = "left"
 
 # PAD SCRATCH
@@ -440,13 +445,13 @@ side = "left"
 # SAMPLER
 [[input]]
 midi = { channel = 1, note = 0x22 }
-action = "pads.mode_hardware"
+action = "pads.mode_sampler"
 side = "left"
 
 # SHIFT + SAMPLER (TRANS)
 [[input]]
 midi = { channel = 1, note = 0x6E }
-action = "pads.mode_hardware"
+action = "pads.mode_trans"
 side = "left"
 
 # SHIFT + HOT CUE
@@ -766,13 +771,13 @@ pad_mode = "hardware"
 # HOT CUE
 [[input]]
 midi = { channel = 2, note = 0x1B }
-action = "pads.mode_hardware"
+action = "pads.mode_hot_cue"
 side = "right"
 
 # FX FADE
 [[input]]
 midi = { channel = 2, note = 0x1E }
-action = "pads.mode_hardware"
+action = "pads.mode_fx_fade"
 side = "right"
 
 # PAD SCRATCH
@@ -784,13 +789,13 @@ side = "right"
 # SAMPLER
 [[input]]
 midi = { channel = 2, note = 0x22 }
-action = "pads.mode_hardware"
+action = "pads.mode_sampler"
 side = "right"
 
 # SHIFT + SAMPLER (TRANS)
 [[input]]
 midi = { channel = 2, note = 0x6E }
-action = "pads.mode_hardware"
+action = "pads.mode_trans"
 side = "right"
 
 # SHIFT + HOT CUE
@@ -992,6 +997,6 @@ off = 0
 #     MASTER level         cc14 0x08/0x28   (applied by the SB3 itself, see [[init]])
 #     HEADPHONES level     cc14 0x0D/0x2D   (applied by the SB3 itself, see [[init]])
 #     SHIFT+BROWSE rotate  cc 0x64
-#     SHIFT+BROWSE press   note 0x42
+#     SHIFT+BROWSE press   note 0x42 (browser.toggle_folder)
 #     SHIFT+LOAD left      note 0x58
 #     SHIFT+LOAD right     note 0x59

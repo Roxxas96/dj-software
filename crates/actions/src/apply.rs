@@ -5,8 +5,8 @@ use engine::{
 
 use crate::sync::plan_sync;
 use crate::{
-    Action, ActionKind, AppRequest, BrowserRequest, ControlState, GridEditRequest, Input, Side,
-    ValueTarget,
+    Action, ActionKind, AppRequest, BrowserRequest, ControlState, GridEditRequest, Input, PadMode,
+    Side, ValueTarget,
 };
 
 /// What [`apply`] did.
@@ -100,6 +100,15 @@ pub fn apply(
         // the pad or CUE was held, so the note-off arrives on the shifted note.
         (Action::HotcueDelete(d, slot), Input::Release) => {
             (deck(d, DeckCommand::HotcueRelease(slot)), Update::None)
+        }
+        (Action::BrowserToggleFolder, Input::Press) => {
+            return ApplyResult::Request(AppRequest::Browser(BrowserRequest::ToggleFolder));
+        }
+        (Action::HardwarePadMode(side, mode), Input::Press) => {
+            let side = state.side_mut(side);
+            side.pad_mode = PadMode::Hardware;
+            side.hardware_mode = Some(mode);
+            return ApplyResult::Sent(0);
         }
         (Action::PadMode(side, mode), Input::Press) => {
             state.side_mut(side).pad_mode = mode;

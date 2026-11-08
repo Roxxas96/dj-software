@@ -1,6 +1,6 @@
 use engine::{DeckId, HotcueSlot, Stem};
 
-use crate::PadMode;
+use crate::{HardwarePadMode, PadMode};
 
 /// One half of the controller. Decks 1 and 3 sit on the left, decks 2 and 4 on the right.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -117,6 +117,8 @@ pub enum ActionKind {
     Shift,
     BrowserScroll,
     BrowserToggleFocus,
+    /// Opens or closes the highlighted folder in the browser tree.
+    BrowserToggleFolder,
     LoadSelected,
     /// A hotcue pad: sets, jumps to or previews the slot.
     Hotcue(HotcueSlot),
@@ -156,6 +158,9 @@ pub enum ActionKind {
     LoopExit,
     /// Sets the side's [`PadMode`]; no engine command.
     PadMode(PadMode),
+    /// Sets the side's pad mode to hardware and remembers which hardware button it was;
+    /// no engine command.
+    HardwarePadMode(HardwarePadMode),
     /// Beat jump pad `slot`, by the size in `ControlState::beat_jump_pads`.
     BeatJump(HotcueSlot),
     /// Beat jump pad `slot`, by the size in `ControlState::beat_jump_shift_pads`.
@@ -278,8 +283,8 @@ const SAMPLER_STOP_IDS: [&str; 8] = [
 
 impl ActionKind {
     /// Every kind: each slot family (hotcues, beat jumps, rolls, slices, sampler) once per slot.
-    pub const ALL: [ActionKind; 132] = {
-        let mut all = [ActionKind::PlayPause; 132];
+    pub const ALL: [ActionKind; 137] = {
+        let mut all = [ActionKind::PlayPause; 137];
         let fixed = [
             ActionKind::PlayPause,
             ActionKind::Cue,
@@ -309,6 +314,7 @@ impl ActionKind {
             ActionKind::Shift,
             ActionKind::BrowserScroll,
             ActionKind::BrowserToggleFocus,
+            ActionKind::BrowserToggleFolder,
             ActionKind::LoadSelected,
             ActionKind::LoopIn,
             ActionKind::LoopOut,
@@ -336,6 +342,10 @@ impl ActionKind {
             ActionKind::PadMode(PadMode::LoopRoll),
             ActionKind::PadMode(PadMode::Slicer),
             ActionKind::PadMode(PadMode::PadScratch),
+            ActionKind::HardwarePadMode(HardwarePadMode::HotCue),
+            ActionKind::HardwarePadMode(HardwarePadMode::FxFade),
+            ActionKind::HardwarePadMode(HardwarePadMode::Sampler),
+            ActionKind::HardwarePadMode(HardwarePadMode::Trans),
             ActionKind::SlipToggle,
             ActionKind::KeylockToggle,
             ActionKind::FxToggle(0),
@@ -403,6 +413,7 @@ impl ActionKind {
             ActionKind::Shift => "modifier.shift",
             ActionKind::BrowserScroll => "browser.scroll",
             ActionKind::BrowserToggleFocus => "browser.toggle_focus",
+            ActionKind::BrowserToggleFolder => "browser.toggle_folder",
             ActionKind::LoadSelected => "deck.load_selected",
             ActionKind::Hotcue(slot) => HOTCUE_IDS[slot.index()],
             ActionKind::HotcueDelete(slot) => HOTCUE_DELETE_IDS[slot.index()],
@@ -432,6 +443,10 @@ impl ActionKind {
             ActionKind::PadMode(PadMode::LoopRoll) => "pads.mode_loop_roll",
             ActionKind::PadMode(PadMode::Slicer) => "pads.mode_slicer",
             ActionKind::PadMode(PadMode::PadScratch) => "pads.mode_pad_scratch",
+            ActionKind::HardwarePadMode(HardwarePadMode::HotCue) => "pads.mode_hot_cue",
+            ActionKind::HardwarePadMode(HardwarePadMode::FxFade) => "pads.mode_fx_fade",
+            ActionKind::HardwarePadMode(HardwarePadMode::Sampler) => "pads.mode_sampler",
+            ActionKind::HardwarePadMode(HardwarePadMode::Trans) => "pads.mode_trans",
             ActionKind::BeatJump(slot) => BEAT_JUMP_IDS[slot.index()],
             ActionKind::BeatJumpShift(slot) => BEAT_JUMP_SHIFT_IDS[slot.index()],
             ActionKind::LoopRoll(slot) => LOOP_ROLL_IDS[slot.index()],
@@ -518,9 +533,13 @@ impl ActionKind {
             | ActionKind::HeadphoneMasterToggle
             | ActionKind::BrowserScroll
             | ActionKind::BrowserToggleFocus
+            | ActionKind::BrowserToggleFolder
             | ActionKind::SamplerPlay(_)
             | ActionKind::SamplerStop(_) => Scope::Global,
-            ActionKind::DeckToggle | ActionKind::Shift | ActionKind::PadMode(_) => Scope::Side,
+            ActionKind::DeckToggle
+            | ActionKind::Shift
+            | ActionKind::PadMode(_)
+            | ActionKind::HardwarePadMode(_) => Scope::Side,
         }
     }
 
@@ -635,6 +654,7 @@ pub enum Action {
     Shift(Side),
     BrowserScroll,
     BrowserToggleFocus,
+    BrowserToggleFolder,
     LoadSelected(DeckId),
     Hotcue(DeckId, HotcueSlot),
     HotcueDelete(DeckId, HotcueSlot),
@@ -660,6 +680,7 @@ pub enum Action {
     LoopFade4(DeckId),
     LoopExit(DeckId),
     PadMode(Side, PadMode),
+    HardwarePadMode(Side, HardwarePadMode),
     BeatJump(DeckId, HotcueSlot),
     BeatJumpShift(DeckId, HotcueSlot),
     LoopRoll(DeckId, HotcueSlot),
@@ -706,6 +727,7 @@ impl Action {
             (K::Shift, Target::Side(s)) => Action::Shift(s),
             (K::BrowserScroll, Target::Global) => Action::BrowserScroll,
             (K::BrowserToggleFocus, Target::Global) => Action::BrowserToggleFocus,
+            (K::BrowserToggleFolder, Target::Global) => Action::BrowserToggleFolder,
             (K::LoadSelected, Target::Deck(d)) => Action::LoadSelected(d),
             (K::Hotcue(slot), Target::Deck(d)) => Action::Hotcue(d, slot),
             (K::HotcueDelete(slot), Target::Deck(d)) => Action::HotcueDelete(d, slot),
@@ -731,6 +753,7 @@ impl Action {
             (K::LoopFade4, Target::Deck(d)) => Action::LoopFade4(d),
             (K::LoopExit, Target::Deck(d)) => Action::LoopExit(d),
             (K::PadMode(mode), Target::Side(s)) => Action::PadMode(s, mode),
+            (K::HardwarePadMode(mode), Target::Side(s)) => Action::HardwarePadMode(s, mode),
             (K::BeatJump(slot), Target::Deck(d)) => Action::BeatJump(d, slot),
             (K::BeatJumpShift(slot), Target::Deck(d)) => Action::BeatJumpShift(d, slot),
             (K::LoopRoll(slot), Target::Deck(d)) => Action::LoopRoll(d, slot),
@@ -786,6 +809,7 @@ impl Action {
             Action::Shift(_) => ActionKind::Shift,
             Action::BrowserScroll => ActionKind::BrowserScroll,
             Action::BrowserToggleFocus => ActionKind::BrowserToggleFocus,
+            Action::BrowserToggleFolder => ActionKind::BrowserToggleFolder,
             Action::LoadSelected(_) => ActionKind::LoadSelected,
             Action::Hotcue(_, slot) => ActionKind::Hotcue(*slot),
             Action::HotcueDelete(_, slot) => ActionKind::HotcueDelete(*slot),
@@ -811,6 +835,7 @@ impl Action {
             Action::LoopFade4(_) => ActionKind::LoopFade4,
             Action::LoopExit(_) => ActionKind::LoopExit,
             Action::PadMode(_, mode) => ActionKind::PadMode(*mode),
+            Action::HardwarePadMode(_, mode) => ActionKind::HardwarePadMode(*mode),
             Action::BeatJump(_, slot) => ActionKind::BeatJump(*slot),
             Action::BeatJumpShift(_, slot) => ActionKind::BeatJumpShift(*slot),
             Action::LoopRoll(_, slot) => ActionKind::LoopRoll(*slot),
@@ -886,9 +911,13 @@ impl Action {
             | Action::HeadphoneMasterToggle
             | Action::BrowserScroll
             | Action::BrowserToggleFocus
+            | Action::BrowserToggleFolder
             | Action::SamplerPlay(_)
             | Action::SamplerStop(_) => Target::Global,
-            Action::DeckToggle(s) | Action::Shift(s) | Action::PadMode(s, _) => Target::Side(s),
+            Action::DeckToggle(s)
+            | Action::Shift(s)
+            | Action::PadMode(s, _)
+            | Action::HardwarePadMode(s, _) => Target::Side(s),
         }
     }
 
