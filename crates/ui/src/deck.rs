@@ -9,7 +9,7 @@ use actions::{ControlState, HardwarePadMode, PadMode, Side, SideControl};
 use analysis::{Key, Waveform};
 use egui::{
     Align, Color32, CornerRadius, Label, Layout, Mesh, Rect, RichText, Sense, Shape, Stroke,
-    TextureHandle, Ui, UiBuilder, Vec2, pos2, vec2,
+    StrokeKind, TextureHandle, Ui, UiBuilder, Vec2, pos2, vec2,
 };
 use engine::{
     ChannelSnapshot, DeckId, DeckSnapshot, EffectKind, EngineMonitor, SAMPLER_SLOTS,
@@ -17,11 +17,14 @@ use engine::{
 };
 
 use crate::cover::{self, Covers};
+use crate::mixer;
 use crate::model::ControlFrame;
 use crate::theme;
 use crate::waveform::{Playhead, colour};
 
 /// A record's speed: the jog's marker turns at this at the original tempo.
+/// The tempo's place in `ControlFrame::ghosts`.
+const GHOST_TEMPO: usize = 6;
 const JOG_RPM: f64 = 100.0 / 3.0;
 /// The share of the panels' width each deck panel takes; the mixer has the rest.
 const PANEL_SHARE: f32 = 0.38;
@@ -82,6 +85,8 @@ pub struct DeckView {
     pub pitch_percent: f64,
     /// The tempo slider, 0 to 1: 0.5 is the original tempo, 1 the fastest.
     pub pitch_slider: f32,
+    /// Where the physical tempo slider waits to pick the tempo up (soft takeover).
+    pub pitch_ghost: Option<f32>,
     /// In the library's notation.
     pub key: Option<String>,
     /// `M:SS.d`, cut (not rounded) to the tenth; empty without a track.
@@ -163,6 +168,7 @@ impl DeckView {
                 .map(|bpm| bpm * snapshot.tempo_ratio),
             pitch_percent: (snapshot.tempo_ratio - 1.0) * 100.0,
             pitch_slider: frame.control.deck(id).tempo,
+            pitch_ghost: frame.ghosts[id.index()][GHOST_TEMPO],
             key: info
                 .and_then(|i| i.row.key)
                 .and_then(Key::new)
@@ -523,6 +529,16 @@ fn pitch(ui: &mut Ui, view: &DeckView, accent: Color32) {
         let y = track.top() + track.height() * view.pitch_slider.clamp(0.0, 1.0);
         let handle = Rect::from_center_size(pos2(x, y), PITCH_HANDLE);
         painter.rect_filled(handle, CornerRadius::same(1), accent);
+        let ghost_at = |v: f32| pos2(x, track.top() + track.height() * v);
+        if let Some(at) = mixer::ghost_marker(view.pitch_ghost, ghost_at) {
+            let marker = Rect::from_center_size(at, PITCH_HANDLE + vec2(4.0, 4.0));
+            painter.rect_stroke(
+                marker,
+                CornerRadius::same(1),
+                Stroke::new(1.5, mixer::GHOST),
+                StrokeKind::Outside,
+            );
+        }
         ui.label(RichText::new(format!("{:+.1}%", view.pitch_percent)).size(SMALL_FONT));
     });
 }

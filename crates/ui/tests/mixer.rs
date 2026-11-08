@@ -33,7 +33,7 @@ fn mixer_shows_knob_labels() {
 }
 
 #[test]
-fn a_ghost_marker_does_not_hide_the_knob() {
+fn a_pending_pickup_leaves_the_labels_in_place() {
     let mut frame = ControlFrame::default();
     frame.ghosts[0][5] = Some(0.2);
     frame.ghosts[0][1] = Some(0.9);
