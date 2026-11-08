@@ -1,7 +1,7 @@
 //! Controller mappings: the TOML file format, resolving MIDI messages into actions, and
 //! soft takeover for absolute controls.
 
-mod file;
+pub(crate) mod file;
 mod resolve;
 mod takeover;
 

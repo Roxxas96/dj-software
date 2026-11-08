@@ -1,4 +1,5 @@
-//! The mapping file: TOML with `[controller]`, `[[init]]`, `[[input]]` and `[[output]]`.
+//! The mapping file: TOML with `[controller]`, `[[init]]`, `[[input]]` and `[[output]]`, and
+//! for a file that `extends` another, `[[remove]]`.
 //!
 //! Parsing happens in two passes. The file's top level is read first, keeping each binding
 //! as a raw TOML value, then each binding is read and validated on its own so every error
@@ -130,14 +131,38 @@ pub struct MappingError {
 }
 
 /// Parses and validates the mapping file `name` (used in error messages) from `text`.
+///
+/// An `extends` names a built-in mapping or a file; a relative path is read from the
+/// working directory (see [`crate::builtin::load_mapping`] for paths relative to the file).
 pub fn parse_mapping(name: &str, text: &str) -> Result<Mapping, MappingError> {
+    crate::builtin::parse_text(name, text)
+}
+
+/// [`parse_mapping`], loading the mapping an `extends` names with `parent`.
+pub(crate) fn parse_with(
+    name: &str,
+    text: &str,
+    parent: &mut dyn FnMut(&str) -> Result<Mapping, MappingError>,
+) -> Result<Mapping, MappingError> {
     let error = |message: String| MappingError {
         file: name.to_owned(),
         message,
     };
     let raw: RawFile = toml::from_str(text).map_err(|e| error(e.to_string()))?;
-    let jog_steps_per_turn = raw
-        .controller
+    let base = match &raw.extends {
+        Some(parent_name) => Some(parent(parent_name)?),
+        None => {
+            if !raw.remove.is_empty() {
+                return Err(error(
+                    "remove[0]: `[[remove]]` needs `extends` (it removes inherited bindings)"
+                        .to_owned(),
+                ));
+            }
+            None
+        }
+    };
+    let controller = raw.controller.unwrap_or_default();
+    let jog_steps_per_turn = controller
         .jog_steps_per_turn
         .map(|steps| match u16::try_from(steps) {
             Ok(steps @ 1..=MAX_JOG_STEPS_PER_TURN) => Ok(steps),
@@ -146,8 +171,44 @@ pub fn parse_mapping(name: &str, text: &str) -> Result<Mapping, MappingError> {
             ))),
         })
         .transpose()?;
-    let inputs =
-        read_all(expand_note_ranges(raw.input).map_err(error)?, input_binding).map_err(error)?;
+    let own_inputs: Vec<InputBinding> = read_all(
+        expand_note_ranges(raw.input, "input")
+            .map_err(error)?
+            .into_iter()
+            .map(|(_, label, value)| (label, value))
+            .collect(),
+        input_binding,
+    )
+    .map_err(error)?;
+    let own_init = each(raw.init, "init", init_action).map_err(error)?;
+    let own_outputs = each(raw.output, "output", output_binding).map_err(error)?;
+    let removes = removes(raw.remove).map_err(error)?;
+
+    let (controller, init, inputs, outputs) = match base {
+        None => {
+            let missing = |key: &str| error(format!("controller: missing `{key}`"));
+            let info = ControllerInfo {
+                name: controller.name.ok_or_else(|| missing("name"))?,
+                port: controller.port.ok_or_else(|| missing("port"))?,
+                jog_steps_per_turn,
+            };
+            (info, own_init, own_inputs, own_outputs)
+        }
+        Some(base) => {
+            let info = ControllerInfo {
+                name: controller.name.unwrap_or(base.controller.name),
+                port: controller.port.unwrap_or(base.controller.port),
+                jog_steps_per_turn: jog_steps_per_turn.or(base.controller.jog_steps_per_turn),
+            };
+            let inputs = merge_inputs(base.inputs, &removes, own_inputs).map_err(error)?;
+            (
+                info,
+                [base.init, own_init].concat(),
+                inputs,
+                [base.outputs, own_outputs].concat(),
+            )
+        }
+    };
     let uses_jog = inputs.iter().any(|binding| {
         matches!(
             binding.kind,
@@ -157,21 +218,86 @@ pub fn parse_mapping(name: &str, text: &str) -> Result<Mapping, MappingError> {
                 | ActionKind::JogScratch
         )
     });
-    if uses_jog && jog_steps_per_turn.is_none() {
+    if uses_jog && controller.jog_steps_per_turn.is_none() {
         return Err(error(
             "jog_steps_per_turn is required by jog bindings".to_owned(),
         ));
     }
     Ok(Mapping {
-        controller: ControllerInfo {
-            name: raw.controller.name,
-            port: raw.controller.port,
-            jog_steps_per_turn,
-        },
-        init: each(raw.init, "init", init_action).map_err(error)?,
+        controller,
+        init,
         inputs,
-        outputs: each(raw.output, "output", output_binding).map_err(error)?,
+        outputs,
     })
+}
+
+/// One `[[remove]]` message, after note ranges are expanded. `None` conditions match any.
+struct RemoveMatch {
+    midi: MidiSource,
+    pad_mode: Option<PadMode>,
+    shift: Option<bool>,
+}
+
+impl RemoveMatch {
+    fn matches(&self, binding: &InputBinding) -> bool {
+        binding.midi == self.midi
+            && self
+                .pad_mode
+                .is_none_or(|mode| binding.pad_mode == Some(mode))
+            && self.shift.is_none_or(|shift| binding.shift == Some(shift))
+    }
+}
+
+/// Reads every `[[remove]]` entry: per entry, its label and the messages it expands to.
+fn removes(values: Vec<toml::Value>) -> Result<Vec<(String, Vec<RemoveMatch>)>, String> {
+    let mut entries: Vec<(String, Vec<RemoveMatch>)> = Vec::new();
+    for (index, label, value) in expand_note_ranges(values, "remove")? {
+        let matcher = value
+            .try_into::<RawRemove>()
+            .map_err(|e| e.to_string().trim_end().to_owned())
+            .and_then(|raw| {
+                Ok(RemoveMatch {
+                    midi: midi_source(&raw.midi)?,
+                    pad_mode: raw.pad_mode.as_deref().map(pad_mode).transpose()?,
+                    shift: raw.shift,
+                })
+            })
+            .map_err(|e| format!("{label}: {e}"))?;
+        if entries.len() <= index {
+            entries.push((format!("remove[{index}]"), Vec::new()));
+        }
+        entries[index].1.push(matcher);
+    }
+    Ok(entries)
+}
+
+/// The inherited bindings, without those a `[[remove]]` or one of the file's own bindings
+/// (same message, `pad_mode` and `shift`) replaces, then the file's own bindings.
+fn merge_inputs(
+    inherited: Vec<InputBinding>,
+    removes: &[(String, Vec<RemoveMatch>)],
+    own: Vec<InputBinding>,
+) -> Result<Vec<InputBinding>, String> {
+    for (label, matchers) in removes {
+        if !inherited
+            .iter()
+            .any(|binding| matchers.iter().any(|m| m.matches(binding)))
+        {
+            return Err(format!("{label}: matches no inherited binding"));
+        }
+    }
+    let replaced = |binding: &InputBinding| {
+        removes
+            .iter()
+            .flat_map(|(_, matchers)| matchers)
+            .any(|m| m.matches(binding))
+            || own.iter().any(|o| {
+                o.midi == binding.midi && o.pad_mode == binding.pad_mode && o.shift == binding.shift
+            })
+    };
+    let mut inputs: Vec<InputBinding> = inherited.into_iter().filter(|b| !replaced(b)).collect();
+    inputs.extend(own);
+    Ok(inputs)
 }
 
 /// The largest accepted `jog_steps_per_turn`.
@@ -217,13 +343,17 @@ where
 /// The most notes a `notes` range can span.
 const MAX_RANGE_NOTES: i64 = 128;
 
-/// Expands every `midi = { notes = [first, last] }` binding into one binding per note, in
-/// order, replacing `{n}` in the action id with 1..=count. The result is labeled for errors:
-/// `input[i]`, or `input[i] (note 0x03)` for an expanded binding.
-fn expand_note_ranges(values: Vec<toml::Value>) -> Result<Vec<(String, toml::Value)>, String> {
+/// Expands every `midi = { notes = [first, last] }` entry of the array `what` into one entry
+/// per note, in order, replacing `{n}` in the action id with 1..=count. Each result carries
+/// its entry's index and a label for errors: `input[i]`, or `input[i] (note 0x03)` for an
+/// expanded entry.
+fn expand_note_ranges(
+    values: Vec<toml::Value>,
+    what: &str,
+) -> Result<Vec<(usize, String, toml::Value)>, String> {
     let mut expanded = Vec::with_capacity(values.len());
     for (i, value) in values.into_iter().enumerate() {
-        let label = format!("input[{i}]");
+        let label = format!("{what}[{i}]");
         let has_notes = value.get("midi").is_some_and(|m| m.get("notes").is_some());
         let action_has_n = value
             .get("action")
@@ -233,7 +363,7 @@ fn expand_note_ranges(values: Vec<toml::Value>) -> Result<Vec<(String, toml::Val
             if action_has_n {
                 return Err(format!("{label}: `{{n}}` in the action needs `midi.notes`"));
             }
-            expanded.push((label, value));
+            expanded.push((i, label, value));
             continue;
         }
         let fail = |problem: String| format!("{label}: {problem}");
@@ -279,7 +409,7 @@ fn expand_note_ranges(values: Vec<toml::Value>) -> Result<Vec<(String, toml::Val
                 let action = action.replace("{n}", &n.to_string());
                 binding["action"] = toml::Value::String(action);
             }
-            expanded.push((format!("{label} (note 0x{note:02X})"), binding));
+            expanded.push((i, format!("{label} (note 0x{note:02X})"), binding));
         }
     }
     Ok(expanded)
@@ -288,20 +418,25 @@ fn expand_note_ranges(values: Vec<toml::Value>) -> Result<Vec<(String, toml::Val
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawFile {
-    controller: RawController,
+    /// A built-in mapping name or a path to inherit from.
+    extends: Option<String>,
+    controller: Option<RawController>,
     #[serde(default)]
     init: Vec<toml::Value>,
     #[serde(default)]
     input: Vec<toml::Value>,
     #[serde(default)]
     output: Vec<toml::Value>,
+    #[serde(default)]
+    remove: Vec<toml::Value>,
 }
 
-#[derive(Deserialize)]
+/// Every key is optional here: a file that extends another overrides only the keys it sets.
+#[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawController {
-    name: String,
-    port: String,
+    name: Option<String>,
+    port: Option<String>,
     jog_steps_per_turn: Option<i64>,
 }
 
@@ -365,6 +500,14 @@ struct RawInput {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct RawRemove {
+    midi: RawMidi,
+    pad_mode: Option<String>,
+    shift: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawOutput {
     state: String,
     deck: Option<i64>,
@@ -404,16 +547,7 @@ fn init_action(raw: RawInit) -> Result<InitAction, String> {
 fn input_binding(raw: RawInput) -> Result<InputBinding, String> {
     let kind = action_kind(&raw.action)?;
     let midi = midi_source(&raw.midi)?;
-    let pad_mode = raw
-        .pad_mode
-        .as_deref()
-        .map(|id| {
-            PadMode::from_id(id).ok_or_else(|| {
-                let ids: Vec<&str> = PadMode::ALL.iter().map(|mode| mode.id()).collect();
-                format!("unknown pad_mode `{id}` (use {})", ids.join(", "))
-            })
-        })
-        .transpose()?;
+    let pad_mode = raw.pad_mode.as_deref().map(pad_mode).transpose()?;
     // A master action takes a `side` only to scope its `pad_mode`.
     let (scope_side, pad_scope) = match (kind.scope(), pad_mode, raw.side) {
         (Scope::Global, Some(_), Some(s)) if raw.deck.is_none() => (None, Some(side(s))),
@@ -510,6 +644,13 @@ fn output_binding(raw: RawOutput) -> Result<OutputBinding, String> {
         midi,
         on: raw.on.map_or(Ok(127), |v| midi_number("on", v))?,
         off: raw.off.map_or(Ok(0), |v| midi_number("off", v))?,
+    })
+}
+
+fn pad_mode(id: &str) -> Result<PadMode, String> {
+    PadMode::from_id(id).ok_or_else(|| {
+        let ids: Vec<&str> = PadMode::ALL.iter().map(|mode| mode.id()).collect();
+        format!("unknown pad_mode `{id}` (use {})", ids.join(", "))
     })
 }
 

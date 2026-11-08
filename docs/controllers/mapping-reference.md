@@ -19,15 +19,110 @@ New to this? [Adding a controller](adding-a-controller.md) walks through the who
      (`~/.config/open-jockey/controllers/<name>/mapping.toml` when `XDG_CONFIG_HOME` is not set)
 3. If there is no user file, the built-in mapping with that name is used.
 
-Copy a built-in `mapping.toml` to the user location and edit it to change a mapping without
-rebuilding the app. The file is read when the app starts.
+To change a few controls of a built-in mapping without rebuilding the app, put a short file
+at the user location that [extends](#extending-a-mapping) it. To change everything, copy the
+built-in `mapping.toml` there and edit it. The file is read when the app starts.
+
+## Extending a mapping
+
+A file with a top-level `extends` starts from another mapping and changes only what it says:
+
+- `extends = "ddj-sb3"` names a built-in mapping. Any other value is a path to a mapping
+  file; a relative path is read from the folder of the file that says `extends`. The parent
+  may extend another mapping in turn.
+- Everything of the parent is inherited: `[controller]`, `[[init]]`, `[[input]]` and
+  `[[output]]`.
+- `[controller]` is optional. Each key it sets (`name`, `port`, `jog_steps_per_turn`)
+  overrides the parent's; the others are kept.
+- `[[init]]` and `[[output]]` entries are added after the parent's.
+- An `[[input]]` with the same MIDI message, the same `pad_mode` and the same `shift` as
+  inherited bindings *replaces* them (a missing `pad_mode` or `shift` matches only a binding
+  without one). Bindings of other messages, and of the same message in another pad mode or
+  SHIFT layer, are kept unchanged. A `notes` range is matched note by note. The file's own
+  inputs come after the inherited ones.
+- `[[remove]]` deletes inherited bindings. It takes `midi` (as in `[[input]]`, `notes`
+  ranges included) and optionally `pad_mode` and `shift`; a missing `pad_mode` or `shift`
+  matches any. It only removes inherited bindings, never the file's own.
+
+These are load errors that name the file: a parent that is neither a built-in mapping nor a
+file, a chain of `extends` that comes back to a file already in it, a `[[remove]]` that
+matches no inherited binding (`remove[0]: matches no inherited binding`), and a `[[remove]]`
+in a file without `extends`.
+
+For example, this file puts the four [stem toggles](#actions) on SAMPLER pads 1-4 of the
+DDJ-SB3, on both sides, and keeps pads 5-8 playing samples. Save it as
+`controllers/ddj-sb3/mapping.toml` in the config directory (see above), so it replaces the
+built-in `ddj-sb3` it extends:
+
+```toml
+extends = "ddj-sb3"
+
+# SAMPLER pads 1-4 (notes 0x30-0x33; channel 8 is the left side, 9 the right)
+[[input]]
+midi = { channel = 8, note = 0x30 }
+action = "deck.stem_toggle_vocals"
+side = "left"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 8, note = 0x31 }
+action = "deck.stem_toggle_instruments"
+side = "left"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 8, note = 0x32 }
+action = "deck.stem_toggle_bass"
+side = "left"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 8, note = 0x33 }
+action = "deck.stem_toggle_rhythm"
+side = "left"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 9, note = 0x30 }
+action = "deck.stem_toggle_vocals"
+side = "right"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 9, note = 0x31 }
+action = "deck.stem_toggle_instruments"
+side = "right"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 9, note = 0x32 }
+action = "deck.stem_toggle_bass"
+side = "right"
+pad_mode = "hardware"
+
+[[input]]
+midi = { channel = 9, note = 0x33 }
+action = "deck.stem_toggle_rhythm"
+side = "right"
+pad_mode = "hardware"
+```
+
+Each binding replaces the inherited `sampler.play_N` of its pad in the hardware pad mode; the
+software pad modes keep their bindings on these notes, and SHIFT + SAMPLER pads 1-4 still stop
+samples 1-4. To leave a pad doing nothing instead, use `[[remove]]`:
+
+```toml
+[[remove]]
+midi = { channel = 8, notes = [0x34, 0x37] }
+pad_mode = "hardware"
+```
 
 ## Errors
 
 A mapping that does not load stops the app with a message in the form
 `<file>: <binding>: <problem>`, for example `input[3]: unknown action `deck.plya``.
 `<binding>` is the kind of binding and its position in the file counting from 0
-(`init[0]`, `input[12]`, `output[1]`).
+(`init[0]`, `input[12]`, `output[1]`, `remove[0]`).
 
 Everything is checked when the file loads:
 
@@ -44,10 +139,12 @@ written in decimal or hex (`note = 0x0B`).
 ## File layout
 
 ```toml
-[controller]          # exactly one
+extends = "ddj-sb3"   # optional: start from another mapping (see above)
+[controller]          # exactly one (optional with extends)
 [[init]]              # any number: values set when the controller attaches
 [[input]]             # any number: controls
 [[output]]            # any number: LEDs
+[[remove]]            # any number, with extends only: inherited bindings to delete
 ```
 
 ### `[controller]`
@@ -58,7 +155,7 @@ written in decimal or hex (`note = 0x0B`).
 | `port` | Text matched against the names of the MIDI input and output ports. Any port whose name contains it is used. |
 | `jog_steps_per_turn` | Optional, 1 to 10000. How many relative steps the jog wheel sends for one full turn of the platter. Required whenever a binding uses `deck.jog_top`, `deck.jog_ring`, `deck.jog_search` or `deck.jog_scratch`: a mapping with such a binding and no key fails to load. |
 
-`name` and `port` are required.
+`name` and `port` are required, except in a file that `extends` another.
 
 ### `[[init]]`
 
