@@ -1,16 +1,19 @@
-//! The `library` command: folders, scans, track lists, analysis, settings, playlists and
-//! beatgrids. Results go to stdout, progress lines to stderr.
+//! The `library` command: folders, scans, track lists, analysis, settings, playlists,
+//! beatgrids and stems prepared ahead. Results go to stdout, progress lines to stderr.
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, bail};
 use library::{
     Analyzer, BPM_RANGE, GridEdit, GridError, KEY_NOTATION, Library, PlaylistSummary, Reader,
-    ScanProgress, ScanReport, TrackFilter, TrackRow, TrackSort, TrackSortKey, WriteOp,
-    WriteOutcome, default_threads, format_bpm_range, validate_bpm_range,
+    ScanProgress, ScanReport, StemCache, StemKey, TrackFilter, TrackRow, TrackSort, TrackSortKey,
+    WriteOp, WriteOutcome, default_threads, format_bpm_range, validate_bpm_range,
 };
+use stems::Separator;
 
 use crate::format::{
     bpm_text, grid_text, is_long_mix, key_text, length_text, notation_from_setting,
@@ -86,6 +89,26 @@ pub enum LibraryCommand {
         track: i64,
         #[command(subcommand)]
         action: GridAction,
+    },
+    /// Separate tracks into stems ahead of time and keep them in the stems cache, where
+    /// they count as prepared (kept longest). Needs the model: run `open-jockey stems
+    /// setup` once. Tracks over 20 minutes are skipped
+    Stems {
+        /// Every track of this playlist
+        #[arg(
+            long,
+            value_name = "NAME",
+            conflicts_with = "tracks",
+            required_unless_present = "tracks"
+        )]
+        playlist: Option<String>,
+        /// These track ids
+        #[arg(long = "track", value_name = "ID", num_args = 1..)]
+        tracks: Vec<i64>,
+        /// Configuration file, for the cache budget `stems.cache_gb` (default: config.toml
+        /// in the per-user configuration folder)
+        #[arg(long, value_name = "PATH")]
+        config: Option<PathBuf>,
     },
 }
 
@@ -247,6 +270,21 @@ pub fn run(args: &LibraryArgs) -> anyhow::Result<()> {
         LibraryCommand::Set(set) => set_setting(&lib, set),
         LibraryCommand::Playlist(cmd) => playlist(&lib, cmd),
         LibraryCommand::Grid { track, action } => grid(&lib, *track, *action),
+        LibraryCommand::Stems {
+            playlist,
+            tracks,
+            config,
+        } => crate::config::load(config.as_deref()).and_then(|config| {
+            prepare_stems(
+                &lib,
+                &StemsRequest {
+                    playlist: playlist.as_deref(),
+                    tracks,
+                    model: &stems::model_path(),
+                    budget_bytes: gb_to_bytes(config.stems.cache_gb),
+                },
+            )
+        }),
     };
     for failed in lib.take_failed_writes() {
         err_out!("warning: a library change was not saved: {}", failed.error);
@@ -732,6 +770,215 @@ fn grid(lib: &Library, track: i64, action: GridAction) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// What `library stems` prepares, and with what.
+struct StemsRequest<'a> {
+    playlist: Option<&'a str>,
+    tracks: &'a [i64],
+    /// The filled model (`stems setup` writes it).
+    model: &'a Path,
+    budget_bytes: u64,
+}
+
+/// `cache_gb` gigabytes (10^9 bytes) as bytes.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn gb_to_bytes(gb: f64) -> u64 {
+    // `as` saturates; the config keeps `cache_gb` within 0.5-1000.
+    (gb * 1e9) as u64
+}
+
+/// The stems cache folder for the library at `db`: `stems` beside it, which is
+/// `<data dir>/stems` for the default library.
+fn stems_dir(db: &Path) -> PathBuf {
+    db.parent().unwrap_or_else(|| Path::new(".")).join("stems")
+}
+
+/// How one track of `library stems` went.
+enum Prepared {
+    Separated,
+    AlreadyCached,
+    Skipped(String),
+}
+
+/// `library stems`: separates the requested tracks one at a time and stores them in the
+/// cache as prepared; tracks already cached are only marked prepared. Ctrl-C stops after
+/// the current chunk. Fails without a model, or if any track failed.
+fn prepare_stems(lib: &Library, request: &StemsRequest<'_>) -> anyhow::Result<()> {
+    if !request.model.is_file() {
+        bail!(
+            "no stems model at {}: run `open-jockey stems setup` once to download and \
+             install it",
+            request.model.display()
+        );
+    }
+    let reader = lib.reader()?;
+    let ids = match request.playlist {
+        Some(name) => {
+            let playlist = find_playlist(&reader, name)?;
+            let mut ids: Vec<i64> = Vec::new();
+            for row in playlist_rows(&reader, &playlist)? {
+                if !ids.contains(&row.id) {
+                    ids.push(row.id);
+                }
+            }
+            ids
+        }
+        None => request.tracks.to_vec(),
+    };
+    if ids.is_empty() {
+        out!("no tracks to prepare");
+        return Ok(());
+    }
+    let mut cache = StemCache::new(lib, stems_dir(lib.path()), request.budget_bytes)
+        .context("opening the stems cache")?;
+    let cancel = Arc::new(AtomicBool::new(false));
+    {
+        let cancel = Arc::clone(&cancel);
+        // Only fails if a handler is already set; Ctrl-C then just ends the process (a
+        // half-written entry is swept the next time the cache opens).
+        let _ = ctrlc::set_handler(move || cancel.store(true, Ordering::Relaxed));
+    }
+    let mut separator: Option<stems::ModelSeparator> = None;
+    let (mut separated, mut cached, mut skipped, mut failed) = (0, 0, 0, 0);
+    for (i, &id) in ids.iter().enumerate() {
+        if cancel.load(Ordering::Relaxed) {
+            out!("stopped: {} track(s) not prepared", ids.len() - i);
+            break;
+        }
+        let prefix = format!("[{}/{}] track {id}", i + 1, ids.len());
+        let result = prepare_one(
+            &reader,
+            &mut cache,
+            id,
+            &prefix,
+            &cancel,
+            &mut |separator: &mut Option<stems::ModelSeparator>| {
+                if separator.is_none() {
+                    err_out!("opening the stems model (the first time takes about a minute)");
+                    *separator = Some(
+                        stems::ModelSeparator::new(request.model, &stems::ModelOptions::default())
+                            .context("opening the stems model")?,
+                    );
+                }
+                Ok(())
+            },
+            &mut separator,
+        );
+        match result {
+            Ok(Prepared::Separated) => {
+                separated += 1;
+                out!("{prefix}: stems ready");
+            }
+            Ok(Prepared::AlreadyCached) => {
+                cached += 1;
+                out!("{prefix}: already cached, marked prepared");
+            }
+            Ok(Prepared::Skipped(why)) => {
+                skipped += 1;
+                out!("{prefix}: skipped, {why}");
+            }
+            Err(e) if cancel.load(Ordering::Relaxed) => {
+                out!("{prefix}: stopped ({e:#})");
+                break;
+            }
+            Err(e) => {
+                failed += 1;
+                out!("{prefix}: failed: {e:#}");
+            }
+        }
+    }
+    out!(
+        "stems: separated {separated}, already cached {cached}, skipped {skipped}, failed \
+         {failed}; cache {:.1} of {:.1} GB",
+        cache.bytes()? as f64 / 1e9,
+        request.budget_bytes as f64 / 1e9
+    );
+    if failed > 0 {
+        bail!("{failed} track(s) could not be prepared");
+    }
+    Ok(())
+}
+
+/// Opens the separator into its slot if it is not open yet.
+type OpenSeparator<'a, S> = dyn FnMut(&mut Option<S>) -> anyhow::Result<()> + 'a;
+
+/// Prepares one track: decodes it, keeps an existing entry, or separates and stores it,
+/// opening the separator (`open` into `separator`) only when one is needed.
+fn prepare_one<S: Separator>(
+    reader: &Reader,
+    cache: &mut StemCache,
+    id: i64,
+    prefix: &str,
+    cancel: &AtomicBool,
+    open: &mut OpenSeparator<'_, S>,
+    separator: &mut Option<S>,
+) -> anyhow::Result<Prepared> {
+    let Some(details) = reader.track(id)? else {
+        return Ok(Prepared::Skipped("no such track".into()));
+    };
+    if details.row.missing {
+        return Ok(Prepared::Skipped(format!(
+            "its file is missing ({})",
+            details.path.display()
+        )));
+    }
+    let name = crate::format::track_name(&details.row);
+    let fingerprint = cache
+        .fingerprint(id)?
+        .with_context(|| format!("track {id} has no fingerprint"))?;
+    if let (Some(frames), Some(rate)) = (details.row.duration_frames, details.row.sample_rate)
+        && let Err(e) = stems::check_length(usize::try_from(frames).unwrap_or(usize::MAX), rate)
+    {
+        return Ok(Prepared::Skipped(format!("{name}: {e}")));
+    }
+    let decoded = decode::decode_file(&details.path)
+        .with_context(|| format!("decoding {}", details.path.display()))?;
+    let track = decoded.track;
+    if let Err(e) = stems::check_length(track.frames(), track.sample_rate()) {
+        return Ok(Prepared::Skipped(format!("{name}: {e}")));
+    }
+    let key = StemKey {
+        track: id,
+        fingerprint: &fingerprint,
+        sample_rate: track.sample_rate(),
+        frames: track.frames(),
+    };
+    if cache.contains(&key) {
+        cache.mark_prepared(id)?;
+        return Ok(Prepared::AlreadyCached);
+    }
+    open(separator)?;
+    let separator = separator.as_mut().context("no stems separator")?;
+    let tty = std::io::stderr().is_terminal();
+    let shown = std::cell::Cell::new(None);
+    let progress = |done: f32| {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let percent = (done.clamp(0.0, 1.0) * 100.0) as u32;
+        if tty && shown.replace(Some(percent)) != Some(percent) {
+            eprint!(
+                "\r{prefix} {}: separating {percent:3} %",
+                truncate(&name, 40)
+            );
+            let _ = std::io::stderr().flush();
+        }
+    };
+    let result = separator.separate(&track, &progress, cancel);
+    if tty {
+        eprint!("\r\x1b[2K");
+    }
+    let set = result?;
+    let eviction = cache.put(&key, &set, true, &[])?;
+    if let Some(notice) = eviction.notice {
+        err_out!("{notice}");
+    }
+    if !eviction.removed.is_empty() {
+        err_out!(
+            "stems cache: evicted {} track(s) to stay within the budget",
+            eviction.removed.len()
+        );
+    }
+    Ok(Prepared::Separated)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -778,6 +1025,104 @@ mod tests {
         assert!(text.contains("skipped 25 file(s)"));
         assert!(text.contains("/m/19.mp3") && !text.contains("/m/20.mp3"));
         assert!(text.contains("… and 5 more"));
+    }
+
+    #[test]
+    fn stems_without_a_model_explain_setup() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = Library::open(&dir.path().join("library.sqlite3")).unwrap();
+        let err = prepare_stems(
+            &lib,
+            &StemsRequest {
+                playlist: None,
+                tracks: &[1],
+                model: &dir.path().join("no-model.onnx"),
+                budget_bytes: u64::MAX,
+            },
+        )
+        .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("open-jockey stems setup"),
+            "{err:#}"
+        );
+        assert!(
+            !dir.path().join("stems").exists(),
+            "nothing done without a model"
+        );
+    }
+
+    /// Writes a 16-bit stereo PCM WAV of `seconds` of a tone at 44.1 kHz.
+    fn write_wav(path: &Path, seconds: f64) {
+        const SR: u32 = 44_100;
+        let frames = (seconds * f64::from(SR)) as usize;
+        let data_len = u32::try_from(frames * 4).unwrap();
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        bytes.extend_from_slice(&2u16.to_le_bytes()); // channels
+        bytes.extend_from_slice(&SR.to_le_bytes());
+        bytes.extend_from_slice(&(SR * 4).to_le_bytes()); // byte rate
+        bytes.extend_from_slice(&4u16.to_le_bytes()); // block align
+        bytes.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&data_len.to_le_bytes());
+        for i in 0..frames {
+            let s = (3000.0 * (i as f64 * 0.05).sin()) as i16;
+            bytes.extend_from_slice(&s.to_le_bytes());
+            bytes.extend_from_slice(&s.to_le_bytes());
+        }
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn stems_are_prepared_once_then_marked() {
+        let dir = tempfile::tempdir().unwrap();
+        let music = dir.path().join("music");
+        std::fs::create_dir_all(&music).unwrap();
+        write_wav(&music.join("a.wav"), 1.0);
+        let lib = Library::open(&dir.path().join("library.sqlite3")).unwrap();
+        library::add_folder(&lib, &music).unwrap();
+        library::scan_folder(&lib, &music, &mut |_| {}).unwrap();
+        let reader = lib.reader().unwrap();
+        let mut cache = StemCache::new(&lib, stems_dir(lib.path()), u64::MAX).unwrap();
+        let cancel = AtomicBool::new(false);
+        let mut opened = 0;
+        let mut open = |slot: &mut Option<stems::SyntheticSeparator>| {
+            if slot.is_none() {
+                opened += 1;
+                *slot = Some(stems::SyntheticSeparator::new());
+            }
+            Ok(())
+        };
+        let mut separator = None;
+        let mut run = |id| {
+            prepare_one(
+                &reader,
+                &mut cache,
+                id,
+                "",
+                &cancel,
+                &mut open,
+                &mut separator,
+            )
+            .unwrap()
+        };
+        assert!(matches!(run(1), Prepared::Separated));
+        assert!(matches!(run(1), Prepared::AlreadyCached));
+        assert!(matches!(run(2), Prepared::Skipped(why) if why.contains("no such track")));
+        drop(run);
+        assert_eq!(opened, 1);
+        let prepared: bool = reader
+            .connection()
+            .query_row("SELECT prepared FROM stems WHERE track_id = 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert!(prepared);
+        assert!(dir.path().join("stems").is_dir());
     }
 
     #[test]

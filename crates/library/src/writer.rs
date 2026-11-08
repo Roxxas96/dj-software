@@ -91,6 +91,17 @@ pub enum WriteOp {
     /// Removes hotcue `slot` (1 to 8) of track `track`; an empty slot is fine. Fails like
     /// [`WriteOp::SetHotcue`] for a bad slot or an unknown track, changing nothing.
     DeleteHotcue { track: i64, slot: u8 },
+    /// Records that track `id` was loaded into a deck now (`tracks.last_loaded_at`), which
+    /// keeps its stems cached. Fails with [`LibraryError::NoSuchTrack`] for an unknown track.
+    TrackLoaded(i64),
+    /// Records (or replaces) track `track`'s stems cache entry. `prepared` is kept once set.
+    /// Used by [`crate::StemCache`].
+    PutStems(Box<StemsRow>),
+    /// Marks track `id`'s stems cache entry as prepared ahead (`library stems`); no-op
+    /// without an entry.
+    MarkStemsPrepared(i64),
+    /// Removes track `id`'s stems cache entry row (the cache removes its files).
+    RemoveStems(i64),
     /// Flags these tracks' files as missing. Tracks are never deleted by a scan.
     MarkMissing(Vec<i64>),
     /// Adds a library folder (no-op if already there). Only the `folders` table changes.
@@ -134,6 +145,30 @@ pub enum WriteOp {
         statements: Vec<RawStatement>,
         after: usize,
     },
+}
+
+/// The payload of [`WriteOp::PutStems`]: one stems cache entry.
+#[derive(Clone, PartialEq, Eq)]
+pub struct StemsRow {
+    pub track_id: i64,
+    /// The track's fingerprint the stems were separated from.
+    pub fingerprint: Vec<u8>,
+    /// The entry's folder, relative to the stems folder.
+    pub path: String,
+    /// The entry's files' total size.
+    pub bytes: u64,
+    pub prepared: bool,
+}
+
+impl std::fmt::Debug for StemsRow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StemsRow")
+            .field("track_id", &self.track_id)
+            .field("path", &self.path)
+            .field("bytes", &self.bytes)
+            .field("prepared", &self.prepared)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A track file's size and modification time as stored by the last scan.
@@ -472,6 +507,43 @@ fn apply(tx: &Transaction<'_>, op: &WriteOp) -> Result<WriteOutcome, LibraryErro
         }
         WriteOp::DeleteHotcue { track, slot } => {
             cues::delete_hotcue(tx, *track, *slot)?;
+            Ok(WriteOutcome::Done)
+        }
+        WriteOp::TrackLoaded(id) => {
+            let changed = tx.execute(
+                "UPDATE tracks SET last_loaded_at = ?2 WHERE id = ?1",
+                (id, unix_now()),
+            )?;
+            if changed == 0 {
+                return Err(LibraryError::NoSuchTrack(*id));
+            }
+            Ok(WriteOutcome::Done)
+        }
+        WriteOp::PutStems(row) => {
+            tx.execute(
+                "INSERT INTO stems(track_id, fingerprint, path, bytes, prepared, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+                 ON CONFLICT(track_id) DO UPDATE SET \
+                     fingerprint = excluded.fingerprint, path = excluded.path, \
+                     bytes = excluded.bytes, prepared = prepared OR excluded.prepared, \
+                     created_at = excluded.created_at",
+                rusqlite::params![
+                    row.track_id,
+                    row.fingerprint,
+                    row.path,
+                    i64::try_from(row.bytes).unwrap_or(i64::MAX),
+                    row.prepared,
+                    unix_now(),
+                ],
+            )?;
+            Ok(WriteOutcome::Done)
+        }
+        WriteOp::MarkStemsPrepared(id) => {
+            tx.execute("UPDATE stems SET prepared = 1 WHERE track_id = ?1", [id])?;
+            Ok(WriteOutcome::Done)
+        }
+        WriteOp::RemoveStems(id) => {
+            tx.execute("DELETE FROM stems WHERE track_id = ?1", [id])?;
             Ok(WriteOutcome::Done)
         }
         WriteOp::MarkMissing(ids) => {

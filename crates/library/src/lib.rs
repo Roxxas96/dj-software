@@ -17,6 +17,7 @@ mod playlists;
 mod scan;
 pub mod schema;
 mod settings;
+mod stems_cache;
 pub mod tags;
 mod watch;
 mod writer;
@@ -41,9 +42,10 @@ pub use settings::{
     BPM_RANGE, BpmRangeError, InvalidBpmRange, KEY_NOTATION, LOW_BPM_RANGE_WARNING,
     format_bpm_range, parse_bpm_range, validate_bpm_range,
 };
+pub use stems_cache::{Eviction, RECENT_SECONDS, StemCache, StemKey};
 pub use watch::{DEBOUNCE, RESCAN_INTERVAL, WatchHealth, Watcher, watch, watch_with_debounce};
 pub use writer::{
-    FailedWrite, FileStamp, RawStatement, StoreAnalysis, WriteOp, WriteOutcome, Writer,
+    FailedWrite, FileStamp, RawStatement, StemsRow, StoreAnalysis, WriteOp, WriteOutcome, Writer,
 };
 
 /// Everything that can go wrong opening or writing the library.
@@ -101,6 +103,8 @@ pub enum LibraryError {
     },
     #[error(transparent)]
     Grid(#[from] GridError),
+    #[error("could not encode the stems: {0}")]
+    StemEncode(String),
     #[error("the library writer has shut down")]
     WriterGone,
     #[error("the library writer panicked while applying a change; it was rolled back")]

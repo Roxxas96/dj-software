@@ -21,10 +21,17 @@ analysis = { path = "../analysis" }
 blake3.workspace = true
 decode = { path = "../decode" }
 dunce.workspace = true
+engine = { path = "../engine" }
 lofty.workspace = true
 notify.workspace = true
 rusqlite.workspace = true
+# Only the model identity (the stems cache's key); the separator itself is the app's.
+stems = { path = "../stems", default-features = false }
+tempfile.workspace = true
 thiserror.workspace = true
+toml.workspace = true
+# The stems cache's encoder; a fixed stream serial, so no random source is needed.
+vorbis_rs = { version = "0.5.6", default-features = false }
 walkdir.workspace = true
 
 [dev-dependencies]

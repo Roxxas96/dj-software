@@ -472,6 +472,41 @@ mod tests {
     }
 
     #[test]
+    fn parses_library_stems() {
+        match library(&["stems", "--playlist", "Friday"]).command {
+            LibraryCommand::Stems {
+                playlist, tracks, ..
+            } => {
+                assert_eq!(playlist.as_deref(), Some("Friday"));
+                assert!(tracks.is_empty());
+            }
+            other => panic!("expected stems, got {other:?}"),
+        }
+        match library(&["stems", "--track", "3", "4"]).command {
+            LibraryCommand::Stems {
+                playlist, tracks, ..
+            } => {
+                assert_eq!(playlist, None);
+                assert_eq!(tracks, [3, 4]);
+            }
+            other => panic!("expected stems, got {other:?}"),
+        }
+        assert!(parse(&["open-jockey", "library", "stems"]).is_err());
+        assert!(
+            parse(&[
+                "open-jockey",
+                "library",
+                "stems",
+                "--playlist",
+                "a",
+                "--track",
+                "1"
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
     fn parses_library_list_with_filters() {
         let args = library(&[
             "list",

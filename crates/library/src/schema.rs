@@ -82,5 +82,22 @@ CREATE TABLE settings (
 );
 ";
 
+/// Version 2: stems. `tracks.last_loaded_at` (seconds since the Unix epoch, set at each
+/// deck load) and the stems cache's entries, one per track: the fingerprint the stems were
+/// separated from, the entry's folder relative to the stems folder, its size on disk, and
+/// whether it was prepared ahead with `library stems`.
+const V2: &str = "
+ALTER TABLE tracks ADD COLUMN last_loaded_at INTEGER;
+
+CREATE TABLE stems (
+    track_id INTEGER PRIMARY KEY REFERENCES tracks(id) ON DELETE CASCADE,
+    fingerprint BLOB NOT NULL,
+    path TEXT NOT NULL,
+    bytes INTEGER NOT NULL,
+    prepared INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+";
+
 /// Every migration, in order. The latest schema version is `MIGRATIONS.len()`.
-pub const MIGRATIONS: &[&str] = &[V1];
+pub const MIGRATIONS: &[&str] = &[V1, V2];
