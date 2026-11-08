@@ -99,7 +99,9 @@ fn state_path(config_path: Option<&Path>) -> Option<PathBuf> {
 /// closed.
 fn session(config_path: Option<&Path>, shared: &Shared, quit: &AtomicBool) -> anyhow::Result<()> {
     let result = crate::config::load(config_path).and_then(|config| {
-        shared.frame.publish(FrameParts::new(&config).idle());
+        let mut parts = FrameParts::new(&config);
+        parts.zoom = zoom::Zoom::load(shared.state_path.clone(), config.ui.waveform_beats);
+        shared.frame.publish(parts.idle());
         run_config(&config, shared, quit)
     });
     match &result {
