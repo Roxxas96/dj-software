@@ -19,7 +19,8 @@ From the configuration file ([config.md](config.md)):
 |---|---|---|
 | `audio.device`, `audio.master`, `audio.headphones` | the default output | Where the sound goes |
 | `controller.mapping` | `"ddj-sb3"` | The controller mapping |
-| `ui.waveform_beats` | `16` | Beats across a waveform lane at the first launch, 4 to 64 (the window's zoom then takes over) |
+| `ui.waveform_beats` | `16` | Beats across a waveform lane at the first launch (the window's zoom then takes over) |
+| `ui.waveform_min_beats`, `ui.waveform_max_beats` | `4`, `64` | The zoom range: the fewest and the most beats across a lane, 1 to 512 |
 
 The library opens at the default database. A missing DDJ-SB3 or audio device does not stop the
 window: it tries again every 2 seconds, and the top bar says what is missing. A bad
@@ -36,7 +37,9 @@ like Ctrl-C in `play`.
   Cue and hotcue markers and the loop band show on the lane. The playhead is fixed at the
   centre.
 - **Zoom:** scroll (or pinch) over the waveforms, or click the `-` and `+` buttons at their
-  top right. Both lanes always share the zoom, so the two tracks' beats stay lined up. The
+  top right. Each step is 1.25 times, between `ui.waveform_min_beats` and
+  `ui.waveform_max_beats` (4 and 64 beats by default). Both lanes always share the zoom, so
+  the two tracks' beats stay lined up. The
   `ui.waveform_zoom_in` and `ui.waveform_zoom_out` actions do the same from a controller
   button (unmapped by default). The zoom is saved in `ui-state.toml` next to `config.toml`
   and restored at the next launch; `ui.waveform_beats` is only the zoom before that file

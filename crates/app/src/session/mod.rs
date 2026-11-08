@@ -100,7 +100,11 @@ fn state_path(config_path: Option<&Path>) -> Option<PathBuf> {
 fn session(config_path: Option<&Path>, shared: &Shared, quit: &AtomicBool) -> anyhow::Result<()> {
     let result = crate::config::load(config_path).and_then(|config| {
         let mut parts = FrameParts::new(&config);
-        parts.zoom = zoom::Zoom::load(shared.state_path.clone(), config.ui.waveform_beats);
+        parts.zoom = zoom::Zoom::load(
+            shared.state_path.clone(),
+            config.ui.waveform_beats,
+            config.ui.zoom_range(),
+        );
         shared.frame.publish(parts.idle());
         run_config(&config, shared, quit)
     });
@@ -194,7 +198,11 @@ fn run_session(
     let (lines_tx, lines) = channel();
     let printer = Printer::to_channel(lines_tx);
     let mut parts = FrameParts::new(config);
-    parts.zoom = zoom::Zoom::load(shared.state_path.clone(), config.ui.waveform_beats);
+    parts.zoom = zoom::Zoom::load(
+        shared.state_path.clone(),
+        config.ui.waveform_beats,
+        config.ui.zoom_range(),
+    );
     parts.detail = Some(DetailJobs::new(library.library()));
     parts.samples_loaded = start.samples_loaded;
     for text in start.events.drain(..) {
