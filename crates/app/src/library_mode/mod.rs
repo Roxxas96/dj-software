@@ -2262,6 +2262,92 @@ mod tests {
         printer.finish();
     }
 
+    /// Reports its only chunk done, says it `entered`, then waits to be released before
+    /// returning the synthetic stems: a job sent meanwhile arrives after the last chunk.
+    struct LastChunk {
+        entered: std::sync::mpsc::Sender<()>,
+        release: std::sync::mpsc::Receiver<()>,
+    }
+
+    impl stems::Separator for LastChunk {
+        fn separate(
+            &mut self,
+            track: &engine::TrackBuffer,
+            progress: &dyn Fn(f32),
+            cancel: &std::sync::atomic::AtomicBool,
+        ) -> Result<engine::StemSet, stems::SeparateError> {
+            progress(1.0);
+            let _ = self.entered.send(());
+            let _ = self.release.recv();
+            stems::SyntheticSeparator::new().separate(track, &|_| {}, cancel)
+        }
+    }
+
+    impl StemSeparator for LastChunk {}
+
+    #[test]
+    fn cached_stems_requested_after_the_last_chunk_skip_the_cache_write() {
+        let set = stems::SyntheticSeparator::new()
+            .separate(
+                &short_track(),
+                &|_| {},
+                &std::sync::atomic::AtomicBool::new(false),
+            )
+            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let lib = Library::open(&dir.path().join("library.sqlite3")).unwrap();
+        add_tracks(&lib, &[7, 8]);
+        {
+            let stems_dir = crate::library_cmd::stems_dir(lib.path());
+            let mut cache = library::StemCache::new(&lib, stems_dir, 1_000_000_000).unwrap();
+            let key = library::StemKey {
+                track: 8,
+                fingerprint: &[0],
+                sample_rate: 44_100,
+                frames: 4410,
+            };
+            cache.put(&key, &set, false, &[]).unwrap();
+        }
+        let (entered_tx, entered) = channel();
+        let (release, release_rx) = channel();
+        let source = SeparatorSource::Open(Box::new(move || {
+            Ok(Box::new(LastChunk {
+                entered: entered_tx,
+                release: release_rx,
+            }) as Box<dyn StemSeparator>)
+        }));
+        let mut control = stem_jobs::StemsControl::start(Arc::new(lib), setup(source)).unwrap();
+        let d1 = DeckId::new(0).unwrap();
+        let separated = control
+            .request(d1, 7, "seven".into(), short_track())
+            .unwrap();
+        entered.recv_timeout(Duration::from_secs(10)).unwrap();
+        // Track 8 is asked for once track 7's last chunk is done, before its cache write.
+        let cached = control
+            .request(DeckId::new(1).unwrap(), 8, "eight".into(), short_track())
+            .unwrap();
+        release.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut replies = Vec::new();
+        while !replies
+            .iter()
+            .any(|r| matches!(r, Reply::Done(id) if *id == separated))
+        {
+            assert!(Instant::now() < deadline, "not done within 10 s");
+            std::thread::sleep(Duration::from_millis(2));
+            replies.extend(control.take_replies());
+        }
+        let position = |wanted: &dyn Fn(&Reply) -> bool| replies.iter().position(wanted);
+        let hit = position(&|r| matches!(r, Reply::Stems(id, _) if *id == cached))
+            .expect("track 8's cached stems");
+        let written = position(&|r| matches!(r, Reply::Evicted(_))).expect("track 7's write");
+        assert!(
+            hit < written,
+            "the hit waited for the cache write: {replies:?}"
+        );
+        control.shutdown();
+    }
+
     #[test]
     fn missing_model_is_reported_once() {
         let (_dir, mut mode, mut engine, mut renderer, printer, events) =
