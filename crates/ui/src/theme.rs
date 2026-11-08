@@ -27,6 +27,11 @@ pub const HOTCUE: Color32 = Color32::from_rgb(0x3d, 0xd6, 0x8c);
 /// An active loop, over the waveform (translucent green, premultiplied).
 pub const LOOP_BAND: Color32 = Color32::from_rgba_premultiplied(0x13, 0x30, 0x1a, 0x40);
 
+/// A browser row under the cursor of the pane that has focus.
+pub const HIGHLIGHT: Color32 = Color32::from_rgb(0x2a, 0x5f, 0x8a);
+/// A browser row under the cursor of the pane without focus.
+pub const HIGHLIGHT_DIM: Color32 = Color32::from_rgb(0x38, 0x3b, 0x42);
+
 /// The accent of `deck`'s side: [`DECK_LEFT`] or [`DECK_RIGHT`].
 pub fn deck_accent(deck: DeckId) -> Color32 {
     match Side::of(deck) {

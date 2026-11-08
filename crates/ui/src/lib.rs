@@ -2,6 +2,7 @@
 //! publishes and reads the engine's state through an [`EngineMonitor`]. It never sends
 //! the engine anything, and the control thread never waits on it.
 
+pub mod browser;
 pub mod cover;
 pub mod deck;
 pub mod mixer;
@@ -120,5 +121,9 @@ pub fn root(
         });
     egui::CentralPanel::default()
         .frame(egui::Frame::new().fill(theme::BACKGROUND))
-        .show(ui, |_ui| {});
+        .show(ui, |ui| {
+            if let Some(view) = &frame.browser {
+                browser::show(ui, view, frame.key_notation, &mut screen.covers);
+            }
+        });
 }
