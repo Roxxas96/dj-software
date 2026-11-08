@@ -38,8 +38,9 @@ A file with a top-level `extends` starts from another mapping and changes only w
 - An `[[input]]` with the same MIDI message, the same `pad_mode` and the same `shift` as
   inherited bindings *replaces* them (a missing `pad_mode` or `shift` matches only a binding
   without one). Bindings of other messages, and of the same message in another pad mode or
-  SHIFT layer, are kept unchanged. A `notes` range is matched note by note. The file's own
-  inputs come after the inherited ones.
+  SHIFT layer, are kept unchanged. A `notes` range is matched note by note. `side`, `deck`
+  and `active_deck` play no part in the match: only the MIDI message, `pad_mode` and `shift`
+  do. The file's own inputs come after the inherited ones.
 - `[[remove]]` deletes inherited bindings. It takes `midi` (as in `[[input]]`, `notes`
   ranges included) and optionally `pad_mode` and `shift`; a missing `pad_mode` or `shift`
   matches any. It only removes inherited bindings, never the file's own.
