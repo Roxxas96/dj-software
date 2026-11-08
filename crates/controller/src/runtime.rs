@@ -350,6 +350,20 @@ impl Runtime {
         }
     }
 
+    /// Performs `action` for `input` as a controller input bound to it would, now: the
+    /// window pressing an action (a pad mode from a dropdown, say). It works whether or not
+    /// the controller is attached. Soft takeover follows as for any value changed
+    /// elsewhere, and the LEDs show the change at the next [`tick`](Self::tick). A request
+    /// in the result is the caller's to perform.
+    pub fn apply_ui(
+        &mut self,
+        action: &Action,
+        input: Input,
+        engine: &mut EngineController,
+    ) -> ApplyResult {
+        apply(action, input, clock::now_micros(), &mut self.state, engine)
+    }
+
     /// Updates the LEDs from the control state and the engine's deck snapshots. Does
     /// nothing while the controller is not attached.
     pub fn tick(&mut self, now_micros: u64, engine: &EngineController, out: &mut dyn MidiOut) {
