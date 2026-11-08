@@ -16,7 +16,7 @@ use crate::model::{
 };
 use crate::theme;
 
-/// How long a channel's meter keeps its highest peak.
+/// How long a channel meter's peak marker stays at the highest peak.
 const PEAK_HOLD: Duration = Duration::from_secs(1);
 /// The height of the crossfader and master row.
 const BOTTOM_HEIGHT: f32 = 56.0;
@@ -96,9 +96,10 @@ impl Mixer {
         for (side, strip_rect) in Side::ALL.into_iter().zip(split(strips, half)) {
             let deck = frame.control.side(side).active_deck;
             let stems_active = monitor.is_some_and(|m| m.deck(deck).stems_active);
-            let peak = self.holds[deck.index()].update(peaks[deck.index()], now);
+            let level = peaks[deck.index()];
+            let held = self.holds[deck.index()].update(level, now);
             ui.scope_builder(egui::UiBuilder::new().max_rect(strip_rect), |ui| {
-                strip(ui, strip_rect, deck, frame, stems_active, peak);
+                strip(ui, strip_rect, deck, frame, stems_active, level, held);
             });
         }
         centre(ui, bottom, frame, monitor.map(|m| m.meters().master_peak));
@@ -124,14 +125,16 @@ fn caption(ui: &mut Ui, rect: Rect, text: &str, colour: Color32) {
 }
 
 /// Draws one channel in `rect`: the deck's header with the headphone button, the knobs,
-/// the fader and the meter. `peak` is the level the meter shows.
+/// the fader and the meter. The meter's bar shows `level`, the live peak, and a line marks
+/// `held`, the highest recent peak.
 pub fn strip(
     ui: &mut Ui,
     rect: Rect,
     deck: DeckId,
     frame: &ControlFrame,
     stems_active: bool,
-    peak: f32,
+    level: f32,
+    held: f32,
 ) {
     let accent = theme::deck_accent(deck);
     let state = frame.control.deck(deck);
@@ -207,7 +210,8 @@ pub fn strip(
         pos2(track.right() + METER_WIDTH, travel_top),
         pos2(track.right() + METER_WIDTH * 2.0, travel_bottom),
     );
-    level_bar(&painter, meter, peak);
+    level_bar(&painter, meter, level);
+    peak_line(&painter, meter, held);
 }
 
 /// A knob at `value` (0 to 1) with its pickup marker, if any.
@@ -263,6 +267,28 @@ fn level_bar(painter: &egui::Painter, bar: Rect, level: f32) {
         METER_OK
     };
     painter.rect_filled(filled, CornerRadius::ZERO, colour);
+}
+
+/// A line across `bar` at `peak`, the held peak over the live level.
+fn peak_line(painter: &egui::Painter, bar: Rect, peak: f32) {
+    let peak = peak.clamp(0.0, 1.0);
+    if peak <= 0.0 {
+        return;
+    }
+    let y = bar.bottom() - peak * bar.height();
+    let colour = if peak > METER_HOT {
+        METER_CLIP
+    } else {
+        METER_OK
+    };
+    painter.rect_filled(
+        Rect::from_min_max(
+            pos2(bar.left(), y),
+            pos2(bar.right(), (y + 2.0).min(bar.bottom())),
+        ),
+        CornerRadius::ZERO,
+        colour,
+    );
 }
 
 /// The crossfader and the master level in `rect`: the crossfader is dimmed when the

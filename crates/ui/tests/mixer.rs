@@ -11,7 +11,15 @@ fn draw(frame: &ControlFrame, stems_active: bool) -> Harness<'_> {
         .with_size([340.0, 300.0])
         .build_ui(move |ui| {
             let rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(170.0, 300.0));
-            ui::mixer::strip(ui, rect, DeckId::new(0).unwrap(), frame, stems_active, 0.5);
+            ui::mixer::strip(
+                ui,
+                rect,
+                DeckId::new(0).unwrap(),
+                frame,
+                stems_active,
+                0.5,
+                0.7,
+            );
         });
     harness.run_steps(3);
     harness

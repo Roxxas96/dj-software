@@ -39,8 +39,9 @@ like Ctrl-C in `play`.
   and remaining time, the FX slots, the jog, the pitch fader with its pickup marker, VINYL,
   SLIP and KEYLOCK, the pad mode name and the 8 pads, the loop size, and CUE, PLAY and SYNC.
   SYNC is never lit: sync is one-shot here, and there is no MASTER badge.
-- **Mixer:** GAIN, three EQ knobs, FILTER, the channel fader, PFL, the level meters, the
-  crossfader and the master level. The EQ labels follow the mode: HIGH, MID, LOW, or once
+- **Mixer:** GAIN, three EQ knobs, FILTER, the channel fader, PFL, the level meters (the live
+  level, with a line marking the highest peak of the last second), the crossfader and the
+  master level. The EQ labels follow the mode: HIGH, MID, LOW, or once
   stems are active HIHAT, MEL/VOX, KICK (`vdj` knobs) or VOCALS, INSTRU, BASS (`raw` knobs).
   Ghost markers show where a physical control is while soft takeover has not caught up with
   the value on screen (after a DECK switch, for instance).
