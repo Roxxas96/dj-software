@@ -116,21 +116,40 @@ pub fn scan_folder(
         root,
         None,
         None,
+        None,
         progress,
     )
+}
+
+/// Adds the audio files directly in `folder` (not those in its subfolders) as tracks, the
+/// way [`scan_folder`] does, without registering the folder: it is not watched, and no
+/// track is flagged missing. Meant for the files of a folder being browsed.
+///
+/// # Errors
+///
+/// Fails if `folder` cannot be resolved, or if the library cannot be read or written.
+pub fn add_folder_files(
+    writer: &Writer,
+    conn: &Connection,
+    folder: &Path,
+) -> Result<ScanReport, LibraryError> {
+    scan_folder_with(writer, conn, folder, None, None, Some(1), &mut |_| {})
 }
 
 /// [`scan_folder`] on a writer handle and a read connection, for threads that do not
 /// hold the [`Library`] itself. `relink_root`, when given, is the folder that moved files
 /// may come from (a watched root holding the scanned subfolder); missing tracks are still
 /// only flagged under `root`. When `stop` becomes true the scan ends early (changes
-/// already found are written, nothing is flagged missing).
+/// already found are written, nothing is flagged missing). With `max_depth` set, only
+/// that many levels below `root` are walked (1: its own files), and nothing is flagged
+/// missing, since the files of the levels left out were not looked at.
 pub(crate) fn scan_folder_with(
     writer: &Writer,
     conn: &Connection,
     root: &Path,
     relink_root: Option<&Path>,
     stop: Option<&AtomicBool>,
+    max_depth: Option<usize>,
     progress: &mut dyn FnMut(ScanProgress),
 ) -> Result<ScanReport, LibraryError> {
     let root = normalize_path(root)?;
@@ -140,6 +159,7 @@ pub(crate) fn scan_folder_with(
     }
     let mut scanned = 0;
     let walk = WalkDir::new(&root)
+        .max_depth(max_depth.unwrap_or(usize::MAX))
         .follow_links(true)
         .sort_by_file_name()
         .into_iter()
@@ -201,7 +221,9 @@ pub(crate) fn scan_folder_with(
         }
     }
     scan.flush()?;
-    scan.flag_missing()?;
+    if max_depth.is_none() {
+        scan.flag_missing()?;
+    }
     Ok(scan.report)
 }
 
@@ -232,7 +254,7 @@ pub(crate) fn scan_path(
     match fs::metadata(&path) {
         Ok(meta) if meta.is_dir() => {
             if dirs {
-                scan_folder_with(writer, conn, &path, Some(&root), stop, &mut |_| {})
+                scan_folder_with(writer, conn, &path, Some(&root), stop, None, &mut |_| {})
             } else {
                 Ok(ScanReport::default())
             }

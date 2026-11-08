@@ -39,7 +39,8 @@ pub use playlists::{
     PlaylistSummary, TrackDetails, TrackFilter, TrackRow, TrackSort, TrackSortKey,
 };
 pub use scan::{
-    EXTENSIONS, ScanProgress, ScanReport, TrackFile, add_folder, remove_folder, scan_folder,
+    EXTENSIONS, ScanProgress, ScanReport, TrackFile, add_folder, add_folder_files, remove_folder,
+    scan_folder,
 };
 pub use settings::{
     BPM_RANGE, BpmRangeError, InvalidBpmRange, KEY_NOTATION, LOW_BPM_RANGE_WARNING,

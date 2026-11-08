@@ -2,11 +2,13 @@
 //! moves, track lookups, grid edits), and a loader thread that decodes tracks, so the
 //! control loop never waits on either.
 
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread::JoinHandle;
 
 use engine::{DeckId, HOTCUES, TrackBuffer, TrackMemory};
@@ -69,6 +71,9 @@ pub enum Event {
     },
     /// Tracks that need analysis.
     NewTracks(Vec<PendingTrack>),
+    /// A browsed folder's files were added to the library: reread the browser and look
+    /// for tracks to analyze.
+    FolderAdded,
 }
 
 /// A decoded track, ready for the deck.
@@ -92,19 +97,22 @@ struct LoadJob {
     path: PathBuf,
 }
 
-/// Starts the worker (and its loader), browsing the computer's drives. It stops when the
-/// returned sender is dropped.
+/// Starts the worker (and its loader), browsing `drives`, or the computer's drives when
+/// `None`. It stops when the returned sender is dropped.
 pub fn spawn(
     lib: Arc<Library>,
     events: Sender<Event>,
+    drives: Option<Vec<Drive>>,
 ) -> std::io::Result<(Sender<Job>, JoinHandle<()>)> {
     // Unit tests must not read the real disks.
-    let roots = || {
-        if cfg!(test) {
-            Vec::new()
-        } else {
-            library::drives()
-        }
+    let roots = move || {
+        drives.unwrap_or_else(|| {
+            if cfg!(test) {
+                Vec::new()
+            } else {
+                library::drives()
+            }
+        })
     };
     spawn_with(lib, events, decode::decode_file, roots)
 }
@@ -154,6 +162,8 @@ fn run(
         }
     };
     let _ = events.send(Event::Browser(browser.view()));
+    let adder = FolderAdder::start(lib, events);
+    adder.offer(&browser);
     let (load_tx, load_rx) = channel::<LoadJob>();
     let loader_events = events.clone();
     let loader = std::thread::Builder::new()
@@ -168,6 +178,7 @@ fn run(
             Job::Browse(req) => match browser.apply(req) {
                 Ok(view) => {
                     let _ = events.send(Event::Browser(view));
+                    adder.offer(&browser);
                 }
                 Err(e) => say(format!("warning: library browser: {}", safe(e))),
             },
@@ -178,6 +189,7 @@ fn run(
                 match browser.refresh() {
                     Ok(view) => {
                         let _ = events.send(Event::Browser(view));
+                        adder.offer(&browser);
                     }
                     Err(e) => say(format!("warning: library browser: {}", safe(e))),
                 }
@@ -231,8 +243,92 @@ fn run(
         }
     }
     drop(load_tx);
+    adder.stop();
     if let Ok(loader) = loader {
         let _ = loader.join();
+    }
+}
+
+/// Adds the files of the folder being browsed to the library on a thread of its own, so
+/// a slow disk never holds up the worker's browsing and loading.
+struct FolderAdder {
+    /// The newest folder waiting: a newer one replaces an older one still waiting.
+    next: Arc<(Mutex<Option<PathBuf>>, Condvar)>,
+    /// Folders already tried this session, so a file that cannot be added (a corrupt
+    /// one) doesn't queue its folder at every refresh.
+    tried: RefCell<HashSet<PathBuf>>,
+    /// False when the thread could not be started.
+    running: bool,
+    closed: Arc<AtomicBool>,
+}
+
+impl FolderAdder {
+    fn start(lib: &Library, events: &Sender<Event>) -> Self {
+        let next = Arc::new((Mutex::new(None::<PathBuf>), Condvar::new()));
+        let closed = Arc::new(AtomicBool::new(false));
+        let (writer, reader) = (lib.writer(), lib.reader());
+        let (queue, shut, events) = (Arc::clone(&next), Arc::clone(&closed), events.clone());
+        let thread = reader.ok().and_then(|reader| {
+            std::thread::Builder::new()
+                .name("folder-adder".into())
+                .spawn(move || {
+                    loop {
+                        let folder = {
+                            let (lock, wake) = &*queue;
+                            let mut slot = lock.lock().unwrap_or_else(PoisonError::into_inner);
+                            loop {
+                                if shut.load(Ordering::Acquire) {
+                                    return;
+                                }
+                                if let Some(folder) = slot.take() {
+                                    break folder;
+                                }
+                                slot = wake.wait(slot).unwrap_or_else(PoisonError::into_inner);
+                            }
+                        };
+                        match library::add_folder_files(&writer, reader.connection(), &folder) {
+                            Ok(_) => {
+                                let _ = events.send(Event::FolderAdded);
+                            }
+                            Err(e) => {
+                                let _ = events.send(Event::Message(format!(
+                                    "warning: could not add the files of {}: {}",
+                                    safe(folder.display()),
+                                    safe(e)
+                                )));
+                            }
+                        }
+                    }
+                })
+                .ok()
+        });
+        Self {
+            next,
+            tried: RefCell::new(HashSet::new()),
+            running: thread.is_some(),
+            closed,
+        }
+    }
+
+    /// Queues the browser's highlighted folder if it lists files the library lacks and
+    /// was not tried yet.
+    fn offer(&self, browser: &Browser) {
+        let Some(folder) = browser.folder_with_unknown_files() else {
+            return;
+        };
+        if !self.running || !self.tried.borrow_mut().insert(folder.clone()) {
+            return;
+        }
+        let (lock, wake) = &*self.next;
+        *lock.lock().unwrap_or_else(PoisonError::into_inner) = Some(folder);
+        wake.notify_one();
+    }
+
+    /// Tells the thread to end once its current folder is done (it is not waited for, so
+    /// a slow disk never holds up shutdown).
+    fn stop(&self) {
+        self.closed.store(true, Ordering::Release);
+        self.next.1.notify_one();
     }
 }
 
@@ -448,7 +544,7 @@ mod tests {
         let id = ids(&s.lib)[0];
         std::fs::remove_file(s.music.join("gone.wav")).unwrap();
         let (tx, events) = channel();
-        let (jobs, worker) = spawn(Arc::clone(&s.lib), tx).unwrap();
+        let (jobs, worker) = spawn(Arc::clone(&s.lib), tx, None).unwrap();
         jobs.send(Job::LoadTrack {
             deck: deck(2),
             track: id,
@@ -489,7 +585,7 @@ mod tests {
             .edit_grid(id, library::GridEdit::SetBpm(120.0), None)
             .unwrap();
         let (tx, events) = channel();
-        let (jobs, _worker) = spawn(Arc::clone(&s.lib), tx).unwrap();
+        let (jobs, _worker) = spawn(Arc::clone(&s.lib), tx, None).unwrap();
         jobs.send(Job::LoadTrack {
             deck: deck(1),
             track: id,
@@ -535,7 +631,7 @@ mod tests {
             }]))
             .unwrap();
         let (tx, events) = channel();
-        let (jobs, _worker) = spawn(Arc::clone(&s.lib), tx).unwrap();
+        let (jobs, _worker) = spawn(Arc::clone(&s.lib), tx, None).unwrap();
         jobs.send(Job::LoadTrack {
             deck: deck(1),
             track: id,
@@ -696,5 +792,51 @@ mod tests {
             _ => None,
         });
         assert!(new.iter().any(|t| t.id == 0), "{new:?}");
+    }
+
+    #[test]
+    fn a_browsed_folder_is_added_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = Arc::new(Library::open(&dir.path().join("library.sqlite3")).unwrap());
+        let music = dunce::canonicalize(dir.path()).unwrap().join("music");
+        std::fs::create_dir_all(music.join("sub")).unwrap();
+        std::fs::copy(FIXTURE, music.join("one.wav")).unwrap();
+        std::fs::copy(
+            FIXTURE.replace("sine440.wav", "sine440_mono.wav"),
+            music.join("two.wav"),
+        )
+        .unwrap();
+        std::fs::copy(
+            FIXTURE.replace("sine440.wav", "sine440.flac"),
+            music.join("sub/deep.flac"),
+        )
+        .unwrap();
+        let roots = vec![Drive {
+            name: "music".into(),
+            path: music.clone(),
+        }];
+        let (tx, events) = channel();
+        let (jobs, _worker) =
+            spawn_with(Arc::clone(&lib), tx, decode::decode_file, move || roots).unwrap();
+        // Highlighting the drive adds its two files, and only those.
+        wait_for(&events, |e| matches!(e, Event::FolderAdded).then_some(()));
+        assert_eq!(ids(&lib).len(), 2);
+        // Highlighted again, it is not added again.
+        jobs.send(Job::Refresh {
+            decks: Vec::new(),
+            find_new_tracks: false,
+        })
+        .unwrap();
+        let view = wait_for(&events, |e| match e {
+            Event::Browser(v) if v.list.iter().all(|r| r.track.is_some()) => Some(v),
+            _ => None,
+        });
+        assert_eq!(view.list.len(), 2);
+        assert!(
+            events
+                .recv_timeout(std::time::Duration::from_millis(300))
+                .is_err_and(|e| e == std::sync::mpsc::RecvTimeoutError::Timeout)
+        );
+        assert!(lib.reader().unwrap().folders().unwrap().is_empty());
     }
 }
