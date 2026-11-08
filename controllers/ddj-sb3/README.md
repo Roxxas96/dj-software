@@ -45,7 +45,7 @@ knobs and faders use soft takeover: they act once they reach the new deck's valu
 
 With `play --library`, the BROWSE knob scrolls the library browser (clockwise moves
 down), and pressing it switches between the tree (playlists, folders, all tracks) and the
-track list. LOAD loads the selected track onto the deck its side currently shows: the left
+track list; SHIFT + BROWSE press opens or closes the highlighted folder. LOAD loads the selected track onto the deck its side currently shows: the left
 LOAD onto deck 1 or 3, the right LOAD onto deck 2 or 4, following the DECK buttons. A cue
 point you set is remembered and comes back when the track is loaded again. See
 [docs/library.md](../../docs/library.md).
@@ -69,6 +69,7 @@ point you set is remembered and comes back when the track is loaded again. See
 | crossfader | crossfader |
 | headphone MASTER button | headphones hear the master instead of the cue |
 | BROWSE turn, BROWSE press | scroll the library, switch tree and list (`--library`) |
+| SHIFT + BROWSE press | open or close the highlighted folder (`--library`) |
 | LOAD left, LOAD right | load the selected track onto the side's deck (`--library`) |
 | SYNC | match tempo and beats to the playing deck on the other side |
 | VINYL | vinyl mode on/off (on at start): the touched jog top scratches |

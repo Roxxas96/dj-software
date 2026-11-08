@@ -22,6 +22,8 @@ pub enum BrowserRequest {
     Scroll(i32),
     /// Switch focus between the tree (playlists, folders, all tracks) and the track list.
     ToggleFocus,
+    /// Open or close the highlighted folder in the tree.
+    ToggleFolder,
 }
 
 /// A beatgrid edit as an action asks for it, before the app knows the track: the app turns

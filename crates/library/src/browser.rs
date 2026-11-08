@@ -127,6 +127,8 @@ impl Browser {
                 Focus::Tree => self.move_tree(steps)?,
                 Focus::List => self.move_list(steps)?,
             },
+            // Task 3 opens and closes folders.
+            BrowserRequest::ToggleFolder => {}
             BrowserRequest::ToggleFocus => {
                 self.focus = match self.focus {
                     Focus::Tree => Focus::List,

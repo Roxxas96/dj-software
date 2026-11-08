@@ -92,6 +92,36 @@ impl PadMode {
     }
 }
 
+/// The SB3's own pad modes, named by the button that picks them. Which one is active is
+/// not observable from MIDI; the app remembers the last button pressed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HardwarePadMode {
+    HotCue,
+    FxFade,
+    Sampler,
+    Trans,
+}
+
+impl HardwarePadMode {
+    /// Every hardware mode.
+    pub const ALL: [HardwarePadMode; 4] = [
+        HardwarePadMode::HotCue,
+        HardwarePadMode::FxFade,
+        HardwarePadMode::Sampler,
+        HardwarePadMode::Trans,
+    ];
+
+    /// The name shown to the user.
+    pub fn label(self) -> &'static str {
+        match self {
+            HardwarePadMode::HotCue => "HOT CUE",
+            HardwarePadMode::FxFade => "FX FADE",
+            HardwarePadMode::Sampler => "SAMPLER",
+            HardwarePadMode::Trans => "TRANS",
+        }
+    }
+}
+
 /// One side of the controller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SideControl {
@@ -101,6 +131,22 @@ pub struct SideControl {
     pub shift: bool,
     /// What the side's performance pads do.
     pub pad_mode: PadMode,
+    /// The last hardware mode button pressed; `None` until one is.
+    pub hardware_mode: Option<HardwarePadMode>,
+}
+
+impl SideControl {
+    /// The name of what the side's pads do: the last hardware mode button while the pads
+    /// are in hardware mode ("pads" before any), else the software mode.
+    pub fn pad_mode_label(&self) -> &'static str {
+        match self.pad_mode {
+            PadMode::Hardware => self.hardware_mode.map_or("pads", HardwarePadMode::label),
+            PadMode::BeatJump => "BEAT JUMP",
+            PadMode::LoopRoll => "LOOP ROLL",
+            PadMode::Slicer => "SLICER",
+            PadMode::PadScratch => "PAD SCRATCH",
+        }
+    }
 }
 
 /// The app-side model of everything controls have set. [`crate::apply`] updates it only
@@ -161,6 +207,7 @@ impl Default for ControlState {
                 active_deck: side.decks()[0],
                 shift: false,
                 pad_mode: PadMode::Hardware,
+                hardware_mode: None,
             }),
             crossfader: 0.5,
             master_level: 0.8,

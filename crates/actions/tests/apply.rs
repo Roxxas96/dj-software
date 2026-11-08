@@ -113,6 +113,7 @@ fn ids_round_trip_for_every_action() {
         "modifier.shift",
         "browser.scroll",
         "browser.toggle_focus",
+        "browser.toggle_folder",
         "deck.load_selected",
         "deck.hotcue_1",
         "deck.hotcue_2",
@@ -217,6 +218,10 @@ fn ids_round_trip_for_every_action() {
         "pads.mode_loop_roll",
         "pads.mode_slicer",
         "pads.mode_pad_scratch",
+        "pads.mode_hot_cue",
+        "pads.mode_fx_fade",
+        "pads.mode_sampler",
+        "pads.mode_trans",
     ];
     let ids: HashSet<_> = ActionKind::ALL.iter().map(|k| k.id()).collect();
     assert_eq!(ids, expected.into_iter().collect::<HashSet<_>>());
@@ -245,7 +250,7 @@ fn ids_round_trip_for_every_action() {
         .into_iter()
         .filter(|k| k.takes_release())
         .collect();
-    assert_eq!(ActionKind::ALL.len(), 132);
+    assert_eq!(ActionKind::ALL.len(), 137);
     let hotcue = |n| ActionKind::Hotcue(HotcueSlot::new(n).unwrap());
     let hotcue_delete = |n| ActionKind::HotcueDelete(HotcueSlot::new(n).unwrap());
     let mut expected_release = vec![
@@ -1657,4 +1662,68 @@ fn scratch_anchor_return_without_an_anchor_sets_it_here() {
     seek(&mut rig, 10_000.0);
     assert_eq!(rig.apply(back, Input::Press), ApplyResult::Sent(1));
     assert_eq!(rig.c.deck(d(0)).position_frames, 70_000.0);
+}
+
+#[test]
+fn hardware_mode_buttons_name_the_pads() {
+    use actions::{HardwarePadMode, PadMode};
+    let mut rig = Rig::new();
+    let press = |rig: &mut Rig, kind| {
+        let action = Action::new(kind, Target::Side(Side::Left)).unwrap();
+        assert_eq!(rig.apply(action, Input::Press), ApplyResult::Sent(0));
+    };
+    press(
+        &mut rig,
+        ActionKind::HardwarePadMode(HardwarePadMode::Sampler),
+    );
+    assert_eq!(rig.state.side(Side::Left).pad_mode_label(), "SAMPLER");
+    assert_eq!(rig.state.side(Side::Left).pad_mode, PadMode::Hardware);
+    assert_eq!(rig.state.side(Side::Right).pad_mode_label(), "pads");
+    press(&mut rig, ActionKind::PadMode(PadMode::BeatJump));
+    assert_eq!(rig.state.side(Side::Left).pad_mode_label(), "BEAT JUMP");
+    press(&mut rig, ActionKind::PadMode(PadMode::Hardware));
+    assert_eq!(rig.state.side(Side::Left).pad_mode_label(), "SAMPLER");
+    for (mode, id, label) in [
+        (HardwarePadMode::HotCue, "pads.mode_hot_cue", "HOT CUE"),
+        (HardwarePadMode::FxFade, "pads.mode_fx_fade", "FX FADE"),
+        (HardwarePadMode::Sampler, "pads.mode_sampler", "SAMPLER"),
+        (HardwarePadMode::Trans, "pads.mode_trans", "TRANS"),
+    ] {
+        assert_eq!(ActionKind::HardwarePadMode(mode).id(), id);
+        assert_eq!(
+            ActionKind::from_id(id),
+            Some(ActionKind::HardwarePadMode(mode))
+        );
+        assert_eq!(mode.label(), label);
+    }
+    for (mode, label) in [
+        (PadMode::LoopRoll, "LOOP ROLL"),
+        (PadMode::Slicer, "SLICER"),
+        (PadMode::PadScratch, "PAD SCRATCH"),
+    ] {
+        press(&mut rig, ActionKind::PadMode(mode));
+        assert_eq!(rig.state.side(Side::Left).pad_mode_label(), label);
+    }
+}
+
+#[test]
+fn fresh_side_says_pads() {
+    let state = ControlState::default();
+    assert_eq!(state.side(Side::Left).pad_mode_label(), "pads");
+    assert_eq!(state.side(Side::Left).hardware_mode, None);
+}
+
+#[test]
+fn toggle_folder_asks_the_browser() {
+    use actions::{AppRequest, BrowserRequest};
+    let mut rig = Rig::new();
+    let action = Action::new(ActionKind::BrowserToggleFolder, Target::Global).unwrap();
+    assert_eq!(
+        rig.apply(action, Input::Press),
+        ApplyResult::Request(AppRequest::Browser(BrowserRequest::ToggleFolder))
+    );
+    assert_eq!(
+        ActionKind::BrowserToggleFolder.id(),
+        "browser.toggle_folder"
+    );
 }
