@@ -36,6 +36,7 @@ pub fn run(
         frame,
         monitor,
         quit: Arc::clone(&quit),
+        lanes: waveform::Lanes::default(),
     };
     let result = eframe::run_native(
         TITLE,
@@ -53,6 +54,7 @@ struct App {
     frame: Published<ControlFrame>,
     monitor: Published<Option<EngineMonitor>>,
     quit: Arc<AtomicBool>,
+    lanes: waveform::Lanes,
 }
 
 impl eframe::App for App {
@@ -62,7 +64,7 @@ impl eframe::App for App {
         }
         let frame = self.frame.latest();
         let monitor = self.monitor.latest();
-        root(ui, &frame, monitor.as_ref().as_ref());
+        root(ui, &frame, monitor.as_ref().as_ref(), &mut self.lanes);
         // The decks move on their own: draw at the display's rate.
         ui.ctx().request_repaint();
     }
@@ -72,11 +74,27 @@ impl eframe::App for App {
     }
 }
 
+/// The share of the window's height the waveform lanes take.
+const LANES_HEIGHT: f32 = 0.22;
+
 /// Draws the whole window for `frame`; `monitor` is `None` until the audio device opens.
-pub fn root(ui: &mut egui::Ui, frame: &ControlFrame, monitor: Option<&EngineMonitor>) {
+/// `lanes` is kept from one frame to the next.
+pub fn root(
+    ui: &mut egui::Ui,
+    frame: &ControlFrame,
+    monitor: Option<&EngineMonitor>,
+    lanes: &mut waveform::Lanes,
+) {
+    let window_height = ui.max_rect().height();
     egui::Panel::top("top_bar")
         .frame(egui::Frame::new().fill(theme::PANEL).inner_margin(6))
         .show(ui, |ui| topbar::show(ui, frame, monitor));
+    egui::Panel::top("waveform_lanes")
+        .frame(egui::Frame::new().fill(theme::BACKGROUND))
+        .exact_size(window_height * LANES_HEIGHT)
+        .resizable(false)
+        .show_separator_line(false)
+        .show(ui, |ui| lanes.show(ui, frame, monitor));
     egui::CentralPanel::default()
         .frame(egui::Frame::new().fill(theme::BACKGROUND))
         .show(ui, |_ui| {});
