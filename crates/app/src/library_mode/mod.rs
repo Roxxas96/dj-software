@@ -1,12 +1,15 @@
 //! `play --library`: the browser line, loading library tracks with their cue point,
 //! hotcues and beatgrid, beatgrid edits, cue and hotcue write-through, background analysis
-//! and folder watching, driven from the control loop.
+//! and folder watching, driven from the control loop. With `[stems] enabled`, each library
+//! track's stems are loaded from the stems cache or separated once its load has applied.
 //!
 //! The control loop never waits on the database or a decode: browser moves, lookups and
 //! grid edits run on the library worker, decoding on its loader thread
-//! ([`worker`]); cue points and hotcues are written with the non-blocking `Writer::submit`.
+//! ([`worker`]), stems on their own thread ([`stem_jobs`]); cue points and hotcues are
+//! written with the non-blocking `Writer::submit`.
 
 mod memory_sync;
+mod stem_jobs;
 mod worker;
 
 use std::collections::{HashMap, HashSet};
@@ -19,7 +22,9 @@ use std::time::{Duration, Instant};
 use actions::{AppRequest, GridEditRequest};
 use analysis::KeyNotation;
 use anyhow::Context;
-use engine::{Command, DeckCommand, DeckId, DeckSnapshot, EngineController, Grid};
+use engine::{
+    Command, DeckCommand, DeckId, DeckSnapshot, EngineController, Grid, StemSet, TrackBuffer,
+};
 use library::{
     Analyzer, BrowserView, FailedWrite, GridEdit, KEY_NOTATION, Library, PendingTrack, TrackRow,
     WatchHealth, Watcher, WriteOp, Writer, default_threads,
@@ -29,6 +34,7 @@ use crate::console::ConsoleCommand;
 use crate::format::{bpm_text, grid_text, key_text, notation_from_setting, safe, track_name};
 use crate::printer::Printer;
 use memory_sync::{MemoryAction, MemorySync, engine_grid};
+use stem_jobs::{Reply, StemsControl, StemsSetup};
 use worker::{Event, Job};
 
 /// How often failed writes, analysis and the watcher are checked, and the most often the
@@ -54,6 +60,25 @@ struct DeckTrack {
     memory: MemorySync,
     /// The grid last sent to the deck (with the `Load` or a `SetGrid`).
     grid: Option<Grid>,
+    /// The decoded track, kept (with stems enabled) until its stems are asked for.
+    buffer: Option<Arc<TrackBuffer>>,
+    stems: DeckStems,
+}
+
+/// Where a deck's load is with its stems.
+#[derive(Debug)]
+enum DeckStems {
+    /// The load has not applied yet.
+    Unrequested,
+    /// Waiting on this stems job.
+    Job(u64),
+    /// The stems came; the engine command queue was full, so they are sent again.
+    Sending(Arc<StemSet>),
+    /// Nothing more to do: the stems were sent, or there are none (stems disabled, no
+    /// model, a failed separation).
+    Done,
+    /// Over 20 minutes: refused.
+    TooLong,
 }
 
 pub struct LibraryMode {
@@ -84,6 +109,8 @@ pub struct LibraryMode {
     jobs: Option<Sender<Job>>,
     events: Receiver<Event>,
     worker: Option<JoinHandle<()>>,
+    /// Stems, when enabled.
+    stems: Option<StemsControl>,
     decks: [Option<DeckTrack>; 4],
     /// The track each deck held before its latest `Load`, still saved until the engine
     /// applies the load that replaced it: until the deck's `load_seq` passes the second
@@ -109,8 +136,14 @@ impl LibraryMode {
     }
 
     /// Opens the library, queues the tracks not analyzed yet, watches the library folders
-    /// and starts the worker. Prints what it does (before the control loop starts).
-    pub fn start(db: Option<&Path>) -> anyhow::Result<Self> {
+    /// and starts the worker, and with `stems` enabled the stems thread. Prints what it
+    /// does (before the control loop starts).
+    pub fn start(db: Option<&Path>, stems: &crate::config::StemsConfig) -> anyhow::Result<Self> {
+        Self::start_with(db, stems.enabled.then(|| StemsSetup::from_config(stems)))
+    }
+
+    /// [`LibraryMode::start`] with stems set up as `stems` says (`None`: disabled).
+    fn start_with(db: Option<&Path>, stems: Option<StemsSetup>) -> anyhow::Result<Self> {
         let lib = Arc::new(crate::library_cmd::open_library(db)?);
         let reader = lib.reader()?;
         let notation = notation_from_setting(reader.setting(KEY_NOTATION)?.as_deref());
@@ -138,6 +171,10 @@ impl LibraryMode {
         let (events_tx, events) = channel();
         let (jobs, worker) =
             worker::spawn(Arc::clone(&lib), events_tx).context("starting the library worker")?;
+        let stems = stems
+            .map(|setup| StemsControl::start(Arc::clone(&lib), setup))
+            .transpose()
+            .context("starting the stems thread")?;
         let mut mode = Self {
             writer: lib.writer(),
             lib,
@@ -156,6 +193,7 @@ impl LibraryMode {
             jobs: Some(jobs),
             events,
             worker: Some(worker),
+            stems,
             decks: [None, None, None, None],
             outgoing: [None, None, None, None],
             engine_loads: [0; 4],
@@ -308,7 +346,9 @@ impl LibraryMode {
             self.on_event(event, engine, printer);
         }
         self.sync_cues(engine, printer);
-        self.set_playing(DeckId::ALL.into_iter().any(|d| engine.deck(d).playing));
+        let playing = DeckId::ALL.into_iter().any(|d| engine.deck(d).playing);
+        self.set_playing(playing);
+        self.poll_stems(playing, engine, printer);
         if now.duration_since(self.last_poll) >= POLL_EVERY {
             self.last_poll = now;
             self.report_failed_writes(printer);
@@ -428,6 +468,7 @@ impl LibraryMode {
         }
         let frames = loaded.buffer.frames();
         let rate = loaded.buffer.sample_rate();
+        let buffer = self.stems.is_some().then(|| Arc::clone(&loaded.buffer));
         if engine
             .send(Command::Deck(
                 deck,
@@ -458,15 +499,22 @@ impl LibraryMode {
             row: loaded.row,
             memory,
             grid: loaded.memory.clamped(frames).grid,
+            buffer,
+            stems: DeckStems::Unrequested,
         };
         // The outgoing track's changes keep being saved until the engine applies this load.
         // A track whose own load never showed had none: the earlier outgoing track then
         // stays, until the load that replaced it shows.
-        if let Some(old) = self.decks[i].replace(incoming)
-            && old.memory.load_applied()
-        {
-            self.outgoing[i] = Some((old, after));
+        if let Some(mut old) = self.decks[i].replace(incoming) {
+            // The outgoing track wants no stems now; its job is cancelled unless another
+            // deck holding the track waits on it too.
+            old.buffer = None;
+            old.stems = DeckStems::Done;
+            if old.memory.load_applied() {
+                self.outgoing[i] = Some((old, after));
+            }
         }
+        self.cancel_unwanted_stems();
         // A grid edited while the track was decoding reaches the deck at the refresh.
         self.refresh_wanted = true;
         self.dirty = true;
@@ -745,6 +793,154 @@ impl LibraryMode {
         }
     }
 
+    /// Stems, once per control-loop round: asks for the stems of each deck whose load has
+    /// just applied, applies the stems thread's replies, sends stems the engine queue had
+    /// no room for, and tells the thread what the decks are doing.
+    fn poll_stems(&mut self, playing: bool, engine: &mut EngineController, printer: &Printer) {
+        for deck in DeckId::ALL {
+            self.request_stems(deck, printer);
+        }
+        let replies = self
+            .stems
+            .as_mut()
+            .map(StemsControl::take_replies)
+            .unwrap_or_default();
+        for reply in replies {
+            self.on_stems_reply(reply, engine, printer);
+        }
+        self.send_stems(engine);
+        if let Some(stems) = &self.stems {
+            let playheads = DeckId::ALL.map(|d| engine.deck(d).position_frames);
+            let loaded = self
+                .decks
+                .iter()
+                .flatten()
+                .chain(self.outgoing.iter().flatten().map(|(t, _)| t))
+                .map(|t| t.row.id)
+                .collect();
+            stems.update(playing, playheads, loaded);
+        }
+    }
+
+    /// Once `deck`'s load has applied: records the load (the stems cache keeps recently
+    /// loaded tracks longer) and, with stems enabled, asks for its stems, unless the track
+    /// is over 20 minutes.
+    fn request_stems(&mut self, deck: DeckId, printer: &Printer) {
+        let Some(track) = self.decks[deck.index()]
+            .as_mut()
+            .filter(|t| matches!(t.stems, DeckStems::Unrequested) && t.memory.load_applied())
+        else {
+            return;
+        };
+        let id = track.row.id;
+        if let Err(e) = self.writer.submit(WriteOp::TrackLoaded(id)) {
+            printer.event(format!(
+                "warning: could not record the load of {}: {}",
+                track_name(&track.row),
+                safe(e)
+            ));
+        }
+        track.stems = match (self.stems.as_mut(), track.buffer.take()) {
+            (Some(stems), Some(buffer)) => {
+                if stems::check_length(buffer.frames(), buffer.sample_rate()).is_err() {
+                    DeckStems::TooLong
+                } else {
+                    stems
+                        .request(deck, id, buffer)
+                        .map_or(DeckStems::Done, DeckStems::Job)
+                }
+            }
+            _ => DeckStems::Done,
+        };
+        self.dirty = true;
+    }
+
+    /// Applies one reply of the stems thread. Stems go only to the decks still waiting on
+    /// their job (a deck's newer load has its own state) and holding its track; any other
+    /// result is dropped.
+    fn on_stems_reply(&mut self, reply: Reply, engine: &mut EngineController, printer: &Printer) {
+        let Some(stems) = self.stems.as_mut() else {
+            return;
+        };
+        match reply {
+            Reply::Message(text) => printer.event(text),
+            Reply::Status(job, status) => self.dirty |= stems.set_status(job, status),
+            Reply::Stems(job, set) => {
+                let track = stems.finish(job);
+                for t in self.decks.iter_mut().flatten() {
+                    if matches!(t.stems, DeckStems::Job(j) if j == job) && Some(t.row.id) == track {
+                        t.stems = DeckStems::Sending(Arc::clone(&set));
+                    }
+                }
+                drop(set);
+                self.send_stems(engine);
+                self.dirty = true;
+            }
+            Reply::Done(job) => {
+                stems.finish(job);
+                for t in self.decks.iter_mut().flatten() {
+                    if matches!(t.stems, DeckStems::Job(j) if j == job) {
+                        t.stems = DeckStems::Done;
+                    }
+                }
+                self.dirty = true;
+            }
+            Reply::Evicted(eviction) => {
+                for line in stems.eviction_lines(&eviction) {
+                    printer.event(line);
+                }
+            }
+        }
+    }
+
+    /// Sends the stems waiting for the engine queue. A `SetStems` follows any `Load` sent
+    /// before it, so it reaches the load the deck's [`DeckTrack`] is for.
+    fn send_stems(&mut self, engine: &mut EngineController) {
+        for deck in DeckId::ALL {
+            let Some(track) = self.decks[deck.index()].as_mut() else {
+                continue;
+            };
+            let DeckStems::Sending(set) = &track.stems else {
+                continue;
+            };
+            let command = Command::Deck(deck, DeckCommand::SetStems(Some(Arc::clone(set))));
+            if engine.send(command).is_ok() {
+                track.stems = DeckStems::Done;
+            }
+        }
+    }
+
+    /// Cancels the stems jobs no deck waits on any more.
+    fn cancel_unwanted_stems(&mut self) {
+        let Some(stems) = self.stems.as_mut() else {
+            return;
+        };
+        let waiting: Vec<u64> = self
+            .decks
+            .iter()
+            .flatten()
+            .filter_map(|t| match t.stems {
+                DeckStems::Job(job) => Some(job),
+                _ => None,
+            })
+            .collect();
+        stems.cancel_unwanted(|job| waiting.contains(&job));
+    }
+
+    /// The deck line's stems text: `stems` once the deck has them, `stems 40%` while they
+    /// are separated, `no stems (too long)` for a refused track.
+    fn stems_text(&self, track: Option<&DeckTrack>, snap: &DeckSnapshot) -> Option<String> {
+        let stems = self.stems.as_ref()?;
+        if snap.stems {
+            return Some("stems".to_owned());
+        }
+        match track?.stems {
+            DeckStems::TooLong => Some("no stems (too long)".to_owned()),
+            DeckStems::Job(job) => stem_jobs::status_text(stems.status(job)),
+            _ => None,
+        }
+    }
+
     /// The browser line, then one line per loaded deck.
     pub fn status_lines(
         &self,
@@ -759,22 +955,29 @@ impl LibraryMode {
         for deck in DeckId::ALL {
             let snap = engine.deck(deck);
             if snap.loaded {
-                let track = self.decks[deck.index()].as_ref().map(|t| &t.row);
+                let current = self.decks[deck.index()].as_ref();
+                let stems = self.stems_text(current, &snap);
                 lines.push(deck_status(
                     deck,
                     &snap,
-                    track,
+                    current.map(|t| &t.row),
                     fx_slots,
                     &engine.channel(deck),
+                    stems.as_deref(),
                 ));
             }
         }
         lines
     }
 
-    /// Saves the last cue and hotcue changes, stops analysis, watching and the worker, waits for
-    /// queued writes, and reports any that failed.
+    /// Saves the last cue and hotcue changes, stops stems, analysis, watching and the worker,
+    /// waits for queued writes, and reports any that failed.
     pub fn shutdown(mut self, engine: &mut EngineController, printer: &Printer) {
+        if let Some(stems) = self.stems.take() {
+            for text in stems.shutdown() {
+                printer.event(text);
+            }
+        }
         for deck in DeckId::ALL {
             if !self.sync_deck_patiently(deck, || engine.deck_consistent(deck), printer) {
                 printer.event(format!(
@@ -902,13 +1105,15 @@ fn browser_line(
     line
 }
 
-/// A deck's line: time, BPM at the current tempo once analyzed, and the track.
+/// A deck's line: time, the stems' state, BPM at the current tempo once analyzed, and the
+/// track.
 fn deck_status(
     deck: DeckId,
     snap: &DeckSnapshot,
     track: Option<&TrackRow>,
     fx_slots: &[engine::EffectKind; 3],
     channel: &engine::ChannelSnapshot,
+    stems: Option<&str>,
 ) -> String {
     let mark = if snap.playing { '>' } else { ' ' };
     let mut line = format!(
@@ -916,6 +1121,9 @@ fn deck_status(
         crate::play::deck_line(deck, snap),
         crate::play::fx_suffix(fx_slots, channel)
     );
+    if let Some(stems) = stems {
+        line.push_str(&format!("  {stems}"));
+    }
     if let Some(track) = track {
         if let Some(bpm) = track.bpm {
             line.push_str(&format!("  {} BPM", bpm_text(bpm * snap.tempo_ratio)));
@@ -990,12 +1198,12 @@ mod tests {
         };
         let deck = DeckId::new(2).unwrap();
         assert_eq!(
-            deck_status(deck, &snap, Some(&row()), &SLOTS, &CH),
+            deck_status(deck, &snap, Some(&row()), &SLOTS, &CH, None),
             ">Deck 3  01:05 / 03:20  134.40 BPM  Artist – Title"
         );
         let unanalyzed = TrackRow { bpm: None, ..row() };
         assert_eq!(
-            deck_status(deck, &snap, Some(&unanalyzed), &SLOTS, &CH),
+            deck_status(deck, &snap, Some(&unanalyzed), &SLOTS, &CH, None),
             ">Deck 3  01:05 / 03:20  Artist – Title"
         );
     }
@@ -1056,7 +1264,8 @@ mod tests {
         Printer,
     ) {
         let dir = tempfile::tempdir().unwrap();
-        let mode = LibraryMode::start(Some(&dir.path().join("library.sqlite3"))).unwrap();
+        let mode =
+            LibraryMode::start_with(Some(&dir.path().join("library.sqlite3")), None).unwrap();
         let (engine, renderer) = engine::engine(engine::EngineConfig {
             sample_rate: 44_100,
             max_block_frames: 512,
@@ -1323,6 +1532,8 @@ mod tests {
             },
             memory,
             grid: None,
+            buffer: None,
+            stems: DeckStems::Unrequested,
         });
         assert!(
             refused(&mode).contains("still loading"),
@@ -1666,6 +1877,425 @@ mod tests {
         mode.sync_snapshot(deck, &shown(2, None), &printer);
         assert!(mode.outgoing[0].is_none());
         assert_eq!(hotcue_1(&mode, 8), None);
+        mode.shutdown(&mut engine, &printer);
+        printer.finish();
+    }
+
+    // Stems on load (plan 8, Task 6).
+
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
+
+    use stem_jobs::{Reply, SeparatorSource, StemSeparator, StemsSetup};
+    use stems::Separator;
+
+    /// The synthetic separator, counting its runs.
+    struct Counting {
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl stems::Separator for Counting {
+        fn separate(
+            &mut self,
+            track: &engine::TrackBuffer,
+            progress: &dyn Fn(f32),
+            cancel: &std::sync::atomic::AtomicBool,
+        ) -> Result<engine::StemSet, stems::SeparateError> {
+            self.calls.fetch_add(1, AtomicOrdering::Relaxed);
+            stems::SyntheticSeparator::new().separate(track, progress, cancel)
+        }
+    }
+
+    impl StemSeparator for Counting {}
+
+    /// Separates once: reports `report` done, says it `entered`, waits to be released, then
+    /// returns the synthetic stems whatever the cancel flag says (a result that lost the
+    /// race with a newer load). Later runs fail.
+    struct Scripted {
+        calls: Arc<AtomicUsize>,
+        report: f32,
+        entered: std::sync::mpsc::Sender<()>,
+        release: std::sync::mpsc::Receiver<()>,
+    }
+
+    impl stems::Separator for Scripted {
+        fn separate(
+            &mut self,
+            track: &engine::TrackBuffer,
+            progress: &dyn Fn(f32),
+            _cancel: &std::sync::atomic::AtomicBool,
+        ) -> Result<engine::StemSet, stems::SeparateError> {
+            if self.calls.fetch_add(1, AtomicOrdering::Relaxed) > 0 {
+                return Err(stems::SeparateError::Model("only once".into()));
+            }
+            progress(self.report);
+            let _ = self.entered.send(());
+            let _ = self.release.recv();
+            stems::SyntheticSeparator::new().separate(
+                track,
+                &|_| {},
+                &std::sync::atomic::AtomicBool::new(false),
+            )
+        }
+    }
+
+    impl StemSeparator for Scripted {}
+
+    fn counting() -> (SeparatorSource, Arc<AtomicUsize>) {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&calls);
+        let source = SeparatorSource::Open(Box::new(move || {
+            Ok(Box::new(Counting { calls: counter }) as Box<dyn StemSeparator>)
+        }));
+        (source, calls)
+    }
+
+    /// A [`Scripted`] separator, with its run counter, the `entered` signal and the release.
+    fn scripted(
+        report: f32,
+    ) -> (
+        SeparatorSource,
+        Arc<AtomicUsize>,
+        std::sync::mpsc::Receiver<()>,
+        std::sync::mpsc::Sender<()>,
+    ) {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (entered_tx, entered) = channel();
+        let (release, release_rx) = channel();
+        let counter = Arc::clone(&calls);
+        let source = SeparatorSource::Open(Box::new(move || {
+            Ok(Box::new(Scripted {
+                calls: counter,
+                report,
+                entered: entered_tx,
+                release: release_rx,
+            }) as Box<dyn StemSeparator>)
+        }));
+        (source, calls, entered, release)
+    }
+
+    fn setup(separator: SeparatorSource) -> StemsSetup {
+        StemsSetup {
+            budget_bytes: 1_000_000_000,
+            separator,
+        }
+    }
+
+    /// Adds library tracks `ids` (fingerprint `x'00'`) to the library at `db`.
+    fn add_tracks(lib: &Library, ids: &[i64]) {
+        let statements = ids
+            .iter()
+            .map(|id| library::RawStatement {
+                sql: format!(
+                    "INSERT INTO tracks(id, path, fingerprint, added_at) \
+                     VALUES ({id}, '/m/{id}.wav', x'00', 0)"
+                ),
+                params: vec![],
+            })
+            .collect();
+        lib.writer().submit_wait(WriteOp::Raw(statements)).unwrap();
+    }
+
+    /// A library mode on a fresh library holding tracks 7 and 8, with stems per `stems`,
+    /// its engine and renderer, and a printer whose events are kept. `before` runs on the
+    /// library before the mode starts.
+    #[allow(clippy::type_complexity)]
+    fn stems_mode(
+        stems: Option<StemsSetup>,
+        before: impl FnOnce(&Library),
+    ) -> (
+        tempfile::TempDir,
+        LibraryMode,
+        EngineController,
+        engine::EngineRenderer,
+        Printer,
+        Arc<std::sync::Mutex<Vec<String>>>,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.sqlite3");
+        {
+            let lib = Library::open(&db).unwrap();
+            add_tracks(&lib, &[7, 8]);
+            before(&lib);
+        }
+        let mode = LibraryMode::start_with(Some(&db), stems).unwrap();
+        let (engine, renderer) = engine::engine(engine::EngineConfig {
+            sample_rate: 44_100,
+            max_block_frames: 512,
+        });
+        let (printer, events) = Printer::capturing();
+        (dir, mode, engine, renderer, printer, events)
+    }
+
+    /// Loads `buffer` as track `id` on `deck` (0-based).
+    fn load_track(
+        mode: &mut LibraryMode,
+        deck: usize,
+        id: i64,
+        buffer: Arc<engine::TrackBuffer>,
+        engine: &mut EngineController,
+        printer: &Printer,
+    ) {
+        let deck = DeckId::new(deck).unwrap();
+        let seq = mode.next_seq(deck);
+        let next = worker::Loaded {
+            deck,
+            seq,
+            row: TrackRow { id, ..row() },
+            buffer,
+            ..loaded(seq)
+        };
+        mode.load(next, engine, printer);
+    }
+
+    fn short_track() -> Arc<engine::TrackBuffer> {
+        Arc::new(engine::TrackBuffer::new(44_100, vec![0.1; 2 * 4410]).unwrap())
+    }
+
+    /// Renders and polls until `done` holds, for at most 10 s.
+    fn run_until(
+        mode: &mut LibraryMode,
+        engine: &mut EngineController,
+        renderer: &mut engine::EngineRenderer,
+        printer: &Printer,
+        mut done: impl FnMut(&LibraryMode, &EngineController) -> bool,
+    ) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            render(renderer);
+            mode.poll(Instant::now(), engine, printer);
+            if done(mode, engine) {
+                return;
+            }
+            assert!(Instant::now() < deadline, "not done within 10 s");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    /// The status line of deck `n` (0-based), if loaded.
+    fn deck_line_of(mode: &LibraryMode, engine: &EngineController, n: usize) -> String {
+        let slots = [engine::EffectKind::Echo; 3];
+        let lines = mode.status_lines(engine, &slots);
+        lines
+            .into_iter()
+            .find(|l| l.contains(&format!("Deck {}", n + 1)))
+            .unwrap_or_default()
+    }
+
+    fn stems_rows(mode: &LibraryMode, track: i64) -> i64 {
+        mode.lib
+            .reader()
+            .unwrap()
+            .connection()
+            .query_row(
+                "SELECT count(*) FROM stems WHERE track_id = ?1",
+                [track],
+                |r| r.get(0),
+            )
+            .unwrap()
+    }
+
+    fn idle(mode: &LibraryMode) -> bool {
+        mode.stems.as_ref().is_some_and(|s| s.idle())
+    }
+
+    #[test]
+    fn cached_stems_are_sent_after_load() {
+        let track = short_track();
+        let set = stems::SyntheticSeparator::new()
+            .separate(&track, &|_| {}, &std::sync::atomic::AtomicBool::new(false))
+            .unwrap();
+        let (source, calls) = counting();
+        let (_dir, mut mode, mut engine, mut renderer, printer, _events) =
+            stems_mode(Some(setup(source)), |lib| {
+                let dir = crate::library_cmd::stems_dir(lib.path());
+                let mut cache = library::StemCache::new(lib, dir, 1_000_000_000).unwrap();
+                let key = library::StemKey {
+                    track: 7,
+                    fingerprint: &[0],
+                    sample_rate: 44_100,
+                    frames: 4410,
+                };
+                cache.put(&key, &set, false, &[]).unwrap();
+            });
+        let d1 = DeckId::new(0).unwrap();
+        load_track(&mut mode, 0, 7, track, &mut engine, &printer);
+        // Nothing is asked for before the engine shows the load.
+        assert!(idle(&mode));
+        run_until(&mut mode, &mut engine, &mut renderer, &printer, |_, e| {
+            e.deck(d1).stems
+        });
+        assert_eq!(calls.load(AtomicOrdering::Relaxed), 0, "no separation");
+        flush(&mode);
+        let loaded_at: Option<i64> = mode
+            .lib
+            .reader()
+            .unwrap()
+            .connection()
+            .query_row("SELECT last_loaded_at FROM tracks WHERE id = 7", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert!(loaded_at.is_some(), "the load is recorded for eviction");
+        assert!(deck_line_of(&mode, &engine, 0).contains("  stems  "));
+        mode.shutdown(&mut engine, &printer);
+        printer.finish();
+    }
+
+    #[test]
+    fn separation_result_reaches_the_same_track() {
+        let (source, calls) = counting();
+        let (_dir, mut mode, mut engine, mut renderer, printer, _events) =
+            stems_mode(Some(setup(source)), |_| {});
+        let (d1, d3) = (DeckId::new(0).unwrap(), DeckId::new(2).unwrap());
+        // The same track on two decks: one separation serves both.
+        load_track(&mut mode, 0, 7, short_track(), &mut engine, &printer);
+        load_track(&mut mode, 2, 7, short_track(), &mut engine, &printer);
+        run_until(&mut mode, &mut engine, &mut renderer, &printer, |_, e| {
+            e.deck(d1).stems && e.deck(d3).stems
+        });
+        run_until(&mut mode, &mut engine, &mut renderer, &printer, |m, _| {
+            idle(m) && stems_rows(m, 7) == 1
+        });
+        assert_eq!(calls.load(AtomicOrdering::Relaxed), 1);
+        mode.shutdown(&mut engine, &printer);
+        printer.finish();
+    }
+
+    #[test]
+    fn stale_separation_never_reaches_a_new_track() {
+        let (source, calls, entered, release) = scripted(0.5);
+        let (_dir, mut mode, mut engine, mut renderer, printer, _events) =
+            stems_mode(Some(setup(source)), |_| {});
+        let d1 = DeckId::new(0).unwrap();
+        load_track(&mut mode, 0, 7, short_track(), &mut engine, &printer);
+        run_until(&mut mode, &mut engine, &mut renderer, &printer, |_, _| {
+            entered.try_recv().is_ok()
+        });
+        let old_job = match mode.decks[0].as_ref().unwrap().stems {
+            DeckStems::Job(job) => job,
+            ref other => panic!("{other:?}"),
+        };
+        // Track 8 replaces track 7 while 7 is separating; 7's stems then come in late.
+        load_track(&mut mode, 0, 8, short_track(), &mut engine, &printer);
+        run_until(&mut mode, &mut engine, &mut renderer, &printer, |m, _| {
+            m.decks[0].as_ref().unwrap().memory.load_applied()
+        });
+        release.send(()).unwrap();
+        run_until(&mut mode, &mut engine, &mut renderer, &printer, |m, _| {
+            idle(m) && calls.load(AtomicOrdering::Relaxed) == 2
+        });
+        render(&mut renderer);
+        assert!(
+            !engine.deck(d1).stems,
+            "track 7's stems never reach track 8"
+        );
+        assert_eq!(stems_rows(&mode, 7), 0, "a discarded result is not kept");
+        // Even a result for the old job that does reach the control loop is dropped.
+        let set = stems::SyntheticSeparator::new()
+            .separate(
+                &short_track(),
+                &|_| {},
+                &std::sync::atomic::AtomicBool::new(false),
+            )
+            .unwrap();
+        mode.on_stems_reply(Reply::Stems(old_job, Arc::new(set)), &mut engine, &printer);
+        render(&mut renderer);
+        assert!(!engine.deck(d1).stems);
+        mode.shutdown(&mut engine, &printer);
+        printer.finish();
+    }
+
+    #[test]
+    fn missing_model_is_reported_once() {
+        let (_dir, mut mode, mut engine, mut renderer, printer, events) =
+            stems_mode(Some(setup(SeparatorSource::Missing)), |_| {});
+        load_track(&mut mode, 0, 7, short_track(), &mut engine, &printer);
+        load_track(&mut mode, 1, 8, short_track(), &mut engine, &printer);
+        run_until(&mut mode, &mut engine, &mut renderer, &printer, |m, _| {
+            idle(m)
+                && m.decks[..2]
+                    .iter()
+                    .all(|t| matches!(t.as_ref().unwrap().stems, DeckStems::Done))
+        });
+        let lines = [0, 1].map(|n| deck_line_of(&mode, &engine, n));
+        mode.shutdown(&mut engine, &printer);
+        printer.finish();
+        let events = events.lock().unwrap();
+        let stems: Vec<&String> = events.iter().filter(|e| e.contains("stems")).collect();
+        assert_eq!(
+            stems,
+            ["stems: no model, run `open-jockey stems setup`"],
+            "{events:?}"
+        );
+        for line in lines {
+            assert!(!line.contains("stems"), "{line}");
+        }
+    }
+
+    #[test]
+    fn long_tracks_are_refused() {
+        let (source, calls) = counting();
+        let (_dir, mut mode, mut engine, mut renderer, printer, _events) =
+            stems_mode(Some(setup(source)), |_| {});
+        // 20 minutes and one second, at a low rate to keep the test small.
+        let rate = 1_000;
+        let frames = (stems::MAX_SECONDS as usize + 1) * rate;
+        let long = Arc::new(engine::TrackBuffer::new(rate as u32, vec![0.0; 2 * frames]).unwrap());
+        load_track(&mut mode, 0, 7, long, &mut engine, &printer);
+        run_until(&mut mode, &mut engine, &mut renderer, &printer, |m, e| {
+            deck_line_of(m, e, 0).contains("  no stems (too long)")
+        });
+        assert!(idle(&mode));
+        assert_eq!(calls.load(AtomicOrdering::Relaxed), 0);
+        mode.shutdown(&mut engine, &printer);
+        printer.finish();
+    }
+
+    #[test]
+    fn status_shows_progress() {
+        const SLOTS: [engine::EffectKind; 3] = [engine::EffectKind::Echo; 3];
+        const CH: engine::ChannelSnapshot = engine::ChannelSnapshot {
+            fx_enabled: [false; 3],
+            fx_amount: 0.5,
+        };
+        let snap = DeckSnapshot {
+            loaded: true,
+            position_frames: 44_100.0 * 65.0,
+            duration_frames: 44_100 * 200,
+            track_sample_rate: 44_100,
+            tempo_ratio: 1.0,
+            ..DeckSnapshot::default()
+        };
+        let deck = DeckId::new(0).unwrap();
+        let line = |stems| deck_status(deck, &snap, Some(&row()), &SLOTS, &CH, stems);
+        assert_eq!(
+            line(Some("stems 40%")),
+            " Deck 1  01:05 / 03:20  stems 40%  128.00 BPM  Artist – Title"
+        );
+        assert_eq!(
+            line(Some("stems")),
+            " Deck 1  01:05 / 03:20  stems  128.00 BPM  Artist – Title"
+        );
+        assert_eq!(
+            line(Some("no stems (too long)")),
+            " Deck 1  01:05 / 03:20  no stems (too long)  128.00 BPM  Artist – Title"
+        );
+
+        // Live: the separation's progress, then the stems.
+        let (source, _calls, entered, release) = scripted(0.4);
+        let (_dir, mut mode, mut engine, mut renderer, printer, _events) =
+            stems_mode(Some(setup(source)), |_| {});
+        load_track(&mut mode, 0, 7, short_track(), &mut engine, &printer);
+        run_until(&mut mode, &mut engine, &mut renderer, &printer, |_, _| {
+            entered.try_recv().is_ok()
+        });
+        run_until(&mut mode, &mut engine, &mut renderer, &printer, |m, e| {
+            deck_line_of(m, e, 0).contains("  stems 40%  ")
+        });
+        release.send(()).unwrap();
+        run_until(&mut mode, &mut engine, &mut renderer, &printer, |m, e| {
+            deck_line_of(m, e, 0).contains("  stems  ")
+        });
         mode.shutdown(&mut engine, &printer);
         printer.finish();
     }
