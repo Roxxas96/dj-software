@@ -533,8 +533,9 @@ impl Worker {
 
     /// Separates `job` around the playhead of a deck waiting on it, sends the stems unless
     /// the job was cancelled meanwhile, and keeps them in the cache either way (Ruling
-    /// R14). Between chunks, newly arrived jobs are looked up in the cache, so a cached
-    /// track never waits for the whole separation (Ruling R12); their misses are returned.
+    /// R14). Between chunks, and once more before the cache write, newly arrived jobs are
+    /// looked up in the cache, so a cached track never waits for the whole separation
+    /// (Ruling R12); their misses are returned.
     fn separate(
         &mut self,
         job: Job,
@@ -566,12 +567,20 @@ impl Worker {
             chunk_start.set(Instant::now());
         };
         let result = separator.separate(&job.buffer, &progress, &job.cancel);
+        let mut misses = misses.into_inner();
         match result {
             Ok(set) => {
                 let set = Arc::new(set);
                 // No deck wants it now: kept, not sent.
                 if !job.cancel.load(Ordering::Relaxed) {
                     self.reply(Reply::Stems(job.id, Arc::clone(&set)));
+                }
+                // Tracks asked for since the last chunk: their hits do not wait for the
+                // cache write (~7 s).
+                for arrived in jobs.try_iter() {
+                    if let Some(miss) = look_up(&self.cache, &self.replies, true, arrived) {
+                        misses.push(miss);
+                    }
                 }
                 let loaded = self
                     .shared
@@ -600,7 +609,7 @@ impl Worker {
             ))),
         }
         self.reply(Reply::Done(job.id));
-        misses.into_inner()
+        misses
     }
 }
 
