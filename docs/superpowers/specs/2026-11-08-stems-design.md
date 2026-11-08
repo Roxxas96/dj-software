@@ -143,7 +143,7 @@ The main spec's anti-goals stand: no freeze, crash or dropout; a control does on
 - **Memory:**
   - In memory, stems are stored as 16-bit samples, three stems plus the mix (the fourth stem is the mix minus the other three), so about 1.75× the track's decoded size.
   - Stems are refused for tracks longer than 20 minutes (DJ mixes), and the deck's status line says so.
-  - The status line also shows `stems: 40 %` while separating and `stems` when they are active.
+  - The status line shows `stems: preparing model` while the model opens, `stems 40%` while separating, and `stems` once they are ready (as built).
 - **Speed:**
   - The 10-30 s target is a goal, not a gate. Because stems are cached and can be prepared ahead, a slower result still ships.
   - The plan starts with a spike that picks the model variant, runtime and Apple-silicon acceleration, and measures them on the owner's MacBook.
