@@ -623,3 +623,411 @@ fn sb3_mapping_expands_to_the_same_bindings() {
     assert_eq!(actual.len(), expected.len());
     assert_eq!(actual, expected);
 }
+
+// Mapping `extends` and `[[remove]]`.
+
+const SB3: &str = include_str!("../../../controllers/ddj-sb3/mapping.toml");
+
+fn sb3() -> Mapping {
+    parse_mapping("sb3.toml", SB3).unwrap()
+}
+
+/// A fresh, empty folder for mapping files.
+fn temp_folder(name: &str) -> std::path::PathBuf {
+    let dir =
+        std::env::temp_dir().join(format!("open-jockey-extends-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn note(channel: u8, note: u8) -> MidiSource {
+    MidiSource::Note { channel, note }
+}
+
+#[test]
+fn extends_inherits_everything() {
+    // A child with nothing of its own is its parent.
+    let child = parse_mapping("mine.toml", "extends = \"ddj-sb3\"\n").unwrap();
+    assert_eq!(child, sb3());
+
+    // Its [controller] keys override the parent's one by one; [[init]] and [[output]] are
+    // inherited, and the child's own come after.
+    let text = r#"
+extends = "ddj-sb3"
+
+[controller]
+name = "My SB3"
+
+[[init]]
+action = "master.level"
+value = 0.5
+
+[[output]]
+state = "deck.play_led"
+deck = 1
+midi = { note = 0x70, channel = 1 }
+"#;
+    let child = parse_mapping("mine.toml", text).unwrap();
+    let parent = sb3();
+    assert_eq!(child.controller.name, "My SB3");
+    assert_eq!(child.controller.port, parent.controller.port);
+    assert_eq!(
+        child.controller.jog_steps_per_turn,
+        parent.controller.jog_steps_per_turn
+    );
+    assert_eq!(child.init[..parent.init.len()], parent.init[..]);
+    assert_eq!(child.init.len(), parent.init.len() + 1);
+    assert_eq!(child.outputs[..parent.outputs.len()], parent.outputs[..]);
+    assert_eq!(
+        child.outputs.last().unwrap().midi,
+        OutputMidi::Note {
+            channel: 0,
+            note: 0x70
+        }
+    );
+    assert_eq!(child.inputs, parent.inputs);
+
+    // A chain of files, the parent named by a path relative to the child's folder.
+    let dir = temp_folder("chain");
+    std::fs::create_dir_all(dir.join("base")).unwrap();
+    std::fs::write(
+        dir.join("base").join("b.toml"),
+        "extends = \"ddj-sb3\"\n[controller]\nport = \"B port\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("a.toml"),
+        "extends = \"base/b.toml\"\n[controller]\nname = \"A\"\n",
+    )
+    .unwrap();
+    let a = controller::builtin::load_mapping(dir.join("a.toml").to_str().unwrap()).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(a.controller.name, "A");
+    assert_eq!(a.controller.port, "B port");
+    assert_eq!(a.inputs, parent.inputs);
+}
+
+#[test]
+fn child_input_replaces_matching_bindings() {
+    let parent = sb3();
+    // SAMPLER pad 1 on the left: channel 8, note 0x30, hardware mode, no SHIFT condition.
+    let pad = note(7, 0x30);
+    let text = r#"
+extends = "ddj-sb3"
+
+[[input]]
+midi = { channel = 8, note = 0x30 }
+action = "deck.stem_toggle_vocals"
+side = "left"
+pad_mode = "hardware"
+"#;
+    let child = parse_mapping("mine.toml", text).unwrap();
+    let on_pad = |m: &Mapping| -> Vec<(ActionKind, Option<PadMode>)> {
+        m.inputs
+            .iter()
+            .filter(|b| b.midi == pad)
+            .map(|b| (b.kind, b.pad_mode))
+            .collect()
+    };
+    let before = on_pad(&parent);
+    assert!(before.contains(&(
+        ActionKind::SamplerPlay(engine::HotcueSlot::new(1).unwrap()),
+        Some(PadMode::Hardware)
+    )));
+    let after = on_pad(&child);
+    // The hardware binding is replaced; the software modes' bindings on the note stay.
+    let mut expected: Vec<_> = before
+        .iter()
+        .copied()
+        .filter(|(_, mode)| *mode != Some(PadMode::Hardware))
+        .collect();
+    expected.push((
+        ActionKind::from_id("deck.stem_toggle_vocals").unwrap(),
+        Some(PadMode::Hardware),
+    ));
+    assert_eq!(after, expected);
+    // Every other inherited binding carries over unchanged, in order.
+    let others = |m: &Mapping| -> Vec<InputBinding> {
+        m.inputs.iter().copied().filter(|b| b.midi != pad).collect()
+    };
+    assert_eq!(others(&child), others(&parent));
+    assert_eq!(child.inputs.len(), parent.inputs.len());
+
+    // Matching is per expanded note, and `shift` is part of the match: a binding with
+    // `shift = true` replaces nothing here (the inherited pads have no SHIFT condition).
+    let text = r#"
+extends = "ddj-sb3"
+
+[[input]]
+midi = { channel = 8, notes = [0x30, 0x31] }
+action = "deck.hotcue_{n}"
+side = "left"
+pad_mode = "hardware"
+shift = true
+"#;
+    let child = parse_mapping("mine.toml", text).unwrap();
+    assert_eq!(child.inputs.len(), parent.inputs.len() + 2);
+}
+
+#[test]
+fn remove_deletes_matching_bindings() {
+    let parent = sb3();
+    let left_pads: Vec<MidiSource> = (0x30..=0x37).map(|n| note(7, n)).collect();
+    let count = |m: &Mapping, mode: Option<PadMode>| {
+        m.inputs
+            .iter()
+            .filter(|b| left_pads.contains(&b.midi) && (mode.is_none() || b.pad_mode == mode))
+            .count()
+    };
+    assert_eq!(count(&parent, Some(PadMode::Hardware)), 8);
+
+    // With `pad_mode`, only that mode's bindings go.
+    let text = r#"
+extends = "ddj-sb3"
+
+[[remove]]
+midi = { channel = 8, notes = [0x30, 0x37] }
+pad_mode = "hardware"
+"#;
+    let child = parse_mapping("mine.toml", text).unwrap();
+    assert_eq!(count(&child, Some(PadMode::Hardware)), 0);
+    assert_eq!(count(&child, None), count(&parent, None) - 8);
+    assert_eq!(child.inputs.len(), parent.inputs.len() - 8);
+
+    // Without `pad_mode` and `shift`, every binding of the message goes.
+    let text = r#"
+extends = "ddj-sb3"
+
+[[remove]]
+midi = { channel = 8, note = 0x30 }
+"#;
+    let child = parse_mapping("mine.toml", text).unwrap();
+    assert!(child.inputs.iter().all(|b| b.midi != note(7, 0x30)));
+    let on_note = parent
+        .inputs
+        .iter()
+        .filter(|b| b.midi == note(7, 0x30))
+        .count();
+    assert!(on_note > 1, "the SB3 binds pad 1 in several modes");
+    assert_eq!(child.inputs.len(), parent.inputs.len() - on_note);
+
+    // A removed message can be bound again by the child.
+    let text = r#"
+extends = "ddj-sb3"
+
+[[remove]]
+midi = { channel = 8, note = 0x30 }
+
+[[input]]
+midi = { channel = 8, note = 0x30 }
+action = "deck.stem_toggle_bass"
+side = "left"
+"#;
+    let child = parse_mapping("mine.toml", text).unwrap();
+    let on_pad: Vec<_> = child
+        .inputs
+        .iter()
+        .filter(|b| b.midi == note(7, 0x30))
+        .collect();
+    assert_eq!(on_pad.len(), 1);
+    assert_eq!(
+        on_pad[0].kind,
+        ActionKind::from_id("deck.stem_toggle_bass").unwrap()
+    );
+
+    // `[[remove]]` needs `extends`, and its entries are checked like bindings.
+    let err = parse_mapping(
+        "mine.toml",
+        "[controller]\nname = \"X\"\nport = \"X\"\n\n[[remove]]\nmidi = { channel = 1, note = 1 }\n",
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains("mine.toml") && err.contains("remove[0]") && err.contains("extends"),
+        "{err}"
+    );
+    let err = parse_mapping(
+        "mine.toml",
+        "extends = \"ddj-sb3\"\n\n[[remove]]\nmidi = { channel = 8, note = 0x30 }\npad_mode = \"disco\"\n",
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains("remove[0]") && err.contains("unknown pad_mode `disco`"),
+        "{err}"
+    );
+}
+
+#[test]
+fn unknown_parent_and_cycles_are_errors() {
+    let err = parse_mapping("mine.toml", "extends = \"ddj-nope\"\n").unwrap_err();
+    assert_eq!(err.file, "mine.toml");
+    assert!(
+        err.message.contains("extends") && err.message.contains("ddj-nope"),
+        "{err}"
+    );
+
+    // A file that extends itself, and two files that extend each other.
+    let dir = temp_folder("cycle");
+    std::fs::write(dir.join("self.toml"), "extends = \"self.toml\"\n").unwrap();
+    std::fs::write(dir.join("a.toml"), "extends = \"b.toml\"\n").unwrap();
+    std::fs::write(dir.join("b.toml"), "extends = \"./a.toml\"\n").unwrap();
+    let load = |name: &str| {
+        controller::builtin::load_mapping(dir.join(name).to_str().unwrap()).unwrap_err()
+    };
+    let self_err = load("self.toml");
+    let pair_err = load("a.toml");
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert!(self_err.file.ends_with("self.toml"), "{self_err}");
+    assert!(self_err.message.contains("cycle"), "{self_err}");
+    assert!(pair_err.file.ends_with("b.toml"), "{pair_err}");
+    assert!(
+        pair_err.message.contains("cycle") && pair_err.message.contains("a.toml"),
+        "{pair_err}"
+    );
+
+    // Without `extends`, `[controller]` with `name` and `port` is still required.
+    let err = parse_mapping("x.toml", "[controller]\nname = \"X\"\n").unwrap_err();
+    assert!(err.to_string().contains("port"), "{err}");
+}
+
+#[test]
+fn remove_matching_nothing_is_an_error() {
+    // Pad 1 has no SHIFT binding on the SAMPLER bank: SHIFT + SAMPLER sends 0x38-0x3F.
+    let text = r#"
+extends = "ddj-sb3"
+
+[[remove]]
+midi = { channel = 8, note = 0x30 }
+pad_mode = "hardware"
+
+[[remove]]
+midi = { channel = 8, notes = [0x30, 0x31] }
+shift = true
+"#;
+    let err = parse_mapping("mine.toml", text).unwrap_err();
+    assert_eq!(err.file, "mine.toml");
+    assert!(
+        err.message.contains("remove[1]") && err.message.contains("matches no inherited binding"),
+        "{err}"
+    );
+    // A range is an error only if none of its notes matches.
+    let text = r#"
+extends = "ddj-sb3"
+
+[[remove]]
+midi = { channel = 8, notes = [0x37, 0x38] }
+pad_mode = "beat_jump"
+"#;
+    parse_mapping("mine.toml", text).unwrap();
+    // The child's own bindings can't be removed, only inherited ones.
+    let text = r#"
+extends = "ddj-sb3"
+
+[[input]]
+midi = { channel = 16, note = 0x7F }
+action = "master.crossfader"
+value = "absolute"
+
+[[remove]]
+midi = { channel = 16, note = 0x7F }
+"#;
+    let err = parse_mapping("mine.toml", text).unwrap_err().to_string();
+    assert!(
+        err.contains("remove[0]: matches no inherited binding"),
+        "{err}"
+    );
+}
+
+/// The example user file in the mapping reference, starting at `extends = "ddj-sb3"`.
+fn reference_stems_example() -> &'static str {
+    let doc = include_str!("../../../docs/controllers/mapping-reference.md");
+    let start = doc
+        .find("```toml\nextends = \"ddj-sb3\"")
+        .expect("the reference has the stems example")
+        + "```toml\n".len();
+    let len = doc[start..].find("```").unwrap();
+    &doc[start..start + len]
+}
+
+#[test]
+fn stems_on_sampler_example_loads_and_routes() {
+    use actions::{ControlState, Input};
+    use controller::MidiMessage;
+    use controller::mapping::Resolver;
+    use engine::{HotcueSlot, Stem};
+
+    let text = reference_stems_example();
+    let mapping = parse_mapping("mapping.toml", text).unwrap();
+    let parent = sb3();
+    assert_eq!(mapping.inputs.len(), parent.inputs.len());
+
+    // Saved where the reference says, it overrides the built-in it extends.
+    let config = temp_folder("override");
+    let folder = config.join("controllers").join("ddj-sb3");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("mapping.toml"), text).unwrap();
+    let loaded = controller::builtin::load_mapping_from("ddj-sb3", Some(&config));
+    std::fs::remove_dir_all(&config).unwrap();
+    assert_eq!(loaded.unwrap(), mapping);
+
+    let mut resolver = Resolver::new(&mapping);
+    let mut state = ControlState::default();
+    // A tap: the press's actions, after which the pad is released.
+    let mut press = |state: &ControlState, channel: u8, note: u8| {
+        let pressed = resolver.resolve(
+            &MidiMessage::NoteOn {
+                channel,
+                note,
+                velocity: 127,
+            },
+            state,
+        );
+        resolver.resolve(
+            &MidiMessage::NoteOff {
+                channel,
+                note,
+                velocity: 0,
+            },
+            state,
+        );
+        pressed
+    };
+    let stems = [Stem::Vocals, Stem::Instruments, Stem::Bass, Stem::Rhythm];
+    // SAMPLER pads 1-4 toggle the stems of the deck each side shows (channels 8 and 9).
+    for (channel, deck) in [(7, d(0)), (8, d(1))] {
+        for (i, stem) in stems.into_iter().enumerate() {
+            assert_eq!(
+                press(&state, channel, 0x30 + i as u8),
+                vec![(Action::StemToggle(deck, stem), Input::Press)]
+            );
+        }
+        // Pads 5-8 still play samples.
+        for i in 4..8u8 {
+            assert_eq!(
+                press(&state, channel, 0x30 + i),
+                vec![(
+                    Action::SamplerPlay(HotcueSlot::new(i + 1).unwrap()),
+                    Input::Press
+                )]
+            );
+        }
+    }
+    // The left side switched to deck 3: its stem pads follow.
+    state.side_mut(Side::Left).active_deck = d(2);
+    assert_eq!(
+        press(&state, 7, 0x32),
+        vec![(Action::StemToggle(d(2), Stem::Bass), Input::Press)]
+    );
+    // In another pad mode the pads do what the SB3 mapping says.
+    state.side_mut(Side::Left).pad_mode = PadMode::BeatJump;
+    let resolved = press(&state, 7, 0x30);
+    assert!(
+        resolved
+            .iter()
+            .all(|(a, _)| !matches!(a, Action::StemToggle(..))),
+        "{resolved:?}"
+    );
+    assert!(!resolved.is_empty());
+}
