@@ -10,10 +10,10 @@ mod roll;
 mod slip;
 
 use crate::dsp::smooth::{Ramp, Segment};
-use crate::stems::Garbage;
+use crate::stems::{Garbage, PARTS};
 use crate::{
-    DeckCommand, DeckId, DeckSnapshot, EqMode, Grid, HOTCUES, StemSet, TempoRange, TrackBuffer,
-    knob_law,
+    DeckCommand, DeckId, DeckSnapshot, EqMode, Grid, HOTCUES, StemKnobs, StemSet, TempoRange,
+    TrackBuffer, knob_law, pad_gains,
 };
 
 /// What a command hands back for the renderer to discard: at most a track, its stems and
@@ -85,9 +85,10 @@ pub(crate) struct Deck {
     /// The set replacing the leaving one once its gains are back at the mix.
     stems_incoming: Option<Arc<StemSet>>,
     /// The stem pads, in [`Stem::ALL`](crate::Stem::ALL) order. All on after a load.
-    stem_on: [bool; 4],
-    /// Per stem gain, from the knob law and the pads; all 1.0 plays the mix itself.
-    stem_gain: [Ramp; 4],
+    stem_on: [bool; 7],
+    /// Per part gain (vocals, instruments, bass, kicks, hats), from the knob law and the
+    /// pads; all 1.0 plays the mix itself.
+    stem_gain: [Ramp; PARTS],
     /// The EQ knobs control the stems.
     stems_active: bool,
 }
@@ -127,8 +128,8 @@ impl Default for Deck {
             stems: None,
             stems_leaving: false,
             stems_incoming: None,
-            stem_on: [true; 4],
-            stem_gain: [Ramp::new(1.0); 4],
+            stem_on: [true; 7],
+            stem_gain: [Ramp::new(1.0); PARTS],
             stems_active: false,
         }
     }
@@ -267,8 +268,8 @@ impl Deck {
     /// where the sound jumps anyway.
     fn reset_stems(&mut self) -> [Option<Garbage>; 2] {
         self.stems_leaving = false;
-        self.stem_on = [true; 4];
-        self.stem_gain = [Ramp::new(1.0); 4];
+        self.stem_on = [true; 7];
+        self.stem_gain = [Ramp::new(1.0); PARTS];
         self.stems_active = false;
         [
             self.stems.take().map(Garbage::Stems),
@@ -288,7 +289,11 @@ impl Deck {
                 self.stems_leaving = self.stems.is_some();
                 [incoming(self), None]
             }
-            Some(set) if self.track.is_none() || set.frames() != self.frames() => {
+            Some(set)
+                if self.track.as_ref().is_none_or(|track| {
+                    set.frames() != track.frames() || set.sample_rate() != track.sample_rate()
+                }) =>
+            {
                 [Some(Garbage::Stems(set)), None]
             }
             // At the mix, a swap is inaudible.
@@ -304,13 +309,15 @@ impl Deck {
     }
 
     /// Before a block: sets the stem gains the block ramps to, from the EQ knob positions
-    /// `[low, mid, high]` under `mode`, and returns whether the knobs control the stems,
+    /// `[low, mid, high]` under `mode` in the `layout`, and returns whether the knobs
+    /// control the stems,
     /// with a dropped set to discard once its gains are back at the mix. In
     /// [`EqMode::Eq`] the gains are the pads alone.
     pub(crate) fn update_stems(
         &mut self,
         mode: EqMode,
-        [low, mid, high]: [f32; 3],
+        layout: StemKnobs,
+        knobs: [f32; 3],
     ) -> (bool, Option<Arc<StemSet>>) {
         let released = if self.stems_leaving && self.stem_gain.iter().all(|g| g.current == 1.0) {
             self.stems_leaving = false;
@@ -321,13 +328,17 @@ impl Deck {
         let present = self.has_stems();
         self.stems_active = present && mode == EqMode::Stems;
         let law = if self.stems_active && !self.stems_leaving {
-            knob_law(low, mid, high)
+            knob_law(layout, knobs)
         } else {
-            [1.0; 4]
+            [1.0; PARTS]
         };
-        let pads = present && !self.stems_leaving;
-        for ((gain, law), on) in self.stem_gain.iter_mut().zip(law).zip(self.stem_on) {
-            gain.target = if pads && !on { 0.0 } else { law };
+        let pads = if present && !self.stems_leaving {
+            pad_gains(self.stem_on)
+        } else {
+            [1.0; PARTS]
+        };
+        for ((gain, law), pad) in self.stem_gain.iter_mut().zip(law).zip(pads) {
+            gain.target = law * pad;
         }
         (self.stems_active, released)
     }
@@ -361,14 +372,14 @@ impl Deck {
 
     /// Starts the stem gains' ramp over `reads` source reads. `None` plays the mix itself:
     /// no stems, or every gain at rest at 1.
-    fn stem_segments(&mut self, reads: usize) -> Option<[Segment; 4]> {
+    fn stem_segments(&mut self, reads: usize) -> Option<[Segment; PARTS]> {
         let segments = self.stem_gain.each_mut().map(|gain| gain.block(reads));
         let mix = self.stems.is_none() || segments.iter().all(|s| s.rests_at(1.0));
         (!mix).then_some(segments)
     }
 
     /// The stem gains held where they are, for reads outside the block's ramp.
-    fn stem_held(&self) -> Option<[Segment; 4]> {
+    fn stem_held(&self) -> Option<[Segment; PARTS]> {
         let mix = self.stems.is_none() || self.stem_gain.iter().all(|g| g.current == 1.0);
         (!mix).then(|| self.stem_gain.map(|mut gain| gain.block(0)))
     }
@@ -691,14 +702,14 @@ impl Deck {
 struct Source<'a> {
     track: &'a TrackBuffer,
     /// The stems and their gains across the block's reads; `None` plays the track.
-    stems: Option<(&'a StemSet, [Segment; 4])>,
+    stems: Option<(&'a StemSet, [Segment; PARTS])>,
 }
 
 impl<'a> Source<'a> {
     fn new(
         track: &'a TrackBuffer,
         stems: Option<&'a StemSet>,
-        gains: Option<[Segment; 4]>,
+        gains: Option<[Segment; PARTS]>,
     ) -> Self {
         Self {
             track,

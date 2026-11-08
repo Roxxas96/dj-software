@@ -153,7 +153,7 @@ pub fn apply(
             let control = state.deck_mut(d);
             if control.stems_load_seq != seq {
                 control.stems_load_seq = seq;
-                control.stems_on = [true; 4];
+                control.stems_on = [true; 7];
             }
             let on = !control.stems_on[stem.index()];
             (

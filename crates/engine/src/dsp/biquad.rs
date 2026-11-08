@@ -82,6 +82,16 @@ pub(crate) struct State {
 }
 
 impl State {
+    /// The memory a filter with unity DC gain (a low pass) settles to under the constant
+    /// input `x`, so filtering a signal that starts at `x` starts without a step.
+    pub(crate) fn settled(c: &Coeffs, x: f32) -> Self {
+        let s2 = (c.b2 - c.a2) * x;
+        Self {
+            s1: (c.b1 - c.a1) * x + s2,
+            s2,
+        }
+    }
+
     #[inline]
     pub(crate) fn process(&mut self, c: &Coeffs, x: f32) -> f32 {
         let y = c.b0 * x + self.s1;
@@ -136,6 +146,15 @@ mod tests {
         let ap = Coeffs::all_pass(2500.0, std::f32::consts::FRAC_1_SQRT_2, 44_100);
         for freq in [100.0, 2500.0, 10_000.0] {
             assert!((gain(&ap, freq, 44_100) - 1.0).abs() < 1e-3);
+        }
+    }
+
+    #[test]
+    fn settled_low_pass_holds_a_constant() {
+        let c = Coeffs::low_pass(250.0, std::f32::consts::FRAC_1_SQRT_2, 44_100);
+        let mut state = State::settled(&c, 0.6);
+        for _ in 0..100 {
+            assert!((state.process(&c, 0.6) - 0.6).abs() < 1e-5);
         }
     }
 

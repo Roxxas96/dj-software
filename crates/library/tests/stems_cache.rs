@@ -111,7 +111,7 @@ fn stems_at(rate: u32, seconds: f32) -> StemSet {
         bass.extend([to_i16(b), to_i16(b)]);
         rhythm.extend([to_i16(left), to_i16(right)]);
     }
-    StemSet::new(vocals.into(), bass.into(), rhythm.into(), frames).unwrap()
+    StemSet::new(vocals.into(), bass.into(), rhythm.into(), frames, rate).unwrap()
 }
 
 fn energy(samples: impl Iterator<Item = f64>) -> f64 {

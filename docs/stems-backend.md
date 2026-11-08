@@ -347,6 +347,17 @@ Estimated peak for a 20-minute track (52.9 M frames):
 - pending chunks, < 0.1 GB;
 - **≈ 3.4 GB in total**, of which 2.2 GB is fixed.
 
+**Kicks (the stems addendum).** `StemSet::new` also computes a fourth i16 stereo stem, kicks: rhythm
+through a zero-phase low pass at 250 Hz (`KICKS_HZ`, a Butterworth biquad run forward and backward).
+Hats is `rhythm − kicks`, computed per frame like instruments, so nothing else is stored. Kicks lives
+**in memory only, not in the cache**: a cache hit recomputes it after decoding (about 0.6 s for a
+5-minute track on the M1 Pro, release build). Its cost:
+- one more i16 stem, **0.21 GB** at 20 minutes (52.9 M frames × 4 bytes), held as long as the set;
+- while it is computed, a float scratch of one 65,536-frame chunk (plus 0.1 s of overlap), under 1 MB.
+
+So a loaded 20-minute set holds four i16 stems, 0.85 GB, beside the deck's f32 mix (0.42 GB), and the
+separation peak becomes **≈ 3.6 GB**. That still fits; the 20-minute limit stays.
+
 On CPU, ONNX Runtime's share is larger (5.1 GB peak for a 5-minute track with the default arena). Task 6
 should drop the session when stems are disabled, and may drop it after a while idle.
 
@@ -394,8 +405,9 @@ As built in the `stems` crate (Task 4):
     are done (at most 3 chunk buffers are held);
   - resample each stem back to the track's rate.
 - **Mapping:** source 3 (vocals) → vocals, 1 → bass and 0 (drums) → rhythm; source 2 (other) is dropped.
-  The `StemSet` is built with `StemSet::new(vocals, bass, rhythm, frames)` from the 16-bit stems, and
-  instruments is the engine's residual.
+  The `StemSet` is built with `StemSet::new(vocals, bass, rhythm, frames, sample_rate)` from the 16-bit
+  stems at the track's rate; it computes kicks from rhythm at that rate. Instruments and hats are the
+  engine's residuals.
 - Tracks over 20 minutes return `SeparateError::TooLong`.
 - `SyntheticSeparator` is a fixed band split behind the same trait, so CI never needs the model.
 

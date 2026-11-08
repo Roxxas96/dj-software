@@ -320,6 +320,7 @@ impl Mixer {
             }
             // The renderer applies it: the decks play the stems.
             MasterCommand::EqMode(_)
+            | MasterCommand::StemKnobs(_)
             | MasterCommand::FxSlot(..)
             | MasterCommand::Crossfader(_)
             | MasterCommand::MasterLevel(_)

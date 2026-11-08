@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use crate::{
-    DeckId, EffectKind, EqMode, Grid, HotcueSlot, Stem, StemSet, TrackBuffer, TrackMemory,
+    DeckId, EffectKind, EqMode, Grid, HotcueSlot, Stem, StemKnobs, StemSet, TrackBuffer,
+    TrackMemory,
 };
 
 /// A message from the controller to the audio thread.
@@ -32,21 +33,22 @@ pub enum Command {
 pub enum DeckCommand {
     /// Loads a track, paused at frame 0, then applies `memory.clamped(track.frames())`.
     /// The tempo slider keeps its position. Drops the previous track's stems and turns
-    /// every stem back on.
+    /// every stem pad back on.
     Load {
         track: Arc<TrackBuffer>,
         memory: TrackMemory,
     },
     /// Unloads the track and its stems.
     Unload,
-    /// Gives the loaded track its stems (`None` drops them). A set whose frame count is not
-    /// the track's, or one sent to an empty deck, is ignored. A replaced or ignored set goes
+    /// Gives the loaded track its stems (`None` drops them). A set whose frame count or
+    /// sample rate is not the track's, or one sent to an empty deck, is ignored. A replaced or ignored set goes
     /// back to the controller to be freed, like a track. Stems arriving or leaving while the
     /// knobs control them crossfade over one block.
     SetStems(Option<Arc<StemSet>>),
-    /// A stem pad: turns one stem on or off, ramped over one block. It applies whatever
-    /// the [`EqMode`], once the deck has stems (a press before then is kept). Every stem is
-    /// on after `Load`.
+    /// A stem pad: turns one stem or knob part on or off, ramped over one block. A part
+    /// plays only while every pad covering it is on ([`pad_gains`](crate::pad_gains)). It
+    /// applies whatever the [`EqMode`] and [`StemKnobs`], once the deck has stems (a press
+    /// before then is kept). Every pad is on after `Load`.
     StemOn(Stem, bool),
     Play,
     Pause,
@@ -282,6 +284,9 @@ pub enum MasterCommand {
     /// [`knob_law`](crate::knob_law) gains in place of the EQ bands; switching crossfades
     /// over one block.
     EqMode(EqMode),
+    /// Which parts the EQ knobs control in [`EqMode::Stems`] (`Vdj` for a new engine);
+    /// switching crossfades over one block.
+    StemKnobs(StemKnobs),
 }
 
 /// Sampler commands. A slot index `>= SAMPLER_SLOTS` is ignored.
