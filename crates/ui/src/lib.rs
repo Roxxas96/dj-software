@@ -8,6 +8,7 @@ mod command;
 pub mod cover;
 pub mod deck;
 mod fonts;
+pub mod layout;
 mod menu;
 pub mod mixer;
 mod model;
@@ -95,11 +96,6 @@ impl eframe::App for App {
     }
 }
 
-/// The share of the window's height the waveform lanes take.
-const LANES_HEIGHT: f32 = 0.22;
-/// The share of the window's height the deck panels and the mixer take.
-const DECKS_HEIGHT: f32 = 0.38;
-
 /// What the window keeps from one frame to the next.
 #[derive(Debug)]
 pub struct Screen {
@@ -134,12 +130,13 @@ pub fn root(
     theme::apply(ui.ctx(), frame.view.colour_scheme);
     let p = theme::palette(ui.ctx());
     let window_height = ui.max_rect().height();
+    let sections = layout::sections(frame.view.layout);
     egui::Panel::top("top_bar")
         .frame(egui::Frame::new().fill(p.panel).inner_margin(6))
         .show(ui, |ui| topbar::show(ui, frame, monitor, &screen.commands));
     egui::Panel::top("waveform_lanes")
         .frame(egui::Frame::new().fill(p.background))
-        .exact_size(window_height * LANES_HEIGHT)
+        .exact_size(window_height * layout::LANES_SHARE)
         .resizable(false)
         .show_separator_line(false)
         .show(ui, |ui| {
@@ -147,13 +144,15 @@ pub fn root(
         });
     egui::Panel::top("deck_panels")
         .frame(egui::Frame::new().fill(p.background))
-        .exact_size(window_height * DECKS_HEIGHT)
+        .exact_size(window_height * sections.decks_share)
         .resizable(false)
         .show_separator_line(false)
         .show(ui, |ui| {
             // The space between the decks is the mixer's.
-            let space = screen.decks.show(ui, frame, monitor, &mut screen.covers);
-            screen.mixer.show(ui, space, frame, monitor);
+            let space = screen
+                .decks
+                .show(ui, frame, monitor, &mut screen.covers, &sections);
+            screen.mixer.show(ui, space, frame, monitor, &sections);
         });
     egui::CentralPanel::default()
         .frame(egui::Frame::new().fill(p.background))

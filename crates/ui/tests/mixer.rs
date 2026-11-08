@@ -4,9 +4,14 @@ use egui::{Rect, pos2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use engine::{DeckId, EqMode, StemKnobs};
-use ui::ControlFrame;
+use ui::layout::sections;
+use ui::{ControlFrame, Layout};
 
 fn draw(frame: &ControlFrame, stems_active: bool) -> Harness<'_> {
+    draw_in(frame, stems_active, Layout::Pro)
+}
+
+fn draw_in(frame: &ControlFrame, stems_active: bool, layout: Layout) -> Harness<'_> {
     let mut harness = Harness::builder()
         .with_size([340.0, 300.0])
         .build_ui(move |ui| {
@@ -17,8 +22,8 @@ fn draw(frame: &ControlFrame, stems_active: bool) -> Harness<'_> {
                 DeckId::new(0).unwrap(),
                 frame,
                 stems_active,
-                0.5,
-                0.7,
+                (0.5, 0.7),
+                &sections(layout),
             );
         });
     harness.run_steps(3);
@@ -46,4 +51,13 @@ fn a_pending_pickup_leaves_the_labels_in_place() {
     frame.ghosts[0][5] = Some(0.2);
     frame.ghosts[0][1] = Some(0.9);
     draw(&frame, false).get_by_label("FILTER");
+}
+
+#[test]
+fn starter_keeps_gain_and_filter_and_drops_the_eq() {
+    let frame = ControlFrame::default();
+    let harness = draw_in(&frame, false, Layout::Starter);
+    harness.get_by_label("GAIN");
+    harness.get_by_label("FILTER");
+    assert!(harness.query_by_label("LOW").is_none());
 }

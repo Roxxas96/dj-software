@@ -50,6 +50,18 @@ ids!(Layout {
     Performance => "performance",
 });
 
+impl Layout {
+    /// The layout `ui.layout` moves to: the four in turn, then back to the first.
+    pub fn next(self) -> Self {
+        match self {
+            Self::Starter => Self::Essentials,
+            Self::Essentials => Self::Pro,
+            Self::Pro => Self::Performance,
+            Self::Performance => Self::Starter,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ColourScheme {
     #[default]
@@ -259,6 +271,13 @@ impl ViewState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn layout_next_cycles() {
+        assert_eq!(Layout::Performance.next(), Layout::Starter);
+        assert_eq!(Layout::Starter.next(), Layout::Essentials);
+        assert_eq!(Layout::Pro.next(), Layout::Performance);
+    }
 
     #[test]
     fn ids_name_every_value_once() {

@@ -65,11 +65,14 @@ impl FrameParts {
         self.events.push_back((Instant::now(), text));
     }
 
-    /// Applies the zoom actions' `count` once the loop runs, and saves the view once it
-    /// has stayed put.
-    pub fn settle_view(&mut self, count: Option<i32>) {
+    /// Applies the zoom and layout actions' counts once the loop runs (`None` before it
+    /// does), and saves the view once it has stayed put.
+    pub fn settle_view(&mut self, counts: Option<(i32, i32)>) {
         let now = Instant::now();
-        self.view.zoom(0, count, now);
+        self.view.zoom(0, counts.map(|(zoom, _)| zoom), now);
+        if let Some((_, layout)) = counts {
+            self.view.layout(layout, now);
+        }
         self.view.save_if_due(now);
     }
 

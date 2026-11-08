@@ -17,6 +17,7 @@ use engine::{
 };
 
 use crate::cover::{self, Covers};
+use crate::layout::Sections;
 use crate::mixer;
 use crate::model::{ControlFrame, GHOST_TEMPO};
 use crate::theme;
@@ -39,6 +40,8 @@ const JOG_SIDE: f32 = 104.0;
 const JOG_STROKE: f32 = 2.0;
 const JOG_MARKER: f32 = 3.0;
 const PITCH_WIDTH: f32 = 54.0;
+/// The tempo slider's width when the layout has no jog wheel.
+const PITCH_COMPACT_WIDTH: f32 = 40.0;
 const PITCH_TRACK: f32 = 4.0;
 const PITCH_HANDLE: Vec2 = Vec2::new(24.0, 6.0);
 /// Below the tempo slider, for the pitch in percent.
@@ -321,6 +324,7 @@ impl DeckPanels {
         frame: &ControlFrame,
         monitor: Option<&EngineMonitor>,
         covers: &mut Covers,
+        sections: &Sections,
     ) -> Rect {
         let now = Instant::now();
         let (area, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
@@ -346,7 +350,7 @@ impl DeckPanels {
                 .as_deref()
                 .and_then(|path| covers.get(ui.ctx(), path));
             ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| {
-                panel(ui, &view, cover.as_ref());
+                panel(ui, &view, cover.as_ref(), sections);
             });
         }
         Rect::from_min_max(
@@ -356,8 +360,9 @@ impl DeckPanels {
     }
 }
 
-/// Draws `view` filling `ui`, with `cover` (the plain tile without one).
-pub fn panel(ui: &mut Ui, view: &DeckView, cover: Option<&TextureHandle>) {
+/// Draws `view` filling `ui`, with `cover` (the plain tile without one), showing the
+/// `sections` the layout has.
+pub fn panel(ui: &mut Ui, view: &DeckView, cover: Option<&TextureHandle>, sections: &Sections) {
     let p = theme::palette(ui.ctx());
     let accent = p.deck_accent(view.deck);
     egui::Frame::new()
@@ -367,17 +372,30 @@ pub fn panel(ui: &mut Ui, view: &DeckView, cover: Option<&TextureHandle>) {
             ui.set_min_size(ui.available_size());
             ui.spacing_mut().item_spacing = vec2(6.0, 4.0);
             header(ui, view, cover, accent);
-            overview(ui, view);
+            if sections.overview {
+                overview(ui, view);
+            }
             ui.horizontal(|ui| {
                 ui.set_height(MIDDLE_HEIGHT);
-                fx(ui, view, accent);
-                jog(ui, view, accent);
-                pitch(ui, view, accent);
+                if sections.fx {
+                    fx(ui, view, accent, sections.fx_level);
+                }
+                if sections.jog {
+                    jog(ui, view, accent);
+                }
+                if sections.pitch {
+                    let width = if sections.jog {
+                        PITCH_WIDTH
+                    } else {
+                        PITCH_COMPACT_WIDTH
+                    };
+                    pitch(ui, view, accent, width);
+                }
                 states(ui, view, accent);
             });
             ui.horizontal_top(|ui| {
                 transport(ui, view);
-                pads_grid(ui, view, accent);
+                pads_grid(ui, view, accent, sections);
             });
         });
 }
@@ -468,13 +486,16 @@ fn overview_columns(mesh: &mut Mesh, rect: Rect, waveform: &Waveform, silent: Co
     }
 }
 
-/// The three FX slots, each lit while on, over the effect level.
-fn fx(ui: &mut Ui, view: &DeckView, accent: Color32) {
+/// The three FX slots, each lit while on, over the effect level (when `level`).
+fn fx(ui: &mut Ui, view: &DeckView, accent: Color32, level: bool) {
     let p = theme::palette(ui.ctx());
     ui.vertical(|ui| {
         ui.set_width(FX_WIDTH);
         for (label, on) in &view.fx {
             indicator(ui, vec2(FX_WIDTH, SLOT_HEIGHT), label, on.then_some(accent));
+        }
+        if !level {
+            return;
         }
         let (rect, _) = ui.allocate_exact_size(vec2(FX_WIDTH, FX_LEVEL_HEIGHT), Sense::hover());
         let painter = ui.painter();
@@ -511,12 +532,12 @@ fn jog(ui: &mut Ui, view: &DeckView, accent: Color32) {
 }
 
 /// The tempo slider (faster toward the bottom, as on the SB3) with the pitch in percent.
-fn pitch(ui: &mut Ui, view: &DeckView, accent: Color32) {
+fn pitch(ui: &mut Ui, view: &DeckView, accent: Color32, width: f32) {
     let p = theme::palette(ui.ctx());
     ui.vertical_centered(|ui| {
-        ui.set_width(PITCH_WIDTH);
+        ui.set_width(width);
         let track_height = MIDDLE_HEIGHT - PITCH_LABEL_HEIGHT;
-        let (rect, _) = ui.allocate_exact_size(vec2(PITCH_WIDTH, track_height), Sense::hover());
+        let (rect, _) = ui.allocate_exact_size(vec2(width, track_height), Sense::hover());
         let painter = ui.painter();
         let x = rect.center().x;
         let track = Rect::from_x_y_ranges(
@@ -567,10 +588,24 @@ fn transport(ui: &mut Ui, view: &DeckView) {
     });
 }
 
-/// The pad mode's name over the 2×4 pads, then the loop: its size, IN and OUT.
-fn pads_grid(ui: &mut Ui, view: &DeckView, accent: Color32) {
-    let p = theme::palette(ui.ctx());
-    let pads_width = (ui.available_width() - LOOP_WIDTH - PAD_GAP * 2.0).max(0.0);
+/// The pads and the loop, whichever the layout shows.
+fn pads_grid(ui: &mut Ui, view: &DeckView, accent: Color32, sections: &Sections) {
+    let loop_width = if sections.loop_controls {
+        LOOP_WIDTH + PAD_GAP * 2.0
+    } else {
+        0.0
+    };
+    let pads_width = (ui.available_width() - loop_width).max(0.0);
+    if sections.pads {
+        pads_column(ui, view, accent, pads_width);
+    }
+    if sections.loop_controls {
+        loop_column(ui, view);
+    }
+}
+
+/// The pad mode's name over the 2×4 pads.
+fn pads_column(ui: &mut Ui, view: &DeckView, accent: Color32, pads_width: f32) {
     ui.vertical(|ui| {
         ui.set_width(pads_width);
         ui.label(RichText::new(view.pad_mode).color(accent).size(SMALL_FONT));
@@ -584,6 +619,11 @@ fn pads_grid(ui: &mut Ui, view: &DeckView, accent: Color32) {
             });
         }
     });
+}
+
+/// The loop: its size, IN and OUT.
+fn loop_column(ui: &mut Ui, view: &DeckView) {
+    let p = theme::palette(ui.ctx());
     ui.vertical(|ui| {
         let size = vec2(LOOP_WIDTH, BUTTON_HEIGHT);
         ui.label(RichText::new("LOOP").color(p.text_dim).size(SMALL_FONT));

@@ -112,6 +112,10 @@ pub fn apply(
             state.waveform_zoom = state.waveform_zoom.wrapping_sub(1);
             return ApplyResult::Sent(0);
         }
+        (Action::LayoutNext, Input::Press) => {
+            state.layout_steps = state.layout_steps.wrapping_add(1);
+            return ApplyResult::Sent(0);
+        }
         (Action::HardwarePadMode(side, mode), Input::Press) => {
             let side = state.side_mut(side);
             side.pad_mode = PadMode::Hardware;
