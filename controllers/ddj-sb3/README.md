@@ -201,7 +201,10 @@ below.
 
 ### Hands-on check (plan 8 addendum: knob layouts and pads)
 
-(to be filled after the owner's check)
+Owner, 2026-11-08: "Everything is perfect." The vdj and raw layouts, the right-half boost, the
+seven stem pads and their overlaps all worked. The owner heard a bit too much kick in HI and not
+enough in LOW with the split at 250 Hz, so the split became the `stems.kicks_hz` setting, 300 Hz
+by default (`docs/config.md`).
 
 ## The SB3's own pad routines
 

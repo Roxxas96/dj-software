@@ -20,9 +20,10 @@ use crate::mixer::eq_gain;
 /// The parts a deck mixes: vocals, instruments, bass, kicks and hats, in that order.
 pub(crate) const PARTS: usize = 5;
 
-/// The frequency, in Hz, where kicks hand over to hats: the normal EQ's low crossover.
-/// Kicks and hats are each at half level (−6 dB) there.
-pub const KICKS_HZ: f32 = 250.0;
+/// The default frequency, in Hz, where kicks hand over to hats (`[stems] kicks_hz`). Kicks
+/// and hats are each at half level (−6 dB) there. The normal EQ's 250 Hz low crossover left
+/// too much kick in the hats on the owner's tracks, so the default sits a little higher.
+pub const DEFAULT_KICKS_HZ: f32 = 300.0;
 
 /// Frames of rhythm the kicks' backward pass filters at a time.
 const KICKS_CHUNK: usize = 1 << 16;
@@ -35,7 +36,7 @@ pub enum Stem {
     Instruments,
     Bass,
     Rhythm,
-    /// The low end of rhythm, below [`KICKS_HZ`].
+    /// The low end of rhythm, below the split (see [`StemSet::with_split`]).
     Kicks,
     /// Vocals, instruments and bass together.
     Melody,
@@ -92,7 +93,7 @@ pub enum StemKnobs {
 }
 
 /// Why a [`StemSet`] could not be built.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Debug, Clone, PartialEq, Error)]
 pub enum StemError {
     #[error("the {stem} stem has {samples} samples, expected {expected} ({frames} stereo frames)")]
     Length {
@@ -103,6 +104,8 @@ pub enum StemError {
     },
     #[error("the stems' sample rate is 0")]
     SampleRate,
+    #[error("the kicks split of {hz} Hz is not between 0 and half the {sample_rate} Hz rate")]
+    Split { hz: f32, sample_rate: u32 },
 }
 
 /// The stored stems of a track, each interleaved stereo 16-bit at the track's rate: the
@@ -133,15 +136,27 @@ fn to_i16(x: f32) -> i16 {
 }
 
 impl StemSet {
-    /// Checks that each stem holds `frames` stereo frames, then computes kicks from rhythm
-    /// at `sample_rate`, the track's rate. That takes about 0.6 s for a 5-minute track (on an
-    /// M1 Pro, release build), so call it off the audio thread.
+    /// [`StemSet::with_split`] at [`DEFAULT_KICKS_HZ`].
     pub fn new(
         vocals: Box<[i16]>,
         bass: Box<[i16]>,
         rhythm: Box<[i16]>,
         frames: usize,
         sample_rate: u32,
+    ) -> Result<Self, StemError> {
+        Self::with_split(vocals, bass, rhythm, frames, sample_rate, DEFAULT_KICKS_HZ)
+    }
+
+    /// Checks that each stem holds `frames` stereo frames, then computes kicks from rhythm
+    /// at `sample_rate`, the track's rate, splitting at `kicks_hz`. That takes about 0.6 s
+    /// for a 5-minute track (on an M1 Pro, release build), so call it off the audio thread.
+    pub fn with_split(
+        vocals: Box<[i16]>,
+        bass: Box<[i16]>,
+        rhythm: Box<[i16]>,
+        frames: usize,
+        sample_rate: u32,
+        kicks_hz: f32,
     ) -> Result<Self, StemError> {
         let expected = frames * 2;
         for (stem, samples) in [("vocals", &vocals), ("bass", &bass), ("rhythm", &rhythm)] {
@@ -157,7 +172,13 @@ impl StemSet {
         if sample_rate == 0 {
             return Err(StemError::SampleRate);
         }
-        let kicks = kicks(&rhythm, frames, sample_rate, KICKS_CHUNK);
+        if !(kicks_hz > 0.0 && kicks_hz < sample_rate as f32 / 2.0) {
+            return Err(StemError::Split {
+                hz: kicks_hz,
+                sample_rate,
+            });
+        }
+        let kicks = kicks(&rhythm, frames, sample_rate, kicks_hz, KICKS_CHUNK);
         Ok(Self {
             stems: [vocals, bass, rhythm, kicks],
             frames,
@@ -217,7 +238,7 @@ impl StemSet {
     }
 }
 
-/// Kicks: rhythm through a zero-phase low pass at [`KICKS_HZ`], a Butterworth biquad run
+/// Kicks: rhythm through a zero-phase low pass at `kicks_hz`, a Butterworth biquad run
 /// forward and then backward (an exact −6 dB at the split, falling 24 dB per octave, with
 /// no phase shift, so hats is the matching high pass).
 ///
@@ -225,13 +246,19 @@ impl StemSet {
 /// ring. The backward pass runs over `chunk` frames at a time, each started a tenth of a
 /// second past its end (where the filter's memory has died out), so only one chunk of
 /// float samples is held.
-fn kicks(rhythm: &[i16], frames: usize, sample_rate: u32, chunk: usize) -> Box<[i16]> {
+fn kicks(
+    rhythm: &[i16],
+    frames: usize,
+    sample_rate: u32,
+    kicks_hz: f32,
+    chunk: usize,
+) -> Box<[i16]> {
     const FLUSH_EVERY: usize = 4096;
     let mut kicks = vec![0_i16; frames * 2].into_boxed_slice();
     if frames == 0 {
         return kicks;
     }
-    let c = Coeffs::low_pass(KICKS_HZ, FRAC_1_SQRT_2, sample_rate);
+    let c = Coeffs::low_pass(kicks_hz, FRAC_1_SQRT_2, sample_rate);
     let overlap = (sample_rate as usize / 10).max(1);
     let mut scratch = Vec::with_capacity((chunk + overlap).min(frames));
     let mut starts = Vec::with_capacity(frames.div_ceil(chunk));
@@ -356,7 +383,7 @@ mod tests {
 
     /// Kicks filtered over the whole track in one piece.
     fn kicks_in_one_piece(rhythm: &[i16], frames: usize, rate: u32) -> Vec<i16> {
-        let c = Coeffs::low_pass(KICKS_HZ, FRAC_1_SQRT_2, rate);
+        let c = Coeffs::low_pass(DEFAULT_KICKS_HZ, FRAC_1_SQRT_2, rate);
         let mut out = vec![0; frames * 2];
         for ch in 0..2 {
             let x: Vec<f32> = (0..frames)
@@ -388,7 +415,7 @@ mod tests {
             .collect();
         let whole = kicks_in_one_piece(&rhythm, frames, 44_100);
         for chunk in [1000, 7_777, KICKS_CHUNK] {
-            let chunked = kicks(&rhythm, frames, 44_100, chunk);
+            let chunked = kicks(&rhythm, frames, 44_100, DEFAULT_KICKS_HZ, chunk);
             let off = whole
                 .iter()
                 .zip(chunked.iter())
@@ -400,11 +427,11 @@ mod tests {
         // The edges do not ring: a constant rhythm gives constant kicks.
         let constant = vec![8000_i16; 2000];
         assert!(
-            kicks(&constant, 1000, 44_100, 300)
+            kicks(&constant, 1000, 44_100, DEFAULT_KICKS_HZ, 300)
                 .iter()
                 .all(|&k| (k - 8000).abs() <= 1)
         );
-        assert!(kicks(&[], 0, 44_100, 300).is_empty());
+        assert!(kicks(&[], 0, 44_100, DEFAULT_KICKS_HZ, 300).is_empty());
     }
 
     #[test]

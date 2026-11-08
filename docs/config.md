@@ -31,6 +31,7 @@ optional; a key left out keeps its default, and so does a missing file.
 | `stems.enabled`      | `false`                                      | `true`: tracks loaded from the library are separated into stems (and cached); `false`: no separation and no cache, nothing is paid |
 | `stems.eq_mode`      | `"eq"`                                       | What the EQ knobs control: `"eq"` (the frequency bands) or `"stems"` (the stems, laid out by `stems.knobs`, on a deck whose stems are ready). `"stems"` without `enabled = true` is not an error: `play` starts with the plain EQ |
 | `stems.knobs`        | `"vdj"`                                      | What the knobs control in stems mode: `"vdj"` (LOW the kicks, MID the melody (vocals, instruments and bass), HI the hats) or `"raw"` (HI the vocals, MID the instruments, LOW the bass) |
+| `stems.kicks_hz`     | `300`                                        | Where kicks hand over to hats in the `"vdj"` layout (and the kicks and hats pads), in Hz, from 50 to 1000. Higher puts more of the drums in the kicks. It applies to stems loaded after a restart, cached ones included |
 | `stems.cache_gb`     | `5`                                          | The most disk the stems cache may use, in gigabytes, from 0.5 to 1000 |
 
 A sample is at most 60 seconds long. A `track` id is looked up in the library: the one opened
@@ -67,6 +68,7 @@ long = 2.0
 enabled = false              # true: separate library tracks into stems (needs `stems setup` once)
 eq_mode = "eq"               # "eq" or "stems"; "stems" only acts when enabled
 knobs = "vdj"                # "vdj" or "raw"; what the knobs control in stems mode
+kicks_hz = 300               # 50 to 1000; where kicks hand over to hats
 cache_gb = 5                 # 0.5 to 1000
 ```
 

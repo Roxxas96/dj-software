@@ -185,11 +185,13 @@ impl Finalizer {
 }
 
 /// Separates `track` with `network`, chunk by chunk, starting with the chunk around
-/// `start_frame` (a frame of the track) and working outward.
+/// `start_frame` (a frame of the track) and working outward. Kicks split from rhythm at
+/// `kicks_hz`.
 pub(crate) fn separate(
     network: &mut dyn Network,
     track: &TrackBuffer,
     start_frame: usize,
+    kicks_hz: f32,
     progress: &dyn Fn(f32),
     cancel: &AtomicBool,
 ) -> Result<(StemSet, Stats), SeparateError> {
@@ -202,7 +204,7 @@ pub(crate) fn separate(
     if frames == 0 {
         let empty = || Box::<[i16]>::default();
         return Ok((
-            StemSet::new(empty(), empty(), empty(), 0, rate)?,
+            StemSet::with_split(empty(), empty(), empty(), 0, rate, kicks_hz)?,
             Stats::default(),
         ));
     }
@@ -319,14 +321,17 @@ pub(crate) fn separate(
             back.try_into().expect("one per kept stem");
         [vocals, bass, rhythm]
     };
-    Ok((StemSet::new(vocals, bass, rhythm, frames, rate)?, stats))
+    Ok((
+        StemSet::with_split(vocals, bass, rhythm, frames, rate, kicks_hz)?,
+        stats,
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
 
-    use engine::Stem;
+    use engine::{DEFAULT_KICKS_HZ, Stem};
 
     use super::*;
 
@@ -375,6 +380,7 @@ mod tests {
             &mut Identity,
             &track,
             2 * STRIDE,
+            DEFAULT_KICKS_HZ,
             &|_| {},
             &AtomicBool::new(false),
         )
@@ -399,8 +405,15 @@ mod tests {
     fn other_rates_go_through_the_model_rate_and_back() {
         let frames = 2 * 48_000 * 10;
         let track = track(frames, 48_000);
-        let (set, _) =
-            separate(&mut Identity, &track, 0, &|_| {}, &AtomicBool::new(false)).unwrap();
+        let (set, _) = separate(
+            &mut Identity,
+            &track,
+            0,
+            DEFAULT_KICKS_HZ,
+            &|_| {},
+            &AtomicBool::new(false),
+        )
+        .unwrap();
         assert_eq!(set.frames(), frames);
         let vocals: Vec<f32> = as_f32(set.stored(Stem::Vocals).unwrap()).collect();
         for i in 4_000..frames - 4_000 {
@@ -429,6 +442,7 @@ mod tests {
             &mut Constant(Cell::new(0.0)),
             &track,
             0,
+            DEFAULT_KICKS_HZ,
             &|_| {},
             &AtomicBool::new(false),
         )
@@ -459,7 +473,7 @@ mod tests {
         let cancel = AtomicBool::new(false);
         let mut network = Cancelling(&cancel, 0);
         let track = track(3 * STRIDE, MODEL_RATE);
-        let result = separate(&mut network, &track, 0, &|_| {}, &cancel);
+        let result = separate(&mut network, &track, 0, DEFAULT_KICKS_HZ, &|_| {}, &cancel);
         assert!(matches!(result, Err(SeparateError::Cancelled)));
         assert_eq!(network.1, 1);
     }
@@ -467,8 +481,15 @@ mod tests {
     #[test]
     fn an_empty_track_gives_empty_stems() {
         let track = TrackBuffer::new(MODEL_RATE, Vec::new()).unwrap();
-        let (set, _) =
-            separate(&mut Identity, &track, 0, &|_| {}, &AtomicBool::new(false)).unwrap();
+        let (set, _) = separate(
+            &mut Identity,
+            &track,
+            0,
+            DEFAULT_KICKS_HZ,
+            &|_| {},
+            &AtomicBool::new(false),
+        )
+        .unwrap();
         assert_eq!(set.frames(), 0);
     }
 }

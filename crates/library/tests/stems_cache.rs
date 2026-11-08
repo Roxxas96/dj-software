@@ -250,6 +250,25 @@ fn round_trip(rate: u32) {
         .map(|e| e.unwrap().metadata().unwrap().len())
         .sum();
     assert_eq!(bytes as u64, on_disk);
+
+    // Kicks are recomputed at the cache's split, not stored.
+    let split = StemCache::new(&f.lib, &f.stems, u64::MAX)
+        .unwrap()
+        .with_kicks_hz(450.0)
+        .get(&k)
+        .unwrap();
+    let stored = |stem| Box::from(decoded.stored(stem).unwrap());
+    let expected = StemSet::with_split(
+        stored(Stem::Vocals),
+        stored(Stem::Bass),
+        stored(Stem::Rhythm),
+        decoded.frames(),
+        rate,
+        450.0,
+    )
+    .unwrap();
+    assert_eq!(split, expected);
+    assert_ne!(split.stored(Stem::Kicks), decoded.stored(Stem::Kicks));
 }
 
 #[test]

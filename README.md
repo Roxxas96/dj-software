@@ -59,7 +59,7 @@ How it works:
   normal EQ's boost. A knob only changes its own part. Centred knobs sound exactly like the
   track. Moves never click.
 - Kicks and hats are an approximation. The model separates drums as one rhythm stem, so kicks
-  are the low end of rhythm (below 250 Hz) and hats are the rest. Snares and other percussion
+  are the low end of rhythm (below 300 Hz by default, `stems.kicks_hz`) and hats are the rest. Snares and other percussion
   land in the hats. It is a filter split, not a separation.
 - Stem pads: seven actions turn a part on or off. The raw stems are `deck.stem_toggle_vocals`,
   `deck.stem_toggle_instruments`, `deck.stem_toggle_bass` and `deck.stem_toggle_rhythm`; the

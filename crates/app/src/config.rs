@@ -57,6 +57,8 @@ impl Default for Config {
 
 /// The range of `stems.cache_gb`, in gigabytes.
 const CACHE_GB_RANGE: (f64, f64) = (0.5, 1000.0);
+/// `stems.kicks_hz`: where the vdj layout's kicks hand over to its hats.
+const KICKS_HZ_RANGE: (f64, f64) = (50.0, 1000.0);
 
 /// The `[stems]` section.
 #[derive(Debug, Clone, PartialEq)]
@@ -67,6 +69,8 @@ pub struct StemsConfig {
     pub eq_mode: EqMode,
     /// Which parts the knobs control in stems mode.
     pub knobs: StemKnobs,
+    /// Where kicks split from rhythm, in Hz.
+    pub kicks_hz: f32,
     /// The most disk the stems cache may use, in gigabytes.
     pub cache_gb: f64,
 }
@@ -77,6 +81,7 @@ impl Default for StemsConfig {
             enabled: false,
             eq_mode: EqMode::Eq,
             knobs: StemKnobs::Vdj,
+            kicks_hz: engine::DEFAULT_KICKS_HZ,
             cache_gb: 5.0,
         }
     }
@@ -124,6 +129,24 @@ fn parse_stems(table: &Table, file: &str) -> anyhow::Result<StemsConfig> {
                         return Err(invalid(file, "stems.knobs", "expected \"vdj\" or \"raw\""));
                     }
                 };
+            }
+            "kicks_hz" => {
+                let hz = number(value)
+                    .filter(|hz| (KICKS_HZ_RANGE.0..=KICKS_HZ_RANGE.1).contains(hz))
+                    .ok_or_else(|| {
+                        invalid(
+                            file,
+                            "stems.kicks_hz",
+                            format!(
+                                "expected a number from {} to {}",
+                                KICKS_HZ_RANGE.0, KICKS_HZ_RANGE.1
+                            ),
+                        )
+                    })?;
+                #[expect(clippy::cast_possible_truncation, reason = "50 to 1000 fits an f32")]
+                {
+                    stems.kicks_hz = hz as f32;
+                }
             }
             "cache_gb" => {
                 stems.cache_gb = number(value)
@@ -535,6 +558,7 @@ long = 2.0
 enabled = false
 eq_mode = "eq"
 knobs = "vdj"
+kicks_hz = 300
 cache_gb = 5
 "#;
 
@@ -755,6 +779,7 @@ cache_gb = 5
         assert!(!defaults.enabled);
         assert_eq!(defaults.eq_mode, EqMode::Eq);
         assert_eq!(defaults.cache_gb, 5.0);
+        assert_eq!(defaults.kicks_hz, 300.0);
         let config =
             parse_text("[stems]\nenabled = true\neq_mode = \"stems\"\ncache_gb = 0.5").unwrap();
         assert_eq!(
@@ -763,9 +788,19 @@ cache_gb = 5
                 enabled: true,
                 eq_mode: EqMode::Stems,
                 knobs: StemKnobs::Vdj,
+                kicks_hz: 300.0,
                 cache_gb: 0.5,
             }
         );
+        for (text, hz) in [
+            ("50", 50.0),
+            ("320", 320.0),
+            ("412.5", 412.5),
+            ("1000", 1000.0),
+        ] {
+            let config = parse_text(&format!("[stems]\nkicks_hz = {text}")).unwrap();
+            assert_eq!(config.stems.kicks_hz, hz, "{text}");
+        }
         assert_eq!(
             parse_text("[stems]\ncache_gb = 1000")
                 .unwrap()
@@ -801,6 +836,18 @@ cache_gb = 5
             (
                 "[stems]\ncache_gb = \"big\"",
                 "config.toml: stems.cache_gb: expected a number from 0.5 to 1000",
+            ),
+            (
+                "[stems]\nkicks_hz = 49",
+                "config.toml: stems.kicks_hz: expected a number from 50 to 1000",
+            ),
+            (
+                "[stems]\nkicks_hz = 1001",
+                "config.toml: stems.kicks_hz: expected a number from 50 to 1000",
+            ),
+            (
+                "[stems]\nkicks_hz = \"low\"",
+                "config.toml: stems.kicks_hz: expected a number from 50 to 1000",
             ),
             ("stems = 1", "config.toml: stems: expected a table"),
         ];
