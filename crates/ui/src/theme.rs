@@ -84,6 +84,11 @@ impl Palette {
         text: Color32::from_rgb(0x1e, 0x1f, 0x22),
         text_dim: Color32::from_rgb(0x5f, 0x61, 0x66),
         lane: Color32::from_rgb(0xd8, 0xd8, 0xd8),
+        // Darker than the dark scheme's, to read on the light lane.
+        playhead: Color32::from_rgb(0x1e, 0x1f, 0x22),
+        cue: Color32::from_rgb(0xe0, 0x8a, 0x00),
+        hotcue: Color32::from_rgb(0x1f, 0xa8, 0x66),
+        loop_band: Color32::from_rgba_premultiplied(0x00, 0x40, 0x10, 0x40),
         highlight: Color32::from_rgb(0x9c, 0xc6, 0xe8),
         highlight_dim: Color32::from_rgb(0xcf, 0xd2, 0xd8),
         note: Color32::from_gray(0xa0),
