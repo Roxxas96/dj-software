@@ -462,9 +462,14 @@ fn is_entry_name(name: &str) -> bool {
         && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-/// Removes a folder and everything in it; one that is not there is fine.
+/// Removes a folder and everything in it; one that is not there is fine. A stray file in
+/// its place is removed too, so it cannot leave a row that never goes.
 fn remove_folder(path: &Path) -> std::io::Result<()> {
-    match fs::remove_dir_all(path) {
+    let removed = match fs::symlink_metadata(path) {
+        Ok(meta) if !meta.is_dir() => fs::remove_file(path),
+        _ => fs::remove_dir_all(path),
+    };
+    match removed {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
         _ => Ok(()),
     }
