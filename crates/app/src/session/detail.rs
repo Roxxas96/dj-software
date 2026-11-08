@@ -3,6 +3,7 @@
 //! decoded track, on a thread of their own.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread::JoinHandle;
 
@@ -98,9 +99,26 @@ impl Slots {
     }
 }
 
+/// What the thread checks before each step, so a load that is not wanted any more costs
+/// nothing.
+#[derive(Default)]
+struct Wanted {
+    stop: AtomicBool,
+    /// Per deck, the load whose waveforms are wanted (0: none).
+    load_seq: [AtomicU64; 4],
+}
+
+impl Wanted {
+    fn wants(&self, job: &Job) -> bool {
+        !self.stop.load(Ordering::Relaxed)
+            && self.load_seq[job.deck].load(Ordering::Relaxed) == job.load_seq
+    }
+}
+
 /// Computes the waveforms of each load on a deck in the background.
 pub(super) struct DetailJobs {
     slots: Slots,
+    wanted: Arc<Wanted>,
     jobs: Option<Sender<Job>>,
     done: Receiver<Done>,
     thread: Option<JoinHandle<()>>,
@@ -108,17 +126,33 @@ pub(super) struct DetailJobs {
 
 impl DetailJobs {
     pub fn new(library: Arc<Library>) -> Self {
+        let mut reader = None;
+        let read_overview = move |track_id| {
+            if reader.is_none() {
+                reader = library.reader().ok();
+            }
+            reader.as_ref()?.waveform(track_id).ok().flatten()
+        };
+        Self::start(read_overview, |audio| {
+            analysis::waveform(audio, DETAIL_FRAMES_PER_BUCKET)
+        })
+    }
+
+    fn start(
+        mut read_overview: impl FnMut(i64) -> Option<Waveform> + Send + 'static,
+        compute: impl Fn(&TrackBuffer) -> Waveform + Send + 'static,
+    ) -> Self {
         let (jobs, job_rx) = channel::<Job>();
         let (done_tx, done) = channel();
+        let wanted = Arc::new(Wanted::default());
+        let check = Arc::clone(&wanted);
         let thread = std::thread::Builder::new()
             .name("waveforms".to_owned())
             .spawn(move || {
-                let reader = library.reader().ok();
                 for job in job_rx {
-                    let overview = reader
-                        .as_ref()
-                        .and_then(|r| r.waveform(job.track_id).ok().flatten())
-                        .map(Arc::new);
+                    if !check.wants(&job) {
+                        continue;
+                    }
                     let send = |part| {
                         done_tx.send(Done {
                             deck: job.deck,
@@ -126,10 +160,14 @@ impl DetailJobs {
                             part,
                         })
                     };
+                    let overview = read_overview(job.track_id).map(Arc::new);
                     if send(Part::Overview(overview)).is_err() {
                         return;
                     }
-                    let detail = analysis::waveform(&job.audio, DETAIL_FRAMES_PER_BUCKET);
+                    if !check.wants(&job) {
+                        continue;
+                    }
+                    let detail = compute(&job.audio);
                     if send(Part::Detail(Arc::new(detail))).is_err() {
                         return;
                     }
@@ -138,6 +176,7 @@ impl DetailJobs {
             .ok();
         Self {
             slots: Slots::default(),
+            wanted,
             jobs: Some(jobs),
             done,
             thread,
@@ -157,6 +196,7 @@ impl DetailJobs {
         if self.slots.request(deck, load_seq)
             && let Some(jobs) = &self.jobs
         {
+            self.wanted.load_seq[deck].store(load_seq, Ordering::Relaxed);
             let _ = jobs.send(Job {
                 deck,
                 load_seq,
@@ -169,6 +209,7 @@ impl DetailJobs {
     /// Notes that `deck` holds no library track.
     pub fn empty(&mut self, deck: usize) {
         self.slots.clear(deck);
+        self.wanted.load_seq[deck].store(0, Ordering::Relaxed);
     }
 
     /// The overview and detail of `deck`'s load `load_seq`, as far as they came in.
@@ -183,7 +224,8 @@ impl DetailJobs {
 
 impl Drop for DetailJobs {
     fn drop(&mut self) {
-        // The thread ends after the waveform it is on.
+        // The thread skips what is queued and ends after the waveform it is on.
+        self.wanted.stop.store(true, Ordering::Relaxed);
         self.jobs = None;
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
@@ -240,5 +282,39 @@ mod tests {
         assert!(detail.is_none());
         slots.clear(1);
         assert_eq!(slots.waveforms(1, 2), (None, None));
+    }
+
+    #[test]
+    fn dropping_skips_the_queued_loads() {
+        use std::sync::atomic::AtomicUsize;
+        use std::time::{Duration, Instant};
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (started_tx, started) = channel();
+        let counted = Arc::clone(&calls);
+        let mut jobs = DetailJobs::start(
+            |_| None,
+            move |_| {
+                counted.fetch_add(1, Ordering::Relaxed);
+                let _ = started_tx.send(());
+                std::thread::sleep(Duration::from_millis(100));
+                Waveform {
+                    frames_per_bucket: 128,
+                    buckets: Vec::new(),
+                }
+            },
+        );
+        let audio = Arc::new(TrackBuffer::new(44_100, vec![0.0; 2 * 441]).unwrap());
+        jobs.observe(0, 1, 7, &audio);
+        started.recv_timeout(Duration::from_secs(5)).unwrap();
+        for seq in 2..=5 {
+            jobs.observe(0, seq, 7, &audio);
+        }
+        let at = Instant::now();
+        drop(jobs);
+        assert!(at.elapsed() < Duration::from_millis(400));
+        // Only the load the thread was on; the stale ones and the wanted one that was
+        // still queued when the drop came were skipped.
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
     }
 }
