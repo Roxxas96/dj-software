@@ -21,6 +21,44 @@ start (the 10 newest backups are kept):
   downbeat, halve, double, set BPM, tap, lock).
 - Browsing and loading from the DDJ-SB3 (BROWSE knob and LOAD buttons) with `play --library`.
 
+## Stems
+
+Open Jockey can split a track into four stems (vocals, instruments, bass and rhythm) and let the
+EQ knobs control them: HI is vocals, MID is instruments, LOW is bass. Stem pads switch each stem
+on and off. It is off by default.
+
+- Stems are separated on your computer, in the background, with the open-source Demucs model.
+  No audio ever leaves the computer.
+- `open-jockey stems setup` is a one-time download of the model's weights from the Demucs
+  author's own source. Open Jockey never redistributes them. Their license is unclear (the
+  author trained them partly on research-only data), so each user fetches them themselves.
+  Nothing else ever downloads. Without the model, stems are unavailable and the knobs stay EQ.
+- Turn it on in `config.toml`: `[stems] enabled = true` and `eq_mode = "stems"`.
+- Separated stems are cached; `open-jockey library stems --playlist "<name>"` prepares them ahead
+  (see [docs/library.md](docs/library.md#stems)).
+
+How it works:
+
+- A track loaded from the library (`play --library`) starts separating when it loads, from
+  the playhead outward, and plays normally meanwhile. Tracks played with plain `play <file>`
+  get no stems. Until a deck's stems are ready the knobs are the normal EQ; the changeover is
+  smooth. The deck's status line shows `stems: preparing model` while the model opens, then
+  `stems 40%` while separating, then `stems` once they are active. A track longer than 20
+  minutes gets `no stems (too long)`.
+- Knob law, with 12 o'clock as the middle. Turning a knob left from the middle fades its stem
+  from normal down to silent. Turning it right from the middle fades every stem that no knob
+  is turned right on, rhythm included, so fully right on one knob leaves only that stem. Every
+  knob turned right keeps its own stem: HI and LOW fully right give vocals and bass only.
+  Moves never click.
+- Stem pads: the actions `deck.stem_toggle_vocals`, `deck.stem_toggle_instruments`,
+  `deck.stem_toggle_bass` and `deck.stem_toggle_rhythm` turn a stem on or off. They are bound to
+  no pad by default; the [mapping reference](docs/controllers/mapping-reference.md#extending-a-mapping)
+  has an example that puts them on the SAMPLER pads. They work whatever `eq_mode` is, and all
+  four are on after a load.
+- On macOS the first session after an update takes about a minute to prepare the model for
+  the GPU and Neural Engine; it runs in the background. On Windows and Linux separation runs on
+  the CPU, a whole track takes one to two minutes, and playback always wins over it.
+
 BPM and key come from detectors written for this project and can be wrong: there is no
 confidence value. See [docs/library.md](docs/library.md) for details and known limits.
 
@@ -33,7 +71,7 @@ confidence value. See [docs/library.md](docs/library.md) for details and known l
 New controllers are welcome, see [CONTRIBUTING.md](CONTRIBUTING.md) and
 [Adding a controller](docs/controllers/adding-a-controller.md). The mapping file format is in the
 [mapping reference](docs/controllers/mapping-reference.md).
-Mixer, sampler and pad-size settings are in [docs/config.md](docs/config.md).
+Mixer, sampler, pad-size and stems settings are in [docs/config.md](docs/config.md).
 
 ## Building from source
 

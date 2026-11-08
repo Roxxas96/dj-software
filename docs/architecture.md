@@ -55,6 +55,7 @@ Each plan that adds or changes a crate updates this page. The full design is in
 | `controller` | MIDI ports and messages, the mapping file format, the resolver that turns messages into actions (conditions, soft takeover), LED feedback, the capture tools' logic, and the built-in mappings (`controllers/<name>/mapping.toml`). Tested with fake ports. |
 | `analysis` | Offline track analysis written for this project: three-band waveform, tempo and constant beatgrid, and musical key with Camelot, standard and Open Key notation. Pure functions on decoded audio; no database. |
 | `library` | The SQLite library: schema and migrations, startup backups, folder scans and the watcher, fingerprints, tags, cues, playlists, beatgrid edits, the writer thread and the analyzer pool that stores `analysis` results. See [library.md](library.md). |
+| `stems` | Splits a track into vocals, bass and rhythm (instruments are the residual) with the Demucs `htdemucs` model through ONNX Runtime (`ort`; CoreML on macOS, CPU elsewhere), in chunks, with the STFT in Rust. Also `stems setup` (one-time download of the author's weights, filling the weight-free graph embedded in the crate, verification), a fixed synthetic separator for tests, and the Ogg Vorbis encode and decode of the cache format. No database, no audio thread. See [stems-backend.md](stems-backend.md). |
 | `open-jockey` (`crates/app`) | The application binary. A command-line player and MIDI tools (`devices`, `play`, `library` and `midi` with `ports`, `monitor`, `capture` and `led-scan`) that wire the other crates together. |
 
 ## Track memory, grids and sync
@@ -75,6 +76,65 @@ most half a beat so the beats line up, at once for a playing deck, or at the fir
 where a paused deck plays. The jog wheels are engine commands as well (`JogTouch`, `Jog`,
 `JogSearch`): scratching, nudging and search run on the audio thread, and the control side
 only turns controller steps into platter turns using the mapping's `jog_steps_per_turn`.
+
+## Stems
+
+Stems are off unless `[stems] enabled = true` ([config.md](config.md)). Nothing leaves the
+computer: the only download is `open-jockey stems setup`, which fetches the Demucs author's
+weights once. Open Jockey never redistributes them.
+
+**The cache.** `library::StemCache` (`stems_cache.rs`) keeps each track's stems as Ogg Vorbis
+files in the `stems` folder next to the library database, with a `stems` table in the database.
+An entry is keyed by the track id and its audio fingerprint. Writes go to a temporary folder
+that is renamed into place, so a crash leaves no half entry; leftovers are swept at start.
+`put` stores an entry and then evicts down to the budget (`stems.cache_gb`), never touching a
+track a deck holds. The order is in [library.md](library.md#stems). Maintenance is best-effort
+per entry: a folder that cannot be removed is skipped and retried later, and a cache problem
+never blocks playing a track. `tracks.last_loaded_at` (set at each library load) and
+`tracks.stems_prepared` are the eviction inputs.
+
+**The job thread.** In library mode (`library_mode/stem_jobs.rs`) a `stems` thread owns the
+cache and the separator, so the control loop never waits on either. A track load asks it for
+the track's stems. One job runs per track, shared by the decks that hold it. It looks in the
+cache first (a hit is decoded and sent at once, also between the chunks of a running
+separation); on a miss it separates in chunks working outward from the playhead, reporting
+progress for the deck's status line, and then stores the result. The ONNX session opens in a
+background thread at start (on macOS the first compile after an update takes about a minute),
+and decks keep the EQ until it is ready. CPU separation uses half the cores so that playback
+wins. A finished set travels to the engine like a track buffer, through the command queue,
+and the replaced one comes back through the garbage queue, which the app collects every
+tick. Tracks over 20 minutes are refused.
+
+**In the engine** (`crates/engine/src/stems.rs`). A `StemSet` holds three stems as 16-bit samples
+at the track's own rate; instruments are the residual `mix - (vocals + bass + rhythm)`
+computed from the deck's track, so the four always sum to the mix. The deck's single
+source reader is the one place that reads stems: with a set, it returns the gain-weighted sum
+of the four. Loops, rolls, scratching, slip and beat jump therefore work unchanged, and
+keylock stretches the stem mix. The sampler is not stemmed.
+
+- **Knob law.** `knob_law` turns the EQ knob positions into four stem gains. A knob at
+  position `p` has own level `min(1, 2p)` and isolation `max(0, 2p - 1)`. With `I` the largest
+  isolation, a knob stem whose own isolation is above 0 keeps its own level; the other knob
+  stems get `own * (1 - I)` and rhythm gets `1 - I`. Each is multiplied by the stem's pad flag.
+  Gains ramp over one block, so no click.
+- **Stem mode** applies when `EqMode::Stems` is set and the deck has a set. The EQ isolator
+  keeps running with its band gains at unity (a flat allpass) instead of being bypassed, so
+  the EQ-to-stems changeover with centred knobs is exact. The changeover is a one-block ramp
+  of the source and the band gains. Pad flags (`DeckCommand::StemOn`) apply in either
+  mode.
+- **Keylock alignment.** On the stretched path the stem gains are applied at the stretcher's
+  input, but the heard sound is `input latency + output latency` later. So at a changeover
+  the mixer's EQ-band retarget is delayed by the stretcher's total latency (a countdown in
+  the channel strip, no allocation) and both change in the same audible instant. For the
+  same reason a knob move in stem mode under keylock is heard after the stretcher latency
+  (about 140 ms at 44.1 kHz).
+- **Real-time rules.** Setting, replacing and freeing stems use the command and garbage
+  queues; `crates/engine/tests/no_alloc.rs` covers the stem render paths.
+
+**Pads.** The four `deck.stem_toggle_*` actions flip the deck's stem flags (`DeckControl::stems_on`) and send
+`StemOn`; the flags reset to all on when the deck's `load_seq` moves, and a press before
+the stems are ready is remembered. A press in the same millisecond as a load can be lost
+(press again).
 
 ## Slip, the sampler and software pad modes
 

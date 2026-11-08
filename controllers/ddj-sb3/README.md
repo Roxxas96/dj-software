@@ -173,6 +173,27 @@ ddj-sb3`). Everything worked:
   deck after DECK.
 - [x] Config: `[fx] slots` changes the slot effects after a restart.
 
+## Stems
+
+With `[stems] enabled = true` and `eq_mode = "stems"` in `config.toml`, the EQ knobs of a deck
+whose stems are ready control stems: HI is vocals, MID is instruments and LOW is bass (the knob
+law is in the [README](../../README.md#stems)). Until then they are the normal EQ. The SB3
+needs no mapping change for that.
+
+The stem pads (`deck.stem_toggle_vocals`, `_instruments`, `_bass` and `_rhythm`) have no
+default binding. To use them, extend the built-in mapping and list only the pads you change:
+the [mapping reference](../../docs/controllers/mapping-reference.md#extending-a-mapping) has
+a file that puts them on SAMPLER pads 1-4 of both sides and keeps pads 5-8 playing samples.
+Save it as `controllers/ddj-sb3/mapping.toml` in the config folder. The SB3's pad LEDs do not
+show stem state.
+
+Check the file with `open-jockey midi monitor --controller <path-to-your-mapping.toml>`, which
+shows what each pad does.
+
+### Hands-on check (plan 8)
+
+(to be filled after the owner's check)
+
 ## The SB3's own pad routines
 
 In FX FADE, PAD SCRATCH and TRANS (SHIFT + SAMPLER) the SB3 runs routines of its own on

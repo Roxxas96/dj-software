@@ -227,6 +227,43 @@ open-jockey library playlist delete "Peak time"
 Positions start at 1. Deleting a playlist keeps its tracks in the library. Playlists
 appear in the browser tree in library mode.
 
+## Stems
+
+With `[stems] enabled = true` ([config.md](config.md)), `play --library` separates each loaded
+track into stems and keeps them in a cache, so a reload is instant. The model is installed
+once with `open-jockey stems setup`.
+
+- **Where:** the `stems` folder next to the library database (`<data dir>/stems` for the
+  default library). The model is in `<data dir>/models`.
+- **Identity:** the cache is keyed by the track id and its audio fingerprint. A relinked file
+  keeps its stems; changed audio is separated again. Format: Ogg Vorbis, about 20 MB for a
+  5-minute track.
+- **Budget:** `stems.cache_gb` in `config.toml`, default 5 GB. After each new separation the
+  cache is trimmed to the budget. The stems of a track loaded in a deck are never removed. If
+  only those are left over budget, a notice says so once and the cache shrinks when they go.
+- **Eviction order:** first tracks that are in no playlist, not prepared and not loaded in the
+  last 30 days, the least recently loaded first; then everything else, the least recently
+  loaded first. Prepared means a cue point above 0, a hotcue, or stems made with
+  `library stems`. Evicted stems are separated again at the next load.
+- **Limit:** tracks over 20 minutes (DJ mixes) get no stems.
+- **A bad cache never blocks a track:** missing, corrupt or half-written stems mean the knobs
+  stay EQ until fresh stems are ready.
+
+Prepare stems ahead of time:
+
+```sh
+open-jockey library stems --playlist "Friday"
+open-jockey library stems --track 3 4
+```
+
+`--playlist` takes a playlist name; `--track` takes one or more track ids. Each track is
+separated one at a time and marked prepared (kept longest). The command prints one line per
+track (`stems ready`, `already cached, marked prepared`, `skipped, <reason>` or
+`failed: <reason>`) and a total with the cache size. It needs the model and stops with the
+`stems setup` hint without it. Ctrl-C stops after the current chunk. `--config <PATH>` reads
+the budget from another config file. A whole track takes about 20 s on an Apple-silicon Mac
+and one to two minutes on a CPU.
+
 ## Listing tracks
 
 `library list` prints id, artist, title, BPM, key, length, a bullet for tracks with
