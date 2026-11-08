@@ -11,4 +11,4 @@ pub use colour::colour;
 pub use lane::{Lane, Lanes, lanes};
 pub use playhead::Playhead;
 pub use ticks::{Tick, ticks};
-pub use zoom::{BEATS_RANGE, ZOOM_STEP, ZoomGesture, zoomed};
+pub use zoom::{ZOOM_STEP, ZoomGesture, zoomed};

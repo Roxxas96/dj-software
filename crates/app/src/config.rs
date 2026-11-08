@@ -176,7 +176,8 @@ fn parse_stems(table: &Table, file: &str) -> anyhow::Result<StemsConfig> {
 }
 
 /// The range of `ui.waveform_beats`.
-const WAVEFORM_BEATS_RANGE: (f64, f64) = (4.0, 64.0);
+/// The widest range `ui.waveform_min_beats` and `ui.waveform_max_beats` may set.
+const WAVEFORM_BEATS_LIMITS: (f64, f64) = (1.0, 512.0);
 
 /// The `[audio]` section: the output the window plays to, with 1-based channel pairs as in
 /// `play`'s flags.
@@ -228,15 +229,28 @@ impl Default for ControllerConfig {
 /// The `[ui]` section.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UiConfig {
-    /// The beats visible across a waveform lane.
+    /// The beats visible across a waveform lane at the first launch.
     pub waveform_beats: f64,
+    /// The fewest beats the waveform zoom can show (the most zoomed in).
+    pub waveform_min_beats: f64,
+    /// The most beats the waveform zoom can show (the most zoomed out).
+    pub waveform_max_beats: f64,
 }
 
 impl Default for UiConfig {
     fn default() -> Self {
         Self {
             waveform_beats: 16.0,
+            waveform_min_beats: 4.0,
+            waveform_max_beats: 64.0,
         }
+    }
+}
+
+impl UiConfig {
+    /// The zoom's range, fewest beats first.
+    pub fn zoom_range(&self) -> (f64, f64) {
+        (self.waveform_min_beats, self.waveform_max_beats)
     }
 }
 
@@ -300,26 +314,48 @@ fn parse_controller(table: &Table, file: &str) -> anyhow::Result<ControllerConfi
 
 fn parse_ui(table: &Table, file: &str) -> anyhow::Result<UiConfig> {
     let mut ui = UiConfig::default();
+    let mut beats = None;
     for (key, value) in table {
+        let limit = |name: &str| {
+            number(value)
+                .filter(|b| (WAVEFORM_BEATS_LIMITS.0..=WAVEFORM_BEATS_LIMITS.1).contains(b))
+                .ok_or_else(|| {
+                    invalid(
+                        file,
+                        &format!("ui.{name}"),
+                        format!(
+                            "expected a number from {} to {}",
+                            WAVEFORM_BEATS_LIMITS.0, WAVEFORM_BEATS_LIMITS.1
+                        ),
+                    )
+                })
+        };
         match key.as_str() {
-            "waveform_beats" => {
-                ui.waveform_beats = number(value)
-                    .filter(|beats| {
-                        (WAVEFORM_BEATS_RANGE.0..=WAVEFORM_BEATS_RANGE.1).contains(beats)
-                    })
-                    .ok_or_else(|| {
-                        invalid(
-                            file,
-                            "ui.waveform_beats",
-                            format!(
-                                "expected a number from {} to {}",
-                                WAVEFORM_BEATS_RANGE.0, WAVEFORM_BEATS_RANGE.1
-                            ),
-                        )
-                    })?;
-            }
+            // Checked against the range once the whole table is read.
+            "waveform_beats" => beats = Some(number(value)),
+            "waveform_min_beats" => ui.waveform_min_beats = limit("waveform_min_beats")?,
+            "waveform_max_beats" => ui.waveform_max_beats = limit("waveform_max_beats")?,
             _ => return Err(unknown(file, "ui", key)),
         }
+    }
+    let (min, max) = ui.zoom_range();
+    if min >= max {
+        return Err(invalid(
+            file,
+            "ui.waveform_min_beats",
+            "expected fewer beats than ui.waveform_max_beats",
+        ));
+    }
+    if let Some(beats) = beats {
+        ui.waveform_beats = beats.filter(|b| (min..=max).contains(b)).ok_or_else(|| {
+            invalid(
+                file,
+                "ui.waveform_beats",
+                format!("expected a number from {min} to {max}"),
+            )
+        })?;
+    } else {
+        ui.waveform_beats = ui.waveform_beats.clamp(min, max);
     }
     Ok(ui)
 }
@@ -1039,6 +1075,26 @@ cache_gb = 5
         assert_eq!(config.audio.routing().headphones, Some([2, 3]));
         assert_eq!(config.controller.mapping, "my.toml");
         assert_eq!(config.ui.waveform_beats, 32.0);
+        assert_eq!(config.ui.zoom_range(), (4.0, 64.0));
+
+        // The zoom range is configurable, and the starting zoom must sit inside it.
+        let wide = parse_text(
+            "[ui]
+waveform_min_beats = 1
+waveform_max_beats = 256
+waveform_beats = 128",
+        )
+        .unwrap();
+        assert_eq!(wide.ui.zoom_range(), (1.0, 256.0));
+        assert_eq!(wide.ui.waveform_beats, 128.0);
+        // Without a starting zoom, the default one is brought inside a narrow range.
+        let narrow = parse_text(
+            "[ui]
+waveform_min_beats = 32
+waveform_max_beats = 48",
+        )
+        .unwrap();
+        assert_eq!(narrow.ui.waveform_beats, 32.0);
 
         let cases: &[(&str, &str)] = &[
             (
@@ -1055,6 +1111,26 @@ cache_gb = 5
             ),
             (
                 "[ui]\nwaveform_beats = 2",
+                "config.toml: ui.waveform_beats: expected a number from 4 to 64",
+            ),
+            (
+                "[ui]\nwaveform_max_beats = 100\nwaveform_beats = 120",
+                "config.toml: ui.waveform_beats: expected a number from 4 to 100",
+            ),
+            (
+                "[ui]\nwaveform_min_beats = 0.5",
+                "config.toml: ui.waveform_min_beats: expected a number from 1 to 512",
+            ),
+            (
+                "[ui]\nwaveform_max_beats = 1000",
+                "config.toml: ui.waveform_max_beats: expected a number from 1 to 512",
+            ),
+            (
+                "[ui]\nwaveform_min_beats = 64\nwaveform_max_beats = 32",
+                "config.toml: ui.waveform_min_beats: expected fewer beats than ui.waveform_max_beats",
+            ),
+            (
+                "[ui]\nwaveform_beats = \"wide\"",
                 "config.toml: ui.waveform_beats: expected a number from 4 to 64",
             ),
             (

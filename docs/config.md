@@ -38,7 +38,9 @@ instead (and then the file must exist).
 | `audio.master`       | `[1, 2]`                                     | The 1-based output channels carrying the master, left then right |
 | `audio.headphones`   | none (no headphone output)                   | The 1-based output channels carrying the headphones, left then right; must not overlap `audio.master` |
 | `controller.mapping` | `"ddj-sb3"`                                  | The controller mapping: a built-in name or the path of a mapping file |
-| `ui.waveform_beats`  | `16`                                         | The beats visible across a waveform lane at the first launch, from 4 to 64. After that the window's zoom (scroll over the waveforms) is saved in `ui-state.toml` next to this file and wins; delete that file to come back to this value |
+| `ui.waveform_beats`  | `16`                                         | The beats visible across a waveform lane at the first launch, within the zoom range below. After that the window's zoom (scroll over the waveforms) is saved in `ui-state.toml` next to this file and wins; delete that file to come back to this value |
+| `ui.waveform_min_beats` | `4` | The most the waveforms can zoom in: the fewest beats across a lane, from 1 to 512 |
+| `ui.waveform_max_beats` | `64` | The most the waveforms can zoom out: the most beats across a lane, from 1 to 512 and more than `ui.waveform_min_beats` |
 
 A sample is at most 60 seconds long. A `track` id is looked up in the library: the one opened
 by `--library`, otherwise the default library if it exists.
@@ -86,7 +88,9 @@ headphones = [3, 4]          # left out, no headphone output
 mapping = "ddj-sb3"          # a built-in name or a mapping file path
 
 [ui]
-waveform_beats = 16          # 4 to 64; beats across a waveform lane at the first launch
+waveform_beats = 16          # beats across a waveform lane at the first launch
+waveform_min_beats = 4       # 1 to 512; the most zoomed in
+waveform_max_beats = 64      # 1 to 512; the most zoomed out
 ```
 
 ## Errors

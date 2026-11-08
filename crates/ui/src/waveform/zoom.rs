@@ -4,15 +4,13 @@
 
 /// How much one step zooms: in divides the beats shown by this, out multiplies them.
 pub const ZOOM_STEP: f64 = 1.25;
-/// The fewest and most beats a lane can show.
-pub const BEATS_RANGE: (f64, f64) = (4.0, 64.0);
 /// How far a scroll moves, in points, for one zoom step.
 const SCROLL_PER_STEP: f32 = 40.0;
 
 /// The beats a lane shows after `steps` zoom steps from `beats` (positive steps zoom in),
-/// kept within [`BEATS_RANGE`].
-pub fn zoomed(beats: f64, steps: i32) -> f64 {
-    (beats / ZOOM_STEP.powi(steps)).clamp(BEATS_RANGE.0, BEATS_RANGE.1)
+/// kept within `range` (fewest beats, most beats).
+pub fn zoomed(beats: f64, steps: i32, range: (f64, f64)) -> f64 {
+    (beats / ZOOM_STEP.powi(steps)).clamp(range.0, range.1)
 }
 
 /// Turns scrolls and pinches over the waveforms into whole zoom steps, keeping what is
@@ -45,11 +43,13 @@ mod tests {
 
     #[test]
     fn zooming_divides_the_beats_and_stays_in_range() {
-        assert_eq!(zoomed(16.0, 0), 16.0);
-        assert!((zoomed(16.0, 1) - 12.8).abs() < 1e-9);
-        assert!((zoomed(16.0, -1) - 20.0).abs() < 1e-9);
-        assert_eq!(zoomed(16.0, 100), 4.0);
-        assert_eq!(zoomed(16.0, -100), 64.0);
+        let range = (4.0, 64.0);
+        assert_eq!(zoomed(16.0, 0, range), 16.0);
+        assert!((zoomed(16.0, 1, range) - 12.8).abs() < 1e-9);
+        assert!((zoomed(16.0, -1, range) - 20.0).abs() < 1e-9);
+        assert_eq!(zoomed(16.0, 100, range), 4.0);
+        assert_eq!(zoomed(16.0, -100, range), 64.0);
+        assert_eq!(zoomed(16.0, -100, (2.0, 128.0)), 128.0);
     }
 
     #[test]

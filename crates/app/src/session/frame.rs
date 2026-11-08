@@ -39,7 +39,7 @@ impl FrameParts {
             fx_slots: config.fx_slots,
             eq_mode: config.stems.startup_eq_mode(),
             stem_knobs: config.stems.knobs,
-            zoom: Zoom::load(None, config.ui.waveform_beats),
+            zoom: Zoom::load(None, config.ui.waveform_beats, config.ui.zoom_range()),
             samples_loaded: [false; SAMPLER_SLOTS],
             status: Vec::new(),
             events: VecDeque::new(),

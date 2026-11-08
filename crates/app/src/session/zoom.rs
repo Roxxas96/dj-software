@@ -16,6 +16,9 @@ const SAVE_AFTER: Duration = Duration::from_secs(2);
 pub(super) struct Zoom {
     path: Option<PathBuf>,
     beats: f64,
+    /// The fewest and most beats the zoom can show (`ui.waveform_min_beats` and
+    /// `ui.waveform_max_beats`).
+    range: (f64, f64),
     /// The actions' zoom count when last seen, `None` before the control loop runs.
     seen: Option<i32>,
     /// When the zoom last changed without being saved since.
@@ -23,12 +26,18 @@ pub(super) struct Zoom {
 }
 
 impl Zoom {
-    /// The zoom saved at `path`, else `default`.
-    pub fn load(path: Option<PathBuf>, default: f64) -> Self {
-        let beats = path.as_deref().and_then(read).unwrap_or(default);
+    /// The zoom saved at `path`, else `default`, brought within `range` (a zoom saved
+    /// before the range was narrowed comes back at its nearest end).
+    pub fn load(path: Option<PathBuf>, default: f64, range: (f64, f64)) -> Self {
+        let beats = path
+            .as_deref()
+            .and_then(read)
+            .unwrap_or(default)
+            .clamp(range.0, range.1);
         Self {
             path,
             beats,
+            range,
             seen: None,
             unsaved: None,
         }
@@ -51,7 +60,7 @@ impl Zoom {
         if steps == 0 {
             return false;
         }
-        let beats = ui::waveform::zoomed(self.beats, steps);
+        let beats = ui::waveform::zoomed(self.beats, steps, self.range);
         if beats == self.beats {
             return false;
         }
@@ -102,8 +111,7 @@ fn read(path: &Path) -> Option<f64> {
         toml::Value::Integer(i) => *i as f64,
         _ => return None,
     };
-    let (low, high) = ui::waveform::BEATS_RANGE;
-    (low..=high).contains(&beats).then_some(beats)
+    (beats.is_finite() && beats > 0.0).then_some(beats)
 }
 
 /// Best effort: a zoom that cannot be saved is simply not remembered. The file is written
@@ -126,12 +134,14 @@ fn write(path: &Path, beats: f64) {
 mod tests {
     use super::*;
 
+    const RANGE: (f64, f64) = (4.0, 64.0);
+
     #[test]
     fn the_zoom_is_saved_and_loaded_back() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(STATE_FILE);
         let now = Instant::now();
-        let mut zoom = Zoom::load(Some(path.clone()), 16.0);
+        let mut zoom = Zoom::load(Some(path.clone()), 16.0, RANGE);
         assert_eq!(zoom.beats(), 16.0);
         // The first count seen is only the base.
         assert!(!zoom.take(0, Some(7), now));
@@ -143,30 +153,36 @@ mod tests {
         zoom.save_if_due(now);
         assert!(!path.exists());
         zoom.save_now();
-        assert_eq!(Zoom::load(Some(path.clone()), 16.0).beats(), 20.0);
+        assert_eq!(Zoom::load(Some(path.clone()), 16.0, RANGE).beats(), 20.0);
     }
 
     #[test]
     fn a_bad_or_missing_file_falls_back_to_the_config() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(STATE_FILE);
-        assert_eq!(Zoom::load(Some(path.clone()), 24.0).beats(), 24.0);
+        assert_eq!(Zoom::load(Some(path.clone()), 24.0, RANGE).beats(), 24.0);
         for text in [
-            "waveform_beats = 2",
+            "waveform_beats = -2",
             "waveform_beats = \"wide\"",
             "not toml =",
         ] {
             std::fs::write(&path, text).unwrap();
-            assert_eq!(Zoom::load(Some(path.clone()), 24.0).beats(), 24.0, "{text}");
+            assert_eq!(
+                Zoom::load(Some(path.clone()), 24.0, RANGE).beats(),
+                24.0,
+                "{text}"
+            );
         }
         std::fs::write(&path, "waveform_beats = 8").unwrap();
-        assert_eq!(Zoom::load(Some(path), 24.0).beats(), 8.0);
+        assert_eq!(Zoom::load(Some(path.clone()), 24.0, RANGE).beats(), 8.0);
+        // A zoom saved outside a narrowed range comes back at its nearest end.
+        assert_eq!(Zoom::load(Some(path), 24.0, (12.0, 32.0)).beats(), 12.0);
     }
 
     #[test]
     fn the_zoom_stays_in_range() {
         let now = Instant::now();
-        let mut zoom = Zoom::load(None, 4.0);
+        let mut zoom = Zoom::load(None, 4.0, RANGE);
         assert!(!zoom.take(3, None, now));
         assert_eq!(zoom.beats(), 4.0);
         // Nowhere to save: nothing happens.
