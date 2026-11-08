@@ -647,13 +647,40 @@ fn age(path: &Path, seconds: u64) {
         .unwrap();
 }
 
-/// Replaces track `track`'s entry folder with a file, which no folder removal can delete.
-fn make_unremovable(stems: &Path, track: i64) {
-    let dir = entry_dir(stems, track, &[track as u8; 32]);
-    std::fs::remove_dir_all(&dir).unwrap();
-    std::fs::write(&dir, b"not a folder").unwrap();
+/// Puts a read-only folder holding a file in track `track`'s entry folder, so the entry
+/// cannot be removed; returns that folder, to unlock with [`unlock`].
+#[cfg(unix)]
+fn make_unremovable(stems: &Path, track: i64) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let locked = entry_dir(stems, track, &[track as u8; 32]).join("locked");
+    std::fs::create_dir_all(&locked).unwrap();
+    std::fs::write(locked.join("vocals.ogg"), b"x").unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+    locked
 }
 
+#[cfg(unix)]
+fn unlock(locked: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[test]
+fn a_stray_file_in_place_of_an_entry_is_removed() {
+    let f = fixture();
+    let track = add_track(&f.lib, 1);
+    put_all(&f, &[(track, false)]);
+    let dir = entry_dir(&f.stems, track, &[track as u8; 32]);
+    std::fs::remove_dir_all(&dir).unwrap();
+    std::fs::write(&dir, b"not a folder").unwrap();
+    let mut cache = StemCache::new(&f.lib, &f.stems, 0).unwrap();
+    let report = cache.evict(&[]).unwrap();
+    assert_eq!((report.removed, report.failed), (vec![track], 0));
+    assert!(!dir.exists());
+    assert!(cached_tracks(&f.lib).is_empty(), "no stuck row");
+}
+
+#[cfg(unix)]
 #[test]
 fn a_failed_removal_is_skipped_and_retried() {
     let f = fixture();
@@ -664,7 +691,7 @@ fn a_failed_removal_is_skipped_and_retried() {
         set_loaded_at(&f.lib, track, Some(t - (40 + 10 * (3 - i as i64)) * DAY));
     }
     // The oldest entry cannot be removed: eviction skips it and goes on.
-    make_unremovable(&f.stems, ids[0]);
+    let locked = make_unremovable(&f.stems, ids[0]);
     let mut cache = StemCache::new(&f.lib, &f.stems, 0).unwrap();
     let report = cache.evict(&[]).unwrap();
     assert_eq!(report.failed, 1);
@@ -686,8 +713,7 @@ fn a_failed_removal_is_skipped_and_retried() {
     assert!(cache.get(&key(d, &[4; 32], 44_100, set.frames())).is_some());
 
     // Once removable, a later pass removes it.
-    let dir = entry_dir(&f.stems, ids[0], &[ids[0] as u8; 32]);
-    std::fs::remove_file(&dir).unwrap();
+    unlock(&locked);
     let report = cache.evict(&[d]).unwrap();
     assert_eq!((report.removed, report.failed), (vec![ids[0]], 0));
 }
