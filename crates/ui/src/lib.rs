@@ -5,6 +5,7 @@
 mod model;
 pub mod theme;
 mod topbar;
+pub mod waveform;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

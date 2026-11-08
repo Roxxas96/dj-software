@@ -10,6 +10,8 @@ use crate::config::Config;
 use crate::play::Pass;
 use crate::printer::Line;
 
+use super::detail::DetailJobs;
+
 /// What the session knows besides the loop's state: the configuration's settings, what
 /// the printer was asked to show, and the audio device.
 pub(super) struct FrameParts {
@@ -23,6 +25,8 @@ pub(super) struct FrameParts {
     pub events: VecDeque<(Instant, String)>,
     pub audio: Result<String, String>,
     pub output_latency: Duration,
+    /// Computes the decks' waveforms; none until the library is open.
+    pub detail: Option<DetailJobs>,
 }
 
 impl FrameParts {
@@ -38,6 +42,7 @@ impl FrameParts {
             events: VecDeque::new(),
             audio: Err("opening the audio device".to_owned()),
             output_latency: Duration::ZERO,
+            detail: None,
         }
     }
 
@@ -74,16 +79,39 @@ impl FrameParts {
     }
 
     /// The frame for the loop's state after a pass.
-    pub fn build(&self, pass: &Pass<'_>) -> ControlFrame {
+    pub fn build(&mut self, pass: &Pass<'_>) -> ControlFrame {
+        if let Some(detail) = self.detail.as_mut() {
+            detail.collect();
+        }
         let decks = DeckId::ALL.map(|deck| {
-            let library = pass.library?;
-            let view = library.deck_view(deck, &pass.engine.deck(deck))?;
+            let i = deck.index();
+            let snapshot = pass.engine.deck(deck);
+            let view = pass
+                .library
+                .and_then(|library| library.deck_view(deck, &snapshot));
+            let Some(view) = view else {
+                if let Some(detail) = self.detail.as_mut() {
+                    detail.empty(i);
+                }
+                return None;
+            };
+            let (overview, detail) = match self.detail.as_mut() {
+                Some(jobs) => {
+                    // Once the engine plays the load: until then its waveform is not
+                    // the one on the deck.
+                    if snapshot.loaded && snapshot.load_seq == view.load_seq {
+                        jobs.observe(i, view.load_seq, view.row.id, view.audio);
+                    }
+                    jobs.waveforms(i, view.load_seq)
+                }
+                None => (None, None),
+            };
             Some(DeckInfo {
                 load_seq: view.load_seq,
                 row: view.row.clone(),
                 path: view.path.to_owned(),
-                overview: None,
-                detail: None,
+                overview,
+                detail,
                 stems: view.stems,
             })
         });

@@ -63,6 +63,8 @@ struct DeckTrack {
     memory: MemorySync,
     /// The grid last sent to the deck (with the `Load` or a `SetGrid`).
     grid: Option<Grid>,
+    /// The decoded track, for the window's detailed waveform.
+    audio: Arc<TrackBuffer>,
     /// The decoded track, kept (with stems enabled) until its stems are asked for.
     buffer: Option<Arc<TrackBuffer>>,
     stems: DeckStems,
@@ -133,6 +135,11 @@ pub struct LibraryMode {
 }
 
 impl LibraryMode {
+    /// The open library, for threads that read it on their own.
+    pub fn library(&self) -> Arc<Library> {
+        Arc::clone(&self.lib)
+    }
+
     /// A read-only connection to the library.
     pub fn reader(&self) -> Result<library::Reader, library::LibraryError> {
         self.lib.reader()
@@ -485,6 +492,7 @@ impl LibraryMode {
         }
         let frames = loaded.buffer.frames();
         let rate = loaded.buffer.sample_rate();
+        let audio = Arc::clone(&loaded.buffer);
         let buffer = self.stems.is_some().then(|| Arc::clone(&loaded.buffer));
         if engine
             .send(Command::Deck(
@@ -518,6 +526,7 @@ impl LibraryMode {
             load_seq: after + 1,
             memory,
             grid: loaded.memory.clamped(frames).grid,
+            audio,
             buffer,
             stems: DeckStems::Unrequested,
         };
@@ -981,6 +990,7 @@ impl LibraryMode {
             row: &track.row,
             path: &track.path,
             load_seq: track.load_seq,
+            audio: &track.audio,
             stems: self.stems_text(Some(track), snap),
         })
     }
@@ -1057,6 +1067,8 @@ pub struct DeckView<'a> {
     pub path: &'a Path,
     /// The deck's `load_seq` from which the engine plays this track.
     pub load_seq: u64,
+    /// The decoded track.
+    pub audio: &'a Arc<TrackBuffer>,
     /// The stems' state: `stems`, `stems 40%`, `no stems (too long)`.
     pub stems: Option<String>,
 }
@@ -1616,6 +1628,7 @@ mod tests {
             load_seq: 1,
             memory,
             grid: None,
+            audio: short_track(),
             buffer: None,
             stems: DeckStems::Unrequested,
         });
