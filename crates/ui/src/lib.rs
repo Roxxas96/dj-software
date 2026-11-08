@@ -13,7 +13,7 @@ mod topbar;
 pub mod waveform;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 
 use anyhow::anyhow;
 use engine::EngineMonitor;
@@ -25,11 +25,13 @@ const WINDOW_SIZE: [f32; 2] = [1440.0, 900.0];
 
 /// Opens the window and draws until it is closed, then sets `quit`. The window closes
 /// itself once something else sets `quit`. `monitor` holds `None` until the audio device
-/// opens.
+/// opens. The waveform zoom steps the viewer asks for are added to `zoom` (positive zooms
+/// in); the session takes them and publishes the new zoom in the frame.
 pub fn run(
     frame: Published<ControlFrame>,
     monitor: Published<Option<EngineMonitor>>,
     quit: Arc<AtomicBool>,
+    zoom: Arc<AtomicI32>,
 ) -> anyhow::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -41,7 +43,10 @@ pub fn run(
         frame,
         monitor,
         quit: Arc::clone(&quit),
-        screen: Screen::default(),
+        screen: Screen {
+            zoom,
+            ..Screen::default()
+        },
     };
     let result = eframe::run_native(
         TITLE,
@@ -92,6 +97,8 @@ pub struct Screen {
     pub decks: deck::DeckPanels,
     pub covers: cover::Covers,
     pub mixer: mixer::Mixer,
+    /// Waveform zoom steps asked for and not yet taken by the session.
+    pub zoom: Arc<AtomicI32>,
 }
 
 /// Draws the whole window for `frame`; `monitor` is `None` until the audio device opens.
@@ -110,7 +117,7 @@ pub fn root(
         .exact_size(window_height * LANES_HEIGHT)
         .resizable(false)
         .show_separator_line(false)
-        .show(ui, |ui| screen.lanes.show(ui, frame, monitor));
+        .show(ui, |ui| screen.lanes.show(ui, frame, monitor, &screen.zoom));
     egui::Panel::top("deck_panels")
         .frame(egui::Frame::new().fill(theme::BACKGROUND))
         .exact_size(window_height * DECKS_HEIGHT)

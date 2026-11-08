@@ -119,6 +119,8 @@ pub enum ActionKind {
     BrowserToggleFocus,
     /// Opens or closes the highlighted folder in the browser tree.
     BrowserToggleFolder,
+    WaveformZoomIn,
+    WaveformZoomOut,
     LoadSelected,
     /// A hotcue pad: sets, jumps to or previews the slot.
     Hotcue(HotcueSlot),
@@ -283,8 +285,8 @@ const SAMPLER_STOP_IDS: [&str; 8] = [
 
 impl ActionKind {
     /// Every kind: each slot family (hotcues, beat jumps, rolls, slices, sampler) once per slot.
-    pub const ALL: [ActionKind; 137] = {
-        let mut all = [ActionKind::PlayPause; 137];
+    pub const ALL: [ActionKind; 139] = {
+        let mut all = [ActionKind::PlayPause; 139];
         let fixed = [
             ActionKind::PlayPause,
             ActionKind::Cue,
@@ -315,6 +317,8 @@ impl ActionKind {
             ActionKind::BrowserScroll,
             ActionKind::BrowserToggleFocus,
             ActionKind::BrowserToggleFolder,
+            ActionKind::WaveformZoomIn,
+            ActionKind::WaveformZoomOut,
             ActionKind::LoadSelected,
             ActionKind::LoopIn,
             ActionKind::LoopOut,
@@ -414,6 +418,8 @@ impl ActionKind {
             ActionKind::BrowserScroll => "browser.scroll",
             ActionKind::BrowserToggleFocus => "browser.toggle_focus",
             ActionKind::BrowserToggleFolder => "browser.toggle_folder",
+            ActionKind::WaveformZoomIn => "ui.waveform_zoom_in",
+            ActionKind::WaveformZoomOut => "ui.waveform_zoom_out",
             ActionKind::LoadSelected => "deck.load_selected",
             ActionKind::Hotcue(slot) => HOTCUE_IDS[slot.index()],
             ActionKind::HotcueDelete(slot) => HOTCUE_DELETE_IDS[slot.index()],
@@ -534,6 +540,8 @@ impl ActionKind {
             | ActionKind::BrowserScroll
             | ActionKind::BrowserToggleFocus
             | ActionKind::BrowserToggleFolder
+            | ActionKind::WaveformZoomIn
+            | ActionKind::WaveformZoomOut
             | ActionKind::SamplerPlay(_)
             | ActionKind::SamplerStop(_) => Scope::Global,
             ActionKind::DeckToggle
@@ -655,6 +663,8 @@ pub enum Action {
     BrowserScroll,
     BrowserToggleFocus,
     BrowserToggleFolder,
+    WaveformZoomIn,
+    WaveformZoomOut,
     LoadSelected(DeckId),
     Hotcue(DeckId, HotcueSlot),
     HotcueDelete(DeckId, HotcueSlot),
@@ -728,6 +738,8 @@ impl Action {
             (K::BrowserScroll, Target::Global) => Action::BrowserScroll,
             (K::BrowserToggleFocus, Target::Global) => Action::BrowserToggleFocus,
             (K::BrowserToggleFolder, Target::Global) => Action::BrowserToggleFolder,
+            (K::WaveformZoomIn, Target::Global) => Action::WaveformZoomIn,
+            (K::WaveformZoomOut, Target::Global) => Action::WaveformZoomOut,
             (K::LoadSelected, Target::Deck(d)) => Action::LoadSelected(d),
             (K::Hotcue(slot), Target::Deck(d)) => Action::Hotcue(d, slot),
             (K::HotcueDelete(slot), Target::Deck(d)) => Action::HotcueDelete(d, slot),
@@ -810,6 +822,8 @@ impl Action {
             Action::BrowserScroll => ActionKind::BrowserScroll,
             Action::BrowserToggleFocus => ActionKind::BrowserToggleFocus,
             Action::BrowserToggleFolder => ActionKind::BrowserToggleFolder,
+            Action::WaveformZoomIn => ActionKind::WaveformZoomIn,
+            Action::WaveformZoomOut => ActionKind::WaveformZoomOut,
             Action::LoadSelected(_) => ActionKind::LoadSelected,
             Action::Hotcue(_, slot) => ActionKind::Hotcue(*slot),
             Action::HotcueDelete(_, slot) => ActionKind::HotcueDelete(*slot),
@@ -912,6 +926,8 @@ impl Action {
             | Action::BrowserScroll
             | Action::BrowserToggleFocus
             | Action::BrowserToggleFolder
+            | Action::WaveformZoomIn
+            | Action::WaveformZoomOut
             | Action::SamplerPlay(_)
             | Action::SamplerStop(_) => Target::Global,
             Action::DeckToggle(s)

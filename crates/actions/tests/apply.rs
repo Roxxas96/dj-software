@@ -222,6 +222,8 @@ fn ids_round_trip_for_every_action() {
         "pads.mode_fx_fade",
         "pads.mode_sampler",
         "pads.mode_trans",
+        "ui.waveform_zoom_in",
+        "ui.waveform_zoom_out",
     ];
     let ids: HashSet<_> = ActionKind::ALL.iter().map(|k| k.id()).collect();
     assert_eq!(ids, expected.into_iter().collect::<HashSet<_>>());
@@ -250,7 +252,7 @@ fn ids_round_trip_for_every_action() {
         .into_iter()
         .filter(|k| k.takes_release())
         .collect();
-    assert_eq!(ActionKind::ALL.len(), 137);
+    assert_eq!(ActionKind::ALL.len(), 139);
     let hotcue = |n| ActionKind::Hotcue(HotcueSlot::new(n).unwrap());
     let hotcue_delete = |n| ActionKind::HotcueDelete(HotcueSlot::new(n).unwrap());
     let mut expected_release = vec![
@@ -1726,4 +1728,22 @@ fn toggle_folder_asks_the_browser() {
         ActionKind::BrowserToggleFolder.id(),
         "browser.toggle_folder"
     );
+}
+
+#[test]
+fn waveform_zoom_buttons_count_steps() {
+    let mut rig = Rig::new();
+    let press = |rig: &mut Rig, kind| {
+        let action = Action::new(kind, Target::Global).unwrap();
+        assert_eq!(rig.apply(action, Input::Press), ApplyResult::Sent(0));
+    };
+    assert_eq!(rig.state.waveform_zoom, 0);
+    press(&mut rig, ActionKind::WaveformZoomIn);
+    press(&mut rig, ActionKind::WaveformZoomIn);
+    press(&mut rig, ActionKind::WaveformZoomOut);
+    assert_eq!(rig.state.waveform_zoom, 1);
+    // A release does nothing.
+    let zoom_in = Action::new(ActionKind::WaveformZoomIn, Target::Global).unwrap();
+    assert_eq!(rig.apply(zoom_in, Input::Release), ApplyResult::Ignored);
+    assert_eq!(rig.state.waveform_zoom, 1);
 }

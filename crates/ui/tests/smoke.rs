@@ -30,3 +30,22 @@ fn published_returns_the_latest() {
     assert_eq!(*seen, 2);
     assert!(Arc::ptr_eq(&seen, &published.latest()));
 }
+
+#[test]
+fn the_zoom_buttons_ask_for_steps() {
+    use std::sync::atomic::Ordering;
+    let frame = ControlFrame::default();
+    let mut screen = ui::Screen::default();
+    let zoom = Arc::clone(&screen.zoom);
+    let mut harness = Harness::builder()
+        .with_size([1440.0, 900.0])
+        .build_ui(|ui| ui::root(ui, &frame, None, &mut screen));
+    harness.run_steps(2);
+    harness.get_by_label("+").click();
+    harness.run_steps(2);
+    assert_eq!(zoom.load(Ordering::Relaxed), 1);
+    harness.get_by_label("-").click();
+    harness.get_by_label("-").click();
+    harness.run_steps(2);
+    assert_eq!(zoom.load(Ordering::Relaxed), -1);
+}
