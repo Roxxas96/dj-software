@@ -940,14 +940,16 @@ midi = { channel = 16, note = 0x7F }
     );
 }
 
-/// The example user file in the mapping reference, starting at `extends = "ddj-sb3"`.
+/// The example user file in the mapping reference: the TOML block holding the
+/// `# SAMPLER pads 1-4` comment.
 fn reference_stems_example() -> &'static str {
     let doc = include_str!("../../../docs/controllers/mapping-reference.md");
-    let start = doc
-        .find("```toml\nextends = \"ddj-sb3\"")
-        .expect("the reference has the stems example")
-        + "```toml\n".len();
+    let comment = doc
+        .find("\n# SAMPLER pads 1-4")
+        .expect("the reference has the stems example");
+    let start = doc[..comment].rfind("```toml\n").unwrap() + "```toml\n".len();
     let len = doc[start..].find("```").unwrap();
+    assert!(start + len > comment, "the comment is in the block");
     &doc[start..start + len]
 }
 
