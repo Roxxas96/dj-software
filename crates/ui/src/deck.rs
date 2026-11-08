@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use actions::{ControlState, HardwarePadMode, PadMode, Side, SideControl};
-use analysis::{Key, Waveform};
+use analysis::{Key, KeyNotation, Waveform};
 use egui::{
     Align, Color32, CornerRadius, Label, Layout, Mesh, Rect, RichText, Sense, Shape, Stroke,
     StrokeKind, TextureHandle, Ui, UiBuilder, Vec2, pos2, vec2,
@@ -171,8 +171,7 @@ impl DeckView {
             pitch_ghost: frame.ghosts[id.index()][GHOST_TEMPO],
             key: info
                 .and_then(|i| i.row.key)
-                .and_then(Key::new)
-                .map(|key| key.to_notation(frame.key_notation)),
+                .and_then(|key| key_text(key, frame.key_notation)),
             elapsed: if loaded {
                 clock(position, rate)
             } else {
@@ -256,7 +255,7 @@ fn pads(
 
 /// `title` without the remix in its last brackets, and the remix ([`library::remix_of`]).
 /// A title that is only the brackets is kept whole.
-fn split_remix(title: &str) -> (String, Option<String>) {
+pub(crate) fn split_remix(title: &str) -> (String, Option<String>) {
     let title = title.trim();
     let Some(remix) = library::remix_of(title) else {
         return (title.to_owned(), None);
@@ -280,6 +279,11 @@ fn effect_label(kind: EffectKind) -> &'static str {
         EffectKind::Flanger => "Flanger",
         EffectKind::Filter => "Filter",
     }
+}
+
+/// The stored key `raw` (0..=23) in `notation`; `None` when it is out of range.
+pub(crate) fn key_text(raw: u8, notation: KeyNotation) -> Option<String> {
+    Key::new(raw).map(|key| key.to_notation(notation))
 }
 
 /// `frames` at `rate` as `M:SS.d`, cut to the tenth.
