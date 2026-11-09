@@ -25,6 +25,7 @@ decode = { path = "../decode" }
 engine = { path = "../engine" }
 directories.workspace = true
 dunce.workspace = true
+interop = { path = "../interop" }
 library = { path = "../library" }
 stems = { path = "../stems" }
 toml.workspace = true

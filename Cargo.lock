@@ -3601,6 +3601,7 @@ dependencies = [
  "directories",
  "dunce",
  "engine",
+ "interop",
  "library",
  "stems",
  "tempfile",
