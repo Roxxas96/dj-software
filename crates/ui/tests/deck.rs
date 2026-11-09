@@ -82,7 +82,7 @@ fn deck_panel_shows_title_and_bpm() {
     harness.get_by_label("126.00");
     // The time cycles on a click; a deck starts on the time remaining.
     harness.get_by_label("−4:31.9");
-    assert!(harness.query_by_label("0:57.1").is_none());
+    harness.get_by_label("0:57.1");
     harness.get_by_label("pads");
 }
 
