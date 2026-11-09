@@ -17,9 +17,11 @@ start (the 10 newest backups are kept):
   flag missing files instead of deleting them.
 - Background analysis: three-band waveform, BPM and beatgrid, and musical key (Camelot,
   standard or Open Key notation).
-- Cue points that are remembered per track, playlists, and beatgrid editing (shift, set
-  downbeat, halve, double, set BPM, tap, lock).
+- Cue points and hotcues (with saved loops, colours and names) that are remembered per track,
+  playlists, and beatgrid editing (shift, set downbeat, halve, double, set BPM, tap, lock).
 - Browsing and loading from the DDJ-SB3 (BROWSE knob and LOAD buttons) with `play --library`.
+- A one-time import of VirtualDJ hotcues, saved loops and playlists (`library import-vdj`, or
+  Settings, Library in the window); see [docs/library.md](docs/library.md#importing-from-virtualdj).
 
 ## Stems
 

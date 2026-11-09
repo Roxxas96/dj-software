@@ -40,7 +40,8 @@ like Ctrl-C in `play`.
   (the first two lanes' decks share one lane at 55 % opacity), and puts the lanes at the Top
   or in the Middle (between the deck panels and the browser). Beat ticks are drawn, with a
   red tick on the first beat of each bar. Cue and hotcue markers and the loop band show on
-  the lane. The playhead is fixed at the centre.
+  the lane; a hotcue shows its colour, and its name cut at 14 characters when it has one.
+  The playhead is fixed at the centre.
 - **Zoom:** scroll (or pinch) over the waveforms, or click the `-` and `+` buttons at their
   top right. Each step is 1.25 times, between `ui.waveform_min_beats` and
   `ui.waveform_max_beats` (4 and 64 beats by default). Both lanes always share the zoom, so
@@ -54,7 +55,8 @@ like Ctrl-C in `play`.
 - **Deck panels:** cover, title, artist and remix, the overview waveform, BPM, key, the
   bar.beat counter, two times, the FX slots (each a dropdown that puts another effect in that
   deck's slot), the jog, the pitch fader with its pickup marker, VINYL, SLIP and KEYLOCK, the
-  pad mode dropdown and the 8 pads, the loop size, and CUE, PLAY and SYNC. SYNC is never lit:
+  pad mode dropdown and the 8 pads (a set hotcue pad reads `<n> <name>`, or `<n> loop` for a
+  saved loop with no name), the loop size, and CUE, PLAY and SYNC. SYNC is never lit:
   sync is one-shot here, and there is no MASTER badge. Which of these a panel shows depends
   on the layout. Details:
   - **Times:** the brighter time is the one you cycle, by clicking it: remaining (the
@@ -216,6 +218,12 @@ closable) with a sidebar, as in VirtualDJ:
   "Reset all" the file cannot take says why in the events). Text typed and not yet sent is
   dropped when the window closes. Before the session has read the settings the page says so
   (or shows the error that stopped it).
+- **Library:** "Import from VirtualDJ…", a one-time import of hotcues, saved loops and
+  playlists (see [library.md](library.md#importing-from-virtualdj)). It reads VirtualDJ's data
+  and shows the counts, then Import asks track by track what to do with a track that has
+  hotcues here too (Keep mine, Use VirtualDJ's or Merge, with a "for all remaining" box), takes
+  a library backup, writes, and shows the backup's path. It refuses while a deck holds a
+  track: unload the decks first.
 - **Later:** what will come (recording, broadcast, automix); nothing to set yet.
 
 Some settings apply at once: the crossfader, the effects, the sampler volume, the pad
