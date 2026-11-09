@@ -417,3 +417,53 @@ fn own_crate_from_the_manifest_is_rewritten_and_foreign_database_records_stay() 
     // version, their record, and our two tracks
     assert_eq!(db.len(), 4);
 }
+
+#[test]
+fn long_crate_names_still_get_a_clash_suffix() {
+    let (_dir, stick) = stick();
+    let subcrates = stick.join("_Serato_").join("Subcrates");
+    fs::create_dir_all(&subcrates).unwrap();
+    let long = "x".repeat(130);
+    // Taken by someone else, and so is the first suffixed name.
+    fs::write(
+        subcrates.join(format!("{}.crate", "x".repeat(120))),
+        b"theirs",
+    )
+    .unwrap();
+    let plan = plan(&stick, &[(long.as_str(), &[1])], None);
+    let out = SeratoFormat
+        .write_library(&StickContext {
+            plan: &plan,
+            now_unix: 1,
+        })
+        .unwrap();
+    assert_eq!(out.files.len(), 1);
+    assert!(out.files[0].ends_with(" (Open Jockey).crate"));
+    assert!(out.files[0].chars().count() <= 126 + 1);
+    assert_eq!(
+        fs::read(subcrates.join(format!("{}.crate", "x".repeat(120)))).unwrap(),
+        b"theirs"
+    );
+}
+
+#[test]
+fn two_playlists_with_the_same_long_name_get_different_crates() {
+    let (_dir, stick) = stick();
+    let long = "y".repeat(130);
+    let plan = plan(
+        &stick,
+        &[(long.as_str(), &[1]), (long.as_str(), &[2])],
+        None,
+    );
+    let out = SeratoFormat
+        .write_library(&StickContext {
+            plan: &plan,
+            now_unix: 1,
+        })
+        .unwrap();
+    assert_eq!(out.files.len(), 2);
+    assert_ne!(out.files[0], out.files[1]);
+    for f in &out.files {
+        assert!(stick.join("_Serato_").join("Subcrates").join(f).is_file());
+    }
+}

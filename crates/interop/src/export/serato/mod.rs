@@ -121,7 +121,9 @@ fn unique_crate_name(
         } else {
             format!(" (Open Jockey {n})")
         };
-        let name = format!("{}.crate", safe_component(&format!("{base}{suffix}"), 120));
+        // Cut the base, not the suffix, so every candidate differs.
+        let cut = safe_component(base, 120usize.saturating_sub(suffix.chars().count()).max(1));
+        let name = format!("{cut}{suffix}.crate");
         if free(&name) {
             return name;
         }
