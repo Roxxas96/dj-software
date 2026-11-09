@@ -35,7 +35,7 @@ pub use view::{
 
 const TITLE: &str = "Open Jockey";
 const WINDOW_SIZE: [f32; 2] = [1440.0, 900.0];
-/// The smallest the window goes: the panels still fit.
+/// The smallest the window goes: every layout's deck panels still show all their areas.
 const MIN_WINDOW_SIZE: [f32; 2] = [1024.0, 700.0];
 
 /// Opens the window and draws until it is closed, then sets `quit`. The window closes
@@ -147,27 +147,20 @@ pub fn root(
     theme::apply(ui.ctx(), frame.view.colour_scheme);
     let p = theme::palette(ui.ctx());
     let window = ui.max_rect().size();
-    let mut sections = if frame.view.four_decks {
-        layout::four_deck_sections()
-    } else {
-        layout::sections(frame.view.layout)
-    };
-    sections.overview &= frame.view.overview;
+    let sections = layout::shown_sections(&frame.view);
     let middle = frame.view.waveform_position == WaveformPosition::Middle;
     // The session's shares are the source; a drag in progress (or just let go, until the
-    // session has applied it) shows its own. The decks' share still at its default means
-    // the viewer never set it: the layout's own share applies.
+    // session has applied it) shows its own.
     if screen.sizes.is_some_and(|d| d.base != frame.view.sizes) {
         screen.sizes = None;
     }
-    let mut sizes = screen.sizes.map_or(frame.view.sizes, |d| d.sizes);
-    if sizes.decks == PanelSizes::default().decks {
-        sizes.decks = sections.decks_share;
-    }
+    let source = screen.sizes.map_or(frame.view.sizes, |d| d.sizes);
     let mut drags = Drags {
-        sizes: layout::clamp_sizes(sizes, window),
+        sizes: layout::drawn_sizes(source, &sections, window),
         window,
+        min_decks: deck::row_height(&sections),
         moved: false,
+        decks_moved: false,
         stopped: false,
     };
     egui::Panel::top("top_bar")
@@ -204,7 +197,7 @@ pub fn root(
         );
         screen.mixer.show(ui, space, frame, monitor, &sections);
     });
-    drags.place(drag, top, |sizes, share| sizes.decks = share);
+    drags.decks_moved = drags.place(drag, top, |sizes, share| sizes.decks = share);
     if middle {
         lanes(ui, screen, &mut drags);
     }
@@ -242,17 +235,23 @@ pub fn root(
         drags.sizes = dragged;
         drags.moved = true;
     }
+    // The decks' share stays unset until its own divider moves: the layout's applies.
+    let mut kept = drags.sizes;
+    if !drags.decks_moved && source.decks == PanelSizes::default().decks {
+        kept.decks = source.decks;
+    }
     if drags.moved {
         screen.sizes = Some(Dragged {
-            sizes: drags.sizes,
+            sizes: kept,
             base: frame.view.sizes,
         });
     }
     if let Some(change) = changes.unfold {
         let _ = screen.commands.send(UiCommand::View(change));
     }
-    if drags.stopped || changes.stopped {
-        let change = ViewChange::SetSizes(drags.sizes);
+    // A divider let go after it moved; a click that moved nothing sends nothing.
+    if (drags.stopped || changes.stopped) && screen.sizes.is_some() {
+        let change = ViewChange::SetSizes(kept);
         let _ = screen.commands.send(UiCommand::View(change));
     }
 }
@@ -261,20 +260,26 @@ pub fn root(
 struct Drags {
     sizes: PanelSizes,
     window: egui::Vec2,
+    /// The least the deck panels' row may take, in points.
+    min_decks: f32,
     moved: bool,
+    /// The decks' own divider moved.
+    decks_moved: bool,
     stopped: bool,
 }
 
 impl Drags {
     /// Takes a drag of the divider under the panel starting at `top`; `set` stores the
-    /// panel's new share.
-    fn place(&mut self, drag: browser::Drag, top: f32, set: fn(&mut PanelSizes, f32)) {
+    /// panel's new share. Returns whether the divider moved.
+    fn place(&mut self, drag: browser::Drag, top: f32, set: fn(&mut PanelSizes, f32)) -> bool {
         self.stopped |= drag.stopped;
-        if let Some(pointer) = drag.pointer {
-            set(&mut self.sizes, (pointer.y - top) / self.window.y);
-            self.sizes = layout::clamp_sizes(self.sizes, self.window);
-            self.moved = true;
-        }
+        let Some(pointer) = drag.pointer else {
+            return false;
+        };
+        set(&mut self.sizes, (pointer.y - top) / self.window.y);
+        self.sizes = layout::clamp_sizes(self.sizes, self.window, self.min_decks);
+        self.moved = true;
+        true
     }
 }
 

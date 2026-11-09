@@ -37,6 +37,13 @@ pub struct Options {
 #[derive(Debug, Default)]
 pub struct Drafts(HashMap<String, String>);
 
+impl Drafts {
+    /// Forgets every draft.
+    pub fn clear(&mut self) {
+        self.0.clear();
+    }
+}
+
 /// Asks the session to set `key` to `value`, TOML value text.
 fn set(commands: &Sender<UiCommand>, key: &str, value: String) {
     // The session going away is the window closing: nothing to tell.

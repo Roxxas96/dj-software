@@ -43,7 +43,12 @@ pub(super) fn bars(
     let [peak, low, mid, high] = bucket;
     match style {
         WaveformStyle::Frequency => {
-            out[0] = mirrored(colour(bucket, palette.text_dim), 0.5, 0.5, peak);
+            out[0] = mirrored(
+                colour(bucket, palette.text_dim, palette.wave_high),
+                0.5,
+                0.5,
+                peak,
+            );
             (out, 1)
         }
         WaveformStyle::DeckColour => {
@@ -58,16 +63,19 @@ pub(super) fn bars(
         WaveformStyle::Bands => {
             let third = 1.0 / 3.0;
             let mut count = 0;
+            let rgb = |anchor: [f32; 3]| {
+                let [r, g, b] = anchor.map(|c| c as u8);
+                Color32::from_rgb(r, g, b)
+            };
             for (level, anchor, centre) in [
-                (high, colour::HIGH, third / 2.0),
-                (mid, colour::MID, 0.5),
-                (low, colour::LOW, 1.0 - third / 2.0),
+                (high, palette.wave_high, third / 2.0),
+                (mid, rgb(colour::MID), 0.5),
+                (low, rgb(colour::LOW), 1.0 - third / 2.0),
             ] {
                 if level == 0 {
                     continue;
                 }
-                let [r, g, b] = anchor.map(|c| c as u8);
-                out[count] = mirrored(Color32::from_rgb(r, g, b), centre, third / 2.0, level);
+                out[count] = mirrored(anchor, centre, third / 2.0, level);
                 count += 1;
             }
             (out, count)
@@ -125,7 +133,7 @@ mod tests {
         let p = Palette::DARK;
         let bucket = [220, 200, 80, 30];
         let bars = column(WaveformStyle::Frequency, bucket, deck(0), &p);
-        assert_eq!(bars[0].colour, colour(bucket, p.text_dim));
+        assert_eq!(bars[0].colour, colour(bucket, p.text_dim, p.wave_high));
         assert!((bars[0].from + bars[0].to - 1.0).abs() < 1e-6);
     }
 

@@ -38,11 +38,16 @@ const PANEL_MARGIN: i8 = 6;
 const COVER_SIDE: f32 = 64.0;
 /// The right of the header: BPM, key and times.
 const TIMES_WIDTH: f32 = 130.0;
+/// A line of the header's small text.
+const HEADER_LINE: f32 = 16.0;
 const OVERVIEW_HEIGHT: f32 = 32.0;
-const MIDDLE_HEIGHT: f32 = 104.0;
+/// The space between a panel's rows, and between the controls of a column.
+const ROW_GAP: f32 = 4.0;
 const FX_WIDTH: f32 = 96.0;
 const SLOT_HEIGHT: f32 = 22.0;
 const FX_LEVEL_HEIGHT: f32 = 6.0;
+/// The effect level's caption under its bar.
+const FX_CAPTION_HEIGHT: f32 = 14.0;
 /// The pad mode dropdown's width.
 const PAD_MODE_WIDTH: f32 = 120.0;
 /// The pad modes the dropdown offers: only the app's own. The SB3 switches its hardware
@@ -469,6 +474,8 @@ impl DeckPanels {
                 .as_deref()
                 .and_then(|path| covers.get(ui.ctx(), path));
             ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| {
+                // Nothing a panel draws reaches its neighbours.
+                ui.set_clip_rect(rect.intersect(ui.clip_rect()));
                 panel(ui, &view, cover.as_ref(), sections, commands);
             });
             // With four panels, the ones the controller plays are the ones outlined.
@@ -489,6 +496,53 @@ impl DeckPanels {
     }
 }
 
+/// The height a deck panel needs to show every area of `sections`.
+pub fn panel_height(sections: &Sections) -> f32 {
+    let mut height = 2.0 * f32::from(PANEL_MARGIN) + COVER_SIDE;
+    if sections.overview {
+        height += ROW_GAP + OVERVIEW_HEIGHT;
+    }
+    if sections.compact {
+        return height + ROW_GAP + BUTTON_HEIGHT;
+    }
+    height + ROW_GAP + middle_height(sections) + ROW_GAP + bottom_height()
+}
+
+/// The height the deck panels' row needs for `sections`: one panel, or two stacked in the
+/// 4-Decks view.
+pub fn row_height(sections: &Sections) -> f32 {
+    let panels = if sections.compact { 2.0 } else { 1.0 };
+    panels * panel_height(sections)
+}
+
+/// The middle row's height: the jog's when the layout has one, else the FX slots' (or the
+/// states', without them).
+fn middle_height(sections: &Sections) -> f32 {
+    let states = 3.0 * SLOT_HEIGHT + 2.0 * ROW_GAP;
+    let fx = if sections.fx {
+        fx_height(sections.fx_level)
+    } else {
+        0.0
+    };
+    let jog = if sections.jog { JOG_SIDE } else { 0.0 };
+    states.max(fx).max(jog)
+}
+
+/// The FX column's height, with the effect level under the slots when `level`.
+fn fx_height(level: bool) -> f32 {
+    let slots = 3.0 * SLOT_HEIGHT + 2.0 * ROW_GAP;
+    if level {
+        slots + ROW_GAP + FX_LEVEL_HEIGHT + ROW_GAP + FX_CAPTION_HEIGHT
+    } else {
+        slots
+    }
+}
+
+/// The bottom row's height: three buttons, as tall as the pad mode over two rows of pads.
+fn bottom_height() -> f32 {
+    3.0 * BUTTON_HEIGHT + 2.0 * ROW_GAP
+}
+
 /// Draws `view` filling `ui`, with `cover` (the plain tile without one), showing the
 /// `sections` the layout has. A click on the time asks `commands` to cycle it.
 pub fn panel(
@@ -505,22 +559,18 @@ pub fn panel(
         .inner_margin(PANEL_MARGIN)
         .show(ui, |ui| {
             ui.set_min_size(ui.available_size());
-            ui.spacing_mut().item_spacing = vec2(6.0, 4.0);
+            ui.spacing_mut().item_spacing = vec2(6.0, ROW_GAP);
             header(ui, view, cover, accent, commands);
             if sections.overview {
                 overview(ui, view);
             }
             if sections.compact {
-                ui.horizontal(|ui| {
-                    transport_row(ui, view, accent);
-                    if sections.loop_controls {
-                        loop_row(ui, view);
-                    }
-                });
+                compact_row(ui, view, accent, sections.loop_controls);
                 return;
             }
+            let middle = middle_height(sections);
             ui.horizontal(|ui| {
-                ui.set_height(MIDDLE_HEIGHT);
+                ui.set_height(middle);
                 if sections.fx {
                     fx(ui, view, accent, sections.fx_level, commands);
                 }
@@ -533,7 +583,7 @@ pub fn panel(
                     } else {
                         PITCH_COMPACT_WIDTH
                     };
-                    pitch(ui, view, accent, width);
+                    pitch(ui, view, accent, width, middle);
                 }
                 states(ui, view, accent);
             });
@@ -544,31 +594,45 @@ pub fn panel(
         });
 }
 
-/// CUE, PLAY, SYNC and the three states in one row, for the compact panel.
-fn transport_row(ui: &mut Ui, view: &DeckView, accent: Color32) {
+/// CUE, PLAY, SYNC, the three states and (when `loop_controls`) the loop's size, IN and
+/// OUT in one row, for the compact panel; narrower than they like when the row is short.
+fn compact_row(ui: &mut Ui, view: &DeckView, accent: Color32, loop_controls: bool) {
     let p = theme::palette(ui.ctx());
-    ui.spacing_mut().item_spacing.x = PAD_GAP;
-    let transport = vec2(TRANSPORT_WIDTH / 1.5, BUTTON_HEIGHT);
-    indicator(ui, transport, "CUE", view.cueing.then_some(p.cue));
-    indicator(ui, transport, "PLAY", view.playing.then_some(p.play_lit));
-    indicator(ui, transport, "SYNC", None);
-    let state = vec2(STATE_WIDTH * 0.75, BUTTON_HEIGHT);
-    indicator(ui, state, "VINYL", view.vinyl.then_some(accent));
-    indicator(ui, state, "SLIP", view.slip.then_some(accent));
-    indicator(ui, state, "KEYLOCK", view.keylock.then_some(accent));
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = PAD_GAP;
+        let transport = TRANSPORT_WIDTH / 1.5;
+        let state = STATE_WIDTH * 0.75;
+        let looping = LOOP_WIDTH / 2.0;
+        let (boxes, natural) = if loop_controls {
+            (9.0, 3.0 * (transport + state + looping))
+        } else {
+            (6.0, 3.0 * (transport + state))
+        };
+        let room = (ui.available_width() - (boxes - 1.0) * PAD_GAP).max(0.0);
+        let scale = (room / natural).min(1.0);
+        let size = |width: f32| vec2(width * scale, BUTTON_HEIGHT);
+        indicator(ui, size(transport), "CUE", view.cueing.then_some(p.cue));
+        indicator(
+            ui,
+            size(transport),
+            "PLAY",
+            view.playing.then_some(p.play_lit),
+        );
+        indicator(ui, size(transport), "SYNC", None);
+        indicator(ui, size(state), "VINYL", view.vinyl.then_some(accent));
+        indicator(ui, size(state), "SLIP", view.slip.then_some(accent));
+        indicator(ui, size(state), "KEYLOCK", view.keylock.then_some(accent));
+        if loop_controls {
+            let lit = view.loop_active.then_some(p.hotcue);
+            indicator(ui, size(looping), &view.loop_beats, lit);
+            indicator(ui, size(looping), "IN", lit);
+            indicator(ui, size(looping), "OUT", lit);
+        }
+    });
 }
 
-/// The loop's size, IN and OUT in one row, for the compact panel.
-fn loop_row(ui: &mut Ui, view: &DeckView) {
-    let p = theme::palette(ui.ctx());
-    let looping = view.loop_active.then_some(p.hotcue);
-    let size = vec2(LOOP_WIDTH / 2.0, BUTTON_HEIGHT);
-    indicator(ui, size, &view.loop_beats, looping);
-    indicator(ui, size, "IN", looping);
-    indicator(ui, size, "OUT", looping);
-}
-
-/// The cover, title, artist, remix and stems, then BPM, key and times on the right.
+/// The cover, title, artist, remix and stems, then BPM, key and times on the right, all
+/// within the cover's height.
 fn header(
     ui: &mut Ui,
     view: &DeckView,
@@ -577,56 +641,71 @@ fn header(
     commands: &Sender<UiCommand>,
 ) {
     let p = theme::palette(ui.ctx());
-    ui.horizontal_top(|ui| {
-        cover::tile(ui, cover, COVER_SIDE);
-        let text_width = (ui.available_width() - TIMES_WIDTH).max(0.0);
-        let column = vec2(text_width, COVER_SIDE);
-        ui.allocate_ui_with_layout(column, Layout::top_down(Align::Min), |ui| {
-            ui.set_min_size(column);
-            ui.horizontal(|ui| {
-                ui.label(
-                    RichText::new(&view.tag)
-                        .color(accent)
-                        .strong()
-                        .size(TITLE_FONT),
-                );
-                ui.add(Label::new(RichText::new(&view.title).strong().size(TITLE_FONT)).truncate());
-            });
-            ui.add(Label::new(RichText::new(&view.artist).color(p.text_dim)).truncate());
-            if let Some(remix) = &view.remix {
-                ui.add(Label::new(RichText::new(remix).color(p.text_dim)).truncate());
-            }
-            if let Some(stems) = &view.stems {
-                ui.label(RichText::new(stems).color(accent).size(SMALL_FONT));
-            }
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), COVER_SIDE), Sense::hover());
+    let mut ui = ui.new_child(
+        UiBuilder::new()
+            .max_rect(rect)
+            .layout(Layout::left_to_right(Align::Min)),
+    );
+    ui.set_clip_rect(rect.intersect(ui.clip_rect()));
+    cover::tile(&mut ui, cover, COVER_SIDE);
+    let text_width = (ui.available_width() - TIMES_WIDTH).max(0.0);
+    let column = vec2(text_width, COVER_SIDE);
+    ui.allocate_ui_with_layout(column, Layout::top_down(Align::Min), |ui| {
+        ui.set_min_size(column);
+        ui.spacing_mut().item_spacing.y = 0.0;
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(&view.tag)
+                    .color(accent)
+                    .strong()
+                    .size(TITLE_FONT),
+            );
+            ui.add(Label::new(RichText::new(&view.title).strong().size(TITLE_FONT)).truncate());
         });
-        let times = vec2(ui.available_width(), COVER_SIDE);
-        ui.allocate_ui_with_layout(times, Layout::top_down(Align::Max), |ui| {
-            ui.spacing_mut().item_spacing.y = 0.0;
-            let bpm = view
-                .bpm
-                .map_or_else(|| "–".to_owned(), |bpm| format!("{bpm:.2}"));
-            ui.label(RichText::new(bpm).strong().size(BPM_FONT));
-            if let Some(key) = &view.key {
-                ui.label(RichText::new(key).color(accent));
-            }
-            if let Some(counter) = &view.beat_counter {
-                ui.label(RichText::new(counter).color(p.text_dim));
-            }
-            if !view.elapsed.is_empty() {
-                let remaining = format!("−{}", view.remaining);
-                let (time, other) = match view.time_mode {
-                    TimeMode::Elapsed => (view.elapsed.clone(), remaining),
-                    TimeMode::Remaining => (remaining, view.elapsed.clone()),
-                    TimeMode::Total => (view.total.clone(), view.elapsed.clone()),
-                };
+        ui.add(Label::new(RichText::new(&view.artist).color(p.text_dim)).truncate());
+        if let Some(remix) = &view.remix {
+            ui.add(Label::new(RichText::new(remix).color(p.text_dim)).truncate());
+        }
+        if let Some(stems) = &view.stems {
+            ui.label(RichText::new(stems).color(accent).size(SMALL_FONT));
+        }
+    });
+    let times = vec2(ui.available_width(), COVER_SIDE);
+    ui.allocate_ui_with_layout(times, Layout::top_down(Align::Max), |ui| {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        let bpm = view
+            .bpm
+            .map_or_else(|| "–".to_owned(), |bpm| format!("{bpm:.2}"));
+        ui.label(RichText::new(bpm).strong().size(BPM_FONT));
+        // Right to left: the last added is the leftmost.
+        let row = Layout::right_to_left(Align::Center);
+        let line = vec2(ui.available_width(), HEADER_LINE);
+        if view.key.is_some() || view.beat_counter.is_some() {
+            ui.allocate_ui_with_layout(line, row, |ui| {
+                if let Some(counter) = &view.beat_counter {
+                    ui.label(RichText::new(counter).color(p.text_dim));
+                }
+                if let Some(key) = &view.key {
+                    ui.label(RichText::new(key).color(accent));
+                }
+            });
+        }
+        if !view.elapsed.is_empty() {
+            let remaining = format!("−{}", view.remaining);
+            let (time, other) = match view.time_mode {
+                TimeMode::Elapsed => (view.elapsed.clone(), remaining),
+                TimeMode::Remaining => (remaining, view.elapsed.clone()),
+                TimeMode::Total => (view.total.clone(), view.elapsed.clone()),
+            };
+            ui.allocate_ui_with_layout(line, row, |ui| {
+                ui.label(RichText::new(other).color(p.text_dim));
                 let time = ui.add(Label::new(time).selectable(false).sense(Sense::click()));
                 if time.clicked() {
                     let _ = commands.send(UiCommand::View(ViewChange::CycleTime(view.deck)));
                 }
-                ui.label(RichText::new(other).color(p.text_dim));
-            }
-        });
+            });
+        }
     });
 }
 
@@ -639,7 +718,7 @@ fn overview(ui: &mut Ui, view: &DeckView) {
     painter.rect_filled(rect, CornerRadius::ZERO, p.lane);
     let mut mesh = Mesh::default();
     if let Some(waveform) = view.overview.as_deref() {
-        overview_columns(&mut mesh, rect, waveform, p.text_dim);
+        overview_columns(&mut mesh, rect, waveform, p.text_dim, p.wave_high);
     }
     if let Some(progress) = view.progress {
         let x = rect.left() + rect.width() * progress.clamp(0.0, 1.0);
@@ -651,7 +730,13 @@ fn overview(ui: &mut Ui, view: &DeckView) {
 
 /// One column per point, mirrored around the middle, as tall as the loudest bucket under
 /// it and in its colour.
-fn overview_columns(mesh: &mut Mesh, rect: Rect, waveform: &Waveform, silent: Color32) {
+fn overview_columns(
+    mesh: &mut Mesh,
+    rect: Rect,
+    waveform: &Waveform,
+    silent: Color32,
+    high: Color32,
+) {
     let buckets = &waveform.buckets;
     let columns = rect.width().floor().max(0.0) as usize;
     if buckets.is_empty() || columns == 0 {
@@ -668,7 +753,7 @@ fn overview_columns(mesh: &mut Mesh, rect: Rect, waveform: &Waveform, silent: Co
         let reach = half_height * f32::from(loudest[0]) / 255.0;
         let x = rect.left() + column as f32;
         let bar = Rect::from_min_max(pos2(x, middle - reach), pos2(x + 1.0, middle + reach));
-        mesh.add_colored_rect(bar, colour(*loudest, silent));
+        mesh.add_colored_rect(bar, colour(*loudest, silent, high));
     }
 }
 
@@ -702,11 +787,10 @@ fn fx(ui: &mut Ui, view: &DeckView, accent: Color32, level: bool, commands: &Sen
         let level = rect.width() * view.fx_level.clamp(0.0, 1.0);
         let filled = Rect::from_min_size(rect.min, vec2(level, rect.height()));
         painter.rect_filled(filled, CornerRadius::ZERO, accent);
-        ui.label(
-            RichText::new(format!("FX {:.0}%", view.fx_level * 100.0))
-                .color(p.text_dim)
-                .size(SMALL_FONT),
-        );
+        let caption = RichText::new(format!("FX {:.0}%", view.fx_level * 100.0))
+            .color(p.text_dim)
+            .size(SMALL_FONT);
+        ui.add_sized(vec2(FX_WIDTH, FX_CAPTION_HEIGHT), Label::new(caption));
     });
 }
 
@@ -764,11 +848,13 @@ fn jog_info(ui: &mut Ui, view: &DeckView, rect: Rect) {
 }
 
 /// The tempo slider (faster toward the bottom, as on the SB3) with the pitch in percent.
-fn pitch(ui: &mut Ui, view: &DeckView, accent: Color32, width: f32) {
+/// `height` is the middle row's.
+fn pitch(ui: &mut Ui, view: &DeckView, accent: Color32, width: f32, height: f32) {
     let p = theme::palette(ui.ctx());
-    ui.vertical_centered(|ui| {
-        ui.set_width(width);
-        let track_height = MIDDLE_HEIGHT - PITCH_LABEL_HEIGHT;
+    let (column, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
+    let layout = Layout::top_down(Align::Center);
+    ui.scope_builder(UiBuilder::new().max_rect(column).layout(layout), |ui| {
+        let track_height = height - PITCH_LABEL_HEIGHT;
         let (rect, _) = ui.allocate_exact_size(vec2(width, track_height), Sense::hover());
         let painter = ui.painter();
         let x = rect.center().x;
@@ -811,9 +897,8 @@ fn states(ui: &mut Ui, view: &DeckView, accent: Color32) {
 fn transport(ui: &mut Ui, view: &DeckView) {
     let p = theme::palette(ui.ctx());
     ui.vertical(|ui| {
+        // Each in line with the pad mode and the two rows of pads beside it.
         let size = vec2(TRANSPORT_WIDTH, BUTTON_HEIGHT);
-        // Line up with the pads, below the mode's name.
-        ui.add_space(SMALL_FONT + 4.0);
         indicator(ui, size, "CUE", view.cueing.then_some(p.cue));
         indicator(ui, size, "PLAY", view.playing.then_some(p.play_lit));
         indicator(ui, size, "SYNC", None);
@@ -853,7 +938,7 @@ fn pads_column(
     ui.vertical(|ui| {
         ui.set_width(pads_width);
         let p = theme::palette(ui.ctx());
-        let size = vec2(PAD_MODE_WIDTH, SLOT_HEIGHT);
+        let size = vec2(PAD_MODE_WIDTH.min(pads_width), BUTTON_HEIGHT);
         let id = ("pad mode", view.deck);
         let text = RichText::new(view.pad_mode).color(accent);
         dropdown_text(ui, "pad mode", id, size, text, p.lane, |ui| {
@@ -907,7 +992,7 @@ fn dropdown(
 ) {
     let p = theme::palette(ui.ctx());
     let (fill, colour) = match lit {
-        Some(colour) => (colour, p.background),
+        Some(colour) => (colour, p.on_accent),
         None => (p.lane, p.text_dim),
     };
     let text = RichText::new(text).color(colour);
@@ -946,7 +1031,7 @@ fn indicator(ui: &mut Ui, size: Vec2, text: &str, lit: Option<Color32>) {
     let p = theme::palette(ui.ctx());
     let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
     let (fill, colour) = match lit {
-        Some(colour) => (colour, p.background),
+        Some(colour) => (colour, p.on_accent),
         None => (p.lane, p.text_dim),
     };
     ui.painter().rect_filled(rect, CornerRadius::same(2), fill);

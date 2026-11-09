@@ -5,7 +5,7 @@ use std::sync::mpsc::channel;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use library::{BrowserView, Focus, ListRow, TrackRow};
-use ui::{ControlFrame, UiCommand, ViewChange, ViewState};
+use ui::{ControlFrame, Layout, PanelSizes, UiCommand, ViewChange, ViewState};
 
 fn browser() -> BrowserView {
     let track = TrackRow {
@@ -119,9 +119,29 @@ fn sideview_shows_the_sampler() {
     assert!(harness.query_by_label("sideview").is_none());
 }
 
+/// Presses the pointer at `from`, moves it to `to` and lets go.
+fn drag(harness: &mut Harness<'_>, from: egui::Pos2, to: egui::Pos2) {
+    let button = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    };
+    harness.event(egui::Event::PointerMoved(from));
+    harness.run_steps(2);
+    harness.event(button(from, true));
+    harness.run_steps(2);
+    harness.event(egui::Event::PointerMoved(to));
+    harness.run_steps(2);
+    harness.event(button(to, false));
+    harness.run_steps(2);
+}
+
 #[test]
 fn dragging_a_divider_sends_the_new_sizes() {
-    let frame = frame(true, false);
+    // Not Pro: its decks' share is the unset one's.
+    let mut frame = frame(true, false);
+    frame.view.layout = Layout::Starter;
     let (commands, asked) = channel();
     let mut screen = ui::Screen {
         commands,
@@ -130,24 +150,32 @@ fn dragging_a_divider_sends_the_new_sizes() {
     let mut harness = draw(&frame, &mut screen);
     // The divider between the tree and the list, near the bottom of the window.
     let from = egui::pos2(0.20 * 1440.0, 880.0);
-    let to = egui::pos2(0.30 * 1440.0, 880.0);
-    let button = |pressed| egui::Event::PointerButton {
-        pos: if pressed { from } else { to },
-        button: egui::PointerButton::Primary,
-        pressed,
-        modifiers: egui::Modifiers::NONE,
-    };
-    harness.event(egui::Event::PointerMoved(from));
-    harness.run_steps(2);
-    harness.event(button(true));
-    harness.run_steps(2);
-    harness.event(egui::Event::PointerMoved(to));
-    harness.run_steps(2);
-    harness.event(button(false));
-    harness.run_steps(2);
+    drag(&mut harness, from, egui::pos2(0.30 * 1440.0, 880.0));
     let sent: Vec<_> = asked.try_iter().collect();
     let Some(UiCommand::View(ViewChange::SetSizes(sizes))) = sent.last() else {
         panic!("no sizes sent: {sent:?}");
     };
     assert!((sizes.tree - 0.30).abs() < 0.02, "{sizes:?}");
+    // The decks' share was never set: it stays unset, so every layout keeps its own.
+    assert_eq!(sizes.decks, PanelSizes::default().decks, "{sizes:?}");
+    let window = egui::vec2(1440.0, 900.0);
+    let height = |layout| {
+        let sections = ui::layout::sections(layout);
+        ui::layout::drawn_sizes(*sizes, &sections, window).decks
+    };
+    assert!(height(Layout::Starter) > height(Layout::Pro), "{sizes:?}");
+}
+
+#[test]
+fn clicking_a_divider_sends_nothing() {
+    let frame = frame(true, false);
+    let (commands, asked) = channel();
+    let mut screen = ui::Screen {
+        commands,
+        ..ui::Screen::default()
+    };
+    let mut harness = draw(&frame, &mut screen);
+    let at = egui::pos2(0.20 * 1440.0, 880.0);
+    drag(&mut harness, at, at);
+    assert_eq!(asked.try_iter().collect::<Vec<_>>(), []);
 }

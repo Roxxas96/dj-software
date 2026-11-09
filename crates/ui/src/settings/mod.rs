@@ -67,6 +67,8 @@ pub fn show(
     commands: &Sender<UiCommand>,
 ) {
     if !state.open {
+        // What was typed and not sent is dropped with the window.
+        state.drafts.clear();
         return;
     }
     let mut open = true;
@@ -106,6 +108,7 @@ fn page(
         Page::Audio => audio(ui, frame, state, commands),
         Page::Interface => interface::show(ui, &frame.view, commands),
         Page::Controllers => controllers(ui, frame, state, commands),
+        Page::Options if rows.is_empty() => unavailable(ui, frame),
         Page::Options => options::show(ui, rows, &mut state.options, &mut state.drafts, commands),
         Page::Later => later(ui),
     }
@@ -218,6 +221,15 @@ fn controllers(
     for row in rows_of(rows, "controller.") {
         options::show_row(ui, row, rows, &mut state.drafts, commands);
     }
+}
+
+/// In place of the settings before the session has them: why, if it stopped.
+fn unavailable(ui: &mut Ui, frame: &ControlFrame) {
+    let p = theme::palette(ui.ctx());
+    match &frame.error {
+        Some(error) => ui.label(RichText::new(error.as_str()).color(p.error)),
+        None => ui.label(RichText::new("settings are not available yet").color(p.text_dim)),
+    };
 }
 
 /// What will come, with nothing to set yet.

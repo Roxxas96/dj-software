@@ -58,3 +58,28 @@ fn the_zoom_buttons_ask_for_steps() {
         .sum();
     assert_eq!(steps, -2);
 }
+
+#[test]
+fn a_long_status_is_cut_short_at_the_smallest_window() {
+    let frame = ui::ControlFrame {
+        error: Some("a very long reason the session stopped, ".repeat(8)),
+        ..ui::ControlFrame::default()
+    };
+    let mut screen = ui::Screen::default();
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size([1024.0, 700.0])
+        .build_ui(|ui| ui::root(ui, &frame, None, &mut screen));
+    harness.run_steps(3);
+    let status = harness
+        .get_all_by_label_contains("a very long reason")
+        .map(|n| n.rect())
+        .min_by(|a, b| a.top().total_cmp(&b.top()))
+        .unwrap();
+    let right = harness.get_by_label("no controller").rect();
+    let cpu = harness.get_by_label("CPU \u{2013}").rect();
+    assert!(
+        status.right() < cpu.left().min(right.left()),
+        "{status:?} {cpu:?}"
+    );
+    assert!(status.right() <= 1024.0);
+}

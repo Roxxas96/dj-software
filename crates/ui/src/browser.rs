@@ -107,11 +107,12 @@ pub(crate) fn divider(ui: &mut Ui, name: &str, rect: Rect, cursor: CursorIcon) -
         ui.painter()
             .line_segment(line, Stroke::new(2.0, p.text_dim));
     }
+    // A press that has not moved yet is no drag: a click leaves the shares alone.
+    let moved = response
+        .total_drag_delta()
+        .is_some_and(|delta| delta != egui::Vec2::ZERO);
     Drag {
-        pointer: response
-            .dragged()
-            .then(|| response.interact_pointer_pos())
-            .flatten(),
+        pointer: moved.then(|| response.interact_pointer_pos()).flatten(),
         stopped: response.drag_stopped(),
     }
 }
@@ -160,7 +161,12 @@ pub fn show(
         changes.stopped |= drag.stopped;
         if let Some(pointer) = drag.pointer {
             set(&mut sizes, pointer.x);
-            sizes = clamp_sizes(sizes, arrangement.window);
+            // The browser moves only the columns; the rows stay as the window drew them.
+            sizes = PanelSizes {
+                lanes: arrangement.sizes.lanes,
+                decks: arrangement.sizes.decks,
+                ..clamp_sizes(sizes, arrangement.window, 0.0)
+            };
         }
     };
     drag(ui, "tree_divider", tree_edge, &|sizes, x| {

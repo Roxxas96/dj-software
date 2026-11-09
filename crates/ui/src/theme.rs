@@ -49,6 +49,8 @@ pub struct Palette {
     pub note: Color32,
     /// Text on a lit (accent-coloured) button.
     pub on_accent: Color32,
+    /// The colour of a waveform's high frequencies.
+    pub wave_high: Color32,
 }
 
 impl Palette {
@@ -74,10 +76,11 @@ impl Palette {
         play_lit: Color32::from_rgb(0x4c, 0xc2, 0x6a),
         note: Color32::from_gray(0x55),
         on_accent: Color32::BLACK,
+        wave_high: Color32::WHITE,
     };
 
-    /// Light grey, VirtualDJ's other look. The accents, ticks and waveform colours keep
-    /// their hues.
+    /// Light grey, VirtualDJ's other look. The accents, ticks and the waveforms' bass and
+    /// mids keep their hues; the highs and the error text are darker, to read on light grey.
     pub const LIGHT: Self = Self {
         background: Color32::from_rgb(0xe6, 0xe6, 0xe6),
         panel: Color32::from_rgb(0xf4, 0xf4, 0xf4),
@@ -92,6 +95,8 @@ impl Palette {
         highlight: Color32::from_rgb(0x9c, 0xc6, 0xe8),
         highlight_dim: Color32::from_rgb(0xcf, 0xd2, 0xd8),
         note: Color32::from_gray(0xa0),
+        error: Color32::from_rgb(0xc4, 0x1e, 0x1e),
+        wave_high: Color32::from_rgb(0x3e, 0x4c, 0x5e),
         ..Self::DARK
     };
 
@@ -154,6 +159,34 @@ pub fn apply(ctx: &Context, scheme: ColourScheme) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The WCAG contrast ratio of `a` on `b`.
+    fn contrast(a: Color32, b: Color32) -> f32 {
+        let luminance = |c: Color32| {
+            let channel = |v: u8| {
+                let v = f32::from(v) / 255.0;
+                if v <= 0.040_45 {
+                    v / 12.92
+                } else {
+                    ((v + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * channel(c.r()) + 0.7152 * channel(c.g()) + 0.0722 * channel(c.b())
+        };
+        let (a, b) = (luminance(a), luminance(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    #[test]
+    fn light_text_and_highs_read_on_light_grey() {
+        let light = Palette::LIGHT;
+        for surface in [light.panel, light.background] {
+            assert!(contrast(light.error, surface) >= 4.5, "{surface:?}");
+        }
+        assert!(contrast(light.wave_high, light.lane) >= 4.5);
+        // The dark scheme keeps its own.
+        assert_eq!(Palette::DARK.wave_high, Color32::WHITE);
+    }
 
     #[test]
     fn palettes_differ_and_keep_accents() {
