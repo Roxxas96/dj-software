@@ -883,7 +883,10 @@ fn hotcue_actions_send_slot_commands() {
         let at = rig.c.deck(d(0)).position_frames;
         // Press on an empty pad sets it at the playhead; release is sent too.
         assert_eq!(rig.apply(pad, Input::Press), ApplyResult::Sent(1));
-        assert_eq!(rig.c.deck(d(0)).hotcues[slot(n).index()], Some(at));
+        assert_eq!(
+            rig.c.deck(d(0)).hotcues[slot(n).index()].map(|h| h.frames),
+            Some(at)
+        );
         assert_eq!(rig.apply(pad, Input::Release), ApplyResult::Sent(1));
     }
     let snap = rig.c.deck(d(0));
@@ -909,7 +912,7 @@ fn shifted_releases_end_the_unshifted_hold() {
     rig.c
         .send(engine::Command::Deck(
             d(0),
-            engine::DeckCommand::SetHotcue(slot(1), Some(5_000.0)),
+            engine::DeckCommand::SetHotcue(slot(1), Some(engine::Hotcue::point(5_000.0))),
         ))
         .unwrap();
     rig.render(1);
@@ -920,7 +923,7 @@ fn shifted_releases_end_the_unshifted_hold() {
     assert!(!snap.previewing && !snap.playing, "pad preview ended");
     assert_eq!(snap.position_frames, 5_000.0);
     assert_eq!(
-        snap.hotcues[0],
+        snap.hotcues[0].map(|h| h.frames),
         Some(5_000.0),
         "the release deletes nothing"
     );

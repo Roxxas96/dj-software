@@ -577,7 +577,7 @@ impl LibraryMode {
     ) {
         for &(track, action) in saved {
             let (slot, value) = match action {
-                MemoryAction::SaveHotcue(slot, frames) => (slot, Some(frames)),
+                MemoryAction::SaveHotcue(slot, hotcue) => (slot, Some(hotcue)),
                 MemoryAction::DeleteHotcue(slot) => (slot, None),
                 MemoryAction::SaveCue(_) => continue,
             };
@@ -665,11 +665,11 @@ impl LibraryMode {
         for &action in actions {
             let op = match action {
                 MemoryAction::SaveCue(frames) => WriteOp::SetCue { track: id, frames },
-                MemoryAction::SaveHotcue(slot, frames) => WriteOp::SetHotcue {
+                MemoryAction::SaveHotcue(slot, hotcue) => WriteOp::SetHotcue {
                     track: id,
                     slot: slot.number(),
-                    frames,
-                    loop_frames: None,
+                    frames: hotcue.frames,
+                    loop_frames: hotcue.loop_frames,
                 },
                 MemoryAction::DeleteHotcue(slot) => WriteOp::DeleteHotcue {
                     track: id,
@@ -1434,9 +1434,12 @@ mod tests {
         render(&mut renderer);
         mode.sync_cues(&mut engine, &printer);
         let slot1 = engine::HotcueSlot::new(1).unwrap();
-        let set = |engine: &mut EngineController, deck, value| {
+        let set = |engine: &mut EngineController, deck, value: Option<f64>| {
             engine
-                .send(Command::Deck(deck, DeckCommand::SetHotcue(slot1, value)))
+                .send(Command::Deck(
+                    deck,
+                    DeckCommand::SetHotcue(slot1, value.map(engine::Hotcue::point)),
+                ))
                 .unwrap();
         };
 
@@ -1448,7 +1451,11 @@ mod tests {
         mode.sync_cues(&mut engine, &printer);
         assert_eq!(stored_hotcues(&mode)[0], Some(100.0));
         render(&mut renderer);
-        assert_eq!(engine.deck(d3).hotcues[0], Some(100.0), "deck 3 has it");
+        assert_eq!(
+            engine.deck(d3).hotcues[0].map(|h| h.frames),
+            Some(100.0),
+            "deck 3 has it"
+        );
         mode.sync_cues(&mut engine, &printer);
         assert_eq!(stored_hotcues(&mode)[0], Some(100.0));
 
@@ -1486,7 +1493,7 @@ mod tests {
         mode.sync_cues(&mut engine, &printer);
         let slot1 = engine::HotcueSlot::new(1).unwrap();
         for cmd in [
-            DeckCommand::SetHotcue(slot1, Some(100.0)),
+            DeckCommand::SetHotcue(slot1, Some(engine::Hotcue::point(100.0))),
             DeckCommand::SetCue(50.0),
         ] {
             engine.send(Command::Deck(d1, cmd)).unwrap();
@@ -1510,7 +1517,7 @@ mod tests {
         load_7(&mut mode, 0, &mut engine, &printer);
         let d1 = DeckId::new(0).unwrap();
         let mut hotcues = [None; engine::HOTCUES];
-        hotcues[0] = Some(100.0);
+        hotcues[0] = Some(engine::Hotcue::point(100.0));
         let shown = DeckSnapshot {
             loaded: true,
             duration_frames: 4410,
@@ -1900,7 +1907,7 @@ mod tests {
         let deck = DeckId::new(0).unwrap();
         let shown = |load_seq, hotcue: Option<f64>| {
             let mut hotcues = [None; engine::HOTCUES];
-            hotcues[0] = hotcue;
+            hotcues[0] = hotcue.map(engine::Hotcue::point);
             DeckSnapshot {
                 loaded: true,
                 duration_frames: 4410,
@@ -1948,7 +1955,7 @@ mod tests {
         let deck = DeckId::new(0).unwrap();
         let shown = |load_seq, hotcue: Option<f64>| {
             let mut hotcues = [None; engine::HOTCUES];
-            hotcues[0] = hotcue;
+            hotcues[0] = hotcue.map(engine::Hotcue::point);
             DeckSnapshot {
                 loaded: true,
                 duration_frames: 4410,

@@ -2,8 +2,8 @@ mod common;
 
 use common::{ramp_track, render};
 use engine::{
-    Command, DeckCommand, DeckId, EngineConfig, EngineController, EngineRenderer, Grid, HotcueSlot,
-    JogSurface, TempoRange, TrackMemory, engine,
+    Command, DeckCommand, DeckId, EngineConfig, EngineController, EngineRenderer, Grid, Hotcue,
+    HotcueSlot, JogSurface, TempoRange, TrackMemory, engine,
 };
 
 const SR: u32 = 44_100;
@@ -152,7 +152,7 @@ fn slip_hotcue_is_momentary() {
         &mut c,
         &mut r,
         id,
-        DeckCommand::SetHotcue(slot(1), Some(5000.0)),
+        DeckCommand::SetHotcue(slot(1), Some(Hotcue::point(5000.0))),
     );
     let start = position(&c, id);
     step(&mut c, &mut r, id, DeckCommand::HotcuePress(slot(1)));
@@ -201,7 +201,7 @@ fn ghost_follows_tempo_and_nudge() {
         &mut c,
         &mut r,
         id,
-        DeckCommand::SetHotcue(slot(1), Some(5000.0)),
+        DeckCommand::SetHotcue(slot(1), Some(Hotcue::point(5000.0))),
     );
     step(&mut c, &mut r, id, DeckCommand::HotcuePress(slot(1)));
     let (p0, g0) = (position(&c, id), ghost(&c, id));
@@ -259,7 +259,7 @@ fn without_slip_nothing_changes() {
         &mut c,
         &mut r,
         id,
-        DeckCommand::SetHotcue(slot(1), Some(5000.0)),
+        DeckCommand::SetHotcue(slot(1), Some(Hotcue::point(5000.0))),
     );
     step(&mut c, &mut r, id, DeckCommand::HotcuePress(slot(1)));
     render(&mut r, 1000);
@@ -301,7 +301,7 @@ fn slip_hotcue_out_of_a_loop_leaves_it() {
         &mut c,
         &mut r,
         id,
-        DeckCommand::SetHotcue(slot(1), Some(5000.0)),
+        DeckCommand::SetHotcue(slot(1), Some(Hotcue::point(5000.0))),
     );
     step(&mut c, &mut r, id, DeckCommand::HotcuePress(slot(1)));
     assert!(!c.deck(id).loop_active, "the jump left the loop");
@@ -366,7 +366,7 @@ fn deliberate_jumps_drop_the_ghost() {
         &mut c,
         &mut r,
         id,
-        DeckCommand::SetHotcue(slot(1), Some(5000.0)),
+        DeckCommand::SetHotcue(slot(1), Some(Hotcue::point(5000.0))),
     );
     step(&mut c, &mut r, id, DeckCommand::HotcuePress(slot(1)));
     assert!(c.deck(id).ghost_frames.is_some());

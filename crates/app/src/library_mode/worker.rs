@@ -11,7 +11,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread::JoinHandle;
 
-use engine::{DeckId, HOTCUES, TrackBuffer, TrackMemory};
+use engine::{DeckId, HOTCUES, Hotcue, TrackBuffer, TrackMemory};
 use library::{
     Beatgrid, Browser, BrowserRequest, BrowserView, Drive, GridEdit, Library, PendingTrack, Reader,
     TrackRow,
@@ -404,7 +404,9 @@ fn read_memory(
     let grid = read_or_warn(reader.beatgrid(track), "beatgrid", "", track, events).flatten();
     let memory = TrackMemory {
         cue: cue.unwrap_or(0.0),
-        hotcues: hotcues.unwrap_or_default(),
+        hotcues: hotcues
+            .map(|h| h.map(|frames| frames.map(Hotcue::point)))
+            .unwrap_or_default(),
         // Grid periods at the decoded rate, which is what the deck plays.
         grid: engine_grid(grid.as_ref(), rate),
     };
@@ -602,7 +604,7 @@ mod tests {
         assert_eq!((loaded.deck, loaded.seq, loaded.row.id), (deck(1), 7, id));
         assert_eq!(loaded.memory.cue, 1234.0);
         let mut hotcues = [None; HOTCUES];
-        hotcues[2] = Some(900.0);
+        hotcues[2] = Some(Hotcue::point(900.0));
         assert_eq!(loaded.memory.hotcues, hotcues);
         let rate = loaded.buffer.sample_rate();
         assert_eq!(
@@ -691,7 +693,7 @@ mod tests {
             Event::Loaded(l) => Some(l),
             _ => None,
         });
-        assert_eq!(loaded.memory.hotcues[0], Some(77.0));
+        assert_eq!(loaded.memory.hotcues[0], Some(Hotcue::point(77.0)));
     }
 
     fn panicking_decode(path: &Path) -> Result<decode::Decoded, decode::DecodeError> {

@@ -1047,7 +1047,7 @@ fn indicator(ui: &mut Ui, size: Vec2, text: &str, lit: Option<Color32>) {
 mod tests {
     use std::path::PathBuf;
 
-    use engine::Grid;
+    use engine::{Grid, Hotcue};
     use library::TrackRow;
 
     use super::*;
@@ -1177,8 +1177,8 @@ mod tests {
     #[test]
     fn pads_follow_the_mode() {
         let (mut snapshot, mut frame) = loaded();
-        snapshot.hotcues[0] = Some(1000.0);
-        snapshot.hotcues[2] = Some(5000.0);
+        snapshot.hotcues[0] = Some(Hotcue::point(1000.0));
+        snapshot.hotcues[2] = Some(Hotcue::point(5000.0));
         frame.control.sides[0].hardware_mode = Some(HardwarePadMode::HotCue);
         let pads = view(&snapshot, &frame).pads;
         assert!(pads[0].lit && !pads[1].lit && pads[2].lit);

@@ -36,6 +36,51 @@ impl HotcueSlot {
     }
 }
 
+/// A hotcue slot's content: a point, or a saved loop starting there.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Hotcue {
+    /// Position in track frames; a saved loop's start.
+    pub frames: f64,
+    /// A saved loop's length in track frames, `None` for a plain hotcue.
+    pub loop_frames: Option<f64>,
+}
+
+impl Hotcue {
+    /// A plain hotcue at `frames`.
+    pub fn point(frames: f64) -> Hotcue {
+        Hotcue {
+            frames,
+            loop_frames: None,
+        }
+    }
+
+    /// The hotcue as the engine keeps it on a track of `frames` frames, or `None` when its
+    /// position is not finite: the position clamped to `[0, frames]`, a non-finite or
+    /// non-positive loop length made a plain hotcue, and a loop end past the track end cut
+    /// to it.
+    pub(crate) fn clamped(self, frames: usize) -> Option<Hotcue> {
+        if !self.frames.is_finite() {
+            return None;
+        }
+        let end = frames as f64;
+        let start = self.frames.clamp(0.0, end);
+        let loop_frames = self
+            .loop_frames
+            .filter(|l| l.is_finite() && *l > 0.0)
+            .map(|l| l.min(end - start))
+            .filter(|l| *l > 0.0);
+        Some(Hotcue {
+            frames: start,
+            loop_frames,
+        })
+    }
+
+    /// The saved loop's start and end in track frames, if the slot holds one.
+    pub(crate) fn loop_bounds(&self) -> Option<(f64, f64)> {
+        self.loop_frames.map(|l| (self.frames, self.frames + l))
+    }
+}
+
 /// A constant-tempo beatgrid, in track frames.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Grid {
@@ -76,15 +121,17 @@ impl Grid {
 pub struct TrackMemory {
     /// Cue point in track frames.
     pub cue: f64,
-    /// Hotcue positions in track frames, indexed by [`HotcueSlot::index`].
-    pub hotcues: [Option<f64>; HOTCUES],
+    /// Hotcues and saved loops, indexed by [`HotcueSlot::index`].
+    pub hotcues: [Option<Hotcue>; HOTCUES],
     pub grid: Option<Grid>,
 }
 
 impl TrackMemory {
     /// The memory as the engine applies it to a track of `frames` frames: cue and hotcues
-    /// clamped to `[0, frames]`, a non-finite cue reset to 0, a non-finite hotcue dropped,
-    /// and a grid with a non-finite or non-positive period or a non-finite first beat dropped.
+    /// clamped to `[0, frames]`, a non-finite cue reset to 0, a non-finite hotcue dropped, a
+    /// saved loop with a non-finite or non-positive length made a plain hotcue and one past
+    /// the track end cut to it, and a grid with a non-finite or non-positive period or a
+    /// non-finite first beat dropped.
     pub fn clamped(self, frames: usize) -> TrackMemory {
         let end = frames as f64;
         let clamp = |v: f64| v.clamp(0.0, end);
@@ -94,7 +141,7 @@ impl TrackMemory {
             } else {
                 0.0
             },
-            hotcues: self.hotcues.map(|h| h.filter(|v| v.is_finite()).map(clamp)),
+            hotcues: self.hotcues.map(|h| h.and_then(|h| h.clamped(frames))),
             grid: self.grid.filter(Grid::is_valid),
         }
     }

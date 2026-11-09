@@ -6,8 +6,8 @@ use approx::{assert_abs_diff_eq, assert_relative_eq};
 use common::{SETTLE_FRAMES, SETTLED_EPSILON, constant_track, ramp_track, render};
 use engine::{
     ChannelCommand, Command, CommandQueueFull, DeckCommand, DeckId, EngineConfig, EngineController,
-    EngineRenderer, Grid, HOTCUES, HotcueSlot, MasterCommand, TempoRange, TrackBuffer, TrackError,
-    TrackMemory, XfaderAssign, engine,
+    EngineRenderer, Grid, HOTCUES, Hotcue, HotcueSlot, MasterCommand, TempoRange, TrackBuffer,
+    TrackError, TrackMemory, XfaderAssign, engine,
 };
 
 const SR: u32 = 44_100;
@@ -444,7 +444,7 @@ fn grid_120_bpm() -> Grid {
 fn load_applies_track_memory() {
     let (mut c, mut r) = setup(SR);
     let mut hotcues = [None; HOTCUES];
-    hotcues[HotcueSlot::new(3).unwrap().index()] = Some(900.0);
+    hotcues[HotcueSlot::new(3).unwrap().index()] = Some(Hotcue::point(900.0));
     let memory = TrackMemory {
         cue: 500.0,
         hotcues,
@@ -461,7 +461,7 @@ fn load_applies_track_memory() {
     render(&mut r, 64);
     let s = c.deck(deck(0));
     assert_eq!(s.cue_frames, 500.0);
-    assert_eq!(s.hotcues[2], Some(900.0));
+    assert_eq!(s.hotcues[2], Some(Hotcue::point(900.0)));
     let grid = s.grid.unwrap();
     assert_eq!(grid.beat_period_frames, 22_050.0);
     assert_eq!(grid.first_beat_frames, 1000.0);
@@ -498,8 +498,8 @@ fn load_clamps_memory_like_clamped() {
     let memory = TrackMemory {
         cue: 5000.0,
         hotcues: [
-            Some(-5.0),
-            Some(f64::NAN),
+            Some(Hotcue::point(-5.0)),
+            Some(Hotcue::point(f64::NAN)),
             None,
             None,
             None,
@@ -521,7 +521,7 @@ fn load_clamps_memory_like_clamped() {
     let s = c.deck(deck(0));
     let expected = memory.clamped(1000);
     assert_eq!(expected.cue, 1000.0);
-    assert_eq!(expected.hotcues[..2], [Some(0.0), None]);
+    assert_eq!(expected.hotcues[..2], [Some(Hotcue::point(0.0)), None]);
     assert_eq!(s.cue_frames, expected.cue);
     assert_eq!(s.hotcues, expected.hotcues);
     assert_eq!(s.grid, Some(grid_120_bpm()));

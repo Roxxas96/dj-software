@@ -249,8 +249,8 @@ impl Lane<'_> {
             mesh.add_colored_rect(Rect::from_x_y_ranges(xs.clone(), top), colour);
             mesh.add_colored_rect(Rect::from_x_y_ranges(xs, bottom), colour);
         }
-        for frame in snapshot.hotcues.iter().flatten() {
-            let x = scale.x(*frame);
+        for hotcue in snapshot.hotcues.iter().flatten() {
+            let x = scale.x(hotcue.frames);
             let pole = x..=x + FLAG_POLE;
             mesh.add_colored_rect(Rect::from_x_y_ranges(pole, rect.y_range()), p.hotcue);
             let flag = Rect::from_min_size(pos2(x, rect.top()), vec2(FLAG_SIZE, FLAG_SIZE));
@@ -273,9 +273,9 @@ impl Lane<'_> {
 
     /// The numbers on the hotcue flags in sight.
     fn hotcue_numbers(&self, painter: &Painter, rect: Rect, scale: &Scale, p: &Palette) {
-        for (slot, frame) in self.snapshot.hotcues.iter().enumerate() {
-            let Some(frame) = frame else { continue };
-            let x = scale.x(*frame);
+        for (slot, hotcue) in self.snapshot.hotcues.iter().enumerate() {
+            let Some(hotcue) = hotcue else { continue };
+            let x = scale.x(hotcue.frames);
             if x + FLAG_SIZE < rect.left() || x > rect.right() {
                 continue;
             }

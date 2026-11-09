@@ -2,8 +2,8 @@ mod common;
 
 use common::{ramp_track, render};
 use engine::{
-    Command, DeckCommand, DeckId, EngineConfig, EngineController, EngineRenderer, Grid, HotcueSlot,
-    TrackMemory, engine,
+    Command, DeckCommand, DeckId, EngineConfig, EngineController, EngineRenderer, Grid, Hotcue,
+    HotcueSlot, TrackMemory, engine,
 };
 
 const SR: u32 = 44_100;
@@ -347,13 +347,13 @@ fn hotcue_outside_loop_exits_it() {
         &mut c,
         &mut r,
         id,
-        DeckCommand::SetHotcue(slot(1), Some(50_000.0)),
+        DeckCommand::SetHotcue(slot(1), Some(Hotcue::point(50_000.0))),
     );
     step(
         &mut c,
         &mut r,
         id,
-        DeckCommand::SetHotcue(slot(2), Some(200_000.0)),
+        DeckCommand::SetHotcue(slot(2), Some(Hotcue::point(200_000.0))),
     );
     step(&mut c, &mut r, id, DeckCommand::Seek(22_050.0));
     step(&mut c, &mut r, id, DeckCommand::AutoLoop);

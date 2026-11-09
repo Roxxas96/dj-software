@@ -2,8 +2,8 @@ mod common;
 
 use common::{ramp_track, render};
 use engine::{
-    Command, DeckCommand, DeckId, EngineConfig, EngineController, EngineRenderer, Grid, HotcueSlot,
-    TrackMemory, engine,
+    Command, DeckCommand, DeckId, EngineConfig, EngineController, EngineRenderer, Grid, Hotcue,
+    HotcueSlot, TrackMemory, engine,
 };
 
 const SR: u32 = 44_100;
@@ -277,7 +277,7 @@ fn load_resets_roll_and_slice() {
             &mut c,
             &mut r,
             id,
-            DeckCommand::SetHotcue(HotcueSlot::new(1).unwrap(), Some(300_000.0)),
+            DeckCommand::SetHotcue(HotcueSlot::new(1).unwrap(), Some(Hotcue::point(300_000.0))),
         );
         for pad in [press(1.0), DeckCommand::SlicePress(2)] {
             step(&mut c, &mut r, id, pad);

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use analysis::Waveform;
 use egui::{Mesh, Sense};
 use egui_kittest::Harness;
-use engine::{DeckId, DeckSnapshot, Grid};
+use engine::{DeckId, DeckSnapshot, Grid, Hotcue};
 use ui::waveform::Lane;
 use ui::{ControlFrame, WaveformPosition, WaveformStyle};
 
@@ -55,8 +55,8 @@ fn lane_draws_with_and_without_a_grid() {
         loop_active: true,
         ..DeckSnapshot::default()
     };
-    loaded.hotcues[0] = Some(435_000.0);
-    loaded.hotcues[2] = Some(450_000.0);
+    loaded.hotcues[0] = Some(Hotcue::point(435_000.0));
+    loaded.hotcues[2] = Some(Hotcue::point(450_000.0));
     draw(loaded, &waveform);
     let gridded = DeckSnapshot {
         grid: Some(Grid {

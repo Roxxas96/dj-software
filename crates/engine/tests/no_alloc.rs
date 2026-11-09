@@ -5,7 +5,7 @@ use std::sync::Arc;
 use assert_no_alloc::{AllocDisabler, assert_no_alloc};
 use common::ramp_track;
 use engine::{
-    ChannelCommand, Command, DeckCommand, DeckId, EffectKind, EngineConfig, EqMode, Grid,
+    ChannelCommand, Command, DeckCommand, DeckId, EffectKind, EngineConfig, EqMode, Grid, Hotcue,
     HotcueSlot, JogSurface, MasterCommand, SamplerCommand, Stem, StemKnobs, StemSet, TrackMemory,
     XfaderAssign, engine,
 };
@@ -76,10 +76,10 @@ fn render_does_not_allocate() {
             memory: TrackMemory {
                 cue: 5000.0,
                 hotcues: [
-                    Some(100.0),
+                    Some(Hotcue::point(100.0)),
                     None,
-                    Some(f64::NAN),
-                    Some(-1.0),
+                    Some(Hotcue::point(f64::NAN)),
+                    Some(Hotcue::point(-1.0)),
                     None,
                     None,
                     None,
@@ -128,8 +128,8 @@ fn render_does_not_allocate() {
         DeckCommand::HotcueRelease(slot(1)),
         DeckCommand::HotcuePress(slot(2)),
         DeckCommand::HotcueRelease(slot(2)),
-        DeckCommand::SetHotcue(slot(3), Some(9000.0)),
-        DeckCommand::SetHotcue(slot(3), Some(f64::NAN)),
+        DeckCommand::SetHotcue(slot(3), Some(Hotcue::point(9000.0))),
+        DeckCommand::SetHotcue(slot(3), Some(Hotcue::point(f64::NAN))),
         DeckCommand::HotcuePress(slot(3)),
         DeckCommand::HotcueDelete(slot(3)),
         DeckCommand::Pause,
@@ -196,7 +196,7 @@ fn render_does_not_allocate() {
         DeckCommand::JogTouch(false),
         DeckCommand::LoopHalve,
         DeckCommand::AutoLoop,
-        DeckCommand::SetHotcue(slot(4), Some(3000.0)),
+        DeckCommand::SetHotcue(slot(4), Some(Hotcue::point(3000.0))),
         DeckCommand::HotcuePress(slot(4)),
         DeckCommand::Jog {
             turns: 0.1,
@@ -247,6 +247,24 @@ fn render_does_not_allocate() {
         DeckCommand::SliceRelease(2),
         DeckCommand::SliceRelease(6),
         DeckCommand::AutoLoop,
+        // A saved loop: stored from an active loop, then pressed to jump and loop; a
+        // restored one with a length that is not usable is a plain hotcue.
+        DeckCommand::AutoLoopBeats(2.0),
+        DeckCommand::HotcuePress(slot(7)),
+        DeckCommand::HotcueRelease(slot(7)),
+        DeckCommand::LoopExit,
+        DeckCommand::HotcuePress(slot(7)),
+        DeckCommand::HotcueRelease(slot(7)),
+        DeckCommand::HotcueDelete(slot(7)),
+        DeckCommand::SetHotcue(
+            slot(7),
+            Some(Hotcue {
+                frames: 2000.0,
+                loop_frames: Some(f64::INFINITY),
+            }),
+        ),
+        DeckCommand::HotcueDelete(slot(7)),
+        DeckCommand::LoopExit,
         // A roll over a slipped loop hands the ghost back; loop buttons wait meanwhile.
         DeckCommand::SetSlip(true),
         DeckCommand::AutoLoop,

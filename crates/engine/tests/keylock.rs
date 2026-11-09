@@ -6,8 +6,8 @@ use std::sync::Arc;
 use common::render;
 use engine::{
     ChannelCommand, Command, DeckCommand, DeckId, EngineConfig, EngineController, EngineRenderer,
-    HotcueSlot, JogSurface, MasterCommand, TempoRange, TrackBuffer, TrackMemory, XfaderAssign,
-    engine,
+    Hotcue, HotcueSlot, JogSurface, MasterCommand, TempoRange, TrackBuffer, TrackMemory,
+    XfaderAssign, engine,
 };
 
 const SR: u32 = 44_100;
@@ -133,7 +133,7 @@ fn keylock_jump_is_heard_at_once() {
     let slot = HotcueSlot::new(1).unwrap();
     send(
         &mut c,
-        DeckCommand::SetHotcue(slot, Some(4.0 * f64::from(SR))),
+        DeckCommand::SetHotcue(slot, Some(Hotcue::point(4.0 * f64::from(SR)))),
     );
     send(&mut c, DeckCommand::Play);
     let (before, _) = render(&mut r, SR as usize / 2);

@@ -129,6 +129,13 @@ impl Deck {
         if let (true, Some(start), Some(end)) = (self.loop_active, self.loop_in, self.loop_out)
             && !(start..end).contains(&point)
         {
+            self.exit_loop_by_jump();
+        }
+    }
+
+    /// A jump left the active loop: it is deactivated and a slipped loop's ghost dropped.
+    pub(super) fn exit_loop_by_jump(&mut self) {
+        if self.loop_active {
             self.loop_active = false;
             self.slip_loop_exited(true);
         }
