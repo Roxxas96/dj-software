@@ -43,6 +43,8 @@ eframe = "0.37.0"
 egui = "0.37.0"
 egui_kittest = "0.37.0"
 jiff = "0.2.40"
+# Reads VirtualDJ's XML databases and playlists.
+quick-xml = "0.42.0"
 
 # Decoding a whole track before it plays (MP3, AAC, FLAC, WAV) takes seconds unoptimized,
 # so loading a track in a debug build (`cargo run`) is slow: a 4-minute 320 kbps MP3 took
