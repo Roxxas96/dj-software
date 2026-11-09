@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread::JoinHandle;
 
 use toml_edit::{DocumentMut, Item, Value};
@@ -241,11 +241,23 @@ pub struct Settings {
     /// Per [`REGISTRY`] entry, its value at launch: a next-launch key that differs is
     /// pending.
     launched: Vec<String>,
+    /// `stems.enabled` at launch: `stems.eq_mode` is live only when stems run.
+    launched_stems: bool,
     /// Per [`REGISTRY`] entry, why its last change was refused.
     errors: Vec<Option<String>>,
     /// Why the file cannot be edited: it could not be read, so saving would lose it.
     unreadable: Option<String>,
     saver: Saver,
+}
+
+/// What a save found once it ran, for [`Settings::poll_saves`].
+#[derive(Debug, Default)]
+pub struct SaveNews {
+    /// Events to show: failed saves, and a file changed outside the window.
+    pub events: Vec<String>,
+    /// The configuration the file holds now, when a save had to merge a change made
+    /// outside the window.
+    pub reloaded: Option<Config>,
 }
 
 impl Settings {
@@ -268,6 +280,7 @@ impl Settings {
             doc,
             config: config.clone(),
             launched,
+            launched_stems: config.stems.enabled,
             errors: vec![None; REGISTRY.len()],
             unreadable,
             saver: Saver::new(),
@@ -286,14 +299,15 @@ impl Settings {
             .enumerate()
             .map(|(i, entry)| {
                 let value = value_of(&self.doc, entry);
+                let live = self.live(entry);
                 SettingRow {
                     key: entry.key.to_owned(),
                     category: entry.category,
-                    pending: !entry.live && value != self.launched[i],
+                    pending: !live && value != self.launched[i],
                     value,
                     default: entry.default.to_owned(),
                     help: entry.help,
-                    live: entry.live,
+                    live,
                     error: self.errors[i].clone(),
                 }
             })
@@ -305,10 +319,17 @@ impl Settings {
     /// the whole of it is still valid; otherwise the key's row shows why.
     pub fn set(&mut self, key: &str, value: &str) -> Result<Applied, String> {
         let Some(index) = REGISTRY.iter().position(|entry| entry.key == key) else {
-            return Err(format!("{}: unknown setting", crate::format::safe(key)));
+            return Err(format!(
+                "{}: {}: unknown setting",
+                self.file,
+                crate::format::safe(key)
+            ));
         };
-        let edited = self.edit(index, value);
-        let result = edited.and_then(|doc| self.commit(doc));
+        let edit = Edit::Set {
+            key: REGISTRY[index].key,
+            value: value.to_owned(),
+        };
+        let result = self.commit(edit);
         self.errors[index] = result.as_ref().err().cloned();
         result
     }
@@ -316,23 +337,39 @@ impl Settings {
     /// Removes every key the registry knows from the file, keeping its comments and
     /// anything else it holds.
     pub fn reset_all(&mut self) -> Result<Applied, String> {
-        if let Some(why) = &self.unreadable {
-            return Err(why.clone());
-        }
-        let mut doc = self.doc.clone();
-        for entry in REGISTRY {
-            remove(&mut doc, entry.key);
-        }
-        let result = self.commit(doc);
+        let result = self.commit(Edit::Reset);
         if result.is_ok() {
             self.errors.fill(None);
         }
         result
     }
 
-    /// Why saves failed since the last call.
-    pub fn save_errors(&self) -> Vec<String> {
-        self.saver.errors.try_iter().collect()
+    /// What the saves found since the last call. A save that merged a change made outside
+    /// the window gives the merged file, which becomes the settings' text.
+    pub fn poll_saves(&mut self) -> SaveNews {
+        let mut news = SaveNews::default();
+        for saved in self.saver.news.try_iter() {
+            match saved {
+                Saved::Failed(why) => news.events.push(why),
+                Saved::Merged {
+                    number,
+                    doc,
+                    config,
+                } => {
+                    news.events.push(format!(
+                        "{} changed outside the window; reloaded it",
+                        self.file
+                    ));
+                    // A later save, made from the text before the merge, merges again.
+                    if number == self.saver.asked {
+                        self.doc = *doc;
+                        self.config = (*config).clone();
+                        news.reloaded = Some(*config);
+                    }
+                }
+            }
+        }
+        news
     }
 
     /// Waits for the last save to be written.
@@ -342,56 +379,31 @@ impl Settings {
         }
     }
 
-    /// The file's text with `REGISTRY[index]` set to `value`.
-    fn edit(&self, index: usize, value: &str) -> Result<DocumentMut, String> {
+    /// Whether a change to `entry` applies at once.
+    fn live(&self, entry: &Entry) -> bool {
+        entry.live && (entry.key != "stems.eq_mode" || self.launched_stems)
+    }
+
+    /// Applies `edit` to the file's text, checks the result with `play`'s parser and, if
+    /// it is valid, makes it the file's text and saves it.
+    fn commit(&mut self, edit: Edit) -> Result<Applied, String> {
         if let Some(why) = &self.unreadable {
             return Err(why.clone());
         }
-        let key = REGISTRY[index].key;
-        let mut doc = self.doc.clone();
-        if value.trim().is_empty() {
-            remove(&mut doc, key);
-            return Ok(doc);
-        }
-        let mut value = value.parse::<Value>().map_err(|_| {
-            format!(
-                "{}: {key}: expected a TOML value, such as 300, \"text\" or [1, 2]",
-                self.file
-            )
-        })?;
-        value.decor_mut().clear();
-        let (table, name) = split(key);
-        let root = doc.as_table_mut();
-        if !root.contains_key(table) {
-            root.insert(table, Item::Table(toml_edit::Table::new()));
-        }
-        let Some(table) = root.get_mut(table).and_then(Item::as_table_like_mut) else {
-            return Err(format!("{}: {table}: expected a table", self.file));
-        };
-        match table.get_mut(name) {
-            Some(Item::Value(old)) => {
-                // The comment after the old value stays after the new one.
-                *value.decor_mut() = old.decor().clone();
-                *old = value;
-            }
-            _ => {
-                table.insert(name, Item::Value(value));
-            }
-        }
-        Ok(doc)
-    }
-
-    /// Checks `doc` with `play`'s parser and, if it is valid, makes it the file's text and
-    /// saves it.
-    fn commit(&mut self, doc: DocumentMut) -> Result<Applied, String> {
-        let text = doc.to_string();
-        let config = config::parse_text(&text, &self.file).map_err(|e| format!("{e:#}"))?;
+        let (doc, config) = edited(&self.doc, &edit, &self.file)?;
         let live = REGISTRY
             .iter()
-            .all(|entry| entry.live || value_of(&doc, entry) == value_of(&self.doc, entry));
+            .all(|entry| self.live(entry) || value_of(&doc, entry) == value_of(&self.doc, entry));
+        let job = SaveJob {
+            path: self.path.clone(),
+            file: self.file.clone(),
+            base: self.doc.to_string(),
+            text: doc.to_string(),
+            edit,
+        };
         self.doc = doc;
         self.config = config.clone();
-        self.saver.save(&self.path, text);
+        self.saver.save(job);
         Ok(Applied { config, live })
     }
 }
@@ -402,57 +414,175 @@ impl Drop for Settings {
     }
 }
 
-/// Writes the file on short-lived threads, the newest text last.
+/// A change to the file's text.
+#[derive(Debug, Clone)]
+enum Edit {
+    /// A key set to TOML value text; empty, removed.
+    Set { key: &'static str, value: String },
+    /// Every registry key removed.
+    Reset,
+}
+
+/// `doc` with `edit` applied, and the configuration it parses as.
+fn edited(doc: &DocumentMut, edit: &Edit, file: &str) -> Result<(DocumentMut, Config), String> {
+    let mut doc = doc.clone();
+    match edit {
+        Edit::Reset => {
+            for entry in REGISTRY {
+                remove(&mut doc, entry.key);
+            }
+        }
+        Edit::Set { key, value } if value.trim().is_empty() => remove(&mut doc, key),
+        Edit::Set { key, value } => set_value(&mut doc, key, value, file)?,
+    }
+    let config = config::parse_text(&doc.to_string(), file).map_err(|e| format!("{e:#}"))?;
+    Ok((doc, config))
+}
+
+/// Sets `key` in `doc` to `value`, TOML value text, in its table.
+fn set_value(
+    doc: &mut DocumentMut,
+    key: &'static str,
+    value: &str,
+    file: &str,
+) -> Result<(), String> {
+    let mut value = value.parse::<Value>().map_err(|_| {
+        format!("{file}: {key}: expected a TOML value, such as 300, \"text\" or [1, 2]")
+    })?;
+    value.decor_mut().clear();
+    let (table, name) = split(key);
+    let root = doc.as_table_mut();
+    if !root.contains_key(table) {
+        root.insert(table, Item::Table(toml_edit::Table::new()));
+    }
+    let Some(table) = root.get_mut(table).and_then(Item::as_table_like_mut) else {
+        return Err(format!("{file}: {table}: expected a table"));
+    };
+    match table.get_mut(name) {
+        Some(Item::Value(old)) => {
+            // The comment after the old value stays after the new one.
+            *value.decor_mut() = old.decor().clone();
+            *old = value;
+        }
+        _ => {
+            table.insert(name, Item::Value(value));
+        }
+    }
+    Ok(())
+}
+
+/// One save: `text` is `base` with `edit` applied.
+#[derive(Clone)]
+struct SaveJob {
+    path: PathBuf,
+    file: String,
+    /// The text the settings held before the edit: the file's, unless it was changed
+    /// outside the window since.
+    base: String,
+    text: String,
+    edit: Edit,
+}
+
+/// What a save tells the settings once it ran.
+enum Saved {
+    Failed(String),
+    /// The file had changed outside the window: save `number` applied its edit to the
+    /// file as it found it.
+    Merged {
+        number: u64,
+        doc: Box<DocumentMut>,
+        config: Box<Config>,
+    },
+}
+
+/// Writes the file on short-lived threads, one after the other in the order asked.
 struct Saver {
     /// The number of the last save asked for.
     asked: u64,
-    /// The number of the last save written: an older one still waiting is not written.
-    written: Arc<Mutex<u64>>,
+    /// The number of the last save done, and its signal: each save waits for the one
+    /// before it.
+    done: Arc<(Mutex<u64>, Condvar)>,
     handle: Option<JoinHandle<()>>,
-    errors_tx: Sender<String>,
-    errors: Receiver<String>,
+    news_tx: Sender<Saved>,
+    news: Receiver<Saved>,
 }
 
 impl Saver {
     fn new() -> Self {
-        let (errors_tx, errors) = channel();
+        let (news_tx, news) = channel();
         Self {
             asked: 0,
-            written: Arc::new(Mutex::new(0)),
+            done: Arc::new((Mutex::new(0), Condvar::new())),
             handle: None,
-            errors_tx,
-            errors,
+            news_tx,
+            news,
         }
     }
 
-    fn save(&mut self, path: &Path, text: String) {
+    fn save(&mut self, job: SaveJob) {
         self.asked += 1;
         let number = self.asked;
-        let written = Arc::clone(&self.written);
-        let errors = self.errors_tx.clone();
-        let path = path.to_owned();
+        let (done, news) = (Arc::clone(&self.done), self.news_tx.clone());
+        let spare = job.clone();
         let spawned = std::thread::Builder::new()
             .name("config save".to_owned())
-            .spawn(move || {
-                let mut last = written.lock().unwrap_or_else(PoisonError::into_inner);
-                if *last > number {
-                    return;
-                }
-                *last = number;
-                if let Err(e) = write(&path, &text) {
-                    let file = crate::format::safe(path.display());
-                    let _ = errors.send(format!("cannot save {file}: {e}"));
-                }
-            });
+            .spawn(move || save_in_turn(&done, number, &job, &news));
         match spawned {
             Ok(handle) => self.handle = Some(handle),
-            Err(e) => {
-                let _ = self
-                    .errors_tx
-                    .send(format!("cannot save the settings: {e}"));
-            }
+            // The later saves wait for this one: with no thread for it, it runs here.
+            Err(_) => save_in_turn(&self.done, number, &spare, &self.news_tx),
         }
     }
+}
+
+/// Waits for the saves before `number`, then runs this one.
+fn save_in_turn(done: &(Mutex<u64>, Condvar), number: u64, job: &SaveJob, news: &Sender<Saved>) {
+    let (lock, turn) = done;
+    let mut last = lock.lock().unwrap_or_else(PoisonError::into_inner);
+    while *last + 1 != number {
+        last = turn.wait(last).unwrap_or_else(PoisonError::into_inner);
+    }
+    if let Some(saved) = run_save(number, job) {
+        let _ = news.send(saved);
+    }
+    *last = number;
+    turn.notify_all();
+}
+
+/// Writes `job`'s text, or, when the file no longer holds its base (it was changed
+/// outside the window), its edit applied to the file as it is now.
+fn run_save(number: u64, job: &SaveJob) -> Option<Saved> {
+    let failed = |why: String| Some(Saved::Failed(format!("cannot save {}: {why}", job.file)));
+    let found = match std::fs::read_to_string(&job.path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return failed(e.to_string()),
+    };
+    if found == job.base {
+        return write(&job.path, &job.text)
+            .err()
+            .and_then(|e| failed(e.to_string()));
+    }
+    let merged = found
+        .parse::<DocumentMut>()
+        .map_err(|e| format!("{}: {e}", job.file))
+        .and_then(|doc| edited(&doc, &job.edit, &job.file));
+    let (doc, config) = match merged {
+        Ok(merged) => merged,
+        Err(why) => {
+            return failed(format!(
+                "it was changed outside the window and the change cannot be added: {why}"
+            ));
+        }
+    };
+    if let Err(e) = write(&job.path, &doc.to_string()) {
+        return failed(e.to_string());
+    }
+    Some(Saved::Merged {
+        number,
+        doc: Box::new(doc),
+        config: Box::new(config),
+    })
 }
 
 /// Writes `text` beside the file and renames it over it, so the file is never left half
@@ -634,7 +764,10 @@ kicks_hz = 300
         assert_eq!(row.value, "300");
         // Not TOML at all, and an unknown key.
         assert!(settings.set("stems.knobs", "raw").is_err());
-        assert!(settings.set("stems.nope", "1").is_err());
+        assert_eq!(
+            settings.set("stems.nope", "1").unwrap_err(),
+            format!("{}: stems.nope: unknown setting", path.display())
+        );
         // A good value clears the row's error.
         settings.set("stems.kicks_hz", "200").unwrap();
         let rows = settings.rows();
@@ -663,6 +796,76 @@ kicks_hz = 300
         // Back to what it was at launch, it is no longer pending.
         settings.set("audio.device", "").unwrap();
         assert!(!row(&settings, "audio.device").pending);
+    }
+
+    #[test]
+    fn eq_mode_is_live_only_with_stems_enabled_at_launch() {
+        let row = |settings: &Settings| {
+            settings
+                .rows()
+                .into_iter()
+                .find(|row| row.key == "stems.eq_mode")
+                .unwrap()
+        };
+        let (_dir, _path, mut enabled) = settings(FILE);
+        assert!(row(&enabled).live);
+        assert!(enabled.set("stems.eq_mode", "\"stems\"").unwrap().live);
+        assert!(!row(&enabled).pending);
+
+        let (_dir, _path, mut disabled) = settings("[stems]\nenabled = false\n");
+        assert!(!row(&disabled).live);
+        assert!(!disabled.set("stems.eq_mode", "\"stems\"").unwrap().live);
+        assert!(row(&disabled).pending);
+    }
+
+    #[test]
+    fn a_change_made_outside_the_window_is_kept() {
+        let (_dir, path, mut settings) = settings(FILE);
+        let hand = FILE.replace("kicks_hz = 300", "# by hand\nkicks_hz = 400");
+        std::fs::write(&path, &hand).unwrap();
+        settings.set("stems.knobs", "\"raw\"").unwrap();
+        settings.set("sampler.volume", "0.5").unwrap();
+        let text = saved(&path, &mut settings);
+        assert!(text.contains("# by hand\nkicks_hz = 400\n"), "{text}");
+        assert!(text.contains("knobs = \"raw\""), "{text}");
+        assert!(text.contains("volume = 0.5"), "{text}");
+        // The settings take the merged file, and say so.
+        let news = settings.poll_saves();
+        assert!(
+            news.events
+                .iter()
+                .any(|event| event.ends_with("changed outside the window; reloaded it")),
+            "{:?}",
+            news.events
+        );
+        let reloaded = news.reloaded.expect("the merged configuration");
+        assert_eq!(reloaded.stems.kicks_hz, 400.0);
+        assert_eq!(reloaded.sampler.volume, 0.5);
+        let rows = settings.rows();
+        let kicks = rows.iter().find(|row| row.key == "stems.kicks_hz").unwrap();
+        assert_eq!(kicks.value, "400");
+        // Its launch value is still the one before the hand edit.
+        assert!(kicks.pending);
+        // The next save, from the merged text, writes it as it is.
+        settings.set("backspin.long", "3").unwrap();
+        let text = saved(&path, &mut settings);
+        assert!(text.contains("# by hand\nkicks_hz = 400\n") && text.contains("long = 3"));
+        assert!(settings.poll_saves().reloaded.is_none());
+    }
+
+    #[test]
+    fn a_broken_hand_edit_is_not_overwritten() {
+        let (_dir, path, mut settings) = settings(FILE);
+        std::fs::write(&path, "[stems\n").unwrap();
+        settings.set("stems.knobs", "\"raw\"").unwrap();
+        assert_eq!(saved(&path, &mut settings), "[stems\n");
+        let news = settings.poll_saves();
+        assert!(news.reloaded.is_none());
+        assert!(
+            news.events[0].contains("changed outside the window"),
+            "{:?}",
+            news.events
+        );
     }
 
     #[test]

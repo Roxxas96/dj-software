@@ -15,7 +15,7 @@ use ui::UiCommand;
 
 use super::frame::FrameParts;
 use super::settings::{Applied, Settings};
-use crate::config::{Config, StemsConfig};
+use crate::config::{Config, StemsConfig, UiConfig};
 
 /// The controller runtime and the engine, once the control loop runs.
 pub(super) type Control<'a> = Option<(&'a mut Runtime, &'a mut EngineController)>;
@@ -52,9 +52,15 @@ pub(super) fn drain(commands: &Receiver<UiCommand>, parts: &mut FrameParts, mut 
             }
         }
     }
-    if let Some(settings) = &parts.settings {
-        for error in settings.save_errors() {
-            parts.event(format!("warning: {error}"));
+    if let Some(settings) = parts.settings.as_mut() {
+        let before = settings.config().ui.clone();
+        let news = settings.poll_saves();
+        for text in news.events {
+            parts.event(format!("warning: {text}"));
+        }
+        if let Some(config) = news.reloaded {
+            parts.refresh_settings();
+            adopt(parts, &before, config, now);
         }
     }
     if let Some((runtime, engine)) = control {
@@ -127,12 +133,18 @@ fn change_settings(
     if !applied.live {
         parts.event("settings saved; some apply at the next launch".to_owned());
     }
-    let ui = &applied.config.ui;
-    if *ui != before {
+    adopt(parts, &before, applied.config, now);
+}
+
+/// Makes `config` the one the file holds: the view's part (`ui`, which was `before`) at
+/// once, the rest by [`apply_live`].
+fn adopt(parts: &mut FrameParts, before: &UiConfig, config: Config, now: Instant) {
+    let ui = &config.ui;
+    if ui != before {
         let beats = (ui.waveform_beats != before.waveform_beats).then_some(ui.waveform_beats);
         parts.view.set_zoom_range(ui.zoom_range(), beats, now);
     }
-    parts.unapplied = Some(applied.config);
+    parts.unapplied = Some(config);
 }
 
 /// Sends the live settings of the configuration saved last that the engine and the
