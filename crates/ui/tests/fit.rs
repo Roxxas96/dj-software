@@ -41,6 +41,7 @@ fn info(deck: usize) -> DeckInfo {
         overview: None,
         detail: None,
         stems: Some("stems 40%".into()),
+        hotcue_marks: Default::default(),
     }
 }
 

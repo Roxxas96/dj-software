@@ -70,6 +70,27 @@ impl<T> Published<T> {
     }
 }
 
+/// A hotcue's colour and name in the library. Where it is and whether it is a loop come
+/// from the engine's snapshot.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HotcueMark {
+    pub color: Option<egui::Color32>,
+    pub name: Option<String>,
+}
+
+impl HotcueMark {
+    /// A mark with `color` as `0xRRGGBB`.
+    pub fn new(color: Option<u32>, name: Option<String>) -> Self {
+        Self {
+            color: color.map(|rgb| {
+                let [_, r, g, b] = rgb.to_be_bytes();
+                egui::Color32::from_rgb(r, g, b)
+            }),
+            name,
+        }
+    }
+}
+
 /// The library track on a deck.
 #[derive(Debug, Clone)]
 pub struct DeckInfo {
@@ -82,6 +103,8 @@ pub struct DeckInfo {
     pub detail: Option<Arc<Waveform>>,
     /// The stems' state (`stems`, `stems 40%`, ...), when there is one to show.
     pub stems: Option<String>,
+    /// Per hotcue slot, its colour and name.
+    pub hotcue_marks: [Option<HotcueMark>; 8],
 }
 
 impl PartialEq for DeckInfo {
@@ -101,6 +124,7 @@ impl PartialEq for DeckInfo {
             && same(&self.overview, &other.overview)
             && same(&self.detail, &other.detail)
             && self.stems == other.stems
+            && self.hotcue_marks == other.hotcue_marks
     }
 }
 

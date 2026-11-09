@@ -8,12 +8,12 @@ use std::time::Instant;
 use actions::Side;
 use analysis::Waveform;
 use egui::{Align2, Color32, FontId, Mesh, Painter, Pos2, Rect, Shape, Ui, pos2, vec2};
-use engine::{DeckId, DeckSnapshot, EngineMonitor};
+use engine::{DeckId, DeckSnapshot, EngineMonitor, Hotcue};
 
 use super::styles::{self, MAX_BARS};
 use super::{Playhead, ZoomGesture, ticks};
 use crate::command::UiCommand;
-use crate::model::ControlFrame;
+use crate::model::{ControlFrame, HotcueMark};
 use crate::theme::{self, Palette};
 use crate::view::WaveformStyle;
 
@@ -35,6 +35,13 @@ const LANE_GAP: f32 = 1.0;
 const LABEL_OFFSET: f32 = 4.0;
 const LABEL_FONT: f32 = 14.0;
 const FLAG_FONT: f32 = 10.0;
+/// The space between a flag and its name, and how many characters of a name show.
+const NAME_GAP: f32 = 3.0;
+const NAME_CHARS: usize = 14;
+/// How opaque a saved loop's band is.
+const SAVED_LOOP_ALPHA: u8 = 0x50;
+/// The brightness below which a flag's number is white rather than the background's.
+const FLAG_DARK: f32 = 0.35;
 /// The zoom buttons' side, and their gap from the area's top right corner.
 const ZOOM_BUTTON: f32 = 18.0;
 const ZOOM_MARGIN: f32 = 4.0;
@@ -118,6 +125,10 @@ impl Lanes {
                 beats: frame.view.waveform_beats,
                 style: frame.view.waveform_style,
                 overlay: overlaid && index == 1,
+                marks: frame.decks[deck.index()]
+                    .as_ref()
+                    .filter(|info| snapshot.loaded && info.load_seq == snapshot.load_seq)
+                    .map(|info| &info.hotcue_marks),
             };
             lane.draw(&ui.painter_at(rect), rect, &mut self.meshes[deck.index()]);
         }
@@ -166,6 +177,8 @@ pub struct Lane<'a> {
     pub style: WaveformStyle,
     /// Drawn over another deck's lane in the same rect: no background of its own.
     pub overlay: bool,
+    /// The hotcues' colours and names, when the library has them for the track.
+    pub marks: Option<&'a [Option<HotcueMark>; 8]>,
 }
 
 impl Lane<'_> {
@@ -234,6 +247,21 @@ impl Lane<'_> {
             let band = Rect::from_x_y_ranges(scale.x(start)..=scale.x(end), rect.y_range());
             mesh.add_colored_rect(band, p.loop_band);
         }
+        for (slot, hotcue) in snapshot.hotcues.iter().enumerate() {
+            let Some(Hotcue {
+                frames,
+                loop_frames: Some(length),
+            }) = *hotcue
+            else {
+                continue;
+            };
+            let band =
+                Rect::from_x_y_ranges(scale.x(frames)..=scale.x(frames + length), rect.y_range());
+            mesh.add_colored_rect(
+                band,
+                with_alpha(self.hotcue_colour(slot, p), SAVED_LOOP_ALPHA),
+            );
+        }
         let from = scale.centre_frame - scale.half_span;
         let to = scale.centre_frame + scale.half_span;
         for tick in ticks(snapshot.grid, from, to) {
@@ -249,12 +277,14 @@ impl Lane<'_> {
             mesh.add_colored_rect(Rect::from_x_y_ranges(xs.clone(), top), colour);
             mesh.add_colored_rect(Rect::from_x_y_ranges(xs, bottom), colour);
         }
-        for hotcue in snapshot.hotcues.iter().flatten() {
+        for (slot, hotcue) in snapshot.hotcues.iter().enumerate() {
+            let Some(hotcue) = hotcue else { continue };
+            let colour = self.hotcue_colour(slot, p);
             let x = scale.x(hotcue.frames);
             let pole = x..=x + FLAG_POLE;
-            mesh.add_colored_rect(Rect::from_x_y_ranges(pole, rect.y_range()), p.hotcue);
+            mesh.add_colored_rect(Rect::from_x_y_ranges(pole, rect.y_range()), colour);
             let flag = Rect::from_min_size(pos2(x, rect.top()), vec2(FLAG_SIZE, FLAG_SIZE));
-            mesh.add_colored_rect(flag, p.hotcue);
+            mesh.add_colored_rect(flag, colour);
         }
         let cue = scale.x(snapshot.cue_frames);
         triangle(
@@ -271,7 +301,16 @@ impl Lane<'_> {
         mesh.add_colored_rect(Rect::from_x_y_ranges(head, rect.y_range()), p.playhead);
     }
 
-    /// The numbers on the hotcue flags in sight.
+    /// Hotcue `slot`'s colour: its saved one, or the palette's.
+    fn hotcue_colour(&self, slot: usize, p: &Palette) -> Color32 {
+        let saved = self
+            .marks
+            .and_then(|m| m[slot].as_ref())
+            .and_then(|m| m.color);
+        p.mark(saved)
+    }
+
+    /// The numbers on the hotcue flags in sight, and the names beside them.
     fn hotcue_numbers(&self, painter: &Painter, rect: Rect, scale: &Scale, p: &Palette) {
         for (slot, hotcue) in self.snapshot.hotcues.iter().enumerate() {
             let Some(hotcue) = hotcue else { continue };
@@ -279,15 +318,52 @@ impl Lane<'_> {
             if x + FLAG_SIZE < rect.left() || x > rect.right() {
                 continue;
             }
+            let flag = self.hotcue_colour(slot, p);
+            let number = if theme::luminance(flag) < FLAG_DARK {
+                Color32::WHITE
+            } else {
+                p.background
+            };
             painter.text(
                 pos2(x + FLAG_SIZE / 2.0, rect.top() + FLAG_SIZE / 2.0),
                 Align2::CENTER_CENTER,
                 slot + 1,
                 FontId::proportional(FLAG_FONT),
-                p.background,
+                number,
             );
+            let name = self
+                .marks
+                .and_then(|m| m[slot].as_ref())
+                .and_then(|m| m.name.as_deref());
+            if let Some(name) = name.map(flag_name).filter(|name| !name.is_empty()) {
+                painter.text(
+                    pos2(
+                        x + FLAG_SIZE + FLAG_POLE + NAME_GAP,
+                        rect.top() + FLAG_SIZE / 2.0,
+                    ),
+                    Align2::LEFT_CENTER,
+                    name,
+                    FontId::proportional(FLAG_FONT),
+                    p.text,
+                );
+            }
         }
     }
+}
+
+/// `name` cut to the length a flag has room for, with `…` when cut.
+fn flag_name(name: &str) -> String {
+    let name = name.trim();
+    if name.chars().count() <= NAME_CHARS {
+        return name.to_owned();
+    }
+    let cut: String = name.chars().take(NAME_CHARS - 1).collect();
+    format!("{}…", cut.trim_end())
+}
+
+/// `colour` with `alpha` (0 to 255) as its opacity.
+fn with_alpha(colour: Color32, alpha: u8) -> Color32 {
+    Color32::from_rgba_unmultiplied(colour.r(), colour.g(), colour.b(), alpha)
 }
 
 /// How a lane maps track frames onto its width.
@@ -436,5 +512,103 @@ mod tests {
         let (first_a, first_b) = (a.vertices[0].pos, b.vertices[0].pos);
         assert_eq!(first_a.y, first_b.y);
         assert!((shifted[0] - first_a.x).abs() < 1e-3, "{shifted:?}");
+    }
+
+    fn marked_lane<'a>(
+        snapshot: &'a DeckSnapshot,
+        marks: Option<&'a [Option<HotcueMark>; 8]>,
+    ) -> Lane<'a> {
+        Lane {
+            deck: deck(1),
+            snapshot,
+            waveform: None,
+            position_frames: 0.0,
+            beats: 16.0,
+            style: WaveformStyle::Frequency,
+            overlay: false,
+            marks,
+        }
+    }
+
+    /// The colours of the rectangles `lane` fills, once each.
+    fn filled_colours(lane: &Lane, p: &Palette) -> Vec<Color32> {
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 50.0));
+        let scale = Scale {
+            centre_x: 200.0,
+            centre_frame: 0.0,
+            frames_per_column: 100.0,
+            frames_per_point: 100.0,
+            half_span: 20_000.0,
+        };
+        let mut mesh = Mesh::default();
+        lane.fill(&mut mesh, rect, &scale, p);
+        mesh.vertices.iter().map(|v| v.color).collect()
+    }
+
+    fn snapshot_with(slot: usize, hotcue: Hotcue) -> DeckSnapshot {
+        let mut snapshot = DeckSnapshot {
+            loaded: true,
+            track_sample_rate: 44_100,
+            ..DeckSnapshot::default()
+        };
+        snapshot.hotcues[slot] = Some(hotcue);
+        snapshot
+    }
+
+    fn red_mark() -> [Option<HotcueMark>; 8] {
+        let mut marks: [Option<HotcueMark>; 8] = Default::default();
+        marks[3] = Some(HotcueMark::new(Some(0xff0000), Some("Drop".into())));
+        marks
+    }
+
+    #[test]
+    fn a_loop_slot_draws_a_band_from_start_to_end_in_its_colour() {
+        let p = Palette::DARK;
+        let snapshot = snapshot_with(
+            3,
+            Hotcue {
+                frames: 1000.0,
+                loop_frames: Some(4000.0),
+            },
+        );
+        let marks = red_mark();
+        let colours = filled_colours(&marked_lane(&snapshot, Some(&marks)), &p);
+        let band = with_alpha(Color32::from_rgb(0xff, 0, 0), SAVED_LOOP_ALPHA);
+        assert_eq!(colours.iter().filter(|c| **c == band).count(), 4);
+        // Without a colour the band takes the hotcue colour.
+        let colours = filled_colours(&marked_lane(&snapshot, None), &p);
+        assert!(colours.contains(&with_alpha(p.hotcue, SAVED_LOOP_ALPHA)));
+        // A plain hotcue has no band.
+        let plain = snapshot_with(3, Hotcue::point(1000.0));
+        let colours = filled_colours(&marked_lane(&plain, Some(&marks)), &p);
+        assert!(!colours.contains(&band));
+    }
+
+    #[test]
+    fn hotcue_colours_tint_flags() {
+        let p = Palette::DARK;
+        let snapshot = snapshot_with(3, Hotcue::point(1000.0));
+        let marks = red_mark();
+        let red = Color32::from_rgb(0xff, 0, 0);
+        let colours = filled_colours(&marked_lane(&snapshot, Some(&marks)), &p);
+        assert!(colours.contains(&red) && !colours.contains(&p.hotcue));
+        let colours = filled_colours(&marked_lane(&snapshot, None), &p);
+        assert!(colours.contains(&p.hotcue) && !colours.contains(&red));
+    }
+
+    #[test]
+    fn pale_colours_are_darkened_on_the_light_palette() {
+        let pale = Color32::from_rgb(0xff, 0xff, 0x80);
+        assert_eq!(Palette::DARK.mark(Some(pale)), pale);
+        assert_ne!(Palette::LIGHT.mark(Some(pale)), pale);
+        let red = Color32::from_rgb(0xff, 0, 0);
+        assert_eq!(Palette::LIGHT.mark(Some(red)), red);
+        assert_eq!(Palette::LIGHT.mark(None), Palette::LIGHT.hotcue);
+    }
+
+    #[test]
+    fn long_names_are_cut_for_the_flag() {
+        assert_eq!(flag_name(" Drop "), "Drop");
+        assert_eq!(flag_name("A very long hotcue name"), "A very long h…");
     }
 }

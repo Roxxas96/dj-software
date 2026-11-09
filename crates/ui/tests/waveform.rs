@@ -27,6 +27,7 @@ fn draw_styled(snapshot: DeckSnapshot, waveform: &Waveform, style: WaveformStyle
                 beats: 16.0,
                 style,
                 overlay,
+                marks: None,
             };
             lane.draw(&ui.painter_at(rect), rect, &mut mesh);
         });
