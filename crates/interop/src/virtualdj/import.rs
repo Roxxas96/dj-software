@@ -15,6 +15,8 @@ use crate::import::{ImportPlan, PlaylistAction, PlaylistImport, TrackImport};
 /// of the file at its path when that file exists, else by being the only track with the
 /// same file name and size. Slots 1-8 keep their number; hotcues and loops numbered above
 /// 8 fill the free slots in position order. Positions convert at the track's sample rate.
+/// A track matched by two songs takes the one from a drive's own database, else the one
+/// with hotcues or loops, else the first; the other's hotcues and loops count as dropped.
 ///
 /// # Errors
 ///
@@ -42,24 +44,46 @@ pub fn plan_virtualdj(
             plan.unmatched.push(path.to_path_buf());
         }
     };
+    // Per planned track, the entry it comes from.
+    let mut kept: Vec<Kept> = Vec::new();
     for song in songs {
-        plan.other_markers += song.other_markers;
         let Some((track, rate)) = matcher.find(&song.path)? else {
+            plan.other_markers += song.other_markers;
             not_found(&song.path, &mut plan);
             continue;
         };
-        // The same file listed twice (say, in two databases) is imported once.
-        if plan.tracks.iter().any(|t| t.track == track) {
+        let (incoming, dropped) = slots(song, rate);
+        let entry = Kept {
+            from_drive: song.from_drive,
+            has_points: incoming.iter().any(Option::is_some),
+            points: song.pois.len(),
+            dropped,
+            other_markers: song.other_markers,
+        };
+        // The same file listed twice (say, in two databases) is imported once, from the
+        // better entry; the other's hotcues and loops are dropped.
+        if let Some(i) = plan.tracks.iter().position(|t| t.track == track) {
+            if entry.rank() > kept[i].rank() {
+                plan.dropped += kept[i].points;
+                kept[i] = entry;
+                plan.tracks[i].path = song.path.clone();
+                plan.tracks[i].incoming = incoming;
+            } else {
+                plan.dropped += entry.points;
+            }
             continue;
         }
-        let (incoming, dropped) = slots(song, rate);
-        plan.dropped += dropped;
+        kept.push(entry);
         plan.tracks.push(TrackImport {
             track,
             path: song.path.clone(),
             incoming,
             existing: reader.hotcue_points(track)?,
         });
+    }
+    for entry in &kept {
+        plan.dropped += entry.dropped;
+        plan.other_markers += entry.other_markers;
     }
 
     let mut taken = existing_playlists(reader)?;
@@ -80,6 +104,26 @@ pub fn plan_virtualdj(
         });
     }
     Ok(plan)
+}
+
+/// The VirtualDJ entry a planned track comes from.
+struct Kept {
+    from_drive: bool,
+    /// It gives the track a hotcue or loop.
+    has_points: bool,
+    /// Its hotcues and loops, imported or not.
+    points: usize,
+    /// Its hotcues and loops that do not fit or are invalid.
+    dropped: usize,
+    other_markers: usize,
+}
+
+impl Kept {
+    /// Which of two entries for one track wins: the drive's own database's, else one with
+    /// hotcues or loops, else the first.
+    fn rank(&self) -> (bool, bool) {
+        (self.from_drive, self.has_points)
+    }
 }
 
 /// Finds library tracks for VirtualDJ paths, remembering each answer.

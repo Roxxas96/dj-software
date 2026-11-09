@@ -17,6 +17,9 @@ pub struct VdjSong {
     pub pois: Vec<VdjPoi>,
     /// Markers that are not hotcues or loops (automix, remix, beatgrid).
     pub other_markers: usize,
+    /// Read from a drive's own database (`<drive>/VirtualDJ/database.xml`), where VirtualDJ
+    /// keeps the drive's tracks.
+    pub from_drive: bool,
 }
 
 /// A hotcue or saved loop; `color` is `0xRRGGBB`.
@@ -116,6 +119,7 @@ fn start_song(e: &BytesStart, drive_root: Option<&Path>) -> Result<VdjSong, Stri
         seconds_per_beat: None,
         pois: Vec::new(),
         other_markers: 0,
+        from_drive: drive_root.is_some(),
     })
 }
 
