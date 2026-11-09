@@ -1369,10 +1369,28 @@ mod tests {
             (dir, lib, vdj, music)
         }
 
+        /// Looks in `vdj`, and for drives under `mounts`. Canonical, as library folders are
+        /// stored (/private/var on macOS): otherwise a library folder in the temp dir is on
+        /// the filesystem root's drive, and the real `/VirtualDJ` would be read.
         fn places(vdj: &Path, mounts: &Path) -> Places {
             Places {
                 homes: vec![vdj.to_path_buf()],
-                mounts: mounts.to_path_buf(),
+                mounts: mounts.canonicalize().unwrap(),
+            }
+        }
+
+        /// Asserts that every place `places` makes the import look in is inside `root`.
+        fn assert_looks_only_in(lib: &Library, places: &Places, root: &Path) {
+            let root = root.canonicalize().unwrap();
+            let volumes = crate::vdj::volumes(&lib.reader().unwrap(), places).unwrap();
+            assert!(!volumes.is_empty());
+            for place in places.homes.iter().chain(&volumes) {
+                let place = place.canonicalize().unwrap_or_else(|_| place.clone());
+                assert!(
+                    place.starts_with(&root),
+                    "{} is outside the temp dir",
+                    place.display()
+                );
             }
         }
 
@@ -1383,7 +1401,9 @@ mod tests {
         #[test]
         fn dry_run_prints_the_summary_and_writes_nothing() {
             let (dir, lib, vdj, music) = vdj_fixture();
-            let lines = vdj_import(&lib, None, &places(&vdj, dir.path())).unwrap();
+            let places = places(&vdj, dir.path());
+            assert_looks_only_in(&lib, &places, dir.path());
+            let lines = vdj_import(&lib, None, &places).unwrap();
             assert_eq!(
                 lines[0],
                 "VirtualDJ import (dry run: nothing written; add --apply keep|replace|merge)"
@@ -1418,8 +1438,9 @@ mod tests {
         #[test]
         fn apply_merge_writes_and_reports_the_backup() {
             let (dir, lib, vdj, _) = vdj_fixture();
-            let lines =
-                vdj_import(&lib, Some(ResolutionArg::Merge), &places(&vdj, dir.path())).unwrap();
+            let places = places(&vdj, dir.path());
+            assert_looks_only_in(&lib, &places, dir.path());
+            let lines = vdj_import(&lib, Some(ResolutionArg::Merge), &places).unwrap();
             assert_eq!(
                 lines[0],
                 "VirtualDJ import (merge for tracks with cues here)"
@@ -1430,6 +1451,32 @@ mod tests {
             assert_eq!(lines[n - 1], "  written: 1 tracks, 0 playlists");
             let slots = hotcues_of(&lib);
             assert!(slots[0].is_some() && slots[1].as_ref().unwrap().loop_frames.is_some());
+        }
+
+        #[test]
+        fn a_playlist_that_cannot_be_read_is_listed_as_skipped() {
+            let (dir, lib, vdj, _) = vdj_fixture();
+            let lists = vdj.join("MyLists");
+            std::fs::create_dir_all(&lists).unwrap();
+            let broken = lists.join("Broken.vdjfolder");
+            std::fs::write(&broken, "<VirtualFolder><song path=").unwrap();
+            let places = places(&vdj, dir.path());
+            assert_looks_only_in(&lib, &places, dir.path());
+            let lines = vdj_import(&lib, None, &places).unwrap();
+            let at = lines
+                .iter()
+                .position(|l| l == "  playlists skipped: 1")
+                .unwrap_or_else(|| panic!("{lines:?}"));
+            assert!(lines[at - 1].starts_with("  playlists: "), "{lines:?}");
+            assert!(
+                lines[at + 1].starts_with("    ")
+                    && lines[at + 1].contains(&broken.display().to_string()),
+                "{lines:?}"
+            );
+            assert!(
+                lines[at + 2].starts_with("  not in the library: "),
+                "{lines:?}"
+            );
         }
 
         #[test]

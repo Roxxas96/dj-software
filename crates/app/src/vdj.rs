@@ -86,10 +86,9 @@ fn volume_of(folder: &Path, mounts: &Path) -> PathBuf {
         .map_or_else(|| folder.to_path_buf(), Path::to_path_buf)
 }
 
-/// Reads VirtualDJ's databases and playlists from `places` and the drives of the
-/// library's folders, and plans the import against the library `reader` reads. Writes
-/// nothing.
-pub(crate) fn scan(reader: &Reader, places: &Places) -> anyhow::Result<Scan> {
+/// The drives of the library's folders, each once: where a per-drive database is looked
+/// for, in `<drive>/VirtualDJ`.
+pub(crate) fn volumes(reader: &Reader, places: &Places) -> anyhow::Result<Vec<PathBuf>> {
     let mut volumes: Vec<PathBuf> = Vec::new();
     for folder in reader.folders()? {
         let volume = volume_of(&folder, &places.mounts);
@@ -97,6 +96,14 @@ pub(crate) fn scan(reader: &Reader, places: &Places) -> anyhow::Result<Scan> {
             volumes.push(volume);
         }
     }
+    Ok(volumes)
+}
+
+/// Reads VirtualDJ's databases and playlists from `places` and the drives of the
+/// library's folders, and plans the import against the library `reader` reads. Writes
+/// nothing.
+pub(crate) fn scan(reader: &Reader, places: &Places) -> anyhow::Result<Scan> {
+    let volumes = volumes(reader, places)?;
     let sources = interop::find_sources(&places.homes, &volumes);
     if sources.databases.is_empty() && sources.list_dirs.is_empty() {
         let searched = places
