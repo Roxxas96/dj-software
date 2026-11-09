@@ -91,9 +91,19 @@ impl Mixer {
         let strips =
             Rect::from_min_max(rect.min, pos2(rect.right(), rect.bottom() - BOTTOM_HEIGHT));
         let bottom = Rect::from_min_max(pos2(rect.left(), strips.bottom()), rect.max);
-        let half = strips.width() / 2.0;
-        for (side, strip_rect) in Side::ALL.into_iter().zip(split(strips, half)) {
-            let deck = frame.control.side(side).active_deck;
+        let active = Side::ALL.map(|side| frame.control.side(side).active_deck);
+        // Four strips in VirtualDJ's order (3, 1, 2, 4) or one per side's active deck.
+        let decks = if frame.view.four_decks {
+            [2, 0, 1, 3].map(|i| DeckId::ALL[i]).to_vec()
+        } else {
+            active.to_vec()
+        };
+        let width = strips.width() / decks.len() as f32;
+        for (i, deck) in decks.into_iter().enumerate() {
+            let strip_rect = Rect::from_min_size(
+                pos2(strips.left() + i as f32 * width, strips.top()),
+                vec2(width, strips.height()),
+            );
             let stems_active = monitor.is_some_and(|m| m.deck(deck).stems_active);
             let level = peaks[deck.index()];
             let held = self.holds[deck.index()].update(level, now);

@@ -17,7 +17,7 @@ use engine::{
 };
 
 use crate::cover::{self, Covers};
-use crate::layout::Sections;
+use crate::layout::{Sections, deck_slots};
 use crate::mixer;
 use crate::model::{ControlFrame, GHOST_TEMPO};
 use crate::theme;
@@ -27,6 +27,10 @@ use crate::waveform::{Playhead, colour};
 const JOG_RPM: f64 = 100.0 / 3.0;
 /// The share of the panels' width each deck panel takes; the mixer has the rest.
 const PANEL_SHARE: f32 = 0.38;
+/// The same in the 4-Decks view, where the mixer has four strips to fit.
+const FOUR_PANEL_SHARE: f32 = 0.34;
+/// The outline of a side's active deck in the 4-Decks view.
+const ACTIVE_BORDER: f32 = 2.0;
 const PANEL_MARGIN: i8 = 6;
 const COVER_SIDE: f32 = 64.0;
 /// The right of the header: BPM, key and times.
@@ -328,15 +332,36 @@ impl DeckPanels {
     ) -> Rect {
         let now = Instant::now();
         let (area, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
-        let width = area.width() * PANEL_SHARE;
+        let four = frame.view.four_decks;
+        let share = if four { FOUR_PANEL_SHARE } else { PANEL_SHARE };
+        let width = area.width() * share;
         let left = Rect::from_min_size(area.min, vec2(width, area.height()));
         let right = Rect::from_min_size(
             pos2(area.right() - width, area.top()),
             vec2(width, area.height()),
         );
+        let active = Side::ALL.map(|side| frame.control.side(side).active_deck);
+        let slots = deck_slots(four, active);
+        // Two decks: one panel a side. Four: two stacked, the side's first deck on top.
+        let rects: Vec<Rect> = if four {
+            [left, right]
+                .into_iter()
+                .flat_map(|side| {
+                    let half = side.height() / 2.0;
+                    [
+                        Rect::from_min_size(side.min, vec2(side.width(), half)),
+                        Rect::from_min_size(
+                            pos2(side.left(), side.top() + half),
+                            vec2(side.width(), half),
+                        ),
+                    ]
+                })
+                .collect()
+        } else {
+            vec![left, right]
+        };
         let sampler = monitor.map(EngineMonitor::sampler).unwrap_or_default();
-        for (side, rect) in Side::ALL.into_iter().zip([left, right]) {
-            let deck = frame.control.side(side).active_deck;
+        for (deck, rect) in slots.into_iter().zip(rects) {
             let (mut snapshot, rendered_at) = monitor
                 .map(|m| m.deck_rendered_at(deck))
                 .unwrap_or_default();
@@ -352,6 +377,16 @@ impl DeckPanels {
             ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| {
                 panel(ui, &view, cover.as_ref(), sections);
             });
+            // With four panels, the ones the controller plays are the ones outlined.
+            if four && active.contains(&deck) {
+                let accent = theme::palette(ui.ctx()).deck_accent(deck);
+                ui.painter().rect_stroke(
+                    rect,
+                    CornerRadius::ZERO,
+                    Stroke::new(ACTIVE_BORDER, accent),
+                    StrokeKind::Inside,
+                );
+            }
         }
         Rect::from_min_max(
             pos2(left.right(), area.top()),
@@ -374,6 +409,15 @@ pub fn panel(ui: &mut Ui, view: &DeckView, cover: Option<&TextureHandle>, sectio
             header(ui, view, cover, accent);
             if sections.overview {
                 overview(ui, view);
+            }
+            if sections.compact {
+                ui.horizontal(|ui| {
+                    transport_row(ui, view, accent);
+                    if sections.loop_controls {
+                        loop_row(ui, view);
+                    }
+                });
+                return;
             }
             ui.horizontal(|ui| {
                 ui.set_height(MIDDLE_HEIGHT);
@@ -398,6 +442,30 @@ pub fn panel(ui: &mut Ui, view: &DeckView, cover: Option<&TextureHandle>, sectio
                 pads_grid(ui, view, accent, sections);
             });
         });
+}
+
+/// CUE, PLAY, SYNC and the three states in one row, for the compact panel.
+fn transport_row(ui: &mut Ui, view: &DeckView, accent: Color32) {
+    let p = theme::palette(ui.ctx());
+    ui.spacing_mut().item_spacing.x = PAD_GAP;
+    let transport = vec2(TRANSPORT_WIDTH / 1.5, BUTTON_HEIGHT);
+    indicator(ui, transport, "CUE", view.cueing.then_some(p.cue));
+    indicator(ui, transport, "PLAY", view.playing.then_some(p.play_lit));
+    indicator(ui, transport, "SYNC", None);
+    let state = vec2(STATE_WIDTH * 0.75, BUTTON_HEIGHT);
+    indicator(ui, state, "VINYL", view.vinyl.then_some(accent));
+    indicator(ui, state, "SLIP", view.slip.then_some(accent));
+    indicator(ui, state, "KEYLOCK", view.keylock.then_some(accent));
+}
+
+/// The loop's size, IN and OUT in one row, for the compact panel.
+fn loop_row(ui: &mut Ui, view: &DeckView) {
+    let p = theme::palette(ui.ctx());
+    let looping = view.loop_active.then_some(p.hotcue);
+    let size = vec2(LOOP_WIDTH / 2.0, BUTTON_HEIGHT);
+    indicator(ui, size, &view.loop_beats, looping);
+    indicator(ui, size, "IN", looping);
+    indicator(ui, size, "OUT", looping);
 }
 
 /// The cover, title, artist, remix and stems, then BPM, key and times on the right.

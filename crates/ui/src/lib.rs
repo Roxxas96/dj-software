@@ -130,7 +130,11 @@ pub fn root(
     theme::apply(ui.ctx(), frame.view.colour_scheme);
     let p = theme::palette(ui.ctx());
     let window_height = ui.max_rect().height();
-    let sections = layout::sections(frame.view.layout);
+    let sections = if frame.view.four_decks {
+        layout::four_deck_sections()
+    } else {
+        layout::sections(frame.view.layout)
+    };
     egui::Panel::top("top_bar")
         .frame(egui::Frame::new().fill(p.panel).inner_margin(6))
         .show(ui, |ui| topbar::show(ui, frame, monitor, &screen.commands));
