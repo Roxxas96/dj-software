@@ -50,7 +50,9 @@ is left as it was. `mixer.crossfader`, `fx.*`, `sampler.volume`, `beat_jump.*`,
 `stems.eq_mode` when stems were enabled at launch; the others at the next launch. A file
 edited by hand while the window runs keeps that edit: the window's change is added to the
 file as it is now (and if the hand-edited file no longer parses, the window's change is not
-saved). A file linked from elsewhere (a dotfiles folder, say) is written through the link.
+saved). A file with Windows line endings, a byte order mark or no final newline is not taken
+for a hand edit; the window writes it back with plain newlines. A file linked from elsewhere
+(a dotfiles folder, say) is written through the link.
 
 A sample is at most 60 seconds long. A `track` id is looked up in the library: the one opened
 by `--library`, otherwise the default library if it exists.

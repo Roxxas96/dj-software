@@ -33,6 +33,8 @@ pub(super) struct ViewStore {
     seen_layout: Option<i32>,
     /// When the view last changed without being saved since.
     unsaved: Option<Instant>,
+    /// The thread writing the last save, if it may still run.
+    saving: Option<std::thread::JoinHandle<()>>,
 }
 
 impl ViewStore {
@@ -51,6 +53,7 @@ impl ViewStore {
             seen: None,
             seen_layout: None,
             unsaved: None,
+            saving: None,
         }
     }
 
@@ -134,18 +137,29 @@ impl ViewStore {
             .unsaved
             .is_some_and(|at| now.saturating_duration_since(at) >= SAVE_AFTER)
         {
-            self.unsaved = None;
-            if let Some(path) = self.path.clone() {
-                let state = self.state.clone();
-                let _ = std::thread::Builder::new()
-                    .name("ui state".to_owned())
-                    .spawn(move || write(&path, &state));
+            let Some(path) = self.path.clone() else {
+                self.unsaved = None;
+                return;
+            };
+            let state = self.state.clone();
+            let spawned = std::thread::Builder::new()
+                .name("ui state".to_owned())
+                .spawn(move || write(&path, &state));
+            // Without a thread the view stays unsaved: the next call, or the end of the
+            // session, tries again.
+            if let Ok(handle) = spawned {
+                self.unsaved = None;
+                self.saving = Some(handle);
             }
         }
     }
 
-    /// Saves an unsaved view now: the session is ending.
+    /// Saves an unsaved view now: the session is ending. A save still being written
+    /// finishes first, so the two never share the file's `.partial`.
     pub fn save_now(&mut self) {
+        if let Some(handle) = self.saving.take() {
+            let _ = handle.join();
+        }
         if self.unsaved.take().is_some()
             && let Some(path) = &self.path
         {
@@ -359,6 +373,24 @@ mod tests {
         drop(store);
         let loaded = ViewStore::load(Some(path), defaults(), RANGE);
         assert_eq!(*loaded.state(), saved);
+    }
+
+    #[test]
+    fn the_last_save_is_the_one_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(STATE_FILE);
+        let now = Instant::now();
+        let mut store = ViewStore::load(Some(path.clone()), defaults(), RANGE);
+        store.apply(ViewChange::SetLayout(Layout::Starter), now);
+        store.save_if_due(now + SAVE_AFTER);
+        assert!(store.unsaved.is_none() && store.saving.is_some());
+        // Changed again while that save may still be writing: the session ends.
+        store.apply(ViewChange::SetLayout(Layout::Performance), now + SAVE_AFTER);
+        store.save_now();
+        assert!(store.saving.is_none());
+        let loaded = ViewStore::load(Some(path.clone()), defaults(), RANGE);
+        assert_eq!(loaded.state().layout, Layout::Performance);
+        assert!(!dir.path().join("ui-state.toml.partial").exists());
     }
 
     #[test]
