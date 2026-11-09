@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::time::Instant;
 
-use actions::{ControlState, HardwarePadMode, PadMode, Side, SideControl};
+use actions::{Action, ControlState, HardwarePadMode, Input, PadMode, Side, SideControl};
 use analysis::{Key, KeyNotation, Waveform};
 use egui::{
     Align, Color32, CornerRadius, Label, Layout, Mesh, Rect, RichText, Sense, Shape, Stroke,
@@ -43,6 +43,18 @@ const MIDDLE_HEIGHT: f32 = 104.0;
 const FX_WIDTH: f32 = 96.0;
 const SLOT_HEIGHT: f32 = 22.0;
 const FX_LEVEL_HEIGHT: f32 = 6.0;
+/// The pad mode dropdown's width.
+const PAD_MODE_WIDTH: f32 = 120.0;
+/// The pad modes the dropdown offers: only the app's own. The SB3 switches its hardware
+/// modes itself and the host cannot set them, so the hardware entry hands the pads back to
+/// whichever the controller last chose.
+const PAD_MODES: [(PadMode, &str); 5] = [
+    (PadMode::Hardware, "pads (controller)"),
+    (PadMode::BeatJump, "BEAT JUMP"),
+    (PadMode::LoopRoll, "LOOP ROLL"),
+    (PadMode::Slicer, "SLICER"),
+    (PadMode::PadScratch, "PAD SCRATCH"),
+];
 const JOG_SIDE: f32 = 104.0;
 const JOG_STROKE: f32 = 2.0;
 const JOG_MARKER: f32 = 3.0;
@@ -117,10 +129,13 @@ pub struct DeckView {
     pub loop_beats: String,
     pub loop_active: bool,
     /// Each FX slot's effect and whether it is on.
-    pub fx: [(String, bool); 3],
+    pub fx: [(EffectKind, bool); 3],
     pub fx_level: f32,
     /// What the pads do, as [`SideControl::pad_mode_label`] names it.
     pub pad_mode: &'static str,
+    /// The pad mode the app switches to, [`PadMode::Hardware`] while the SB3's own mode
+    /// buttons drive the pads.
+    pub pad_mode_choice: PadMode,
     pub pads: [PadView; 8],
     /// The stems' state ("stems", "stems 40%").
     pub stems: Option<String>,
@@ -218,11 +233,11 @@ impl DeckView {
             loop_beats: beats_text(snapshot.loop_beats),
             loop_active: snapshot.loop_active,
             fx: std::array::from_fn(|slot| {
-                let label = effect_label(frame.fx_slots[slot]).to_owned();
-                (label, channel.fx_enabled[slot])
+                (frame.fx_slots[id.index()][slot], channel.fx_enabled[slot])
             }),
             fx_level: channel.fx_amount,
             pad_mode: side.pad_mode_label(),
+            pad_mode_choice: side.pad_mode,
             pads: pads(
                 side,
                 &frame.control,
@@ -507,7 +522,7 @@ pub fn panel(
             ui.horizontal(|ui| {
                 ui.set_height(MIDDLE_HEIGHT);
                 if sections.fx {
-                    fx(ui, view, accent, sections.fx_level);
+                    fx(ui, view, accent, sections.fx_level, commands);
                 }
                 if sections.jog {
                     jog(ui, view, accent);
@@ -524,7 +539,7 @@ pub fn panel(
             });
             ui.horizontal_top(|ui| {
                 transport(ui, view);
-                pads_grid(ui, view, accent, sections);
+                pads_grid(ui, view, accent, sections, commands);
             });
         });
 }
@@ -657,13 +672,26 @@ fn overview_columns(mesh: &mut Mesh, rect: Rect, waveform: &Waveform, silent: Co
     }
 }
 
-/// The three FX slots, each lit while on, over the effect level (when `level`).
-fn fx(ui: &mut Ui, view: &DeckView, accent: Color32, level: bool) {
+/// The three FX slots, each lit while on, over the effect level (when `level`). Each
+/// slot's effect is a dropdown that asks `commands` to change it.
+fn fx(ui: &mut Ui, view: &DeckView, accent: Color32, level: bool, commands: &Sender<UiCommand>) {
     let p = theme::palette(ui.ctx());
     ui.vertical(|ui| {
         ui.set_width(FX_WIDTH);
-        for (label, on) in &view.fx {
-            indicator(ui, vec2(FX_WIDTH, SLOT_HEIGHT), label, on.then_some(accent));
+        for (slot, &(current, on)) in view.fx.iter().enumerate() {
+            let size = vec2(FX_WIDTH, SLOT_HEIGHT);
+            let lit = on.then_some(accent);
+            let id = ("fx slot", view.deck, slot);
+            let name = format!("FX {}", slot + 1);
+            dropdown(ui, &name, id, size, effect_label(current), lit, |ui| {
+                for kind in EffectKind::ALL {
+                    let chosen = ui.selectable_label(kind == current, effect_label(kind));
+                    if chosen.clicked() && kind != current {
+                        let deck = view.deck;
+                        let _ = commands.send(UiCommand::FxSlot { deck, slot, kind });
+                    }
+                }
+            });
         }
         if !level {
             return;
@@ -793,7 +821,13 @@ fn transport(ui: &mut Ui, view: &DeckView) {
 }
 
 /// The pads and the loop, whichever the layout shows.
-fn pads_grid(ui: &mut Ui, view: &DeckView, accent: Color32, sections: &Sections) {
+fn pads_grid(
+    ui: &mut Ui,
+    view: &DeckView,
+    accent: Color32,
+    sections: &Sections,
+    commands: &Sender<UiCommand>,
+) {
     let loop_width = if sections.loop_controls {
         LOOP_WIDTH + PAD_GAP * 2.0
     } else {
@@ -801,18 +835,36 @@ fn pads_grid(ui: &mut Ui, view: &DeckView, accent: Color32, sections: &Sections)
     };
     let pads_width = (ui.available_width() - loop_width).max(0.0);
     if sections.pads {
-        pads_column(ui, view, accent, pads_width);
+        pads_column(ui, view, accent, pads_width, commands);
     }
     if sections.loop_controls {
         loop_column(ui, view);
     }
 }
 
-/// The pad mode's name over the 2×4 pads.
-fn pads_column(ui: &mut Ui, view: &DeckView, accent: Color32, pads_width: f32) {
+/// The pad mode's dropdown over the 2×4 pads; a choice asks `commands` to switch.
+fn pads_column(
+    ui: &mut Ui,
+    view: &DeckView,
+    accent: Color32,
+    pads_width: f32,
+    commands: &Sender<UiCommand>,
+) {
     ui.vertical(|ui| {
         ui.set_width(pads_width);
-        ui.label(RichText::new(view.pad_mode).color(accent).size(SMALL_FONT));
+        let p = theme::palette(ui.ctx());
+        let size = vec2(PAD_MODE_WIDTH, SLOT_HEIGHT);
+        let id = ("pad mode", view.deck);
+        let text = RichText::new(view.pad_mode).color(accent);
+        dropdown_text(ui, "pad mode", id, size, text, p.lane, |ui| {
+            for (mode, label) in PAD_MODES {
+                let chosen = ui.selectable_label(mode == view.pad_mode_choice, label);
+                if chosen.clicked() && mode != view.pad_mode_choice {
+                    let action = Action::PadMode(Side::of(view.deck), mode);
+                    let _ = commands.send(UiCommand::Action(action, Input::Press));
+                }
+            }
+        });
         let pad = vec2((pads_width - PAD_GAP * 3.0) / 4.0, BUTTON_HEIGHT);
         for row in view.pads.chunks(4) {
             ui.horizontal(|ui| {
@@ -839,6 +891,53 @@ fn loop_column(ui: &mut Ui, view: &DeckView) {
             indicator(ui, half, "IN", looping);
             indicator(ui, half, "OUT", looping);
         });
+    });
+}
+
+/// A dropdown named `name` of `size` drawn like an [`indicator`]: `text`, filled with
+/// `lit`'s colour when lit; `contents` fills its list.
+fn dropdown(
+    ui: &mut Ui,
+    name: &str,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    size: Vec2,
+    text: &str,
+    lit: Option<Color32>,
+    contents: impl FnOnce(&mut Ui),
+) {
+    let p = theme::palette(ui.ctx());
+    let (fill, colour) = match lit {
+        Some(colour) => (colour, p.background),
+        None => (p.lane, p.text_dim),
+    };
+    let text = RichText::new(text).color(colour);
+    dropdown_text(ui, name, id, size, text, fill, contents);
+}
+
+/// A dropdown named `name` of `size` showing `text` on `fill`; `contents` fills its list.
+fn dropdown_text(
+    ui: &mut Ui,
+    name: &str,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    size: Vec2,
+    text: RichText,
+    fill: Color32,
+    contents: impl FnOnce(&mut Ui),
+) {
+    ui.scope(|ui| {
+        let idle = &mut ui.visuals_mut().widgets.inactive;
+        idle.weak_bg_fill = fill;
+        idle.bg_stroke = Stroke::NONE;
+        ui.spacing_mut().interact_size.y = size.y;
+        let response = egui::ComboBox::from_id_salt(id)
+            .width(size.x)
+            .selected_text(text.size(SMALL_FONT))
+            .truncate()
+            .show_ui(ui, contents)
+            .response;
+        // The list's name for screen readers; the button shows the choice.
+        ui.ctx()
+            .accesskit_node_builder(response.id, |node| node.set_label(name));
     });
 }
 

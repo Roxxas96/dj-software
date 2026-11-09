@@ -18,7 +18,9 @@ use super::view::ViewStore;
 /// the printer was asked to show, and the audio device.
 pub(super) struct FrameParts {
     crossfader_enabled: bool,
-    fx_slots: [engine::EffectKind; 3],
+    /// Per deck, the effects the engine was sent: the configuration's, then the window's
+    /// choices.
+    pub fx_slots: [[engine::EffectKind; 3]; 4],
     eq_mode: engine::EqMode,
     stem_knobs: engine::StemKnobs,
     /// The window's view state, the zoom included; saved once it stays put and when the
@@ -37,7 +39,7 @@ impl FrameParts {
     pub fn new(config: &Config) -> Self {
         Self {
             crossfader_enabled: config.crossfader,
-            fx_slots: config.fx_slots,
+            fx_slots: DeckId::ALL.map(|deck| config.fx_slots_for(deck)),
             eq_mode: config.stems.startup_eq_mode(),
             stem_knobs: config.stems.knobs,
             view: ViewStore::load(None, default_view(config), config.ui.zoom_range()),

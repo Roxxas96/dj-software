@@ -478,6 +478,30 @@ fn fx_slot_kind_applies_to_every_channel() {
 }
 
 #[test]
+fn fx_slot_per_channel() {
+    // Reverb on deck 2's slot 0 only: a burst leaves a tail at the PFL bus on deck 2, and
+    // the default echo is silent there on the other decks.
+    for index in 0..4 {
+        let (mut c, mut r) = setup();
+        channel(&mut c, 1, ChannelCommand::FxSlot(0, EffectKind::Reverb));
+        channel(&mut c, 1, ChannelCommand::FxSlot(9, EffectKind::Filter));
+        master(&mut c, MasterCommand::HeadphoneMix(0.0));
+        channel(&mut c, index, ChannelCommand::Pfl(true));
+        channel(&mut c, index, ChannelCommand::FxAmount(1.0));
+        fx_enabled(&mut c, index, 0, true);
+        settle(&mut r);
+        play_burst(&mut c, index);
+        let (_, h) = render(&mut r, 20_000);
+        let tail = energy(&h, 9000..10_000);
+        if index == 1 {
+            assert!(tail > 1.0, "deck 2 has reverb: {tail}");
+        } else {
+            assert!(tail < 1e-2, "deck {} keeps echo: {tail}", index + 1);
+        }
+    }
+}
+
+#[test]
 fn several_slots_stack() {
     // Echo on slot 0 and reverb on slot 1 each add to a burst's tail at full amount.
     let tail = |slots: &[usize]| {

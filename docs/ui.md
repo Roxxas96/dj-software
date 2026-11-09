@@ -56,9 +56,10 @@ like Ctrl-C in `play`.
   times (click the brighter one to cycle it through remaining, total and elapsed;
   the dimmer one beside it is the elapsed time, or the remaining time while the
   brighter one shows elapsed), the bar.beat
-  counter (LAYOUT menu), the FX slots, the jog (the LAYOUT menu's info jog draws the BPM,
+  counter (LAYOUT menu), the FX slots (each a dropdown that puts another effect in that
+  deck's slot), the jog (the LAYOUT menu's info jog draws the BPM,
   pitch and times inside it), the pitch fader with its pickup marker, VINYL,
-  SLIP and KEYLOCK, the pad mode name and the 8 pads, the loop size, and CUE, PLAY and SYNC.
+  SLIP and KEYLOCK, the pad mode dropdown and the 8 pads, the loop size, and CUE, PLAY and SYNC.
   SYNC is never lit: sync is one-shot here, and there is no MASTER badge.
 - **Mixer:** GAIN, three EQ knobs, FILTER, the channel fader, PFL, the level meters (the live
   level, with a line marking the highest peak of the last second), the crossfader and the
@@ -92,7 +93,12 @@ like Ctrl-C in `play`.
 ## Pad mode name
 
 The deck panel shows `pads` until a pad mode button is pressed after launch: the DDJ-SB3 does
-not report its mode, so the window cannot know it before that.
+not report its mode, so the window cannot know it before that. After a hardware mode button
+it shows that button's name (HOT CUE, SAMPLER and so on).
+
+The name is a dropdown of the modes the app switches itself: "pads (controller)" (the pads
+go back to the SB3's own mode, `pads.mode_hardware`), BEAT JUMP, LOOP ROLL, SLICER and PAD
+SCRATCH. The SB3's hardware modes are not offered: only its buttons can set them.
 
 ## Fonts
 

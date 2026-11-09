@@ -8,7 +8,7 @@ use anyhow::{Context, anyhow};
 use toml::{Table, Value};
 
 use audio_io::OutputRouting;
-use engine::{EffectKind, EqMode, StemKnobs};
+use engine::{DeckId, EffectKind, EqMode, StemKnobs};
 
 use crate::format::safe;
 
@@ -26,6 +26,8 @@ pub struct Config {
     pub crossfader: bool,
     /// The effect in each of the three effect slots.
     pub fx_slots: [EffectKind; 3],
+    /// Per deck, the effects that replace `fx_slots` for it, when the file sets them.
+    pub fx_decks: [Option<[EffectKind; 3]>; 4],
     pub sampler: SamplerConfig,
     /// Beats for the beat jump pads, when the file sets them.
     pub beat_jump_pads: Option<[f64; PADS]>,
@@ -48,6 +50,7 @@ impl Default for Config {
         Self {
             crossfader: true,
             fx_slots: [EffectKind::Echo, EffectKind::Reverb, EffectKind::Flanger],
+            fx_decks: [None; 4],
             sampler: SamplerConfig::default(),
             beat_jump_pads: None,
             beat_jump_shift_pads: None,
@@ -59,6 +62,13 @@ impl Default for Config {
             controller: ControllerConfig::default(),
             ui: UiConfig::default(),
         }
+    }
+}
+
+impl Config {
+    /// The effects in `deck`'s three slots: its own `fx.deckN`, else `fx.slots`.
+    pub fn fx_slots_for(&self, deck: DeckId) -> [EffectKind; 3] {
+        self.fx_decks[deck.index()].unwrap_or(self.fx_slots)
     }
 }
 
@@ -456,8 +466,15 @@ fn parse(text: &str, file: &str, home: Option<&Path>) -> anyhow::Result<Config> 
             "fx" => {
                 for (key, value) in section(file, name, value)? {
                     match key.as_str() {
-                        "slots" => config.fx_slots = parse_fx_slots(value, file)?,
-                        _ => return Err(unknown(file, "fx", key)),
+                        "slots" => config.fx_slots = parse_fx_slots(value, file, "fx.slots")?,
+                        _ => match fx_deck(key) {
+                            Some(deck) => {
+                                let path = format!("fx.{key}");
+                                config.fx_decks[deck.index()] =
+                                    Some(parse_fx_slots(value, file, &path)?);
+                            }
+                            None => return Err(unknown(file, "fx", key)),
+                        },
                     }
                 }
             }
@@ -596,20 +613,29 @@ fn sizes(
     Ok(out)
 }
 
-fn parse_fx_slots(value: &Value, file: &str) -> anyhow::Result<[EffectKind; 3]> {
+/// The deck an `fx.deck1`-`fx.deck4` key names.
+fn fx_deck(key: &str) -> Option<DeckId> {
+    let index = ["deck1", "deck2", "deck3", "deck4"]
+        .iter()
+        .position(|name| *name == key)?;
+    DeckId::new(index)
+}
+
+/// Three effect ids at `key` (`fx.slots`, `fx.deck2`).
+fn parse_fx_slots(value: &Value, file: &str, key: &str) -> anyhow::Result<[EffectKind; 3]> {
     let items = value
         .as_array()
-        .ok_or_else(|| invalid(file, "fx.slots", "expected an array of 3 effect ids"))?;
+        .ok_or_else(|| invalid(file, key, "expected an array of 3 effect ids"))?;
     if items.len() != 3 {
         return Err(invalid(
             file,
-            "fx.slots",
+            key,
             format!("expected exactly 3 effect ids, got {}", items.len()),
         ));
     }
     let mut slots = [EffectKind::Echo; 3];
     for (i, item) in items.iter().enumerate() {
-        let at = format!("fx.slots[{i}]");
+        let at = format!("{key}[{i}]");
         let id = item
             .as_str()
             .ok_or_else(|| invalid(file, &at, "expected an effect id string"))?;
@@ -871,6 +897,43 @@ cache_gb = 5
             error_of("[fx]\nmode = 1"),
             "config.toml: fx.mode: unknown key"
         );
+    }
+
+    #[test]
+    fn fx_decks_parse_and_reject() {
+        let deck = |i| DeckId::new(i).unwrap();
+        let config = parse_text("[fx]\ndeck2 = [\"flanger\",\"echo\",\"reverb\"]").unwrap();
+        assert_eq!(
+            config.fx_slots_for(deck(1)),
+            [EffectKind::Flanger, EffectKind::Echo, EffectKind::Reverb]
+        );
+        assert_eq!(
+            config.fx_slots_for(deck(0)),
+            [EffectKind::Echo, EffectKind::Reverb, EffectKind::Flanger]
+        );
+        // A deck without its own set follows `fx.slots`, whichever comes first.
+        let config =
+            parse_text("[fx]\ndeck4 = [\"filter\",\"echo\",\"echo\"]\nslots = [\"reverb\",\"reverb\",\"reverb\"]")
+                .unwrap();
+        assert_eq!(config.fx_slots_for(deck(2)), [EffectKind::Reverb; 3]);
+        assert_eq!(
+            config.fx_slots_for(deck(3)),
+            [EffectKind::Filter, EffectKind::Echo, EffectKind::Echo]
+        );
+        assert_eq!(
+            error_of("[fx]\ndeck2 = [\"echo\"]"),
+            "config.toml: fx.deck2: expected exactly 3 effect ids, got 1"
+        );
+        assert!(
+            error_of("[fx]\ndeck1 = [\"echo\", \"wobble\", \"echo\"]")
+                .starts_with("config.toml: fx.deck1[1]: unknown effect `wobble`")
+        );
+        for key in ["deck5", "deck0", "deck01"] {
+            assert_eq!(
+                error_of(&format!("[fx]\n{key} = [\"echo\",\"echo\",\"echo\"]")),
+                format!("config.toml: fx.{key}: unknown key")
+            );
+        }
     }
 
     #[test]

@@ -119,7 +119,8 @@ pub struct ControlFrame {
     pub status: Vec<String>,
     /// The last [`EVENTS_KEPT`] events with when they happened, oldest first.
     pub events: VecDeque<(Instant, String)>,
-    pub fx_slots: [EffectKind; 3],
+    /// Per deck, the effect in each FX slot.
+    pub fx_slots: [[EffectKind; 3]; 4],
     pub eq_mode: EqMode,
     pub stem_knobs: StemKnobs,
     pub samples_loaded: [bool; SAMPLER_SLOTS],
@@ -147,7 +148,7 @@ impl Default for ControlFrame {
             browser: None,
             status: Vec::new(),
             events: VecDeque::new(),
-            fx_slots: [EffectKind::Echo, EffectKind::Reverb, EffectKind::Flanger],
+            fx_slots: [[EffectKind::Echo, EffectKind::Reverb, EffectKind::Flanger]; 4],
             eq_mode: EqMode::default(),
             stem_knobs: StemKnobs::default(),
             samples_loaded: [false; SAMPLER_SLOTS],
