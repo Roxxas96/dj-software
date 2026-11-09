@@ -251,7 +251,7 @@ impl DeckView {
                 side,
                 &frame.control,
                 snapshot,
-                info.map(|i| &i.hotcue_marks),
+                info.map(|i| &*i.hotcue_marks),
                 &frame.samples_loaded,
                 sampler,
             ),
@@ -1299,10 +1299,10 @@ mod tests {
         snapshot.hotcues[1] = Some(Hotcue::point(1000.0));
         snapshot.hotcues[3] = Some(loop_hotcue(2000.0));
         let info = frame.decks[0].as_mut().unwrap();
-        info.hotcue_marks[1] = mark(None, Some("Drop"));
-        info.hotcue_marks[3] = mark(None, Some(" Break "));
+        Arc::make_mut(&mut info.hotcue_marks)[1] = mark(None, Some("Drop"));
+        Arc::make_mut(&mut info.hotcue_marks)[3] = mark(None, Some(" Break "));
         // A name on an empty slot shows nothing.
-        info.hotcue_marks[5] = mark(None, Some("Ghost"));
+        Arc::make_mut(&mut info.hotcue_marks)[5] = mark(None, Some("Ghost"));
         let pads = view(&snapshot, &frame).pads;
         assert_eq!(pads[1].label, "2 Drop");
         assert_eq!(pads[3].label, "4 Break");
@@ -1315,7 +1315,7 @@ mod tests {
         snapshot.hotcues[0] = Some(Hotcue::point(1000.0));
         snapshot.hotcues[1] = Some(Hotcue::point(2000.0));
         let info = frame.decks[0].as_mut().unwrap();
-        info.hotcue_marks[0] = mark(Some(0xff0000), None);
+        Arc::make_mut(&mut info.hotcue_marks)[0] = mark(Some(0xff0000), None);
         let pads = view(&snapshot, &frame).pads;
         assert_eq!(pads[0].colour, Some(Color32::from_rgb(0xff, 0, 0)));
         // No colour: the pad keeps the deck's accent.

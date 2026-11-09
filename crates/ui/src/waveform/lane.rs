@@ -128,7 +128,7 @@ impl Lanes {
                 marks: frame.decks[deck.index()]
                     .as_ref()
                     .filter(|info| snapshot.loaded && info.load_seq == snapshot.load_seq)
-                    .map(|info| &info.hotcue_marks),
+                    .map(|info| &*info.hotcue_marks),
             };
             lane.draw(&ui.painter_at(rect), rect, &mut self.meshes[deck.index()]);
         }
@@ -351,14 +351,13 @@ impl Lane<'_> {
     }
 }
 
-/// `name` cut to the length a flag has room for, with `…` when cut.
-fn flag_name(name: &str) -> String {
+/// `name` cut to the length a flag has room for (a slice: nothing is allocated).
+fn flag_name(name: &str) -> &str {
     let name = name.trim();
-    if name.chars().count() <= NAME_CHARS {
-        return name.to_owned();
+    match name.char_indices().nth(NAME_CHARS) {
+        Some((end, _)) => name[..end].trim_end(),
+        None => name,
     }
-    let cut: String = name.chars().take(NAME_CHARS - 1).collect();
-    format!("{}…", cut.trim_end())
 }
 
 /// `colour` with `alpha` (0 to 255) as its opacity.
@@ -609,6 +608,7 @@ mod tests {
     #[test]
     fn long_names_are_cut_for_the_flag() {
         assert_eq!(flag_name(" Drop "), "Drop");
-        assert_eq!(flag_name("A very long hotcue name"), "A very long h…");
+        assert_eq!(flag_name("A very long hotcue name"), "A very long ho");
+        assert_eq!(flag_name("ééééééééééééééééé"), "éééééééééééééé");
     }
 }
