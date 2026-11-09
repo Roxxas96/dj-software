@@ -98,6 +98,11 @@ pub fn deck_slots(four_decks: bool, active: [DeckId; 2]) -> Vec<DeckId> {
     }
 }
 
+/// The decks the 4-channel mixer has a strip for, left to right: 3, 1, 2, 4.
+pub fn mixer_order() -> [DeckId; 4] {
+    [2, 0, 1, 3].map(|i| DeckId::ALL[i])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,6 +116,12 @@ mod tests {
         let numbers = |slots: Vec<DeckId>| slots.iter().map(|d| d.index() + 1).collect::<Vec<_>>();
         assert_eq!(numbers(deck_slots(true, [deck(3), deck(2)])), [1, 3, 2, 4]);
         assert_eq!(numbers(deck_slots(false, [deck(3), deck(2)])), [3, 2]);
+    }
+
+    #[test]
+    fn the_mixer_orders_its_strips_3_1_2_4() {
+        let numbers: Vec<usize> = mixer_order().iter().map(|d| d.index() + 1).collect();
+        assert_eq!(numbers, [3, 1, 2, 4]);
     }
 
     #[test]
