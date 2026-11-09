@@ -3,6 +3,7 @@
 mod files;
 mod layout;
 mod plan;
+pub mod run;
 pub mod serato;
 pub mod timing;
 
@@ -11,6 +12,7 @@ pub use layout::{
     MANIFEST, MUSIC_DIR, Manifest, OJ_DIR, PART_SUFFIX, SPACE_MARGIN, safe_component, stick_paths,
 };
 pub use plan::{ExportPlan, PlannedTrack, TrackAction, plan_export};
+pub use run::{FormatOutput, StickContext, StickFormat};
 
 use std::collections::{HashMap, HashSet};
 use std::io;

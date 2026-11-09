@@ -2366,6 +2366,7 @@ dependencies = [
  "dunce",
  "fs4",
  "library",
+ "lofty",
  "quick-xml 0.42.0",
  "rusqlite",
  "serde",
