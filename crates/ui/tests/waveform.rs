@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use analysis::Waveform;
-use egui::{Mesh, Sense};
+use egui::{Mesh, Sense, vec2};
 use egui_kittest::Harness;
 use engine::{DeckId, DeckSnapshot, Grid, Hotcue};
 use ui::waveform::Lane;
@@ -107,4 +107,60 @@ fn every_style_draws() {
             }
         }
     }
+}
+
+/// Every shape `add_contents` paints in one pass, nested ones flattened.
+fn painted(add_contents: impl FnMut(&mut egui::Ui)) -> Vec<egui::Shape> {
+    let mut add_contents = add_contents;
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| add_contents(ui));
+    output.textures_delta.clear();
+    let mut flat = Vec::new();
+    for clipped in output.shapes {
+        let mut stack = vec![clipped.shape];
+        while let Some(shape) = stack.pop() {
+            match shape {
+                egui::Shape::Vec(inner) => stack.extend(inner),
+                other => flat.push(other),
+            }
+        }
+    }
+    flat
+}
+
+#[test]
+fn a_named_hotcue_flag_shows_its_name_beside_the_number() {
+    let mut snapshot = DeckSnapshot {
+        loaded: true,
+        track_sample_rate: 44_100,
+        duration_frames: 1_280_000,
+        ..DeckSnapshot::default()
+    };
+    snapshot.hotcues[1] = Some(Hotcue::point(441_000.0));
+    let mut marks: [Option<ui::HotcueMark>; 8] = Default::default();
+    marks[1] = Some(ui::HotcueMark::new(None, Some("Drop".into())));
+    let mut mesh = Arc::new(Mesh::default());
+    let shapes = painted(|ui| {
+        let (rect, _) = ui.allocate_exact_size(vec2(1440.0, 200.0), Sense::hover());
+        let lane = Lane {
+            deck: DeckId::new(0).unwrap(),
+            snapshot: &snapshot,
+            waveform: None,
+            position_frames: 441_000.0,
+            beats: 16.0,
+            style: WaveformStyle::Frequency,
+            overlay: false,
+            marks: Some(&marks),
+        };
+        lane.draw(&ui.painter_at(rect), rect, &mut mesh);
+    });
+    let texts: Vec<String> = shapes
+        .iter()
+        .filter_map(|s| match s {
+            egui::Shape::Text(t) => Some(t.galley.text().to_owned()),
+            _ => None,
+        })
+        .collect();
+    assert!(texts.contains(&"2".to_owned()), "{texts:?}");
+    assert!(texts.contains(&"Drop".to_owned()), "{texts:?}");
 }

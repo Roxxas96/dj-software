@@ -103,8 +103,9 @@ pub struct DeckInfo {
     pub detail: Option<Arc<Waveform>>,
     /// The stems' state (`stems`, `stems 40%`, ...), when there is one to show.
     pub stems: Option<String>,
-    /// Per hotcue slot, its colour and name.
-    pub hotcue_marks: [Option<HotcueMark>; 8],
+    /// Per hotcue slot, its colour and name; shared, like the waveforms, so a frame is
+    /// built without copying the names.
+    pub hotcue_marks: Arc<[Option<HotcueMark>; 8]>,
 }
 
 impl PartialEq for DeckInfo {
@@ -124,7 +125,8 @@ impl PartialEq for DeckInfo {
             && same(&self.overview, &other.overview)
             && same(&self.detail, &other.detail)
             && self.stems == other.stems
-            && self.hotcue_marks == other.hotcue_marks
+            && (Arc::ptr_eq(&self.hotcue_marks, &other.hotcue_marks)
+                || self.hotcue_marks == other.hotcue_marks)
     }
 }
 

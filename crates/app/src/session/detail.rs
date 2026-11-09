@@ -39,7 +39,7 @@ enum Part {
     Overview(Option<Arc<Waveform>>),
     Detail(Arc<Waveform>),
     /// The hotcues' colours and names, when they could be read.
-    Marks(Option<Box<Marks>>),
+    Marks(Option<Arc<Marks>>),
 }
 
 /// What is known of the waveforms of the load a deck is on.
@@ -48,7 +48,7 @@ struct Slot {
     load_seq: u64,
     overview: Option<Arc<Waveform>>,
     detail: Option<Arc<Waveform>>,
-    marks: Marks,
+    marks: Arc<Marks>,
 }
 
 /// Which deck loads were asked for, and what came back for them.
@@ -88,17 +88,15 @@ impl Slots {
             Part::Overview(overview) => slot.overview = overview,
             Part::Detail(detail) => slot.detail = Some(detail),
             // Marks that could not be read leave the ones shown.
-            Part::Marks(marks) => {
-                slot.marks = marks.map_or_else(|| std::mem::take(&mut slot.marks), |marks| *marks)
-            }
+            Part::Marks(marks) => slot.marks = marks.unwrap_or_else(|| slot.marks.clone()),
         }
     }
 
     /// The hotcue marks of `deck`'s load `load_seq`; none until they are read.
-    fn marks(&self, deck: usize, load_seq: u64) -> Marks {
+    fn marks(&self, deck: usize, load_seq: u64) -> Arc<Marks> {
         match &self.0[deck] {
-            Some(slot) if slot.load_seq == load_seq => slot.marks.clone(),
-            _ => Marks::default(),
+            Some(slot) if slot.load_seq == load_seq => Arc::clone(&slot.marks),
+            _ => Arc::default(),
         }
     }
 
@@ -192,7 +190,7 @@ impl DetailJobs {
                             part,
                         })
                     };
-                    if send(Part::Marks(read_marks(job.track_id).map(Box::new))).is_err() {
+                    if send(Part::Marks(read_marks(job.track_id).map(Arc::new))).is_err() {
                         return;
                     }
                     let Some(audio) = &job.audio else { continue };
@@ -266,7 +264,7 @@ impl DetailJobs {
     }
 
     /// The hotcue marks of `deck`'s load `load_seq`, as far as they came in.
-    pub fn marks(&self, deck: usize, load_seq: u64) -> Marks {
+    pub fn marks(&self, deck: usize, load_seq: u64) -> Arc<Marks> {
         self.slots.marks(deck, load_seq)
     }
 
@@ -387,7 +385,7 @@ mod tests {
     fn marks_after_collecting(jobs: &mut DetailJobs, deck: usize, load_seq: u64, name: &str) {
         use std::time::{Duration, Instant};
         let until = Instant::now() + Duration::from_secs(5);
-        while jobs.marks(deck, load_seq) != marks_of(name) {
+        while *jobs.marks(deck, load_seq) != marks_of(name) {
             assert!(Instant::now() < until, "marks never came in");
             std::thread::sleep(Duration::from_millis(5));
             jobs.collect();
@@ -412,11 +410,13 @@ mod tests {
             },
         );
         let audio = Arc::new(TrackBuffer::new(44_100, vec![0.0; 2 * 441]).unwrap());
-        assert_eq!(jobs.marks(0, 1), Marks::default());
+        assert_eq!(*jobs.marks(0, 1), Marks::default());
         jobs.observe(0, 1, 7, &audio);
         marks_after_collecting(&mut jobs, 0, 1, "Drop");
+        // A frame shares the marks instead of copying them.
+        assert!(Arc::ptr_eq(&jobs.marks(0, 1), &jobs.marks(0, 1)));
         // Another load of the deck does not show them.
-        assert_eq!(jobs.marks(0, 2), Marks::default());
+        assert_eq!(*jobs.marks(0, 2), Marks::default());
         // The library changed under the same load.
         *name.lock().unwrap() = "Break".to_owned();
         jobs.refresh_marks();
@@ -424,6 +424,6 @@ mod tests {
         // A deck with nothing loaded has nothing to read again.
         jobs.empty(0);
         jobs.refresh_marks();
-        assert_eq!(jobs.marks(0, 1), Marks::default());
+        assert_eq!(*jobs.marks(0, 1), Marks::default());
     }
 }

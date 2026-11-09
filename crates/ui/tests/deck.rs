@@ -181,7 +181,7 @@ fn a_named_hotcue_pad_shows_its_name_in_the_window() {
         frames: 2000.0,
         loop_frames: Some(500.0),
     });
-    frame.decks[0].as_mut().unwrap().hotcue_marks[1] =
+    Arc::make_mut(&mut frame.decks[0].as_mut().unwrap().hotcue_marks)[1] =
         Some(ui::HotcueMark::new(Some(0xff0000), Some("Drop".into())));
     let view = view(&snapshot, &frame);
     let harness = draw(&view);
@@ -290,4 +290,32 @@ fn an_fx_dropdown_offers_every_effect() {
             kind: EffectKind::Filter,
         })
     );
+}
+
+#[test]
+fn a_coloured_hotcue_pad_is_filled_with_its_colour() {
+    let (mut snapshot, mut frame) = loaded();
+    snapshot.hotcues[0] = Some(engine::Hotcue::point(1000.0));
+    snapshot.hotcues[1] = Some(engine::Hotcue::point(2000.0));
+    Arc::make_mut(&mut frame.decks[0].as_mut().unwrap().hotcue_marks)[0] =
+        Some(ui::HotcueMark::new(Some(0xff0000), None));
+    let view = view(&snapshot, &frame);
+    let sections = sections(Layout::Pro);
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ui.set_min_size(egui::vec2(560.0, 340.0));
+        ui::deck::panel(ui, &view, None, &sections, &channel().0);
+    });
+    output.textures_delta.clear();
+    let mut fills = Vec::new();
+    let mut stack: Vec<egui::Shape> = output.shapes.into_iter().map(|c| c.shape).collect();
+    while let Some(shape) = stack.pop() {
+        match shape {
+            egui::Shape::Vec(inner) => stack.extend(inner),
+            egui::Shape::Rect(rect) => fills.push(rect.fill),
+            _ => {}
+        }
+    }
+    let red = egui::Color32::from_rgb(0xff, 0, 0);
+    assert_eq!(fills.iter().filter(|f| **f == red).count(), 1, "{fills:?}");
 }
