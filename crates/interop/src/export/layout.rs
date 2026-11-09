@@ -71,6 +71,18 @@ pub fn safe_component(text: &str, max_chars: usize) -> String {
     format!("{cut}{ext}")
 }
 
+/// The components of a relative path made only of plain names, or why it is not one.
+fn relative_parts(text: &str) -> Result<impl Iterator<Item = &std::ffi::OsStr>, String> {
+    let path = Path::new(text);
+    let plain = path
+        .components()
+        .all(|c| matches!(c, std::path::Component::Normal(_)));
+    if text.is_empty() || !plain {
+        return Err(format!("path {text:?} is not a plain relative path"));
+    }
+    Ok(path.iter())
+}
+
 /// Splits `name.ext` into `("name", ".ext")`; a leading dot or a very long "extension" is
 /// part of the stem.
 fn split_extension(name: &str) -> (&str, &str) {
@@ -154,11 +166,30 @@ impl Manifest {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(source) => return Err(ExportError::Io { path, source }),
         };
-        toml::from_str(&text).map(Some).map_err(|e| {
+        let damaged = |why: String| {
             ExportError::Refused(format!(
-                "Open Jockey's manifest on the stick is damaged: {e}"
+                "Open Jockey's manifest on the stick is damaged: {why}"
             ))
-        })
+        };
+        let manifest: Self = toml::from_str(&text).map_err(|e| damaged(e.to_string()))?;
+        manifest.validate().map_err(damaged)?;
+        Ok(Some(manifest))
+    }
+
+    /// The stick's contents are untrusted: every name must stay inside where it is joined.
+    fn validate(&self) -> Result<(), String> {
+        for track in &self.tracks {
+            let mut parts = relative_parts(track)?;
+            if parts.next().is_none_or(|first| first != MUSIC_DIR) {
+                return Err(format!("track path {track:?} is not under {MUSIC_DIR}/"));
+            }
+        }
+        for name in self.crates.iter().chain(&self.vdj_lists) {
+            if relative_parts(name)?.count() != 1 {
+                return Err(format!("file name {name:?} is not a single name"));
+            }
+        }
+        Ok(())
     }
 
     /// Writes the manifest to `stick`, all or nothing.
@@ -172,7 +203,7 @@ impl Manifest {
             path: path.clone(),
             why: e.to_string(),
         })?;
-        files::write_atomic(&path, text.as_bytes())
+        files::write_atomic(stick, &path, text.as_bytes())
     }
 }
 
@@ -266,5 +297,41 @@ mod tests {
         assert!(
             matches!(&err, crate::export::ExportError::Refused(m) if m.starts_with("Open Jockey's manifest on the stick is damaged: "))
         );
+    }
+
+    #[test]
+    fn manifest_with_escaping_entries_is_refused() {
+        let bad = [
+            ("tracks", "\"../x\""),
+            ("tracks", "\"/etc/passwd\""),
+            ("tracks", "\"Other/x.mp3\""),
+            ("tracks", "\"Music/../../x\""),
+            ("crates", "\"../x.crate\""),
+            ("crates", "\"a/b.crate\""),
+            ("vdj_lists", "\"/abs.vdjfolder\""),
+            ("vdj_lists", "\"\""),
+        ];
+        for (field, value) in bad {
+            let dir = tempfile::tempdir().unwrap();
+            let oj = dir.path().join(OJ_DIR);
+            std::fs::create_dir_all(&oj).unwrap();
+            let mut lists = std::collections::BTreeMap::from([
+                ("tracks", "[]"),
+                ("crates", "[]"),
+                ("vdj_lists", "[]"),
+            ]);
+            let value = format!("[{value}]");
+            lists.insert(field, &value);
+            let text = format!(
+                "version = 1\nplaylists = []\ncrates = {}\nvdj_lists = {}\ntracks = {}\n",
+                lists["crates"], lists["vdj_lists"], lists["tracks"]
+            );
+            std::fs::write(oj.join(MANIFEST), text).unwrap();
+            let err = Manifest::read(dir.path()).unwrap_err();
+            assert!(
+                matches!(&err, ExportError::Refused(m) if m.starts_with("Open Jockey's manifest on the stick is damaged: ")),
+                "{field} {value}: {err:?}"
+            );
+        }
     }
 }
