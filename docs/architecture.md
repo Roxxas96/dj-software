@@ -245,7 +245,8 @@ The window's session edits the file it read (`session/settings.rs`): a registry 
 key of [config.md](config.md)'s table with its category, default and whether it applies
 live. A change edits the file's text with `toml_edit` (comments, order and layout kept),
 is checked by the same parser as `play` and is written on a short-lived thread, beside
-the file and renamed over it. Live keys are sent to the engine (`MasterCommand`,
+the file and renamed over it; saves run in order, and one that finds the file changed
+outside the window applies its edit to the file as found and hands the result back. Live keys are sent to the engine (`MasterCommand`,
 `ChannelCommand::FxSlot`, `SamplerCommand::Volume`), written into `ControlState` or
 applied to the view's zoom; the others are marked pending until the next launch. The
 rows go to the window in `ControlFrame::settings`.
