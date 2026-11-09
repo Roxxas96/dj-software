@@ -77,6 +77,19 @@ pub enum LibraryCommand {
         #[arg(long)]
         force: bool,
     },
+    /// Import hotcues, saved loops and playlists from VirtualDJ. Without --apply, only
+    /// prints what would be imported
+    ImportVdj {
+        /// Write the import; for a track that has hotcues here and in VirtualDJ, keep
+        /// ours, replace them with VirtualDJ's, or merge (ours stay, VirtualDJ's fill
+        /// the empty slots). Takes a library backup first
+        #[arg(long, value_enum, value_name = "HOW")]
+        apply: Option<ResolutionArg>,
+        /// A VirtualDJ data folder (database.xml, MyLists); repeatable. Replaces the
+        /// default folders. Library drives are always searched for VirtualDJ/database.xml
+        #[arg(long = "vdj-dir", value_name = "DIR")]
+        vdj_dir: Vec<PathBuf>,
+    },
     /// Change a library setting
     #[command(subcommand)]
     Set(SetCommand),
@@ -148,6 +161,31 @@ impl SortArg {
             Self::Bpm => TrackSortKey::Bpm,
             Self::Key => TrackSortKey::Key,
             Self::Added => TrackSortKey::Added,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum ResolutionArg {
+    Keep,
+    Replace,
+    Merge,
+}
+
+impl ResolutionArg {
+    fn resolution(self) -> interop::Resolution {
+        match self {
+            Self::Keep => interop::Resolution::Keep,
+            Self::Replace => interop::Resolution::Replace,
+            Self::Merge => interop::Resolution::Merge,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Keep => "keep",
+            Self::Replace => "replace",
+            Self::Merge => "merge",
         }
     }
 }
@@ -267,6 +305,7 @@ pub fn run(args: &LibraryArgs) -> anyhow::Result<()> {
         LibraryCommand::Scan => scan_all(&lib),
         LibraryCommand::List(list) => list_tracks(&lib, list),
         LibraryCommand::Analyze { tracks, force, .. } => analyze(&lib, tracks, *force),
+        LibraryCommand::ImportVdj { apply, vdj_dir } => import_vdj(&lib, *apply, vdj_dir),
         LibraryCommand::Set(set) => set_setting(&lib, set),
         LibraryCommand::Playlist(cmd) => playlist(&lib, cmd),
         LibraryCommand::Grid { track, action } => grid(&lib, *track, *action),
@@ -290,6 +329,192 @@ pub fn run(args: &LibraryArgs) -> anyhow::Result<()> {
         err_out!("warning: a library change was not saved: {}", failed.error);
     }
     result
+}
+
+/// Where mounted drives appear on macOS.
+const VOLUMES_DIR: &str = "/Volumes";
+/// How many unmatched songs the import summary lists.
+const UNMATCHED_SHOWN: usize = 20;
+
+/// VirtualDJ's own folders in the user's home: where it keeps the local database.
+fn default_vdj_dirs() -> Vec<PathBuf> {
+    let Some(base) = directories::BaseDirs::new() else {
+        return Vec::new();
+    };
+    let documents = directories::UserDirs::new()
+        .and_then(|u| u.document_dir().map(Path::to_path_buf))
+        .unwrap_or_else(|| base.home_dir().join("Documents"));
+    if cfg!(target_os = "macos") {
+        vec![
+            base.home_dir()
+                .join("Library/Application Support/VirtualDJ"),
+            documents.join("VirtualDJ"),
+        ]
+    } else if cfg!(windows) {
+        vec![documents.join("VirtualDJ")]
+    } else {
+        Vec::new()
+    }
+}
+
+/// The drive holding `folder`: `<mounts>/<name>` when it is under `mounts`, else the
+/// filesystem root.
+fn volume_of(folder: &Path, mounts: &Path) -> PathBuf {
+    if let Ok(rest) = folder.strip_prefix(mounts)
+        && let Some(name) = rest.components().next()
+    {
+        return mounts.join(name);
+    }
+    folder
+        .ancestors()
+        .last()
+        .map_or_else(|| folder.to_path_buf(), Path::to_path_buf)
+}
+
+fn import_vdj(
+    lib: &Library,
+    apply: Option<ResolutionArg>,
+    vdj_dirs: &[PathBuf],
+) -> anyhow::Result<()> {
+    let homes = if vdj_dirs.is_empty() {
+        default_vdj_dirs()
+    } else {
+        vdj_dirs.to_vec()
+    };
+    for line in vdj_import(lib, apply, &homes, Path::new(VOLUMES_DIR))? {
+        out!("{line}");
+    }
+    Ok(())
+}
+
+/// Plans (and with `apply`, writes) the VirtualDJ import, returning the summary lines.
+/// `mounts` is where drives are mounted, see [`volume_of`].
+fn vdj_import(
+    lib: &Library,
+    apply: Option<ResolutionArg>,
+    homes: &[PathBuf],
+    mounts: &Path,
+) -> anyhow::Result<Vec<String>> {
+    let reader = lib.reader()?;
+    let mut volumes: Vec<PathBuf> = Vec::new();
+    for folder in reader.folders()? {
+        let volume = volume_of(&folder, mounts);
+        if !volumes.contains(&volume) {
+            volumes.push(volume);
+        }
+    }
+    let sources = interop::find_sources(homes, &volumes);
+    if sources.databases.is_empty() && sources.list_dirs.is_empty() {
+        let searched: Vec<String> = homes
+            .iter()
+            .cloned()
+            .chain(volumes.iter().map(|v| v.join("VirtualDJ")))
+            .map(|d| d.display().to_string())
+            .collect();
+        let searched = if searched.is_empty() {
+            "nowhere (pass --vdj-dir)".to_owned()
+        } else {
+            searched.join(", ")
+        };
+        return Ok(vec![format!("no VirtualDJ data found in: {searched}")]);
+    }
+    let mut songs = Vec::new();
+    for database in &sources.databases {
+        // A per-drive database names its files from the drive's root.
+        let drive_root = database
+            .parent()
+            .filter(|dir| dir.file_name().is_some_and(|n| n == "VirtualDJ"))
+            .and_then(Path::parent)
+            .filter(|root| volumes.iter().any(|v| v == root));
+        songs.extend(
+            interop::read_database(database, drive_root)
+                .with_context(|| format!("reading {}", database.display()))?,
+        );
+    }
+    let (playlists, skipped) =
+        interop::read_playlists(&sources.list_dirs, sources.order.as_deref())
+            .context("reading the VirtualDJ playlists")?;
+    let plan = interop::plan_virtualdj(&reader, &songs, &playlists)?;
+    let mut lines = vdj_summary(&plan, &sources, &skipped, apply);
+    if let Some(how) = apply {
+        let resolution = how.resolution();
+        let report = interop::apply(lib, &plan, |_| resolution)?;
+        lines.push(format!("  backup: {}", report.backup.display()));
+        lines.push(format!(
+            "  written: {} tracks, {} playlists",
+            report.tracks_changed, report.playlists_created
+        ));
+    }
+    Ok(lines)
+}
+
+/// The import summary printed before anything is written.
+fn vdj_summary(
+    plan: &interop::ImportPlan,
+    sources: &interop::VdjSources,
+    skipped: &[interop::InteropError],
+    apply: Option<ResolutionArg>,
+) -> Vec<String> {
+    let mut lines = vec![match apply {
+        None => {
+            "VirtualDJ import (dry run: nothing written; add --apply keep|replace|merge)".to_owned()
+        }
+        Some(how) => format!(
+            "VirtualDJ import ({} for tracks with cues here)",
+            how.name()
+        ),
+    }];
+    lines.push(format!("  databases: {}", sources.databases.len()));
+    lines.extend(
+        sources
+            .databases
+            .iter()
+            .map(|d| format!("    {}", d.display())),
+    );
+    let points = || plan.tracks.iter().flat_map(|t| &t.incoming).flatten();
+    let loops = points().filter(|p| p.loop_frames.is_some()).count();
+    lines.push(format!(
+        "  tracks matched: {}, with hotcues or loops: {}, conflicting with cues here: {}",
+        plan.tracks.len(),
+        plan.tracks
+            .iter()
+            .filter(|t| t.incoming.iter().any(Option::is_some))
+            .count(),
+        plan.tracks.iter().filter(|t| t.conflicts()).count()
+    ));
+    lines.push(format!(
+        "  hotcues: {}, saved loops: {loops}, dropped over 8 slots: {}, other markers not imported: {}",
+        points().count() - loops,
+        plan.dropped,
+        plan.other_markers
+    ));
+    let create = plan
+        .playlists
+        .iter()
+        .filter(|p| p.action == interop::PlaylistAction::Create)
+        .count();
+    lines.push(format!(
+        "  playlists: {create} to create, {} already here",
+        plan.playlists.len() - create
+    ));
+    if !skipped.is_empty() {
+        lines.push(format!("  playlists skipped: {}", skipped.len()));
+        lines.extend(skipped.iter().map(|e| format!("    {e}")));
+    }
+    lines.push(format!("  not in the library: {}", plan.unmatched.len()));
+    lines.extend(
+        plan.unmatched
+            .iter()
+            .take(UNMATCHED_SHOWN)
+            .map(|p| format!("    {}", p.display())),
+    );
+    if plan.unmatched.len() > UNMATCHED_SHOWN {
+        lines.push(format!(
+            "    ... and {} more",
+            plan.unmatched.len() - UNMATCHED_SHOWN
+        ));
+    }
+    lines
 }
 
 fn add_folder(lib: &Library, dir: &Path) -> anyhow::Result<()> {
@@ -1191,5 +1416,124 @@ mod tests {
         assert!(matches_search(&row(1, None), Some("song 1")));
         assert!(matches_search(&row(1, None), Some("ARTIST")));
         assert!(!matches_search(&row(1, None), Some("nope")));
+    }
+
+    mod import_vdj {
+        use super::*;
+
+        /// A library with one scanned wav, and a VirtualDJ folder whose database gives that
+        /// track a hotcue and a loop.
+        fn vdj_fixture() -> (tempfile::TempDir, Library, PathBuf, PathBuf) {
+            let dir = tempfile::tempdir().unwrap();
+            let music = dir.path().join("music");
+            std::fs::create_dir_all(&music).unwrap();
+            write_wav(&music.join("a.wav"), 1.0);
+            let lib = Library::open(&dir.path().join("library.sqlite3")).unwrap();
+            library::add_folder(&lib, &music).unwrap();
+            library::scan_folder(&lib, &music, &mut |_| {}).unwrap();
+            let vdj = dir.path().join("vdj");
+            std::fs::create_dir_all(&vdj).unwrap();
+            let xml = format!(
+                "<VirtualDJ_Database Version=\"2025\">\n\
+                 <Song FilePath=\"{}\" FileSize=\"1\">\n\
+                 <Scan Bpm=\"0.5\" />\n\
+                 <Poi Pos=\"0.25\" Num=\"1\" Type=\"cue\" />\n\
+                 <Poi Pos=\"0.5\" Num=\"2\" Type=\"loop\" Size=\"0.25\" />\n\
+                 </Song>\n\
+                 <Song FilePath=\"{}\" FileSize=\"1\" />\n\
+                 </VirtualDJ_Database>",
+                music.join("a.wav").display(),
+                music.join("gone.wav").display()
+            );
+            std::fs::write(vdj.join("database.xml"), xml).unwrap();
+            (dir, lib, vdj, music)
+        }
+
+        fn hotcues_of(lib: &Library) -> [Option<library::HotcuePoint>; 8] {
+            lib.reader().unwrap().hotcue_points(1).unwrap()
+        }
+
+        #[test]
+        fn dry_run_prints_the_summary_and_writes_nothing() {
+            let (dir, lib, vdj, music) = vdj_fixture();
+            let lines = vdj_import(&lib, None, std::slice::from_ref(&vdj), dir.path()).unwrap();
+            assert_eq!(
+                lines[0],
+                "VirtualDJ import (dry run: nothing written; add --apply keep|replace|merge)"
+            );
+            assert_eq!(lines[1], "  databases: 1");
+            assert_eq!(
+                lines[2],
+                format!("    {}", vdj.join("database.xml").display())
+            );
+            assert_eq!(
+                lines[3],
+                "  tracks matched: 1, with hotcues or loops: 1, conflicting with cues here: 0"
+            );
+            assert_eq!(
+                lines[4],
+                "  hotcues: 1, saved loops: 1, dropped over 8 slots: 0, other markers not imported: 0"
+            );
+            assert_eq!(lines[5], "  playlists: 0 to create, 0 already here");
+            assert_eq!(lines[6], "  not in the library: 1");
+            assert_eq!(
+                lines[7],
+                format!("    {}", music.join("gone.wav").display())
+            );
+            assert_eq!(lines.len(), 8);
+            assert!(hotcues_of(&lib).iter().all(Option::is_none));
+            assert!(
+                !dir.path().join("backups").exists(),
+                "no backup for a dry run"
+            );
+        }
+
+        #[test]
+        fn apply_merge_writes_and_reports_the_backup() {
+            let (dir, lib, vdj, _) = vdj_fixture();
+            let lines = vdj_import(&lib, Some(ResolutionArg::Merge), &[vdj], dir.path()).unwrap();
+            assert_eq!(
+                lines[0],
+                "VirtualDJ import (merge for tracks with cues here)"
+            );
+            let n = lines.len();
+            assert!(lines[n - 2].starts_with("  backup: "), "{lines:?}");
+            assert!(dir.path().join("backups").is_dir());
+            assert_eq!(lines[n - 1], "  written: 1 tracks, 0 playlists");
+            let slots = hotcues_of(&lib);
+            assert!(slots[0].is_some() && slots[1].as_ref().unwrap().loop_frames.is_some());
+        }
+
+        #[test]
+        fn no_virtualdj_data_says_so() {
+            let (dir, lib, _, _) = vdj_fixture();
+            let empty = dir.path().join("empty");
+            std::fs::create_dir_all(&empty).unwrap();
+            // Library folders are stored canonical (/private/var on macOS).
+            let mounts = dir.path().canonicalize().unwrap();
+            let lines = vdj_import(&lib, None, std::slice::from_ref(&empty), &mounts).unwrap();
+            let music_volume = mounts.join("music/VirtualDJ");
+            assert_eq!(
+                lines,
+                [format!(
+                    "no VirtualDJ data found in: {}, {}",
+                    empty.display(),
+                    music_volume.display()
+                )]
+            );
+        }
+
+        #[test]
+        fn a_drive_is_the_mount_holding_the_folder() {
+            let mounts = Path::new("/Volumes");
+            assert_eq!(
+                volume_of(Path::new("/Volumes/Mix/music/a"), mounts),
+                Path::new("/Volumes/Mix")
+            );
+            assert_eq!(
+                volume_of(Path::new("/Users/me/music"), mounts),
+                Path::new("/")
+            );
+        }
     }
 }
