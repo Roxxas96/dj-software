@@ -1485,9 +1485,9 @@ mod tests {
             let empty = dir.path().join("empty");
             std::fs::create_dir_all(&empty).unwrap();
             // Library folders are stored canonical (/private/var on macOS).
-            let mounts = dir.path().canonicalize().unwrap();
+            let mounts = dunce::canonicalize(dir.path()).unwrap();
             let lines = vdj_import(&lib, None, &places(&empty, &mounts)).unwrap();
-            let music_volume = mounts.join("music/VirtualDJ");
+            let music_volume = mounts.join("music").join("VirtualDJ");
             assert_eq!(
                 lines,
                 [format!(

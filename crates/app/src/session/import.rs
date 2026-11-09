@@ -731,7 +731,7 @@ mod tests {
             ImportView::Failed(format!(
                 "No VirtualDJ data found in: {}, {}",
                 empty.display(),
-                root.join("music/VirtualDJ").display()
+                root.join("music").join("VirtualDJ").display()
             ))
         );
     }
