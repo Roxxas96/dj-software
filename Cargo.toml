@@ -44,6 +44,28 @@ egui = "0.37.0"
 egui_kittest = "0.37.0"
 jiff = "0.2.40"
 
+# Decoding a whole track before it plays (MP3, AAC, FLAC, WAV) takes seconds unoptimized,
+# so loading a track in a debug build (`cargo run`) is slow: a 4-minute 320 kbps MP3 took
+# 4.6 s unoptimized and 0.25 s with these.
+[profile.dev.package.decode]
+opt-level = 3
+[profile.dev.package.symphonia-core]
+opt-level = 3
+[profile.dev.package.symphonia-common]
+opt-level = 3
+[profile.dev.package.symphonia-bundle-mp3]
+opt-level = 3
+[profile.dev.package.symphonia-bundle-flac]
+opt-level = 3
+[profile.dev.package.symphonia-codec-aac]
+opt-level = 3
+[profile.dev.package.symphonia-codec-pcm]
+opt-level = 3
+[profile.dev.package.symphonia-format-isomp4]
+opt-level = 3
+[profile.dev.package.symphonia-format-riff]
+opt-level = 3
+
 # The keylock stretcher is C++ built by the crate's build script; unoptimized it costs
 # about a millisecond per deck and block, too slow for debug builds and tests.
 [profile.dev.package.signalsmith-stretch]
