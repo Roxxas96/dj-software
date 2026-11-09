@@ -7,6 +7,7 @@ pub mod rekordbox;
 pub mod run;
 pub mod serato;
 pub mod timing;
+pub mod virtualdj;
 
 pub use files::{copy_atomic, remove_leftovers, remove_regular_file, write_atomic};
 pub use layout::{

@@ -5,7 +5,6 @@ pub mod tags;
 pub mod tlv;
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 
 use super::run::{FormatOutput, StickContext, StickFormat};
 use super::{ExportError, files, safe_component};
@@ -19,10 +18,6 @@ const DATABASE: &str = "database V2";
 /// merged into `database V2`.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SeratoFormat;
-
-fn exists(path: &Path) -> bool {
-    std::fs::symlink_metadata(path).is_ok()
-}
 
 impl StickFormat for SeratoFormat {
     fn name(&self) -> &'static str {
@@ -49,7 +44,7 @@ impl StickFormat for SeratoFormat {
         let mut taken = HashSet::new();
         for playlist in &plan.playlists {
             let base = safe_component(&playlist.name.replace("%%", "_"), 120);
-            let file = unique_crate_name(&base, &subcrates, &ours, &taken);
+            let file = files::unique_name(&base, ".crate", &subcrates, &ours, &taken);
             taken.insert(file.to_lowercase());
             let listed: Vec<&str> = playlist
                 .tracks
@@ -95,38 +90,5 @@ impl StickFormat for SeratoFormat {
         })?;
         files::write_atomic(stick, &database, &merged)?;
         Ok(output)
-    }
-}
-
-/// `<base>.crate`, unless a crate of that name is on the stick and is not ours or is already
-/// used by another playlist of this export; then ` (Open Jockey)` is added, and a number.
-fn unique_crate_name(
-    base: &str,
-    subcrates: &Path,
-    ours: &HashSet<&str>,
-    taken: &HashSet<String>,
-) -> String {
-    let free = |file: &str| {
-        !taken.contains(&file.to_lowercase())
-            && (ours.contains(file) || !exists(&subcrates.join(file)))
-    };
-    let plain = format!("{base}.crate");
-    if free(&plain) {
-        return plain;
-    }
-    let mut n = 1;
-    loop {
-        let suffix = if n == 1 {
-            " (Open Jockey)".to_string()
-        } else {
-            format!(" (Open Jockey {n})")
-        };
-        // Cut the base, not the suffix, so every candidate differs.
-        let cut = safe_component(base, 120usize.saturating_sub(suffix.chars().count()).max(1));
-        let name = format!("{cut}{suffix}.crate");
-        if free(&name) {
-            return name;
-        }
-        n += 1;
     }
 }
