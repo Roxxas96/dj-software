@@ -101,5 +101,11 @@ CREATE TABLE stems (
 );
 ";
 
+/// Version 3: a hotcue slot can hold a saved loop. `hotcues.loop_frames` is the loop's
+/// length in frames; null for a plain hotcue.
+const V3: &str = "
+ALTER TABLE hotcues ADD COLUMN loop_frames REAL;
+";
+
 /// Every migration, in order. The latest schema version is `MIGRATIONS.len()`.
-pub const MIGRATIONS: &[&str] = &[V1, V2];
+pub const MIGRATIONS: &[&str] = &[V1, V2, V3];

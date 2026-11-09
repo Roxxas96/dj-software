@@ -76,6 +76,7 @@ fn hot_set(lib: &Library, track: i64, slot: u8, frames: f64) -> Result<(), Libra
             track,
             slot,
             frames,
+            loop_frames: None,
         })
         .map(drop)
 }

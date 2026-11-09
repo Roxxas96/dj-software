@@ -26,6 +26,7 @@ pub use browser::{
     BROWSER_PAGE_ROWS, Browser, BrowserRequest, BrowserView, Drive, Focus, ListRow, TreeKind,
     TreeRow, drives, remix_of,
 };
+pub use cues::HotcuePoint;
 pub use db::{Library, Reader};
 pub use grid::{
     Beatgrid, GridEdit, GridError, MAX_GRID_BPM, MIN_GRID_BPM, MIN_TAPS, TAP_RESET_MICROS,
@@ -93,6 +94,8 @@ pub enum LibraryError {
     NoSuchTrack(i64),
     #[error("{0} is not a valid cue point: it must be finite and not negative")]
     InvalidCue(f64),
+    #[error("{0} is not a valid loop length: it must be finite and above zero")]
+    InvalidLoop(f64),
     #[error("{0} is not a hotcue slot: slots are 1 to 8")]
     InvalidHotcueSlot(u8),
     #[error("position {position} is out of range (the playlist has {len} entries)")]

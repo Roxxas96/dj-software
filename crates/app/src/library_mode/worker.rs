@@ -581,6 +581,7 @@ mod tests {
                 track: id,
                 slot: 3,
                 frames: 900.0,
+                loop_frames: None,
             })
             .unwrap();
         s.lib
@@ -667,6 +668,7 @@ mod tests {
                 track: *track,
                 slot: 1,
                 frames: 77.0,
+                loop_frames: None,
             })
             .unwrap();
         decode::decode_file(path)
