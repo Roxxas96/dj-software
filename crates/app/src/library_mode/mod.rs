@@ -99,10 +99,10 @@ pub struct LibraryMode {
     queued_total: usize,
     /// Analysis is held to [`WORKERS_WHILE_PLAYING`] because a deck is playing.
     throttled: bool,
-    /// The last value saved this session for each cue point and hotcue, as frames bits
-    /// (`None`: the hotcue was deleted).
+    /// The last value saved this session for each cue point and hotcue, as frames bits and
+    /// loop length bits (`None`: the hotcue was deleted).
     latest_memory: HashMap<(i64, Spot), Option<Stored>>,
-    /// Cue and hotcue writes already retried once, as (track, spot, value).
+    /// Cue and hotcue writes already retried once, as (track, spot, frames and loop length bits).
     retried_memory: HashSet<(i64, Spot, Option<Stored>)>,
     /// The watcher scanned something: look for tracks to analyze at the next refresh.
     find_new_tracks: bool,
@@ -1528,32 +1528,65 @@ mod tests {
     #[test]
     fn turning_a_loop_slot_into_a_hotcue_clears_the_loop() {
         let (_dir, mut mode, mut engine, mut renderer, printer) = mode_rendering();
-        add_track_7(&mode);
         let d1 = DeckId::new(0).unwrap();
+        // Track 7 is not in the library yet, so both saves fail.
         load_7(&mut mode, 0, &mut engine, &printer);
         render(&mut renderer);
-        mode.sync_cues(&mut engine, &printer);
         let slot1 = engine::HotcueSlot::new(1).unwrap();
         let saved_loop = engine::Hotcue {
             frames: 100.0,
             loop_frames: Some(50.0),
         };
-        let mut step = |cmd| {
-            engine.send(Command::Deck(d1, cmd)).unwrap();
-            render(&mut renderer);
-            mode.sync_cues(&mut engine, &printer);
-            mode.sync_cues(&mut engine, &printer);
-        };
-        step(DeckCommand::SetHotcue(slot1, Some(saved_loop)));
-        step(DeckCommand::HotcueDelete(slot1));
-        step(DeckCommand::SetHotcue(
-            slot1,
-            Some(engine::Hotcue::point(100.0)),
-        ));
+        let mut track = mode.decks[d1.index()].take().unwrap();
+        // The loop, then a plain hotcue at the same position: only the loop length differs.
+        mode.save_memory(
+            &mut track,
+            &[
+                MemoryAction::SaveHotcue(slot1, saved_loop),
+                MemoryAction::SaveHotcue(slot1, engine::Hotcue::point(100.0)),
+            ],
+            &printer,
+        );
+        mode.decks[d1.index()] = Some(track);
+        flush(&mode);
+        assert_eq!(mode.lib.failed_write_count(), 2);
+        add_track_7(&mode);
+        // Only the latest write is retried, so the loop cannot come back over it.
+        mode.report_failed_writes(&printer);
         flush(&mode);
         let points = mode.lib.reader().unwrap().hotcue_points(7).unwrap();
         let point = points[0].as_ref().unwrap();
         assert_eq!((point.frames, point.loop_frames), (100.0, None));
+        mode.shutdown(&mut engine, &printer);
+        printer.finish();
+    }
+
+    #[test]
+    fn a_failed_loop_length_change_is_a_new_value_for_the_retry() {
+        let (_dir, mut mode, mut engine, printer) = mode();
+        let set = |loop_frames| WriteOp::SetHotcue {
+            track: 7,
+            slot: 3,
+            frames: 500.0,
+            loop_frames,
+        };
+        // Track 7 does not exist yet: writes fail. The latest is the loop of 80 frames.
+        mode.latest_memory.insert(
+            (7, Spot::Hotcue(3)),
+            Some((500.0_f64.to_bits(), Some(80.0_f64.to_bits()))),
+        );
+        for op in [set(None), set(Some(50.0)), set(Some(80.0))] {
+            mode.writer.submit(op).unwrap();
+        }
+        flush(&mode);
+        assert_eq!(mode.lib.failed_write_count(), 3);
+        mode.report_failed_writes(&printer);
+        flush(&mode);
+        assert_eq!(
+            mode.lib.failed_write_count(),
+            4,
+            "only the write with the latest loop length is retried"
+        );
         mode.shutdown(&mut engine, &printer);
         printer.finish();
     }
