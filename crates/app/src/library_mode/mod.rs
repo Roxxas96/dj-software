@@ -101,9 +101,9 @@ pub struct LibraryMode {
     throttled: bool,
     /// The last value saved this session for each cue point and hotcue, as frames bits
     /// (`None`: the hotcue was deleted).
-    latest_memory: HashMap<(i64, Spot), Option<u64>>,
+    latest_memory: HashMap<(i64, Spot), Option<Stored>>,
     /// Cue and hotcue writes already retried once, as (track, spot, value).
-    retried_memory: HashSet<(i64, Spot, Option<u64>)>,
+    retried_memory: HashSet<(i64, Spot, Option<Stored>)>,
     /// The watcher scanned something: look for tracks to analyze at the next refresh.
     find_new_tracks: bool,
     last_done: usize,
@@ -1086,17 +1086,26 @@ enum Spot {
     Hotcue(u8),
 }
 
-/// The track, spot and value (frames bits, `None` for a deletion) a cue or hotcue write
-/// stores; `None` for other writes.
-fn memory_write(op: &WriteOp) -> Option<(i64, Spot, Option<u64>)> {
+/// What a cue or hotcue write stores: the frames bits and the loop length bits, if any.
+type Stored = (u64, Option<u64>);
+
+/// The track, spot and value (`None` for a deletion) a cue or hotcue write stores; `None`
+/// for other writes.
+fn memory_write(op: &WriteOp) -> Option<(i64, Spot, Option<Stored>)> {
     match *op {
-        WriteOp::SetCue { track, frames } => Some((track, Spot::Cue, Some(frames.to_bits()))),
+        WriteOp::SetCue { track, frames } => {
+            Some((track, Spot::Cue, Some((frames.to_bits(), None))))
+        }
         WriteOp::SetHotcue {
             track,
             slot,
             frames,
-            ..
-        } => Some((track, Spot::Hotcue(slot), Some(frames.to_bits()))),
+            loop_frames,
+        } => Some((
+            track,
+            Spot::Hotcue(slot),
+            Some((frames.to_bits(), loop_frames.map(f64::to_bits))),
+        )),
         WriteOp::DeleteHotcue { track, slot } => Some((track, Spot::Hotcue(slot), None)),
         _ => None,
     }
@@ -1479,6 +1488,77 @@ mod tests {
     }
 
     #[test]
+    fn a_saved_loop_reaches_the_library_and_the_other_decks() {
+        let (_dir, mut mode, mut engine, mut renderer, printer) = mode_rendering();
+        add_track_7(&mode);
+        let (d1, d3) = (DeckId::new(0).unwrap(), DeckId::new(2).unwrap());
+        load_7(&mut mode, 0, &mut engine, &printer);
+        load_7(&mut mode, 2, &mut engine, &printer);
+        render(&mut renderer);
+        mode.sync_cues(&mut engine, &printer);
+        let slot1 = engine::HotcueSlot::new(1).unwrap();
+        let saved_loop = engine::Hotcue {
+            frames: 100.0,
+            loop_frames: Some(50.0),
+        };
+        engine
+            .send(Command::Deck(
+                d1,
+                DeckCommand::SetHotcue(slot1, Some(saved_loop)),
+            ))
+            .unwrap();
+        render(&mut renderer);
+        mode.sync_cues(&mut engine, &printer);
+        mode.sync_cues(&mut engine, &printer);
+        flush(&mode);
+        let points = mode.lib.reader().unwrap().hotcue_points(7).unwrap();
+        let point = points[0].as_ref().unwrap();
+        assert_eq!((point.frames, point.loop_frames), (100.0, Some(50.0)));
+        render(&mut renderer);
+        assert_eq!(
+            engine.deck(d3).hotcues[0],
+            Some(saved_loop),
+            "deck 3 has it"
+        );
+        assert_eq!(mode.lib.failed_write_count(), 0);
+        mode.shutdown(&mut engine, &printer);
+        printer.finish();
+    }
+
+    #[test]
+    fn turning_a_loop_slot_into_a_hotcue_clears_the_loop() {
+        let (_dir, mut mode, mut engine, mut renderer, printer) = mode_rendering();
+        add_track_7(&mode);
+        let d1 = DeckId::new(0).unwrap();
+        load_7(&mut mode, 0, &mut engine, &printer);
+        render(&mut renderer);
+        mode.sync_cues(&mut engine, &printer);
+        let slot1 = engine::HotcueSlot::new(1).unwrap();
+        let saved_loop = engine::Hotcue {
+            frames: 100.0,
+            loop_frames: Some(50.0),
+        };
+        let mut step = |cmd| {
+            engine.send(Command::Deck(d1, cmd)).unwrap();
+            render(&mut renderer);
+            mode.sync_cues(&mut engine, &printer);
+            mode.sync_cues(&mut engine, &printer);
+        };
+        step(DeckCommand::SetHotcue(slot1, Some(saved_loop)));
+        step(DeckCommand::HotcueDelete(slot1));
+        step(DeckCommand::SetHotcue(
+            slot1,
+            Some(engine::Hotcue::point(100.0)),
+        ));
+        flush(&mode);
+        let points = mode.lib.reader().unwrap().hotcue_points(7).unwrap();
+        let point = points[0].as_ref().unwrap();
+        assert_eq!((point.frames, point.loop_frames), (100.0, None));
+        mode.shutdown(&mut engine, &printer);
+        printer.finish();
+    }
+
+    #[test]
     fn hotcues_are_not_saved_when_they_could_not_be_read() {
         let (_dir, mut mode, mut engine, mut renderer, printer) = mode_rendering();
         add_track_7(&mode);
@@ -1535,7 +1615,7 @@ mod tests {
         assert!(mode.sync_deck_patiently(d1, read, &printer));
         assert_eq!(
             mode.latest_memory.get(&(7, Spot::Hotcue(1))),
-            Some(&Some(100.0_f64.to_bits()))
+            Some(&Some((100.0_f64.to_bits(), None)))
         );
         // A deck that never reads whole is given up on after a bounded number of tries.
         let mut reads = 0;
@@ -1764,7 +1844,7 @@ mod tests {
         let (_dir, mut mode, mut engine, printer) = mode();
         // Track 7 does not exist yet: the write fails.
         mode.latest_memory
-            .insert((7, Spot::Cue), Some(500.0_f64.to_bits()));
+            .insert((7, Spot::Cue), Some((500.0_f64.to_bits(), None)));
         mode.writer
             .submit(WriteOp::SetCue {
                 track: 7,
@@ -1782,7 +1862,7 @@ mod tests {
 
         // A superseded value is not retried.
         mode.latest_memory
-            .insert((7, Spot::Cue), Some(900.0_f64.to_bits()));
+            .insert((7, Spot::Cue), Some((900.0_f64.to_bits(), None)));
         mode.writer
             .submit(WriteOp::SetCue {
                 track: 7,
@@ -1830,7 +1910,7 @@ mod tests {
         let delete = WriteOp::DeleteHotcue { track: 7, slot: 3 };
         // Track 7 does not exist yet: writes fail.
         mode.latest_memory
-            .insert((7, Spot::Hotcue(3)), Some(500.0_f64.to_bits()));
+            .insert((7, Spot::Hotcue(3)), Some((500.0_f64.to_bits(), None)));
         mode.writer.submit(set(500.0)).unwrap();
         flush(&mode);
         mode.report_failed_writes(&printer);
@@ -1941,7 +2021,7 @@ mod tests {
         mode.sync_snapshot(deck, &shown(3, Some(50.0)), &printer);
         assert_eq!(
             mode.latest_memory.get(&(9, Spot::Hotcue(1))),
-            Some(&Some(50.0_f64.to_bits()))
+            Some(&Some((50.0_f64.to_bits(), None)))
         );
         assert_eq!(mode.latest_memory.len(), 1);
         drop(load);
@@ -1984,7 +2064,7 @@ mod tests {
         mode.sync_snapshot(deck, &shown(1, Some(100.0)), &printer);
         let hotcue_1 =
             |mode: &LibraryMode, track| mode.latest_memory.get(&(track, Spot::Hotcue(1))).copied();
-        assert_eq!(hotcue_1(&mode, 7), Some(Some(100.0_f64.to_bits())));
+        assert_eq!(hotcue_1(&mode, 7), Some(Some((100.0_f64.to_bits(), None))));
         assert_eq!(hotcue_1(&mode, 8), None);
         // Track 8's load shows: the outgoing track is done with.
         mode.sync_snapshot(deck, &shown(2, None), &printer);

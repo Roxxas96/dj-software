@@ -11,7 +11,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 use std::thread::JoinHandle;
 
-use engine::{DeckId, HOTCUES, Hotcue, TrackBuffer, TrackMemory};
+use engine::{DeckId, Hotcue, TrackBuffer, TrackMemory};
 use library::{
     Beatgrid, Browser, BrowserRequest, BrowserView, Drive, GridEdit, Library, PendingTrack, Reader,
     TrackRow,
@@ -394,8 +394,8 @@ fn read_memory(
             .ok()
     }
     let cue = read_or_warn(reader.cue(track), "cue point", "", track, events).flatten();
-    let hotcues: Option<[Option<f64>; HOTCUES]> = read_or_warn(
-        reader.hotcues(track),
+    let hotcues = read_or_warn(
+        reader.hotcue_points(track),
         "hotcues",
         "; hotcues won't be remembered for this load",
         track,
@@ -405,7 +405,15 @@ fn read_memory(
     let memory = TrackMemory {
         cue: cue.unwrap_or(0.0),
         hotcues: hotcues
-            .map(|h| h.map(|frames| frames.map(Hotcue::point)))
+            .as_ref()
+            .map(|h| {
+                h.clone().map(|point| {
+                    point.map(|p| Hotcue {
+                        frames: p.frames,
+                        loop_frames: p.loop_frames,
+                    })
+                })
+            })
             .unwrap_or_default(),
         // Grid periods at the decoded rate, which is what the deck plays.
         grid: engine_grid(grid.as_ref(), rate),
@@ -475,6 +483,7 @@ fn load_one(reader: &Reader, job: LoadJob, events: &Sender<Event>, decode: Decod
 mod tests {
     use std::time::Duration;
 
+    use engine::HOTCUES;
     use library::{RawStatement, ScanProgress, TrackFilter, TrackSort, WriteOp};
 
     use super::*;
@@ -614,6 +623,44 @@ mod tests {
         );
         assert!(loaded.buffer.frames() > 0);
         assert!(loaded.hotcues_read);
+    }
+
+    #[test]
+    fn a_loop_slot_loads_from_the_library() {
+        let s = setup(&["ok.wav"]);
+        let id = ids(&s.lib)[0];
+        s.lib
+            .writer()
+            .submit_wait(WriteOp::PutHotcue {
+                track: id,
+                slot: 2,
+                point: library::HotcuePoint {
+                    frames: 900.0,
+                    loop_frames: Some(300.0),
+                    color: None,
+                    name: None,
+                },
+            })
+            .unwrap();
+        let (tx, events) = channel();
+        let (jobs, _worker) = spawn(Arc::clone(&s.lib), tx, None).unwrap();
+        jobs.send(Job::LoadTrack {
+            deck: deck(1),
+            track: id,
+            seq: 1,
+        })
+        .unwrap();
+        let loaded = wait_for(&events, |e| match e {
+            Event::Loaded(l) => Some(l),
+            _ => None,
+        });
+        assert_eq!(
+            loaded.memory.hotcues[1],
+            Some(Hotcue {
+                frames: 900.0,
+                loop_frames: Some(300.0)
+            })
+        );
     }
 
     #[test]
