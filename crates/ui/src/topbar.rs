@@ -22,10 +22,14 @@ pub fn show(
     frame: &ControlFrame,
     monitor: Option<&EngineMonitor>,
     commands: &Sender<UiCommand>,
+    settings_open: &mut bool,
 ) {
     let p = theme::palette(ui.ctx());
     ui.horizontal(|ui| {
         menu::show(ui, &frame.view, commands);
+        if gear(ui).clicked() {
+            *settings_open = !*settings_open;
+        }
         ui.separator();
         match &frame.error {
             Some(error) => ui.label(RichText::new(error.as_str()).color(p.error).strong()),
@@ -50,6 +54,35 @@ pub fn show(
             master_meter(ui, peaks);
         });
     });
+}
+
+/// The settings button: a gear, painted as shapes (no font has one for sure).
+fn gear(ui: &mut Ui) -> egui::Response {
+    let p = theme::palette(ui.ctx());
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(20.0), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Open settings"));
+    let colour = if response.hovered() {
+        p.text
+    } else {
+        p.text_dim
+    };
+    let stroke = egui::Stroke::new(2.0, colour);
+    let (centre, radius) = (rect.center(), 5.5);
+    let painter = ui.painter();
+    painter.circle_stroke(centre, radius, stroke);
+    for tooth in 0..8 {
+        let angle = tooth as f32 * std::f32::consts::FRAC_PI_4;
+        let direction = Vec2::angled(angle);
+        painter.line_segment(
+            [
+                centre + direction * radius,
+                centre + direction * (radius + 3.5),
+            ],
+            egui::Stroke::new(2.5, colour),
+        );
+    }
+    painter.circle_filled(centre, 2.0, colour);
+    response.on_hover_text("Settings")
 }
 
 /// `CPU 37%`: the audio thread's share of each block's time; `CPU –` before audio opens.
