@@ -47,6 +47,8 @@ jiff = "0.2.40"
 quick-xml = "0.42.0"
 # Free space on the USB stick before an export.
 fs4 = "1.1.0"
+# Serato stores its cue tags as base64 inside a tag frame.
+base64 = "0.23"
 
 # Decoding a whole track before it plays (MP3, AAC, FLAC, WAV) takes seconds unoptimized,
 # so loading a track in a debug build (`cargo run`) is slow: a 4-minute 320 kbps MP3 took

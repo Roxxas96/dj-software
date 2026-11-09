@@ -3,6 +3,7 @@
 mod files;
 mod layout;
 mod plan;
+pub mod serato;
 pub mod timing;
 
 pub use files::{copy_atomic, remove_leftovers, write_atomic};
