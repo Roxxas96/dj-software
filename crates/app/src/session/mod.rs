@@ -231,6 +231,7 @@ fn run_session(
     let printer = Printer::to_channel(lines_tx);
     let mut parts = FrameParts::new(config);
     parts.view = view_store(config, shared);
+    parts.list_devices();
     if let Some(path) = shared.config_path.clone() {
         parts.set_settings(settings::Settings::load(path, config));
     }

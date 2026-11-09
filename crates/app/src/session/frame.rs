@@ -1,7 +1,7 @@
 //! Builds the [`ControlFrame`] the window draws from the control loop's state.
 
 use std::collections::VecDeque;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use engine::{DeckId, SAMPLER_SLOTS};
@@ -29,6 +29,9 @@ pub(super) struct FrameParts {
     /// The configuration file's settings; `None` when there is no file to keep them in.
     pub settings: Option<Settings>,
     settings_rows: Arc<Vec<SettingRow>>,
+    /// The audio output devices' names, filled by the thread [`FrameParts::list_devices`]
+    /// starts.
+    devices: Arc<OnceLock<Vec<String>>>,
     pub crossfader_enabled: bool,
     /// Per deck, the effects the engine was sent: the configuration's, then the window's
     /// choices.
@@ -54,6 +57,7 @@ impl FrameParts {
             unapplied: None,
             settings: None,
             settings_rows: Arc::default(),
+            devices: Arc::default(),
             crossfader_enabled: config.crossfader,
             fx_slots: DeckId::ALL.map(|deck| config.fx_slots_for(deck)),
             eq_mode: config.stems.startup_eq_mode(),
@@ -66,6 +70,23 @@ impl FrameParts {
             output_latency: Duration::ZERO,
             detail: None,
         }
+    }
+
+    /// Lists the audio output devices on a thread of its own, once: the system's answer
+    /// can take a while, and the control loop never waits for it. The window shows the
+    /// list from the first frame after it arrives.
+    pub fn list_devices(&self) {
+        let devices = Arc::clone(&self.devices);
+        let spawned = std::thread::Builder::new()
+            .name("devices".to_owned())
+            .spawn(move || {
+                let names = audio_io::list_output_devices()
+                    .map(|found| found.into_iter().map(|d| d.name).collect())
+                    .unwrap_or_default();
+                let _ = devices.set(names);
+            });
+        // Without the thread the window just has no list.
+        drop(spawned);
     }
 
     /// Reads the configuration file's settings from `settings`, for the window to list.
@@ -125,6 +146,7 @@ impl FrameParts {
             audio: self.audio.clone(),
             output_latency: self.output_latency,
             settings: Arc::clone(&self.settings_rows),
+            devices: self.devices.get().cloned().unwrap_or_default(),
             ..ControlFrame::default()
         }
     }

@@ -102,7 +102,7 @@ fn menu(ui: &mut Ui, view: &ViewState, commands: &Sender<UiCommand>) {
     });
 }
 
-fn layout_name(layout: Layout) -> &'static str {
+pub(crate) fn layout_name(layout: Layout) -> &'static str {
     match layout {
         Layout::Starter => "Starter",
         Layout::Essentials => "Essentials",

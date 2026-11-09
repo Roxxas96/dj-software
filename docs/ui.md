@@ -105,10 +105,24 @@ SCRATCH. The SB3's hardware modes are not offered: only its buttons can set them
 Titles in scripts the built-in font lacks (Japanese, Cyrillic and so on) use the system's fonts
 as a fallback.
 
+## The settings window
+
+The gear at the left of the top bar opens a Settings window (about 70 % of the screen,
+closable) with a sidebar, as in VirtualDJ:
+
+- **Audio:** a dropdown of the output devices (listed once at launch), and the `audio.*` settings.
+- **Interface:** the four layouts as tiles, each a sketch of the sections it shows; click one to switch.
+- **Controllers:** a dropdown of the built-in mappings, and `controller.mapping`.
+- **Options:** every `config.toml` setting ([config.md](config.md)) with its value editor
+  (checkbox, dropdown, or a text field sent on Enter or when it loses focus) and what it
+  does. The search box matches the key, group or help; "Show modified" lists the settings
+  that differ from their default; "Reset all" asks first. A setting that applies at the next
+  launch says so once saved, and a value the file would not accept shows why on its row.
+- **Later:** what will come (recording, broadcast, automix); nothing to set yet.
+
 ## Known limits
 
 - One audio device: master and headphones must be channels of the same device. Two devices
   come in a later plan.
 - No clickable controls: the window only displays.
-- Plan 10 brings the LAYOUT menu, other waveform styles, a 4-deck view, resizable panels and a
-  settings window.
+- Plan 10 brings the LAYOUT menu, other waveform styles, a 4-deck view and resizable panels.

@@ -12,6 +12,7 @@ pub mod layout;
 mod menu;
 pub mod mixer;
 mod model;
+pub mod settings;
 pub mod sideview;
 pub mod theme;
 mod topbar;
@@ -107,6 +108,7 @@ pub struct Screen {
     pub decks: deck::DeckPanels,
     pub covers: cover::Covers,
     pub mixer: mixer::Mixer,
+    pub settings: settings::SettingsWindow,
     /// The shares a divider was dragged to, drawn until the session's copy catches up.
     pub sizes: Option<Dragged>,
     /// Where what the viewer asks for goes: the session.
@@ -121,6 +123,7 @@ impl Default for Screen {
             decks: deck::DeckPanels::default(),
             covers: cover::Covers::default(),
             mixer: mixer::Mixer::default(),
+            settings: settings::SettingsWindow::default(),
             sizes: None,
             commands: channel().0,
         }
@@ -169,7 +172,15 @@ pub fn root(
     };
     egui::Panel::top("top_bar")
         .frame(egui::Frame::new().fill(p.panel).inner_margin(6))
-        .show(ui, |ui| topbar::show(ui, frame, monitor, &screen.commands));
+        .show(ui, |ui| {
+            topbar::show(
+                ui,
+                frame,
+                monitor,
+                &screen.commands,
+                &mut screen.settings.open,
+            )
+        });
     let lanes = |ui: &mut egui::Ui, screen: &mut Screen, drags: &mut Drags| {
         let height = drags.sizes.lanes * window.y;
         let (drag, top) = row_panel(ui, "waveform_lanes", height, &p, |ui| {
@@ -226,6 +237,7 @@ pub fn root(
                 );
             }
         });
+    settings::show(ui.ctx(), frame, &mut screen.settings, &screen.commands);
     if let Some(dragged) = changes.sizes {
         drags.sizes = dragged;
         drags.moved = true;

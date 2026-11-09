@@ -20,6 +20,7 @@ engine = { path = "../engine" }
 image.workspace = true
 jiff.workspace = true
 library = { path = "../library" }
+controller = { path = "../controller" }
 lofty.workspace = true
 
 [dev-dependencies]

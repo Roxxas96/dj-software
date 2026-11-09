@@ -161,6 +161,9 @@ pub struct ControlFrame {
     /// Every `config.toml` setting, in `docs/config.md`'s order; empty until the session
     /// has read the file.
     pub settings: Arc<Vec<SettingRow>>,
+    /// The names of the audio output devices, listed once when the session starts; empty
+    /// until then.
+    pub devices: Vec<String>,
 }
 
 impl Default for ControlFrame {
@@ -184,6 +187,7 @@ impl Default for ControlFrame {
             key_notation: KeyNotation::default(),
             error: None,
             settings: Arc::default(),
+            devices: Vec::new(),
         }
     }
 }
