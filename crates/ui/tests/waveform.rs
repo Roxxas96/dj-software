@@ -7,8 +7,13 @@ use egui::{Mesh, Sense};
 use egui_kittest::Harness;
 use engine::{DeckId, DeckSnapshot, Grid};
 use ui::waveform::Lane;
+use ui::{ControlFrame, WaveformPosition, WaveformStyle};
 
 fn draw(snapshot: DeckSnapshot, waveform: &Waveform) {
+    draw_styled(snapshot, waveform, WaveformStyle::Frequency, false);
+}
+
+fn draw_styled(snapshot: DeckSnapshot, waveform: &Waveform, style: WaveformStyle, overlay: bool) {
     let mut mesh = Arc::new(Mesh::default());
     let mut harness = Harness::builder()
         .with_size([1440.0, 200.0])
@@ -20,6 +25,8 @@ fn draw(snapshot: DeckSnapshot, waveform: &Waveform) {
                 waveform: Some(waveform),
                 position_frames: 441_000.0,
                 beats: 16.0,
+                style,
+                overlay,
             };
             lane.draw(&ui.painter_at(rect), rect, &mut mesh);
         });
@@ -59,4 +66,44 @@ fn lane_draws_with_and_without_a_grid() {
         ..loaded
     };
     draw(gridded, &waveform);
+}
+
+#[test]
+fn every_style_draws() {
+    let waveform = Waveform {
+        frames_per_bucket: 128,
+        buckets: (0..10_000)
+            .map(|i| [(i % 256) as u8, 200, 80, 30])
+            .collect(),
+    };
+    let loaded = DeckSnapshot {
+        loaded: true,
+        playing: true,
+        position_frames: 441_000.0,
+        duration_frames: 1_280_000,
+        track_sample_rate: 44_100,
+        ..DeckSnapshot::default()
+    };
+    for style in [
+        WaveformStyle::Frequency,
+        WaveformStyle::DeckColour,
+        WaveformStyle::Bands,
+        WaveformStyle::Overlaid,
+    ] {
+        draw_styled(loaded, &waveform, style, false);
+        draw_styled(loaded, &waveform, style, true);
+        for position in [WaveformPosition::Top, WaveformPosition::Middle] {
+            for overview in [true, false] {
+                let mut frame = ControlFrame::default();
+                frame.view.waveform_style = style;
+                frame.view.waveform_position = position;
+                frame.view.overview = overview;
+                let mut screen = ui::Screen::default();
+                let mut harness = Harness::builder()
+                    .with_size([1440.0, 900.0])
+                    .build_ui(|ui| ui::root(ui, &frame, None, &mut screen));
+                harness.run_steps(3);
+            }
+        }
+    }
 }

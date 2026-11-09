@@ -4,11 +4,13 @@
 mod colour;
 mod lane;
 mod playhead;
+mod styles;
 mod ticks;
 mod zoom;
 
 pub use colour::colour;
 pub use lane::{Lane, Lanes, lanes};
 pub use playhead::Playhead;
+pub use styles::{Bar, column};
 pub use ticks::{Tick, ticks};
 pub use zoom::{ZOOM_STEP, ZoomGesture, zoomed};

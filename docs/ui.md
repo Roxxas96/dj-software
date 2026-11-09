@@ -35,8 +35,11 @@ like Ctrl-C in `play`.
   light), waveform and jogwheel displays, the beat counter, 4 decks and the info and side
   panels; the colour scheme already changes the window, the other entries take effect in
   later plan 10 tasks.
-- **Waveform lanes:** the decks both sides show, plus any other deck that is playing. Colour
-  follows frequency. Beat ticks are drawn, with a red tick on the first beat of each bar.
+- **Waveform lanes:** the decks both sides show, plus any other deck that is playing. The LAYOUT
+  menu picks the style: Frequency (colour follows frequency), Deck colour, Bands (highs,
+  mids and bass stacked) or Overlaid (the two side decks share one lane at 55 % opacity),
+  and puts the lanes at the Top or in the Middle (between the deck panels and the browser).
+  Overview switches the deck panels' overview waveform on or off. Beat ticks are drawn, with a red tick on the first beat of each bar.
   Cue and hotcue markers and the loop band show on the lane. The playhead is fixed at the
   centre.
 - **Zoom:** scroll (or pinch) over the waveforms, or click the `-` and `+` buttons at their
