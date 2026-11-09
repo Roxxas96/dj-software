@@ -18,6 +18,7 @@ dunce.workspace = true
 fs4.workspace = true
 lofty.workspace = true
 library = { path = "../library" }
+percent-encoding.workspace = true
 quick-xml.workspace = true
 serde.workspace = true
 thiserror.workspace = true

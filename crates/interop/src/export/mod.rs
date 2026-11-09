@@ -3,6 +3,7 @@
 mod files;
 mod layout;
 mod plan;
+pub mod rekordbox;
 pub mod run;
 pub mod serato;
 pub mod timing;
