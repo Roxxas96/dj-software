@@ -65,6 +65,7 @@ fn song(path: &str, pois: Vec<VdjPoi>) -> VdjSong {
         seconds_per_beat: Some(0.5),
         pois,
         other_markers: 0,
+        from_drive: false,
     }
 }
 
@@ -185,6 +186,50 @@ fn slots_positions_and_loops_convert() {
     assert_eq!(lp.name.as_deref(), Some("Outro"));
     assert!(t.incoming.iter().filter(|p| p.is_some()).count() == 2);
     assert!(!t.conflicts());
+}
+
+#[test]
+fn a_track_in_two_databases_takes_the_drive_entry() {
+    let (_dir, lib) = open();
+    let id = track(&lib, "/music/a.mp3");
+    // The home database lists the track with no hotcues, the drive's own with two.
+    let mut home = song("/music/a.mp3", Vec::new());
+    home.other_markers = 2;
+    let mut drive = song("/music/a.mp3", vec![hotcue(1, 1.0), hotcue(2, 2.0)]);
+    drive.from_drive = true;
+    drive.other_markers = 1;
+    let planned = plan(&lib, &[home.clone(), drive.clone()], &[]);
+    assert_eq!(planned.tracks.len(), 1);
+    assert_eq!(planned.tracks[0].track, id);
+    let frames: Vec<f64> = planned.tracks[0]
+        .incoming
+        .iter()
+        .flatten()
+        .map(|p| p.frames)
+        .collect();
+    assert_eq!(frames, [RATE, 2.0 * RATE]);
+    // The home entry had nothing to lose; only the kept entry's other markers count.
+    assert_eq!((planned.dropped, planned.other_markers), (0, 1));
+
+    // Listed the other way round, with hotcues in both: the drive's still win, and the
+    // home entry's are counted as dropped.
+    home.pois = vec![hotcue(1, 5.0), hotcue(3, 6.0), hotcue(4, 7.0)];
+    let planned = plan(&lib, &[drive.clone(), home.clone()], &[]);
+    let frames: Vec<f64> = planned.tracks[0]
+        .incoming
+        .iter()
+        .flatten()
+        .map(|p| p.frames)
+        .collect();
+    assert_eq!(frames, [RATE, 2.0 * RATE]);
+    assert_eq!((planned.dropped, planned.other_markers), (3, 1));
+
+    // Two entries from home databases: the one with hotcues wins over an empty one.
+    drive.from_drive = false;
+    let empty = song("/music/a.mp3", Vec::new());
+    let planned = plan(&lib, &[empty, drive], &[]);
+    assert_eq!(planned.tracks[0].incoming.iter().flatten().count(), 2);
+    assert_eq!(planned.dropped, 0);
 }
 
 #[test]

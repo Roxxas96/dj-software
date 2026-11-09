@@ -68,6 +68,7 @@ fn reads_hotcues_loops_names_and_colours() {
                 },
             ],
             other_markers: 3,
+            from_drive: true,
         }]
     );
 }

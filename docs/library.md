@@ -259,6 +259,8 @@ In the window: Settings, Library, "Import from VirtualDJ…" (see [ui.md](ui.md)
   and size. Songs and playlist entries with no match are listed as "not in the library" and
   are not added; scan the folder first. A hotcue keeps its slot number (1 to 8); numbers above
   8 take the free slots in order of position, and what finds no slot is counted as dropped.
+  A track listed in two databases takes the entry of the drive's own database, else the one
+  with hotcues or loops; the other entry's hotcues and loops are counted as dropped.
 - **When a track already has hotcues here** and VirtualDJ has some too, you choose: **keep**
   yours and import nothing for the track, **replace** them with VirtualDJ's, or **merge**
   (yours stay, VirtualDJ's fill the empty slots). Tracks without a conflict just take what
