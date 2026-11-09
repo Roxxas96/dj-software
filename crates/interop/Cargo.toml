@@ -16,6 +16,7 @@ base64.workspace = true
 decode = { path = "../decode" }
 dunce.workspace = true
 fs4.workspace = true
+lofty.workspace = true
 library = { path = "../library" }
 quick-xml.workspace = true
 serde.workspace = true
