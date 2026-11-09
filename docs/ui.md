@@ -124,5 +124,5 @@ closable) with a sidebar, as in VirtualDJ:
 
 - One audio device: master and headphones must be channels of the same device. Two devices
   come in a later plan.
-- No clickable controls: the window only displays.
+- The window sets things up (the LAYOUT menu, the dropdowns, the settings window); performing (transport, jog, faders, pads) is still on the controller only.
 - Plan 10 brings the LAYOUT menu, other waveform styles, a 4-deck view and resizable panels.

@@ -164,6 +164,8 @@ pub struct ControlFrame {
     /// The names of the audio output devices, listed once when the session starts; empty
     /// until then.
     pub devices: Vec<String>,
+    /// The names of the built-in controller mappings.
+    pub mappings: Vec<String>,
 }
 
 impl Default for ControlFrame {
@@ -188,6 +190,7 @@ impl Default for ControlFrame {
             error: None,
             settings: Arc::default(),
             devices: Vec::new(),
+            mappings: Vec::new(),
         }
     }
 }

@@ -5307,7 +5307,6 @@ dependencies = [
  "actions",
  "analysis",
  "anyhow",
- "controller",
  "eframe",
  "egui",
  "egui_kittest",

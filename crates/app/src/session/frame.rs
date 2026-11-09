@@ -147,6 +147,9 @@ impl FrameParts {
             output_latency: self.output_latency,
             settings: Arc::clone(&self.settings_rows),
             devices: self.devices.get().cloned().unwrap_or_default(),
+            mappings: controller::builtin::builtin_names()
+                .map(str::to_owned)
+                .collect(),
             ..ControlFrame::default()
         }
     }

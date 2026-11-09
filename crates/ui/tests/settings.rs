@@ -24,6 +24,7 @@ fn row(key: &str, category: &'static str, value: &str, default: &str) -> Setting
 fn frame(rows: Vec<SettingRow>) -> ControlFrame {
     ControlFrame {
         settings: Arc::new(rows),
+        mappings: vec!["ddj-sb3".to_owned(), "other".to_owned()],
         devices: vec!["Built-in Output".to_owned(), "DDJ-SB3".to_owned()],
         ..ControlFrame::default()
     }
@@ -149,6 +150,52 @@ fn the_audio_page_lists_the_devices() {
         [UiCommand::SetSetting {
             key: "audio.device".to_owned(),
             value: "\"DDJ-SB3\"".to_owned()
+        }]
+    );
+}
+
+#[test]
+fn the_controllers_page_lists_the_mappings() {
+    let mut all = rows();
+    all.push(row(
+        "controller.mapping",
+        "Controller",
+        "\"ddj-sb3\"",
+        "\"ddj-sb3\"",
+    ));
+    let frame = frame(all);
+    let (mut harness, asked) = open(&frame);
+    harness.get_by_label("Controllers").click();
+    harness.run_steps(3);
+    harness.get_by_label("controller.mapping");
+    harness.get_by_label("Controller mapping").click();
+    harness.run_steps(3);
+    harness.get_by_label("other").click();
+    harness.run_steps(3);
+    assert_eq!(
+        asked.try_iter().collect::<Vec<_>>(),
+        [UiCommand::SetSetting {
+            key: "controller.mapping".to_owned(),
+            value: "\"other\"".to_owned()
+        }]
+    );
+}
+
+#[test]
+fn default_output_clears_the_device() {
+    let frame = frame(rows());
+    let (mut harness, asked) = open(&frame);
+    harness.get_by_label("Audio").click();
+    harness.run_steps(3);
+    harness.get_by_label("Output device").click();
+    harness.run_steps(3);
+    harness.get_by_label("Default output").click();
+    harness.run_steps(3);
+    assert_eq!(
+        asked.try_iter().collect::<Vec<_>>(),
+        [UiCommand::SetSetting {
+            key: "audio.device".to_owned(),
+            value: String::new()
         }]
     );
 }
