@@ -85,7 +85,7 @@ pub fn confirm_reset(ctx: &egui::Context, options: &mut Options, commands: &Send
     if !options.confirm_reset {
         return;
     }
-    let modal = egui::Modal::new(egui::Id::unique("confirm_reset_settings")).show(ctx, |ui| {
+    let modal = egui::Modal::new(egui::Id::NULL.with("confirm_reset_settings")).show(ctx, |ui| {
         ui.label("Put every setting back to its default?");
         ui.horizontal(|ui| {
             if ui.button("Reset").clicked() {

@@ -16,6 +16,8 @@ use crate::theme;
 
 /// The window takes this share of the screen when it opens.
 const SHARE: f32 = 0.7;
+/// The audio device list's entry for the system's default output.
+const DEFAULT_OUTPUT: &str = "Default output";
 const SIDEBAR_WIDTH: f32 = 130.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -103,7 +105,7 @@ fn page(
     match state.page {
         Page::Audio => audio(ui, frame, state, commands),
         Page::Interface => interface::show(ui, &frame.view, commands),
-        Page::Controllers => controllers(ui, rows, state, commands),
+        Page::Controllers => controllers(ui, frame, state, commands),
         Page::Options => options::show(ui, rows, &mut state.options, &mut state.drafts, commands),
         Page::Later => later(ui),
     }
@@ -122,23 +124,41 @@ fn value_of(rows: &[SettingRow], key: &str) -> String {
         .unwrap_or_default()
 }
 
+/// Which setting a dropdown sets, and what it is called.
+struct Choice<'a> {
+    label: &'a str,
+    name: &'a str,
+    key: &'a str,
+}
+
 /// A dropdown of `names` for the setting `key`; sends the one chosen as a string.
 fn choose(
     ui: &mut Ui,
-    label: &str,
-    name: &str,
-    key: &str,
+    what: Choice<'_>,
     current: &str,
     names: &[&str],
+    default: Option<&str>,
     commands: &Sender<UiCommand>,
 ) {
+    let Choice { label, name, key } = what;
     ui.horizontal(|ui| {
         ui.label(label);
-        if let Some(name) = options::dropdown(ui, label, name, current, names) {
+        let mut options: Vec<&str> = default.into_iter().collect();
+        options.extend_from_slice(names);
+        if let Some(chosen) = options::dropdown(ui, label, name, current, &options) {
+            // An empty value removes the key: back to the default.
+            let value = if default == Some(chosen.as_str()) {
+                String::new()
+            } else {
+                format!("\"{chosen}\"")
+            };
             let _ = commands.send(UiCommand::SetSetting {
                 key: key.to_owned(),
-                value: format!("\"{name}\""),
+                value,
             });
+        }
+        if names.is_empty() && default.is_some() {
+            ui.label("no devices found");
         }
     });
     ui.add_space(6.0);
@@ -153,18 +173,21 @@ fn audio(
     let rows = frame.settings.as_slice();
     let current = value_of(rows, "audio.device");
     let current = if current.is_empty() {
-        "default output"
+        DEFAULT_OUTPUT
     } else {
         current.as_str()
     };
     let names: Vec<&str> = frame.devices.iter().map(String::as_str).collect();
     choose(
         ui,
-        "Device",
-        "Output device",
-        "audio.device",
+        Choice {
+            label: "Device",
+            name: "Output device",
+            key: "audio.device",
+        },
         current,
         &names,
+        Some(DEFAULT_OUTPUT),
         commands,
     );
     for row in rows_of(rows, "audio.") {
@@ -174,18 +197,22 @@ fn audio(
 
 fn controllers(
     ui: &mut Ui,
-    rows: &[SettingRow],
+    frame: &ControlFrame,
     state: &mut SettingsWindow,
     commands: &Sender<UiCommand>,
 ) {
-    let names: Vec<&str> = controller::builtin::builtin_names().collect();
+    let rows = frame.settings.as_slice();
+    let names: Vec<&str> = frame.mappings.iter().map(String::as_str).collect();
     choose(
         ui,
-        "Mapping",
-        "Controller mapping",
-        "controller.mapping",
+        Choice {
+            label: "Mapping",
+            name: "Controller mapping",
+            key: "controller.mapping",
+        },
         &value_of(rows, "controller.mapping"),
         &names,
+        None,
         commands,
     );
     for row in rows_of(rows, "controller.") {
