@@ -76,7 +76,7 @@ fn default_vdj_dirs() -> Vec<PathBuf> {
 /// filesystem root. Both are compared by canonical path, so a short or symlinked spelling
 /// still matches; the drive comes back in canonical form.
 fn volume_of(folder: &Path, mounts: &Path) -> PathBuf {
-    let canonical = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let canonical = |path: &Path| dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let (folder, mounts) = (canonical(folder), canonical(mounts));
     if let Ok(rest) = folder.strip_prefix(&mounts)
         && let Some(name) = rest.components().next()
@@ -197,7 +197,7 @@ mod tests {
         std::fs::create_dir_all(&folder).unwrap();
         // The mounts are canonical; the folder keeps the temp dir's own spelling, which
         // differs on macOS (/var vs /private/var) and Windows (8.3 short names).
-        let mounts = temp.path().canonicalize().unwrap();
+        let mounts = dunce::canonicalize(temp.path()).unwrap();
         assert_eq!(volume_of(&folder, &mounts), mounts.join("Mix"));
     }
 }
