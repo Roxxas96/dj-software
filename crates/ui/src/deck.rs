@@ -887,6 +887,15 @@ mod tests {
         assert_eq!(beat_counter(None, 0.0), None);
     }
 
+    #[test]
+    fn pitch_reads_with_a_sign_and_never_minus_zero() {
+        assert_eq!(pitch_text(0.0), "+0.0%");
+        assert_eq!(pitch_text(-0.0), "+0.0%");
+        assert_eq!(pitch_text(-0.04), "+0.0%");
+        assert_eq!(pitch_text(1.25), "+1.3%");
+        assert_eq!(pitch_text(-2.0), "-2.0%");
+    }
+
     fn deck(number: usize) -> DeckId {
         DeckId::new(number - 1).unwrap()
     }
