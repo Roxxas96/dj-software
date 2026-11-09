@@ -273,6 +273,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn time_mode_cycles() {
+        assert_eq!(TimeMode::Total.next(), TimeMode::Elapsed);
+        assert_eq!(TimeMode::Elapsed.next(), TimeMode::Remaining);
+    }
+
+    #[test]
     fn layout_next_cycles() {
         assert_eq!(Layout::Performance.next(), Layout::Starter);
         assert_eq!(Layout::Starter.next(), Layout::Essentials);

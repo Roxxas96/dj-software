@@ -1,6 +1,7 @@
 //! The 4-Decks view draws headless, without a GPU.
 
 use std::path::PathBuf;
+use std::sync::mpsc::channel;
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -87,7 +88,7 @@ fn four_deck_panels_follow_their_decks() {
     let mut harness = Harness::builder()
         .with_size([1440.0, 400.0])
         .build_ui(move |ui| {
-            panels.show_reads(ui, &frame, &reads, &mut covers, &sections);
+            panels.show_reads(ui, &frame, &reads, &mut covers, &sections, &channel().0);
         });
     harness.run_steps(3);
     harness.get_by_label("One");

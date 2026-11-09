@@ -3,6 +3,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::mpsc::Sender;
 use std::time::Instant;
 
 use actions::{ControlState, HardwarePadMode, PadMode, Side, SideControl};
@@ -12,15 +13,17 @@ use egui::{
     StrokeKind, TextureHandle, Ui, UiBuilder, Vec2, pos2, vec2,
 };
 use engine::{
-    ChannelSnapshot, DeckId, DeckSnapshot, EffectKind, EngineMonitor, SAMPLER_SLOTS,
+    ChannelSnapshot, DeckId, DeckSnapshot, EffectKind, EngineMonitor, Grid, SAMPLER_SLOTS,
     SamplerSnapshot,
 };
 
+use crate::command::{UiCommand, ViewChange};
 use crate::cover::{self, Covers};
 use crate::layout::{Sections, deck_slots};
 use crate::mixer;
 use crate::model::{ControlFrame, GHOST_TEMPO};
 use crate::theme;
+use crate::view::{JogDisplay, TimeMode};
 use crate::waveform::{Playhead, colour};
 
 /// A record's speed: the jog's marker turns at this at the original tempo.
@@ -93,6 +96,13 @@ pub struct DeckView {
     /// `M:SS.d`, cut (not rounded) to the tenth; empty without a track.
     pub elapsed: String,
     pub remaining: String,
+    /// The track's length, like the times; empty without a track.
+    pub total: String,
+    /// Which of the times the header shows.
+    pub time_mode: TimeMode,
+    /// `bar.beat` for the header, when the view asks for it and the track has a grid.
+    pub beat_counter: Option<String>,
+    pub jog_display: JogDisplay,
     /// The playhead's place in the track, 0 to 1; `None` without a track.
     pub progress: Option<f32>,
     /// How far the jog's marker has turned, 0 to 1 clockwise from the top.
@@ -183,6 +193,17 @@ impl DeckView {
             } else {
                 String::new()
             },
+            total: if loaded {
+                clock(duration, rate)
+            } else {
+                String::new()
+            },
+            time_mode: frame.view.time_mode(id),
+            beat_counter: snapshot
+                .grid
+                .filter(|_| loaded && frame.view.beat_counter)
+                .and_then(|grid| beat_counter(Some(grid), position)),
+            jog_display: frame.view.jog_display,
             progress: (loaded && duration > 0.0).then(|| (position / duration) as f32),
             jog_turn: if loaded {
                 (position / f64::from(rate) * JOG_RPM / 60.0).fract() as f32
@@ -295,6 +316,23 @@ fn clock(frames: f64, rate: u32) -> String {
     format!("{}:{:02}.{}", tenths / 600, tenths / 10 % 60, tenths % 10)
 }
 
+/// The `bar.beat` the playhead is at, both counted from 1 from the grid's first beat, 4
+/// beats to a bar. Before the first beat the bars count backwards from 0: three beats
+/// before it is "0.2". `None` without a grid.
+pub fn beat_counter(grid: Option<Grid>, position_frames: f64) -> Option<String> {
+    let grid = grid.filter(|g| g.beat_period_frames.is_finite() && g.beat_period_frames > 0.0)?;
+    let beats = ((position_frames - grid.first_beat_frames) / grid.beat_period_frames).floor();
+    if !beats.is_finite() {
+        return None;
+    }
+    let beats = beats as i64;
+    Some(format!(
+        "{}.{}",
+        beats.div_euclid(4) + 1,
+        beats.rem_euclid(4) + 1
+    ))
+}
+
 /// A beat count as a pad or loop shows it: "1/16", "1/2", "4".
 fn beats_text(beats: f64) -> String {
     if beats > 0.0 && beats < 1.0 {
@@ -352,9 +390,10 @@ impl DeckPanels {
         monitor: Option<&EngineMonitor>,
         covers: &mut Covers,
         sections: &Sections,
+        commands: &Sender<UiCommand>,
     ) -> Rect {
         let reads = DeckReads::read(monitor);
-        self.show_reads(ui, frame, &reads, covers, sections)
+        self.show_reads(ui, frame, &reads, covers, sections, commands)
     }
 
     /// [`DeckPanels::show`] from what was already read from the engine.
@@ -365,6 +404,7 @@ impl DeckPanels {
         reads: &DeckReads,
         covers: &mut Covers,
         sections: &Sections,
+        commands: &Sender<UiCommand>,
     ) -> Rect {
         let now = Instant::now();
         let (area, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
@@ -408,7 +448,7 @@ impl DeckPanels {
                 .as_deref()
                 .and_then(|path| covers.get(ui.ctx(), path));
             ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| {
-                panel(ui, &view, cover.as_ref(), sections);
+                panel(ui, &view, cover.as_ref(), sections, commands);
             });
             // With four panels, the ones the controller plays are the ones outlined.
             if four && active.contains(&deck) {
@@ -429,8 +469,14 @@ impl DeckPanels {
 }
 
 /// Draws `view` filling `ui`, with `cover` (the plain tile without one), showing the
-/// `sections` the layout has.
-pub fn panel(ui: &mut Ui, view: &DeckView, cover: Option<&TextureHandle>, sections: &Sections) {
+/// `sections` the layout has. A click on the time asks `commands` to cycle it.
+pub fn panel(
+    ui: &mut Ui,
+    view: &DeckView,
+    cover: Option<&TextureHandle>,
+    sections: &Sections,
+    commands: &Sender<UiCommand>,
+) {
     let p = theme::palette(ui.ctx());
     let accent = p.deck_accent(view.deck);
     egui::Frame::new()
@@ -439,7 +485,7 @@ pub fn panel(ui: &mut Ui, view: &DeckView, cover: Option<&TextureHandle>, sectio
         .show(ui, |ui| {
             ui.set_min_size(ui.available_size());
             ui.spacing_mut().item_spacing = vec2(6.0, 4.0);
-            header(ui, view, cover, accent);
+            header(ui, view, cover, accent, commands);
             if sections.overview {
                 overview(ui, view);
             }
@@ -502,7 +548,13 @@ fn loop_row(ui: &mut Ui, view: &DeckView) {
 }
 
 /// The cover, title, artist, remix and stems, then BPM, key and times on the right.
-fn header(ui: &mut Ui, view: &DeckView, cover: Option<&TextureHandle>, accent: Color32) {
+fn header(
+    ui: &mut Ui,
+    view: &DeckView,
+    cover: Option<&TextureHandle>,
+    accent: Color32,
+    commands: &Sender<UiCommand>,
+) {
     let p = theme::palette(ui.ctx());
     ui.horizontal_top(|ui| {
         cover::tile(ui, cover, COVER_SIDE);
@@ -537,9 +589,19 @@ fn header(ui: &mut Ui, view: &DeckView, cover: Option<&TextureHandle>, accent: C
             if let Some(key) = &view.key {
                 ui.label(RichText::new(key).color(accent));
             }
+            if let Some(counter) = &view.beat_counter {
+                ui.label(RichText::new(counter).color(p.text_dim));
+            }
             if !view.elapsed.is_empty() {
-                ui.label(&view.elapsed);
-                ui.label(RichText::new(format!("−{}", view.remaining)).color(p.text_dim));
+                let time = match view.time_mode {
+                    TimeMode::Elapsed => view.elapsed.clone(),
+                    TimeMode::Remaining => format!("−{}", view.remaining),
+                    TimeMode::Total => view.total.clone(),
+                };
+                let time = ui.add(Label::new(time).selectable(false).sense(Sense::click()));
+                if time.clicked() {
+                    let _ = commands.send(UiCommand::View(ViewChange::CycleTime(view.deck)));
+                }
             }
         });
     });
@@ -623,13 +685,46 @@ fn jog(ui: &mut Ui, view: &DeckView, accent: Color32) {
     let angle = view.jog_turn * std::f32::consts::TAU;
     let direction = vec2(angle.sin(), -angle.cos());
     let colour = if view.playing { accent } else { p.text };
+    let info = view.jog_display == JogDisplay::Info;
+    // The info jog keeps the marker on the rim, out of the text.
+    let inner = if info { 0.85 } else { 0.55 };
     painter.line_segment(
         [
-            centre + direction * radius * 0.55,
+            centre + direction * radius * inner,
             centre + direction * radius,
         ],
         Stroke::new(JOG_MARKER, colour),
     );
+    if info {
+        jog_info(
+            ui,
+            view,
+            Rect::from_center_size(centre, Vec2::splat(radius * 1.4)),
+        );
+    }
+}
+
+/// VirtualDJ's info jog: the BPM, pitch and both times inside the wheel.
+fn jog_info(ui: &mut Ui, view: &DeckView, rect: Rect) {
+    let p = theme::palette(ui.ctx());
+    let bpm = view
+        .bpm
+        .map_or_else(|| "–".to_owned(), |bpm| format!("{bpm:.2}"));
+    ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        ui.vertical_centered(|ui| {
+            ui.label(RichText::new(bpm).strong());
+            ui.label(RichText::new(format!("{:+.1}%", view.pitch_percent)).size(SMALL_FONT));
+            if !view.elapsed.is_empty() {
+                ui.label(RichText::new(&view.elapsed).size(SMALL_FONT));
+                ui.label(
+                    RichText::new(format!("−{}", view.remaining))
+                        .color(p.text_dim)
+                        .size(SMALL_FONT),
+                );
+            }
+        });
+    });
 }
 
 /// The tempo slider (faster toward the bottom, as on the SB3) with the pitch in percent.
@@ -765,6 +860,24 @@ mod tests {
 
     use super::*;
     use crate::model::DeckInfo;
+
+    fn grid(first_beat_frames: f64) -> Option<Grid> {
+        Some(Grid {
+            beat_period_frames: 100.0,
+            first_beat_frames,
+        })
+    }
+
+    #[test]
+    fn beat_counter_counts_bars() {
+        let at = |first, position| beat_counter(grid(first), position);
+        assert_eq!(at(0.0, 0.0).as_deref(), Some("1.1"));
+        assert_eq!(at(0.0, 150.0).as_deref(), Some("1.2"));
+        assert_eq!(at(0.0, 400.0).as_deref(), Some("2.1"));
+        // Three beats before the first beat: bar 0 counts backwards.
+        assert_eq!(at(300.0, 0.0).as_deref(), Some("0.2"));
+        assert_eq!(beat_counter(None, 0.0), None);
+    }
 
     fn deck(number: usize) -> DeckId {
         DeckId::new(number - 1).unwrap()
