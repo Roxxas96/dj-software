@@ -13,9 +13,13 @@ workspace = true
 [dependencies]
 analysis = { path = "../analysis" }
 decode = { path = "../decode" }
+dunce.workspace = true
+fs4.workspace = true
 library = { path = "../library" }
 quick-xml.workspace = true
+serde.workspace = true
 thiserror.workspace = true
+toml.workspace = true
 
 [dev-dependencies]
 rusqlite.workspace = true

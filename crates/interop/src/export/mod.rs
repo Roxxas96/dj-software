@@ -1,6 +1,15 @@
 //! What an export to a USB stick reads from the library, and how each app times a position.
 
+mod files;
+mod layout;
+mod plan;
 pub mod timing;
+
+pub use files::{copy_atomic, remove_leftovers, write_atomic};
+pub use layout::{
+    MANIFEST, MUSIC_DIR, Manifest, OJ_DIR, PART_SUFFIX, SPACE_MARGIN, safe_component, stick_paths,
+};
+pub use plan::{ExportPlan, PlannedTrack, TrackAction, plan_export};
 
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -9,6 +18,12 @@ use std::path::PathBuf;
 use analysis::Key;
 use decode::LeadIn;
 use library::{HotcuePoint, Reader};
+
+/// Free bytes on the volume that holds `path`, or `None` when the system will not say.
+#[must_use]
+pub fn free_space(path: &std::path::Path) -> Option<u64> {
+    fs4::available_space(path).ok()
+}
 
 /// Why an export could not go ahead.
 #[derive(Debug, thiserror::Error)]
