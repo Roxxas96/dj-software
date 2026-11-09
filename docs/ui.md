@@ -52,8 +52,11 @@ like Ctrl-C in `play`.
   launch; `ui.waveform_beats` is only the zoom before that file exists (delete the file to
   go back to it). A value in the file that cannot be read keeps its default, and the others
   still load.
-- **Deck panels:** cover, title, artist and remix, the overview waveform, BPM, key, a time
-  (click it to cycle elapsed, remaining and total), the bar.beat counter (LAYOUT menu), the FX slots, the jog (the LAYOUT menu's info jog draws the BPM, pitch and times inside it), the pitch fader with its pickup marker, VINYL,
+- **Deck panels:** cover, title, artist and remix, the overview waveform, BPM, key, the
+  elapsed and remaining times (click the brighter one to cycle it through remaining,
+  total and elapsed; the other of elapsed and remaining stays beside it), the bar.beat
+  counter (LAYOUT menu), the FX slots, the jog (the LAYOUT menu's info jog draws the BPM,
+  pitch and times inside it), the pitch fader with its pickup marker, VINYL,
   SLIP and KEYLOCK, the pad mode name and the 8 pads, the loop size, and CUE, PLAY and SYNC.
   SYNC is never lit: sync is one-shot here, and there is no MASTER badge.
 - **Mixer:** GAIN, three EQ knobs, FILTER, the channel fader, PFL, the level meters (the live

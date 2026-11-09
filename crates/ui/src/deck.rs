@@ -333,6 +333,12 @@ pub fn beat_counter(grid: Option<Grid>, position_frames: f64) -> Option<String> 
     ))
 }
 
+/// The pitch as "+0.0%"; a pitch that rounds to nothing never reads "-0.0%".
+fn pitch_text(percent: f64) -> String {
+    let rounded = (percent * 10.0).round() / 10.0;
+    format!("{:+.1}%", if rounded == 0.0 { 0.0 } else { rounded })
+}
+
 /// A beat count as a pad or loop shows it: "1/16", "1/2", "4".
 fn beats_text(beats: f64) -> String {
     if beats > 0.0 && beats < 1.0 {
@@ -593,15 +599,17 @@ fn header(
                 ui.label(RichText::new(counter).color(p.text_dim));
             }
             if !view.elapsed.is_empty() {
-                let time = match view.time_mode {
-                    TimeMode::Elapsed => view.elapsed.clone(),
-                    TimeMode::Remaining => format!("−{}", view.remaining),
-                    TimeMode::Total => view.total.clone(),
+                let remaining = format!("−{}", view.remaining);
+                let (time, other) = match view.time_mode {
+                    TimeMode::Elapsed => (view.elapsed.clone(), remaining),
+                    TimeMode::Remaining => (remaining, view.elapsed.clone()),
+                    TimeMode::Total => (view.total.clone(), view.elapsed.clone()),
                 };
                 let time = ui.add(Label::new(time).selectable(false).sense(Sense::click()));
                 if time.clicked() {
                     let _ = commands.send(UiCommand::View(ViewChange::CycleTime(view.deck)));
                 }
+                ui.label(RichText::new(other).color(p.text_dim));
             }
         });
     });
@@ -714,7 +722,7 @@ fn jog_info(ui: &mut Ui, view: &DeckView, rect: Rect) {
         ui.spacing_mut().item_spacing.y = 0.0;
         ui.vertical_centered(|ui| {
             ui.label(RichText::new(bpm).strong());
-            ui.label(RichText::new(format!("{:+.1}%", view.pitch_percent)).size(SMALL_FONT));
+            ui.label(RichText::new(pitch_text(view.pitch_percent)).size(SMALL_FONT));
             if !view.elapsed.is_empty() {
                 ui.label(RichText::new(&view.elapsed).size(SMALL_FONT));
                 ui.label(
@@ -757,7 +765,7 @@ fn pitch(ui: &mut Ui, view: &DeckView, accent: Color32, width: f32) {
                 StrokeKind::Outside,
             );
         }
-        ui.label(RichText::new(format!("{:+.1}%", view.pitch_percent)).size(SMALL_FONT));
+        ui.label(RichText::new(pitch_text(view.pitch_percent)).size(SMALL_FONT));
     });
 }
 
