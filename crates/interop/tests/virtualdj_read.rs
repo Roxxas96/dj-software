@@ -165,7 +165,8 @@ fn playlists_keep_their_order_and_follow_the_order_file() {
     write(&lists, "readme.txt", "ignored");
     let order = write(&lists, "order", "Zulu\nSub/Inner\n");
 
-    let got = read_playlists(std::slice::from_ref(&lists), Some(&order)).unwrap();
+    let (got, errors) = read_playlists(std::slice::from_ref(&lists), Some(&order)).unwrap();
+    assert!(errors.is_empty());
     let names: Vec<&str> = got.iter().map(|p| p.name.as_str()).collect();
     assert_eq!(names, ["Zulu", "Sub / Inner", "Alpha", "Mixtape"]);
     assert_eq!(
@@ -177,7 +178,7 @@ fn playlists_keep_their_order_and_follow_the_order_file() {
         [lists.join("songs/one.mp3"), PathBuf::from("/abs/two.mp3")]
     );
 
-    let unordered = read_playlists(&[lists], None).unwrap();
+    let (unordered, _) = read_playlists(&[lists], None).unwrap();
     assert_eq!(unordered[0].name, "Alpha");
 }
 
@@ -216,4 +217,51 @@ fn find_sources_looks_in_home_dirs_and_volumes() {
         ]
     );
     assert_eq!(s.order, Some(home1.join("MyLists/order")));
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_folders_and_files_are_not_followed() {
+    let dir = TempDir::new().unwrap();
+    let lists = dir.path().join("MyLists");
+    write(&lists, "Top.vdjfolder", &folder(&["/m/t.mp3"]));
+    write(&lists, "Sub/Inner.vdjfolder", &folder(&["/m/i.mp3"]));
+    std::os::unix::fs::symlink("..", lists.join("Sub/up")).unwrap();
+    std::os::unix::fs::symlink(&lists, lists.join("self")).unwrap();
+    std::os::unix::fs::symlink(lists.join("Top.vdjfolder"), lists.join("Alias.vdjfolder")).unwrap();
+
+    let (got, errors) = read_playlists(&[lists], None).unwrap();
+    let names: Vec<&str> = got.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(names, ["Sub / Inner", "Top"]);
+    assert!(errors.is_empty());
+}
+
+#[test]
+fn a_bad_playlist_is_reported_and_the_rest_are_read() {
+    let dir = TempDir::new().unwrap();
+    let lists = dir.path().join("MyLists");
+    write(&lists, "Good.vdjfolder", &folder(&["/m/g.mp3"]));
+    let full = folder(&["/m/b.mp3"]);
+    write(&lists, "Bad.vdjfolder", &full[..full.len() - 20]);
+
+    let (got, errors) = read_playlists(&[lists], None).unwrap();
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0].name, "Good");
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].to_string().contains("Bad.vdjfolder"));
+}
+
+#[test]
+fn an_unreadable_order_file_is_reported_and_names_sort() {
+    let dir = TempDir::new().unwrap();
+    let lists = dir.path().join("MyLists");
+    write(&lists, "B.vdjfolder", &folder(&[]));
+    write(&lists, "A.vdjfolder", &folder(&[]));
+    let (got, errors) = read_playlists(
+        std::slice::from_ref(&lists),
+        Some(&lists.join("missing-order")),
+    )
+    .unwrap();
+    assert_eq!(got[0].name, "A");
+    assert_eq!(errors.len(), 1);
 }

@@ -14,21 +14,43 @@ pub struct VdjPlaylist {
     pub paths: Vec<PathBuf>,
 }
 
+/// How many folder levels below a list dir are searched.
+const MAX_DEPTH: usize = 8;
+
 /// Reads every playlist under the dirs, in `order`'s sequence and then by name.
+///
+/// Symlinks are not followed. A file or entry that cannot be read is returned in the second
+/// list and the rest are still read; `Err` only when no list dir can be opened.
 pub fn read_playlists(
     list_dirs: &[PathBuf],
     order: Option<&Path>,
-) -> Result<Vec<VdjPlaylist>, InteropError> {
+) -> Result<(Vec<VdjPlaylist>, Vec<InteropError>), InteropError> {
     let mut playlists = Vec::new();
+    let mut errors = Vec::new();
+    let mut first_open_failure = None;
+    let mut opened = 0;
     for dir in list_dirs {
-        collect(dir, dir, &mut playlists)?;
+        match collect(dir, dir, 0, &mut playlists, &mut errors) {
+            Ok(()) => opened += 1,
+            Err(e) => first_open_failure = first_open_failure.or(Some(e)),
+        }
     }
-    let order_lines: Vec<String> = match order {
-        Some(path) => String::from_utf8_lossy(&read_file(path)?)
+    if opened == 0
+        && let Some(e) = first_open_failure
+    {
+        return Err(e);
+    }
+    errors.extend(first_open_failure);
+    let order_lines: Vec<String> = match order.map(read_file) {
+        Some(Ok(bytes)) => String::from_utf8_lossy(&bytes)
             .lines()
             .map(|l| l.trim().replace('\\', "/"))
             .filter(|l| !l.is_empty())
             .collect(),
+        Some(Err(e)) => {
+            errors.push(e);
+            Vec::new()
+        }
         None => Vec::new(),
     };
     let rank = |p: &VdjPlaylist| {
@@ -39,38 +61,60 @@ pub fn read_playlists(
             .unwrap_or(usize::MAX)
     };
     playlists.sort_by(|a, b| rank(a).cmp(&rank(b)).then_with(|| a.name.cmp(&b.name)));
-    Ok(playlists)
+    Ok((playlists, errors))
 }
 
-fn collect(root: &Path, dir: &Path, out: &mut Vec<VdjPlaylist>) -> Result<(), InteropError> {
+/// Fails only when `dir` itself cannot be listed; problems below it go to `errors`.
+fn collect(
+    root: &Path,
+    dir: &Path,
+    depth: usize,
+    out: &mut Vec<VdjPlaylist>,
+    errors: &mut Vec<InteropError>,
+) -> Result<(), InteropError> {
     let io = |source| InteropError::Io {
         path: dir.to_path_buf(),
         source,
     };
-    let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
-        .map_err(io)?
-        .map(|e| e.map(|e| e.path()))
-        .collect::<Result<_, _>>()
-        .map_err(io)?;
-    entries.sort();
-    for path in entries {
-        if path.is_dir() {
-            collect(root, &path, out)?;
+    let mut entries = Vec::new();
+    for entry in std::fs::read_dir(dir).map_err(io)? {
+        match entry.and_then(|e| e.file_type().map(|t| (e.path(), t))) {
+            Ok((path, kind)) => entries.push((path, kind)),
+            Err(source) => errors.push(InteropError::Io {
+                path: dir.to_path_buf(),
+                source,
+            }),
+        }
+    }
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    for (path, kind) in entries {
+        if kind.is_symlink() {
+            continue;
+        }
+        if kind.is_dir() {
+            if depth < MAX_DEPTH
+                && let Err(e) = collect(root, &path, depth + 1, out, errors)
+            {
+                errors.push(e);
+            }
             continue;
         }
         let ext = path
             .extension()
             .and_then(|e| e.to_str())
             .map(str::to_ascii_lowercase);
-        let paths = match ext.as_deref() {
-            Some("vdjfolder") => read_vdjfolder(&path)?,
-            Some("m3u") => read_m3u(&path)?,
+        let read = match ext.as_deref() {
+            Some("vdjfolder") => read_vdjfolder(&path),
+            Some("m3u") => read_m3u(&path),
             _ => continue,
         };
-        out.push(VdjPlaylist {
-            name: playlist_name(root, &path),
-            paths,
-        });
+        match read {
+            Ok(paths) => out.push(VdjPlaylist {
+                name: playlist_name(root, &path),
+                paths,
+            }),
+            Err(e) => errors.push(e),
+        }
     }
     Ok(())
 }
