@@ -230,7 +230,7 @@ amount (`ChannelCommand::FxAmount`); the effect in each slot is set per channel
 (`ChannelCommand::FxSlot`, an `EffectKind`) or for every channel at once
 (`MasterCommand::FxSlot`). `play` sends each deck's at startup from `[fx]` in
 `config.toml` (`fx.deckN`, else `fx.slots`), and the window's FX dropdowns send them while
-playing. Echo and reverb follow a DJ mixer's dry/wet curve (dry
+playing and save them as that deck's `fx.deckN`. Echo and reverb follow a DJ mixer's dry/wet curve (dry
 `min(1, 2(1 − a))`, wet `min(1, 2a)`: the dry stays at unity up to mid amount), the
 flanger crossfades by the amount, and the filter's amount is its cutoff. The actions
 `deck.fx_toggle_1` to `_3` and `deck.fx_level` drive the
@@ -241,5 +241,13 @@ The app tracks the slots it switched in `DeckControl::fx_on` and the amount in
 **config.toml.** `play` reads the per-user `config.toml` ([config.md](config.md)) before the
 controller attaches: the crossfader switch, the effect in each slot, the sampler files and volume, and the beat jump
 and loop roll size tables, which are written into `ControlState`.
+The window's session edits the file it read (`session/settings.rs`): a registry lists every
+key of [config.md](config.md)'s table with its category, default and whether it applies
+live. A change edits the file's text with `toml_edit` (comments, order and layout kept),
+is checked by the same parser as `play` and is written on a short-lived thread, beside
+the file and renamed over it. Live keys are sent to the engine (`MasterCommand`,
+`ChannelCommand::FxSlot`, `SamplerCommand::Volume`), written into `ControlState` or
+applied to the view's zoom; the others are marked pending until the next launch. The
+rows go to the window in `ControlFrame::settings`.
 
 Controllers are documented in [`controllers/`](controllers/): the [mapping reference](controllers/mapping-reference.md) and [adding a controller](controllers/adding-a-controller.md).

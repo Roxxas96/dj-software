@@ -104,6 +104,29 @@ impl PartialEq for DeckInfo {
     }
 }
 
+/// One `config.toml` setting, as the settings window lists it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SettingRow {
+    /// The key, `stems.knobs` say.
+    pub key: String,
+    /// The group it is listed under: "Audio", "Controller", "Mixer", "Effects", "Sampler",
+    /// "Pads", "Stems" or "Interface".
+    pub category: &'static str,
+    /// The current value as TOML text (`"vdj"`, `300`, `[3, 4]`); the default when the file
+    /// leaves it out.
+    pub value: String,
+    /// The default as TOML text; empty when the default is to leave it unset.
+    pub default: String,
+    /// What it does, in one line.
+    pub help: &'static str,
+    /// Whether a change applies at once; otherwise it applies at the next launch.
+    pub live: bool,
+    /// A saved change that applies at the next launch.
+    pub pending: bool,
+    /// Why the last change to it was refused.
+    pub error: Option<String>,
+}
+
 /// Everything the window shows that is not read from the engine's snapshots.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ControlFrame {
@@ -135,6 +158,9 @@ pub struct ControlFrame {
     /// Why the session stopped (a bad configuration or mapping, say), shown until the
     /// window is closed.
     pub error: Option<String>,
+    /// Every `config.toml` setting, in `docs/config.md`'s order; empty until the session
+    /// has read the file.
+    pub settings: Arc<Vec<SettingRow>>,
 }
 
 impl Default for ControlFrame {
@@ -157,6 +183,7 @@ impl Default for ControlFrame {
             view: ViewState::default(),
             key_notation: KeyNotation::default(),
             error: None,
+            settings: Arc::default(),
         }
     }
 }

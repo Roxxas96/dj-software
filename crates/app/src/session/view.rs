@@ -87,6 +87,23 @@ impl ViewStore {
         self.replace(next, now)
     }
 
+    /// Changes the zoom's range to `zoom_range` (`ui.waveform_min_beats` and
+    /// `ui.waveform_max_beats` changed) and, when `ui.waveform_beats` changed, zooms to
+    /// `beats`; the zoom is kept within the range. Returns whether the view changed.
+    pub fn set_zoom_range(
+        &mut self,
+        zoom_range: (f64, f64),
+        beats: Option<f64>,
+        now: Instant,
+    ) -> bool {
+        self.zoom_range = zoom_range;
+        let mut next = self.state.clone();
+        if let Some(beats) = beats {
+            next.waveform_beats = beats;
+        }
+        self.replace(next.clamped(zoom_range), now)
+    }
+
     /// Moves to the next layout once for each press of `ui.layout` since the last call (the
     /// first count seen only sets the base). Returns whether the layout changed.
     pub fn layout(&mut self, actions_count: i32, now: Instant) -> bool {

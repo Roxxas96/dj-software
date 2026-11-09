@@ -399,7 +399,7 @@ pub enum PadSource {
 }
 
 /// The default configuration file, in the per-user configuration folder.
-fn default_path() -> Option<PathBuf> {
+pub(crate) fn default_path() -> Option<PathBuf> {
     crate::legacy_dirs::migrate();
     controller::builtin::config_dir().map(|dir| dir.join("config.toml"))
 }
@@ -423,7 +423,7 @@ pub fn load(path: Option<&Path>) -> anyhow::Result<Config> {
             return Err(e).with_context(|| format!("reading {}", safe(path.display())));
         }
     };
-    parse(&text, &safe(path.display()), home_dir().as_deref())
+    parse_text(&text, &safe(path.display()))
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -433,6 +433,11 @@ fn home_dir() -> Option<PathBuf> {
 /// An error `<file>: <key>: <problem>`.
 fn invalid(file: &str, key: &str, problem: impl std::fmt::Display) -> anyhow::Error {
     anyhow!("{file}: {}: {problem}", safe(key))
+}
+
+/// Parses `text` as [`load`] does; `file` names it in errors.
+pub fn parse_text(text: &str, file: &str) -> anyhow::Result<Config> {
+    parse(text, file, home_dir().as_deref())
 }
 
 /// Parses `text`; `file` names it in errors and `home` is what `~/` stands for.

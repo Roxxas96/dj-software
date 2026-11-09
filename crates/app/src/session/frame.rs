@@ -1,10 +1,11 @@
 //! Builds the [`ControlFrame`] the window draws from the control loop's state.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use engine::{DeckId, SAMPLER_SLOTS};
-use ui::{ControlFrame, DeckInfo, EVENTS_KEPT, ViewState};
+use ui::{ControlFrame, DeckInfo, EVENTS_KEPT, SettingRow, ViewState};
 
 use crate::config::Config;
 use crate::library_mode::LibraryMode;
@@ -12,17 +13,28 @@ use crate::play::Pass;
 use crate::printer::Line;
 
 use super::detail::DetailJobs;
+use super::settings::Settings;
 use super::view::ViewStore;
 
 /// What the session knows besides the loop's state: the configuration's settings, what
 /// the printer was asked to show, and the audio device.
 pub(super) struct FrameParts {
-    crossfader_enabled: bool,
+    /// The engine's and the controller's settings as they were sent: the configuration's
+    /// at launch, then the window's live changes (the next-launch keys keep their launch
+    /// values).
+    pub applied: Config,
+    /// A configuration saved from the window whose live changes are still to be sent:
+    /// they wait for the control loop to run.
+    pub unapplied: Option<Config>,
+    /// The configuration file's settings; `None` when there is no file to keep them in.
+    pub settings: Option<Settings>,
+    settings_rows: Arc<Vec<SettingRow>>,
+    pub crossfader_enabled: bool,
     /// Per deck, the effects the engine was sent: the configuration's, then the window's
     /// choices.
     pub fx_slots: [[engine::EffectKind; 3]; 4],
-    eq_mode: engine::EqMode,
-    stem_knobs: engine::StemKnobs,
+    pub eq_mode: engine::EqMode,
+    pub stem_knobs: engine::StemKnobs,
     /// The window's view state, the zoom included; saved once it stays put and when the
     /// session ends.
     pub view: ViewStore,
@@ -38,6 +50,10 @@ pub(super) struct FrameParts {
 impl FrameParts {
     pub fn new(config: &Config) -> Self {
         Self {
+            applied: config.clone(),
+            unapplied: None,
+            settings: None,
+            settings_rows: Arc::default(),
             crossfader_enabled: config.crossfader,
             fx_slots: DeckId::ALL.map(|deck| config.fx_slots_for(deck)),
             eq_mode: config.stems.startup_eq_mode(),
@@ -49,6 +65,23 @@ impl FrameParts {
             audio: Err("opening the audio device".to_owned()),
             output_latency: Duration::ZERO,
             detail: None,
+        }
+    }
+
+    /// Reads the configuration file's settings from `settings`, for the window to list.
+    pub fn set_settings(&mut self, settings: Settings) {
+        self.settings = Some(settings);
+        self.refresh_settings();
+    }
+
+    /// Shows the settings' rows as they are now; the frame's rows are replaced only when
+    /// they changed.
+    pub fn refresh_settings(&mut self) {
+        if let Some(settings) = &self.settings {
+            let rows = settings.rows();
+            if *self.settings_rows != rows {
+                self.settings_rows = Arc::new(rows);
+            }
         }
     }
 
@@ -91,6 +124,7 @@ impl FrameParts {
             events: self.events.clone(),
             audio: self.audio.clone(),
             output_latency: self.output_latency,
+            settings: Arc::clone(&self.settings_rows),
             ..ControlFrame::default()
         }
     }
