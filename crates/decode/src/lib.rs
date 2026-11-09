@@ -9,7 +9,7 @@ use engine::TrackBuffer;
 use symphonia::core::codecs::audio::AudioDecoderOptions;
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::probe::Hint;
-use symphonia::core::formats::{FormatOptions, TrackType};
+use symphonia::core::formats::{FormatOptions, FormatReader, TrackType};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 
@@ -96,9 +96,8 @@ pub fn decode_prefix_checked(path: &Path, max_frames: usize) -> Result<Decoded, 
     decode(path, Some(max_frames))
 }
 
-/// The decode loop shared by [`decode_file`] and [`decode_prefix`]; `limit` caps the
-/// number of frames returned.
-fn decode(path: &Path, limit: Option<usize>) -> Result<Decoded, DecodeError> {
+/// Opens `path` and probes its container, decoding nothing.
+fn probe(path: &Path) -> Result<Box<dyn FormatReader>, DecodeError> {
     let file = File::open(path)?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
@@ -107,7 +106,7 @@ fn decode(path: &Path, limit: Option<usize>) -> Result<Decoded, DecodeError> {
         hint.with_extension(ext);
     }
 
-    let mut format = symphonia::default::get_probe()
+    let format = symphonia::default::get_probe()
         .probe(
             &hint,
             mss,
@@ -119,6 +118,38 @@ fn decode(path: &Path, limit: Option<usize>) -> Result<Decoded, DecodeError> {
             SymphoniaError::Unsupported(m) => DecodeError::Unsupported(m.to_string()),
             other => map_error(other),
         })?;
+    Ok(format)
+}
+
+/// What precedes an MP3's first audio sample in the file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct LeadIn {
+    /// The file has a gapless header (an MP3's LAME/Xing "Info" frame).
+    pub gapless_header: bool,
+    /// Encoder delay in frames, trimmed when decoding; 0 when the file does not declare one.
+    pub delay_frames: u32,
+}
+
+/// Reads `path`'s [`LeadIn`] by probing only; no audio is decoded.
+///
+/// # Errors
+///
+/// As [`decode_file`] for a file that cannot be opened or probed.
+pub fn lead_in(path: &Path) -> Result<LeadIn, DecodeError> {
+    let format = probe(path)?;
+    let track = format
+        .default_track(TrackType::Audio)
+        .ok_or(DecodeError::NoAudioTrack)?;
+    Ok(LeadIn {
+        gapless_header: track.delay.is_some(),
+        delay_frames: track.delay.unwrap_or(0),
+    })
+}
+
+/// The decode loop shared by [`decode_file`] and [`decode_prefix`]; `limit` caps the
+/// number of frames returned.
+fn decode(path: &Path, limit: Option<usize>) -> Result<Decoded, DecodeError> {
+    let mut format = probe(path)?;
 
     let track = format
         .default_track(TrackType::Audio)

@@ -1281,6 +1281,7 @@ version = "0.0.0"
 dependencies = [
  "engine",
  "symphonia",
+ "tempfile",
  "thiserror 2.0.21",
 ]
 
@@ -2349,6 +2350,8 @@ dependencies = [
 name = "interop"
 version = "0.0.0"
 dependencies = [
+ "analysis",
+ "decode",
  "library",
  "quick-xml 0.42.0",
  "rusqlite",

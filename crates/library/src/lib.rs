@@ -37,7 +37,7 @@ pub use jobs::{
     PendingTrack, REPORT_CAPACITY, WAVEFORM_FRAMES_PER_BUCKET, default_threads,
 };
 pub use playlists::{
-    PlaylistSummary, TrackDetails, TrackFilter, TrackRow, TrackSort, TrackSortKey,
+    PlaylistSummary, TrackDetails, TrackFilter, TrackRow, TrackSort, TrackSortKey, TrackSource,
 };
 pub use scan::{
     EXTENSIONS, ScanProgress, ScanReport, TrackFile, add_folder, add_folder_files, remove_folder,

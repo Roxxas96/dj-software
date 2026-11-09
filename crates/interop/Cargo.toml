@@ -11,6 +11,8 @@ publish = false
 workspace = true
 
 [dependencies]
+analysis = { path = "../analysis" }
+decode = { path = "../decode" }
 library = { path = "../library" }
 quick-xml.workspace = true
 thiserror.workspace = true

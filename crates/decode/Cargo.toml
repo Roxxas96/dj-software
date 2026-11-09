@@ -14,3 +14,6 @@ workspace = true
 engine = { path = "../engine" }
 symphonia = { workspace = true, features = ["mp3", "aac", "isomp4", "flac", "wav", "aiff", "vorbis", "ogg"] }
 thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

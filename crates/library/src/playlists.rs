@@ -46,6 +46,17 @@ pub struct TrackDetails {
     pub path: PathBuf,
 }
 
+/// What an export needs of a track's file: where it is, and what identifies its contents.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackSource {
+    pub path: PathBuf,
+    pub fingerprint: [u8; 32],
+    /// The file's size in bytes when it was scanned.
+    pub size: u64,
+    pub album: Option<String>,
+    pub genre: Option<String>,
+}
+
 /// Which tracks [`Reader::tracks`] returns. Every set field must match.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TrackFilter {
@@ -188,6 +199,42 @@ impl Reader {
     ) -> Result<Vec<TrackRow>, LibraryError> {
         let files = self.playlist_files(id, offset, limit)?;
         Ok(files.into_iter().map(|(_, row)| row).collect())
+    }
+
+    /// Track `id`'s file row, or `None` for an unknown id.
+    ///
+    /// # Errors
+    ///
+    /// Any database error, or a stored fingerprint that is not 32 bytes.
+    pub fn track_source(&self, id: i64) -> Result<Option<TrackSource>, LibraryError> {
+        let row = self
+            .connection()
+            .prepare_cached(
+                "SELECT path, fingerprint, size, album, genre FROM tracks WHERE id = ?1",
+            )?
+            .query_row([id], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Vec<u8>>(1)?,
+                    r.get::<_, Option<i64>>(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                ))
+            })
+            .optional()?;
+        let Some((path, fingerprint, size, album, genre)) = row else {
+            return Ok(None);
+        };
+        let fingerprint = <[u8; 32]>::try_from(fingerprint.as_slice()).map_err(|_| {
+            rusqlite::Error::InvalidColumnType(1, "fingerprint".into(), rusqlite::types::Type::Blob)
+        })?;
+        Ok(Some(TrackSource {
+            path: PathBuf::from(path),
+            fingerprint,
+            size: u64::try_from(size.unwrap_or(0)).unwrap_or(0),
+            album,
+            genre,
+        }))
     }
 
     /// [`Reader::playlist_tracks`] with each track's file.
