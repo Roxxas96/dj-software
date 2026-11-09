@@ -590,10 +590,11 @@ fn queries_stay_fast_with_50k_tracks() {
             timings.push(format!("{key:?}@{offset}: {elapsed:?}"));
             assert_eq!(rows.len(), 100, "{key:?}@{offset}");
             // bpm and key sort in a temp b-tree (analysis is a separate table), which is
-            // much slower in unoptimized SQLite builds: give debug CI headroom.
+            // much slower in unoptimized SQLite builds and on shared CI runners: give debug
+            // builds headroom (they take about 190 ms locally; release keeps 250 ms).
             let bound =
                 if cfg!(debug_assertions) && matches!(key, TrackSortKey::Bpm | TrackSortKey::Key) {
-                    Duration::from_millis(750)
+                    Duration::from_millis(2000)
                 } else {
                     Duration::from_millis(250)
                 };
