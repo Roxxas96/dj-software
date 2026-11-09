@@ -126,6 +126,10 @@ pub enum WriteOp {
     /// Creates a playlist at the end of the playlist list; reports its id as
     /// [`WriteOutcome::Created`].
     CreatePlaylist { name: String },
+    /// Creates a playlist at the end of the playlist list holding `tracks` in that order;
+    /// reports its id as [`WriteOutcome::Created`]. Fails with
+    /// [`LibraryError::NoSuchTrack`] for an unknown track, creating nothing.
+    CreatePlaylistWith { name: String, tracks: Vec<i64> },
     /// Renames a playlist.
     RenamePlaylist { id: i64, name: String },
     /// Deletes a playlist and its membership rows; tracks are never touched.
@@ -232,7 +236,8 @@ impl std::fmt::Debug for StoreAnalysis {
 pub enum WriteOutcome {
     /// The op was committed and has nothing to report.
     Done,
-    /// A [`WriteOp::CreatePlaylist`] was committed; this is the new playlist's id.
+    /// A [`WriteOp::CreatePlaylist`] or [`WriteOp::CreatePlaylistWith`] was committed; this
+    /// is the new playlist's id.
     Created { id: i64 },
     /// A [`WriteOp::EditGrid`] was committed (or changed nothing); this is the track's
     /// grid afterwards, read in the same transaction.
@@ -594,6 +599,7 @@ fn apply(tx: &Transaction<'_>, op: &WriteOp) -> Result<WriteOutcome, LibraryErro
             Ok(WriteOutcome::Done)
         }
         WriteOp::CreatePlaylist { .. }
+        | WriteOp::CreatePlaylistWith { .. }
         | WriteOp::RenamePlaylist { .. }
         | WriteOp::DeletePlaylist(_)
         | WriteOp::MovePlaylist { .. }

@@ -1,14 +1,16 @@
 //! VirtualDJ's `database.xml`, playlists and playlist order.
 
 mod database;
+mod import;
 mod playlists;
 
 use std::path::{Path, PathBuf};
 
 pub use database::{VdjPoi, VdjSong, read_database};
+pub use import::plan_virtualdj;
 pub use playlists::{VdjPlaylist, read_playlists};
 
-/// A failure reading VirtualDJ's files.
+/// A failure reading VirtualDJ's files or the library an import goes into.
 #[derive(Debug, thiserror::Error)]
 pub enum InteropError {
     #[error("cannot read {}: {source}", path.display())]
@@ -18,6 +20,8 @@ pub enum InteropError {
     },
     #[error("{} is not a valid VirtualDJ file: {why}", path.display())]
     Format { path: PathBuf, why: String },
+    #[error(transparent)]
+    Library(#[from] library::LibraryError),
 }
 
 /// Where VirtualDJ's data was found.

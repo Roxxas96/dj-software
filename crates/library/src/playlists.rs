@@ -430,19 +430,20 @@ fn tracks_query(
 /// Applies a playlist op inside the writer's transaction.
 pub(crate) fn apply(tx: &Transaction<'_>, op: &WriteOp) -> Result<WriteOutcome, LibraryError> {
     match op {
-        WriteOp::CreatePlaylist { name } => {
-            let next: i64 = tx.query_row(
-                "SELECT coalesce(max(position) + 1, 0) FROM playlists",
-                [],
-                |r| r.get(0),
-            )?;
-            tx.execute(
-                "INSERT INTO playlists(name, position) VALUES (?1, ?2)",
-                (name, next),
-            )?;
-            Ok(WriteOutcome::Created {
-                id: tx.last_insert_rowid(),
-            })
+        WriteOp::CreatePlaylist { name } => Ok(WriteOutcome::Created {
+            id: create(tx, name)?,
+        }),
+        WriteOp::CreatePlaylistWith { name, tracks } => {
+            let mut known =
+                tx.prepare_cached("SELECT EXISTS (SELECT 1 FROM tracks WHERE id = ?1)")?;
+            for track in tracks {
+                if !known.query_row([track], |r| r.get::<_, bool>(0))? {
+                    return Err(LibraryError::NoSuchTrack(*track));
+                }
+            }
+            let id = create(tx, name)?;
+            rewrite(tx, id, tracks)?;
+            Ok(WriteOutcome::Created { id })
         }
         WriteOp::RenamePlaylist { id, name } => {
             let changed = tx.execute("UPDATE playlists SET name = ?2 WHERE id = ?1", (id, name))?;
@@ -502,6 +503,20 @@ pub(crate) fn apply(tx: &Transaction<'_>, op: &WriteOp) -> Result<WriteOutcome, 
         }
         _ => unreachable!("only playlist ops are routed here"),
     }
+}
+
+/// Inserts a playlist named `name` at the end of the list and returns its id.
+fn create(tx: &Transaction<'_>, name: &str) -> Result<i64, LibraryError> {
+    let next: i64 = tx.query_row(
+        "SELECT coalesce(max(position) + 1, 0) FROM playlists",
+        [],
+        |r| r.get(0),
+    )?;
+    tx.execute(
+        "INSERT INTO playlists(name, position) VALUES (?1, ?2)",
+        (name, next),
+    )?;
+    Ok(tx.last_insert_rowid())
 }
 
 fn require_playlist(changed: usize, id: i64) -> Result<(), LibraryError> {
