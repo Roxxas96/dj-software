@@ -100,6 +100,20 @@ impl Palette {
         ..Self::DARK
     };
 
+    /// A hotcue's saved colour as it shows on this palette: the colour itself, darkened when
+    /// it is too pale to read on a light background, or [`Self::hotcue`] without one.
+    pub fn mark(&self, colour: Option<Color32>) -> Color32 {
+        let Some(colour) = colour else {
+            return self.hotcue;
+        };
+        if luminance(self.background) > 0.5 && luminance(colour) > PALE {
+            let dim = |c: u8| (f32::from(c) * DARKEN) as u8;
+            Color32::from_rgb(dim(colour.r()), dim(colour.g()), dim(colour.b()))
+        } else {
+            colour
+        }
+    }
+
     /// The palette of `scheme`.
     pub const fn of(scheme: ColourScheme) -> Self {
         match scheme {
@@ -116,6 +130,17 @@ impl Palette {
         }
     }
 }
+
+/// A colour's brightness, 0.0 to 1.0.
+pub(crate) fn luminance(colour: Color32) -> f32 {
+    (0.299 * f32::from(colour.r()) + 0.587 * f32::from(colour.g()) + 0.114 * f32::from(colour.b()))
+        / 255.0
+}
+
+/// The brightness above which a hotcue colour is too pale for a light background.
+const PALE: f32 = 0.8;
+/// How much of a pale colour is kept when it is darkened.
+const DARKEN: f32 = 0.6;
 
 impl Default for Palette {
     fn default() -> Self {

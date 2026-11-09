@@ -132,6 +132,14 @@ impl FrameParts {
         self.view.save_if_due(now);
     }
 
+    /// Reads the hotcue marks of the decks' tracks from the library again.
+    #[expect(dead_code, reason = "called by the VirtualDJ import")]
+    pub fn refresh_marks(&mut self) {
+        if let Some(detail) = self.detail.as_mut() {
+            detail.refresh_marks();
+        }
+    }
+
     /// The frame before the control loop runs: no controller, decks or browser yet.
     pub fn idle(&self) -> ControlFrame {
         ControlFrame {
@@ -189,6 +197,11 @@ impl FrameParts {
                 overview,
                 detail,
                 stems: view.stems,
+                hotcue_marks: self
+                    .detail
+                    .as_ref()
+                    .map(|jobs| jobs.marks(i, view.load_seq))
+                    .unwrap_or_default(),
             })
         });
         ControlFrame {

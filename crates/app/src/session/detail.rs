@@ -1,6 +1,6 @@
-//! The waveforms of the tracks on the decks, computed off the control thread: the stored
-//! overview is read from the library and the detailed waveform is computed from the
-//! decoded track, on a thread of their own.
+//! The waveforms and hotcue marks of the tracks on the decks, found off the control thread:
+//! the stored overview and the hotcues' colours and names are read from the library and the
+//! detailed waveform is computed from the decoded track, on a thread of their own.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -10,6 +10,7 @@ use std::thread::JoinHandle;
 use analysis::Waveform;
 use engine::TrackBuffer;
 use library::Library;
+use ui::HotcueMark;
 
 /// Frames per bucket of the detailed waveform.
 const DETAIL_FRAMES_PER_BUCKET: u32 = 128;
@@ -19,8 +20,12 @@ struct Job {
     deck: usize,
     load_seq: u64,
     track_id: i64,
-    audio: Arc<TrackBuffer>,
+    /// The decoded track; without it only the hotcue marks are read again.
+    audio: Option<Arc<TrackBuffer>>,
 }
+
+/// A deck's hotcue marks, slot by slot.
+type Marks = [Option<HotcueMark>; 8];
 
 /// What the thread found for a deck's load.
 struct Done {
@@ -33,6 +38,8 @@ enum Part {
     /// The stored overview, if the library has one.
     Overview(Option<Arc<Waveform>>),
     Detail(Arc<Waveform>),
+    /// The hotcues' colours and names, when they could be read.
+    Marks(Option<Box<Marks>>),
 }
 
 /// What is known of the waveforms of the load a deck is on.
@@ -41,6 +48,7 @@ struct Slot {
     load_seq: u64,
     overview: Option<Arc<Waveform>>,
     detail: Option<Arc<Waveform>>,
+    marks: Marks,
 }
 
 /// Which deck loads were asked for, and what came back for them.
@@ -79,6 +87,18 @@ impl Slots {
         match done.part {
             Part::Overview(overview) => slot.overview = overview,
             Part::Detail(detail) => slot.detail = Some(detail),
+            // Marks that could not be read leave the ones shown.
+            Part::Marks(marks) => {
+                slot.marks = marks.map_or_else(|| std::mem::take(&mut slot.marks), |marks| *marks)
+            }
+        }
+    }
+
+    /// The hotcue marks of `deck`'s load `load_seq`; none until they are read.
+    fn marks(&self, deck: usize, load_seq: u64) -> Marks {
+        match &self.0[deck] {
+            Some(slot) if slot.load_seq == load_seq => slot.marks.clone(),
+            _ => Marks::default(),
         }
     }
 
@@ -122,10 +142,13 @@ pub(super) struct DetailJobs {
     jobs: Option<Sender<Job>>,
     done: Receiver<Done>,
     thread: Option<JoinHandle<()>>,
+    /// Per deck, the library track whose load the slot holds.
+    tracks: [i64; 4],
 }
 
 impl DetailJobs {
     pub fn new(library: Arc<Library>) -> Self {
+        let marks_library = Arc::clone(&library);
         let mut reader = None;
         let read_overview = move |track_id| {
             if reader.is_none() {
@@ -133,13 +156,22 @@ impl DetailJobs {
             }
             reader.as_ref()?.waveform(track_id).ok().flatten()
         };
-        Self::start(read_overview, |audio| {
+        let mut reader = None;
+        let read_marks = move |track_id| {
+            if reader.is_none() {
+                reader = marks_library.reader().ok();
+            }
+            let points = reader.as_ref()?.hotcue_points(track_id).ok()?;
+            Some(points.map(|point| point.map(|p| HotcueMark::new(p.color, p.name))))
+        };
+        Self::start(read_overview, read_marks, |audio| {
             analysis::waveform(audio, DETAIL_FRAMES_PER_BUCKET)
         })
     }
 
     fn start(
         mut read_overview: impl FnMut(i64) -> Option<Waveform> + Send + 'static,
+        mut read_marks: impl FnMut(i64) -> Option<Marks> + Send + 'static,
         compute: impl Fn(&TrackBuffer) -> Waveform + Send + 'static,
     ) -> Self {
         let (jobs, job_rx) = channel::<Job>();
@@ -160,6 +192,10 @@ impl DetailJobs {
                             part,
                         })
                     };
+                    if send(Part::Marks(read_marks(job.track_id).map(Box::new))).is_err() {
+                        return;
+                    }
+                    let Some(audio) = &job.audio else { continue };
                     let overview = read_overview(job.track_id).map(Arc::new);
                     if send(Part::Overview(overview)).is_err() {
                         return;
@@ -167,7 +203,7 @@ impl DetailJobs {
                     if !check.wants(&job) {
                         continue;
                     }
-                    let detail = compute(&job.audio);
+                    let detail = compute(audio);
                     if send(Part::Detail(Arc::new(detail))).is_err() {
                         return;
                     }
@@ -180,6 +216,7 @@ impl DetailJobs {
             jobs: Some(jobs),
             done,
             thread,
+            tracks: [0; 4],
         }
     }
 
@@ -197,11 +234,27 @@ impl DetailJobs {
             && let Some(jobs) = &self.jobs
         {
             self.wanted.load_seq[deck].store(load_seq, Ordering::Relaxed);
+            self.tracks[deck] = track_id;
             let _ = jobs.send(Job {
                 deck,
                 load_seq,
                 track_id,
-                audio: Arc::clone(audio),
+                audio: Some(Arc::clone(audio)),
+            });
+        }
+    }
+
+    /// Reads the hotcue marks of every deck's track again, for after the library's hotcues
+    /// changed without a load (an import).
+    pub fn refresh_marks(&mut self) {
+        let Some(jobs) = &self.jobs else { return };
+        for (deck, slot) in self.slots.0.iter().enumerate() {
+            let Some(slot) = slot else { continue };
+            let _ = jobs.send(Job {
+                deck,
+                load_seq: slot.load_seq,
+                track_id: self.tracks[deck],
+                audio: None,
             });
         }
     }
@@ -210,6 +263,11 @@ impl DetailJobs {
     pub fn empty(&mut self, deck: usize) {
         self.slots.clear(deck);
         self.wanted.load_seq[deck].store(0, Ordering::Relaxed);
+    }
+
+    /// The hotcue marks of `deck`'s load `load_seq`, as far as they came in.
+    pub fn marks(&self, deck: usize, load_seq: u64) -> Marks {
+        self.slots.marks(deck, load_seq)
     }
 
     /// The overview and detail of `deck`'s load `load_seq`, as far as they came in.
@@ -294,6 +352,7 @@ mod tests {
         let counted = Arc::clone(&calls);
         let mut jobs = DetailJobs::start(
             |_| None,
+            |_| None,
             move |_| {
                 counted.fetch_add(1, Ordering::Relaxed);
                 let _ = started_tx.send(());
@@ -316,5 +375,55 @@ mod tests {
         // Only the load the thread was on; the stale ones and the wanted one that was
         // still queued when the drop came were skipped.
         assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
+    fn marks_of(name: &str) -> Marks {
+        let mut marks = Marks::default();
+        marks[2] = Some(HotcueMark::new(Some(0x00ff00), Some(name.into())));
+        marks
+    }
+
+    /// Collects until `deck`'s load `load_seq` has marks (or panics after a while).
+    fn marks_after_collecting(jobs: &mut DetailJobs, deck: usize, load_seq: u64, name: &str) {
+        use std::time::{Duration, Instant};
+        let until = Instant::now() + Duration::from_secs(5);
+        while jobs.marks(deck, load_seq) != marks_of(name) {
+            assert!(Instant::now() < until, "marks never came in");
+            std::thread::sleep(Duration::from_millis(5));
+            jobs.collect();
+        }
+    }
+
+    #[test]
+    fn marks_are_read_when_a_track_loads_and_again_on_a_refresh() {
+        use std::sync::Mutex;
+
+        let name = Arc::new(Mutex::new("Drop".to_owned()));
+        let reading = Arc::clone(&name);
+        let mut jobs = DetailJobs::start(
+            |_| None,
+            move |track| {
+                assert_eq!(track, 7);
+                Some(marks_of(&reading.lock().unwrap()))
+            },
+            |_| Waveform {
+                frames_per_bucket: 128,
+                buckets: Vec::new(),
+            },
+        );
+        let audio = Arc::new(TrackBuffer::new(44_100, vec![0.0; 2 * 441]).unwrap());
+        assert_eq!(jobs.marks(0, 1), Marks::default());
+        jobs.observe(0, 1, 7, &audio);
+        marks_after_collecting(&mut jobs, 0, 1, "Drop");
+        // Another load of the deck does not show them.
+        assert_eq!(jobs.marks(0, 2), Marks::default());
+        // The library changed under the same load.
+        *name.lock().unwrap() = "Break".to_owned();
+        jobs.refresh_marks();
+        marks_after_collecting(&mut jobs, 0, 1, "Break");
+        // A deck with nothing loaded has nothing to read again.
+        jobs.empty(0);
+        jobs.refresh_marks();
+        assert_eq!(jobs.marks(0, 1), Marks::default());
     }
 }

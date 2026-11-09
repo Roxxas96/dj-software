@@ -27,7 +27,9 @@ use anyhow::anyhow;
 use engine::EngineMonitor;
 
 pub use command::{UiCommand, ViewChange};
-pub use model::{ControlFrame, DeckInfo, EVENT_SHOWN, EVENTS_KEPT, GHOSTS, Published, SettingRow};
+pub use model::{
+    ControlFrame, DeckInfo, EVENT_SHOWN, EVENTS_KEPT, GHOSTS, HotcueMark, Published, SettingRow,
+};
 pub use view::{
     ColourScheme, JogDisplay, Layout, MAX_SHARE, MIN_SHARE, PanelSizes, TimeMode, ViewState,
     WaveformPosition, WaveformStyle,

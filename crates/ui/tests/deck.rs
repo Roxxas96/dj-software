@@ -47,6 +47,7 @@ fn loaded() -> (DeckSnapshot, ControlFrame) {
         overview: None,
         detail: None,
         stems: None,
+        hotcue_marks: Default::default(),
     });
     (snapshot, frame)
 }
@@ -170,6 +171,22 @@ fn deck_panel_draws_the_overview_stems_and_jump_pads() {
     harness.get_by_value("BEAT JUMP");
     harness.get_by_label("−4");
     harness.get_by_label("+32");
+}
+
+#[test]
+fn a_named_hotcue_pad_shows_its_name_in_the_window() {
+    let (mut snapshot, mut frame) = loaded();
+    snapshot.hotcues[1] = Some(engine::Hotcue::point(1000.0));
+    snapshot.hotcues[3] = Some(engine::Hotcue {
+        frames: 2000.0,
+        loop_frames: Some(500.0),
+    });
+    frame.decks[0].as_mut().unwrap().hotcue_marks[1] =
+        Some(ui::HotcueMark::new(Some(0xff0000), Some("Drop".into())));
+    let view = view(&snapshot, &frame);
+    let harness = draw(&view);
+    harness.get_by_label_contains("Drop");
+    harness.get_by_label_contains("4 loop");
 }
 
 #[test]

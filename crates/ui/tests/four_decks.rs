@@ -45,6 +45,7 @@ fn info(title: &str) -> DeckInfo {
         overview: None,
         detail: None,
         stems: None,
+        hotcue_marks: Default::default(),
     }
 }
 

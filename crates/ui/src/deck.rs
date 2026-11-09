@@ -13,7 +13,7 @@ use egui::{
     StrokeKind, TextureHandle, Ui, UiBuilder, Vec2, pos2, vec2,
 };
 use engine::{
-    ChannelSnapshot, DeckId, DeckSnapshot, EffectKind, EngineMonitor, Grid, SAMPLER_SLOTS,
+    ChannelSnapshot, DeckId, DeckSnapshot, EffectKind, EngineMonitor, Grid, Hotcue, SAMPLER_SLOTS,
     SamplerSnapshot,
 };
 
@@ -21,11 +21,13 @@ use crate::command::{UiCommand, ViewChange};
 use crate::cover::{self, Covers};
 use crate::layout::{Sections, deck_slots};
 use crate::mixer;
-use crate::model::{ControlFrame, GHOST_TEMPO};
+use crate::model::{ControlFrame, GHOST_TEMPO, HotcueMark};
 use crate::theme;
 use crate::view::{JogDisplay, TimeMode};
 use crate::waveform::{Playhead, colour};
 
+/// The brightness below which a lit box takes white text instead of dark.
+const DARK_FILL: f32 = 0.35;
 /// A record's speed: the jog's marker turns at this at the original tempo.
 const JOG_RPM: f64 = 100.0 / 3.0;
 /// The share of the panels' width each deck panel takes; the mixer has the rest.
@@ -84,6 +86,8 @@ const BPM_FONT: f32 = 22.0;
 pub struct PadView {
     pub label: String,
     pub lit: bool,
+    /// The saved colour of the hotcue the pad shows, if it has one.
+    pub colour: Option<Color32>,
 }
 
 /// Everything a deck panel shows, worked out from the engine's snapshots and the frame so
@@ -247,6 +251,7 @@ impl DeckView {
                 side,
                 &frame.control,
                 snapshot,
+                info.map(|i| &i.hotcue_marks),
                 &frame.samples_loaded,
                 sampler,
             ),
@@ -264,11 +269,13 @@ fn pads(
     side: &SideControl,
     control: &ControlState,
     snapshot: &DeckSnapshot,
+    marks: Option<&[Option<HotcueMark>; 8]>,
     samples_loaded: &[bool; SAMPLER_SLOTS],
     sampler: &SamplerSnapshot,
 ) -> [PadView; 8] {
     std::array::from_fn(|pad| {
         let number = pad + 1;
+        let mut colour = None;
         let (label, lit) = match side.pad_mode {
             PadMode::Hardware => match side.hardware_mode {
                 Some(HardwarePadMode::Sampler | HardwarePadMode::Trans) => (
@@ -276,7 +283,16 @@ fn pads(
                     // A sounding slot is loaded even if the frame has not caught up.
                     samples_loaded[pad] || sampler.playing[pad],
                 ),
-                _ => (number.to_string(), snapshot.hotcues[pad].is_some()),
+                _ => {
+                    let mark = marks.and_then(|m| m[pad].as_ref());
+                    colour = mark
+                        .and_then(|m| m.color)
+                        .filter(|_| snapshot.hotcues[pad].is_some());
+                    (
+                        hotcue_label(number, snapshot.hotcues[pad], mark),
+                        snapshot.hotcues[pad].is_some(),
+                    )
+                }
             },
             PadMode::BeatJump => {
                 // SHIFT switches the pads to their second set of sizes.
@@ -291,8 +307,25 @@ fn pads(
             PadMode::Slicer => (number.to_string(), false),
             PadMode::PadScratch => (String::new(), false),
         };
-        PadView { label, lit }
+        PadView { label, lit, colour }
     })
+}
+
+/// A hotcue pad's text: its number, then its name, or `loop` for a saved loop without
+/// one. An empty slot shows the number alone.
+fn hotcue_label(number: usize, hotcue: Option<Hotcue>, mark: Option<&HotcueMark>) -> String {
+    let Some(hotcue) = hotcue else {
+        return number.to_string();
+    };
+    let name = mark
+        .and_then(|m| m.name.as_deref())
+        .map(str::trim)
+        .filter(|name| !name.is_empty());
+    match (name, hotcue.loop_frames) {
+        (Some(name), _) => format!("{number} {name}"),
+        (None, Some(_)) => format!("{number} loop"),
+        (None, None) => number.to_string(),
+    }
 }
 
 /// `title` without the remix in its last brackets, and the remix ([`library::remix_of`]).
@@ -954,8 +987,9 @@ fn pads_column(
         for row in view.pads.chunks(4) {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = PAD_GAP;
-                for p in row {
-                    indicator(ui, pad, &p.label, p.lit.then_some(accent));
+                for pad_view in row {
+                    let fill = pad_view.colour.map_or(accent, |c| p.mark(Some(c)));
+                    indicator(ui, pad, &pad_view.label, pad_view.lit.then_some(fill));
                 }
             });
         }
@@ -1031,6 +1065,8 @@ fn indicator(ui: &mut Ui, size: Vec2, text: &str, lit: Option<Color32>) {
     let p = theme::palette(ui.ctx());
     let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
     let (fill, colour) = match lit {
+        // A dark fill (a hotcue's saved colour) takes light text.
+        Some(colour) if theme::luminance(colour) < DARK_FILL => (colour, Color32::WHITE),
         Some(colour) => (colour, p.on_accent),
         None => (p.lane, p.text_dim),
     };
@@ -1116,6 +1152,7 @@ mod tests {
             overview: None,
             detail: None,
             stems: None,
+            hotcue_marks: Default::default(),
         });
         (snapshot, frame)
     }
@@ -1231,5 +1268,57 @@ mod tests {
         assert_eq!(clock(0.0, 44_100), "0:00.0");
         assert_eq!(clock(-10.0, 44_100), "0:00.0");
         assert_eq!(clock(600.0 * 44_100.0, 44_100), "10:00.0");
+    }
+
+    fn loop_hotcue(frames: f64) -> Hotcue {
+        Hotcue {
+            frames,
+            loop_frames: Some(500.0),
+        }
+    }
+
+    fn mark(color: Option<u32>, name: Option<&str>) -> Option<HotcueMark> {
+        Some(HotcueMark::new(color, name.map(str::to_owned)))
+    }
+
+    #[test]
+    fn a_loop_slot_shows_as_a_loop_on_its_pad() {
+        let (mut snapshot, frame) = loaded();
+        snapshot.hotcues[3] = Some(loop_hotcue(1000.0));
+        snapshot.hotcues[4] = Some(Hotcue::point(2000.0));
+        let pads = view(&snapshot, &frame).pads;
+        assert_eq!(pads[3].label, "4 loop");
+        assert!(pads[3].lit);
+        assert_eq!(pads[4].label, "5");
+        assert_eq!(pads[5].label, "6");
+    }
+
+    #[test]
+    fn a_named_hotcue_shows_its_name() {
+        let (mut snapshot, mut frame) = loaded();
+        snapshot.hotcues[1] = Some(Hotcue::point(1000.0));
+        snapshot.hotcues[3] = Some(loop_hotcue(2000.0));
+        let info = frame.decks[0].as_mut().unwrap();
+        info.hotcue_marks[1] = mark(None, Some("Drop"));
+        info.hotcue_marks[3] = mark(None, Some(" Break "));
+        // A name on an empty slot shows nothing.
+        info.hotcue_marks[5] = mark(None, Some("Ghost"));
+        let pads = view(&snapshot, &frame).pads;
+        assert_eq!(pads[1].label, "2 Drop");
+        assert_eq!(pads[3].label, "4 Break");
+        assert_eq!(pads[5].label, "6");
+    }
+
+    #[test]
+    fn hotcue_colours_tint_pads() {
+        let (mut snapshot, mut frame) = loaded();
+        snapshot.hotcues[0] = Some(Hotcue::point(1000.0));
+        snapshot.hotcues[1] = Some(Hotcue::point(2000.0));
+        let info = frame.decks[0].as_mut().unwrap();
+        info.hotcue_marks[0] = mark(Some(0xff0000), None);
+        let pads = view(&snapshot, &frame).pads;
+        assert_eq!(pads[0].colour, Some(Color32::from_rgb(0xff, 0, 0)));
+        // No colour: the pad keeps the deck's accent.
+        assert_eq!(pads[1].colour, None);
     }
 }
