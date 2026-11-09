@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 analysis = { path = "../analysis" }
+base64.workspace = true
 decode = { path = "../decode" }
 dunce.workspace = true
 fs4.workspace = true

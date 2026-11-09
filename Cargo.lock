@@ -2361,6 +2361,7 @@ name = "interop"
 version = "0.0.0"
 dependencies = [
  "analysis",
+ "base64",
  "decode",
  "dunce",
  "fs4",
