@@ -237,6 +237,9 @@ pub struct Settings {
     /// The file's name in errors.
     file: String,
     doc: DocumentMut,
+    /// The file's text as last read or written, which the next save expects to find
+    /// (`doc` may print it differently: line endings, a byte order mark).
+    text: String,
     config: Config,
     /// Per [`REGISTRY`] entry, its value at launch: a next-launch key that differs is
     /// pending.
@@ -247,6 +250,8 @@ pub struct Settings {
     errors: Vec<Option<String>>,
     /// Why the file cannot be edited: it could not be read, so saving would lose it.
     unreadable: Option<String>,
+    /// Why the last change was refused, when no row shows it.
+    unshown: Option<String>,
     saver: Saver,
 }
 
@@ -265,24 +270,27 @@ impl Settings {
     /// `config`.
     pub fn load(path: PathBuf, config: &Config) -> Self {
         let file = crate::format::safe(path.display());
-        let (doc, unreadable) = match std::fs::read_to_string(&path) {
-            Ok(text) => match text.parse::<DocumentMut>() {
-                Ok(doc) => (doc, None),
-                Err(e) => (DocumentMut::new(), Some(format!("{file}: {e}"))),
-            },
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (DocumentMut::new(), None),
-            Err(e) => (DocumentMut::new(), Some(format!("reading {file}: {e}"))),
+        let (text, unreadable) = match std::fs::read_to_string(&path) {
+            Ok(text) => (text, None),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (String::new(), None),
+            Err(e) => (String::new(), Some(format!("reading {file}: {e}"))),
+        };
+        let (doc, unreadable) = match text.parse::<DocumentMut>() {
+            Ok(doc) => (doc, unreadable),
+            Err(e) => (DocumentMut::new(), Some(format!("{file}: {e}"))),
         };
         let launched = REGISTRY.iter().map(|entry| value_of(&doc, entry)).collect();
         Self {
             path,
             file,
             doc,
+            text,
             config: config.clone(),
             launched,
             launched_stems: config.stems.enabled,
             errors: vec![None; REGISTRY.len()],
             unreadable,
+            unshown: None,
             saver: Saver::new(),
         }
     }
@@ -319,11 +327,13 @@ impl Settings {
     /// the whole of it is still valid; otherwise the key's row shows why.
     pub fn set(&mut self, key: &str, value: &str) -> Result<Applied, String> {
         let Some(index) = REGISTRY.iter().position(|entry| entry.key == key) else {
-            return Err(format!(
+            let why = format!(
                 "{}: {}: unknown setting",
                 self.file,
                 crate::format::safe(key)
-            ));
+            );
+            self.unshown = Some(why.clone());
+            return Err(why);
         };
         let edit = Edit::Set {
             key: REGISTRY[index].key,
@@ -338,8 +348,9 @@ impl Settings {
     /// anything else it holds.
     pub fn reset_all(&mut self) -> Result<Applied, String> {
         let result = self.commit(Edit::Reset);
-        if result.is_ok() {
-            self.errors.fill(None);
+        match &result {
+            Ok(_) => self.errors.fill(None),
+            Err(why) => self.unshown = Some(why.clone()),
         }
         result
     }
@@ -356,12 +367,14 @@ impl Settings {
                     doc,
                     config,
                 } => {
-                    news.events.push(format!(
-                        "{} changed outside the window; reloaded it",
-                        self.file
-                    ));
-                    // A later save, made from the text before the merge, merges again.
+                    // A later save, made from the text before the merge, merges again:
+                    // only the last one asked says so.
                     if number == self.saver.asked {
+                        news.events.push(format!(
+                            "{} changed outside the window; reloaded it",
+                            self.file
+                        ));
+                        self.text = doc.to_string();
                         self.doc = *doc;
                         self.config = (*config).clone();
                         news.reloaded = Some(*config);
@@ -370,6 +383,12 @@ impl Settings {
             }
         }
         news
+    }
+
+    /// Why the last change was refused, when no row shows it (a reset, an unknown key);
+    /// taken once.
+    pub fn take_unshown_refusal(&mut self) -> Option<String> {
+        self.unshown.take()
     }
 
     /// Waits for the last save to be written.
@@ -394,16 +413,20 @@ impl Settings {
         let live = REGISTRY
             .iter()
             .all(|entry| self.live(entry) || value_of(&doc, entry) == value_of(&self.doc, entry));
+        let text = doc.to_string();
         let job = SaveJob {
             path: self.path.clone(),
             file: self.file.clone(),
-            base: self.doc.to_string(),
-            text: doc.to_string(),
+            base: self.text.clone(),
+            text: text.clone(),
             edit,
         };
+        // Unsaved, the file keeps its text: the next save expects it.
+        if self.saver.save(job) {
+            self.text = text;
+        }
         self.doc = doc;
         self.config = config.clone();
-        self.saver.save(job);
         Ok(Applied { config, live })
     }
 }
@@ -472,7 +495,6 @@ fn set_value(
 }
 
 /// One save: `text` is `base` with `edit` applied.
-#[derive(Clone)]
 struct SaveJob {
     path: PathBuf,
     file: String,
@@ -519,18 +541,29 @@ impl Saver {
         }
     }
 
-    fn save(&mut self, job: SaveJob) {
+    /// Saves `job` on a thread of its own. Returns whether the save was started.
+    fn save(&mut self, job: SaveJob) -> bool {
         self.asked += 1;
         let number = self.asked;
         let (done, news) = (Arc::clone(&self.done), self.news_tx.clone());
-        let spare = job.clone();
+        let file = job.file.clone();
         let spawned = std::thread::Builder::new()
             .name("config save".to_owned())
             .spawn(move || save_in_turn(&done, number, &job, &news));
         match spawned {
-            Ok(handle) => self.handle = Some(handle),
-            // The later saves wait for this one: with no thread for it, it runs here.
-            Err(_) => save_in_turn(&self.done, number, &spare, &self.news_tx),
+            Ok(handle) => {
+                self.handle = Some(handle);
+                true
+            }
+            // The control thread never writes the file itself: the save is given up, and
+            // its number with it, so the later saves do not wait for it. The next one
+            // writes this change too.
+            Err(e) => {
+                self.asked -= 1;
+                let why = format!("cannot save {file}: no thread to write it: {e}");
+                let _ = self.news_tx.send(Saved::Failed(why));
+                false
+            }
         }
     }
 }
@@ -851,6 +884,44 @@ kicks_hz = 300
         let text = saved(&path, &mut settings);
         assert!(text.contains("# by hand\nkicks_hz = 400\n") && text.contains("long = 3"));
         assert!(settings.poll_saves().reloaded.is_none());
+    }
+
+    #[test]
+    fn a_crlf_bom_or_unterminated_file_is_not_taken_for_a_hand_edit() {
+        let crlf = FILE.replace('\n', "\r\n");
+        let no_final_newline = FILE.trim_end().to_owned();
+        let bom = format!("\u{feff}{FILE}");
+        for text in [crlf, no_final_newline, bom] {
+            let (_dir, path, mut settings) = settings(&text);
+            settings.set("backspin.long", "3").unwrap();
+            let written = saved(&path, &mut settings);
+            let news = settings.poll_saves();
+            assert!(news.events.is_empty(), "{:?} for {text:?}", news.events);
+            assert!(news.reloaded.is_none());
+            assert!(written.contains("long = 3"), "{written:?}");
+            assert!(
+                written.contains("# no fader on the booth mixer"),
+                "{written:?}"
+            );
+            // The next save expects what this one wrote.
+            settings.set("backspin.short", "2").unwrap();
+            let written = saved(&path, &mut settings);
+            assert!(settings.poll_saves().events.is_empty());
+            assert!(written.contains("short = 2") && written.contains("long = 3"));
+        }
+    }
+
+    #[test]
+    fn two_merging_saves_say_so_once() {
+        let (_dir, path, mut settings) = settings(FILE);
+        let hand = FILE.replace("kicks_hz = 300", "kicks_hz = 400");
+        std::fs::write(&path, &hand).unwrap();
+        settings.set("stems.knobs", "\"raw\"").unwrap();
+        settings.set("sampler.volume", "0.5").unwrap();
+        saved(&path, &mut settings);
+        let news = settings.poll_saves();
+        assert_eq!(news.events.len(), 1, "{:?}", news.events);
+        assert!(news.reloaded.is_some());
     }
 
     #[test]

@@ -114,7 +114,8 @@ fn fx_from_window(
 }
 
 /// Saves a settings `change` and, if it was saved, applies the view's part of it at once
-/// and leaves the rest for [`apply_live`]. A refused change shows on its row.
+/// and leaves the rest for [`apply_live`]. A refused change shows on its row, or as an
+/// event when it has none.
 fn change_settings(
     parts: &mut FrameParts,
     change: impl FnOnce(&mut Settings) -> Result<Applied, String>,
@@ -126,7 +127,12 @@ fn change_settings(
     };
     let before = settings.config().ui.clone();
     let result = change(settings);
+    // A refusal no row shows (a reset of a file that cannot be read) is an event.
+    let unshown = settings.take_unshown_refusal();
     parts.refresh_settings();
+    if let Some(why) = unshown {
+        parts.event(format!("settings not saved: {why}"));
+    }
     let Ok(applied) = result else {
         return;
     };
@@ -413,6 +419,41 @@ mod tests {
         assert_eq!(frame.stem_knobs, engine::StemKnobs::Vdj);
         assert_eq!(frame.fx_slots[1], Config::default().fx_slots);
         assert_eq!(runtime.state().backspin_short, 1.0);
+    }
+
+    #[test]
+    fn a_refused_reset_says_why() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[stems\n").unwrap();
+        let config = Config::default();
+        let mut parts = FrameParts::new(&config);
+        parts.set_settings(Settings::load(path.clone(), &config));
+        let (tx, rx) = channel();
+        // A refused key shows on its row, not as an event.
+        tx.send(UiCommand::SetSetting {
+            key: "backspin.short".to_owned(),
+            value: "3".to_owned(),
+        })
+        .unwrap();
+        drain(&rx, &mut parts, None);
+        let frame = parts.idle();
+        assert!(frame.events.is_empty(), "{:?}", frame.events);
+        let row = frame
+            .settings
+            .iter()
+            .find(|row| row.key == "backspin.short");
+        assert!(row.unwrap().error.is_some());
+        // A reset has no row: it is an event.
+        tx.send(UiCommand::ResetSettings).unwrap();
+        drain(&rx, &mut parts, None);
+        let frame = parts.idle();
+        let event = &frame.events.back().unwrap().1;
+        assert!(
+            event.starts_with("settings not saved: ") && event.contains("unclosed table"),
+            "{event}"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "[stems\n");
     }
 
     #[test]
