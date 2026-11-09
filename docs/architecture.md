@@ -46,13 +46,28 @@ Each plan that adds or changes a crate updates this page. The full design is in
   `play --library --controller`, which publishes a `ControlFrame` (control state, library
   decks, browser, status lines and events) at most every 10 ms by swapping one pointer, and
   never waits on the window. The window reads the deck and meter snapshots through an
-  `EngineMonitor` and never sends the engine anything. Two more threads serve the window:
+  `EngineMonitor` and never sends the engine anything itself: what it asks for goes to the
+  session as a `UiCommand` (below). Two more threads serve the window:
   a **detail-waveform thread** (session) that decodes the loaded tracks and computes their
   scrolling waveforms off the control loop, and a **cover thread** (`ui`) that reads and
   decodes cover art. The session waits for the audio
   device (retrying every 2 s), and closing the window ends the loop, which saves the last
   cues and hotcues. A session that cannot run (a bad configuration file or mapping) leaves
   the window open with the error shown, until the window is closed.
+- **Window to session commands:** the window never touches the engine, the controller state
+  or the files. It sends a `UiCommand` over an `mpsc` channel and never waits; the session
+  drains the channel on each pass of its control loop and applies it there
+  (`crates/app/src/session/commands.rs`). `View` changes (layout, colour scheme, waveform
+  style and position, jog display, beat counter, 4-Decks, overview, panels, time mode, panel
+  sizes) and `Zoom` go to the view store, which saves `ui-state.toml` next to `config.toml`
+  on a thread of its own once the view has stayed put for 2 s, and on close. `Action` (a
+  pad mode dropdown) runs an action through the controller runtime as a MIDI input bound to
+  it would. `FxSlot` sends `ChannelCommand::FxSlot` to the engine and saves `fx.deckN`.
+  `SetSetting` and `ResetSettings` edit `config.toml` (below). The `ui.layout` action, from
+  a controller, reaches the same view store through a counter in the actions' state, as the
+  zoom actions do. Whatever a command changes comes back to the window in the next
+  `ControlFrame` (the view, the FX slots, `ControlFrame::settings`), which is all the
+  window draws from, so an entry shows its effect one frame later.
 - **Database writer:** one thread owns the write connection to the library DB. Every change
   (scan results, cues, grid edits, analysis, playlists, settings) is a write operation sent
   to it and applied in one transaction, so writes are serialized and never run on the UI or
@@ -70,7 +85,7 @@ Each plan that adds or changes a crate updates this page. The full design is in
 | `analysis` | Offline track analysis written for this project: three-band waveform, tempo and constant beatgrid, and musical key with Camelot, standard and Open Key notation. Pure functions on decoded audio; no database. |
 | `library` | The SQLite library: schema and migrations, startup backups, folder scans and the watcher, fingerprints, tags, cues, playlists, beatgrid edits, the writer thread, the analyzer pool that stores `analysis` results, and the stems cache with its Ogg Vorbis format (encoded in `library/src/stems_cache.rs`, decoded through `decode`). See [library.md](library.md). |
 | `stems` | Splits a track into vocals, bass and rhythm (instruments are the residual; kicks and hats are split from rhythm later, in `engine`) with the Demucs `htdemucs` model through ONNX Runtime (`ort`; CoreML on macOS, CPU elsewhere), in chunks, with the STFT in Rust. Also `stems setup` (one-time download of the author's weights, filling the weight-free graph embedded in the crate, verification), and a fixed synthetic separator for tests. No database, no audio thread. See [stems-backend.md](stems-backend.md). |
-| `ui` | The window (egui through eframe): the published `ControlFrame` model, the theme, the top bar, the scrolling waveform lanes, the deck panels, the mixer and the browser. It only reads the frame and the engine's monitor. |
+| `ui` | The window (egui through eframe): the published `ControlFrame` model and the `ViewState`, the dark and light themes, the LAYOUT menu, the four layouts, the top bar, the scrolling waveform lanes, the deck panels, the mixer, the browser with the sideview, and the settings window. It reads the frame and the engine's monitor, and asks the session for changes with `UiCommand`; it does not depend on the controller crate. |
 | `open-jockey` (`crates/app`) | The application binary. Without a command, the window and the session behind it; also a command-line player and MIDI tools (`devices`, `play`, `library`, `stems` and `midi` with `ports`, `monitor`, `capture` and `led-scan`) that wire the other crates together. |
 
 ## Track memory, grids and sync

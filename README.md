@@ -133,7 +133,9 @@ cargo run --release -p open-jockey -- play --library --controller ddj-sb3 \
 cargo run --release -p open-jockey -- midi monitor --controller ddj-sb3
 ```
 
-The window is described in [docs/ui.md](docs/ui.md). Channel numbers are 1-based, as printed on the hardware. `--cue-track` needs `--headphones`.
+The window is described in [docs/ui.md](docs/ui.md); its layout, colours and displays are
+changed from the LAYOUT menu, and the settings from the gear's Settings window (they are saved to
+`config.toml`, keeping its comments). Channel numbers are 1-based, as printed on the hardware. `--cue-track` needs `--headphones`.
 `--library` needs `--controller`. Press Ctrl-C to stop.
 
 ## Architecture
