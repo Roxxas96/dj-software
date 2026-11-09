@@ -242,8 +242,8 @@ In the window: Settings, Library, "Import from VirtualDJ…" (see [ui.md](ui.md)
 - **Where it looks:** on macOS, `~/Library/Application Support/VirtualDJ` and
   `~/Documents/VirtualDJ`; on Windows, `Documents\VirtualDJ`; on Linux, nowhere unless you
   pass `--vdj-dir <DIR>` (repeatable; it replaces those defaults). It also looks for
-  `VirtualDJ/database.xml` and `VirtualDJ/MyLists` on the drive of each library folder (each
-  volume under `/Volumes` on macOS). If it finds no database and no playlist, it says where it
+  `VirtualDJ/database.xml` and `VirtualDJ/MyLists` on the drive each library folder is on (on
+  Linux that is the filesystem root, so `/VirtualDJ`). If it finds no database and no playlist, it says where it
   looked and does nothing.
 - **What comes over:**
   - hotcues, with their colour and name, and saved loops, with their length in beats
@@ -274,7 +274,7 @@ In the window: Settings, Library, "Import from VirtualDJ…" (see [ui.md](ui.md)
 - **The dry run:** without `--apply`, nothing is written and no backup is taken. It prints
   the databases read, the tracks matched, those with hotcues or loops and those that conflict
   with cues here, the hotcues and saved loops, how many were dropped over 8 slots, the other
-  markers not imported, the playlists to create and already here, and the first 20 songs not
+  markers not imported, the playlists to create, already here and skipped, and the first 20 songs not
   in the library. The window shows the same counts before it asks anything.
 - **Running it again** changes nothing: slots that would not change are left out, and the
   playlists are "already here".
@@ -354,13 +354,14 @@ open-jockey play --library --controller ddj-sb3 --device "DDJ-SB3" --master 3,4
   (`<path>` is the highlighted tree row after its parents, such as
   `Macintosh HD ▸ Users ▸ me ▸ Music` or `Playlists ▸ Peak time`; the bullet means the track has a cue point above 0 or at least one hotcue, `missing` flags a missing file), followed by
   analysis progress while the background analysis runs.
+- A hotcue can also have a colour and a name; they come from the VirtualDJ import, and
+  nothing in the app sets them yet.
 - Tracks load in the background. A cue point or hotcue you set is remembered with the
   track and restored when you load it again, and so is a hotcue you delete (it stays
   deleted). An empty hotcue pad pressed while a normal loop is active (not a held roll or slice)
   saves that loop in the slot instead of a point; pressing the pad later jumps to
-  the loop's start and turns the loop on. A hotcue can also have a colour and a name (they
-  come from the VirtualDJ import; nothing in the app sets them yet). With the same track on two decks, a hotcue set or deleted on one shows on
-  the other too. If the track's hotcues cannot be read when it loads, a warning says
+  the loop's start and turns the loop on. With the same track on two decks, a hotcue set or
+  deleted on one shows on the other too. If the track's hotcues cannot be read when it loads, a warning says
   they won't be remembered for this load, and hotcue changes are not saved until it is
   loaded again. The track's beatgrid is applied on load too, so SYNC and the loop buttons
   work as soon as the track is analyzed. A load onto a playing deck prints
