@@ -150,9 +150,14 @@ pub fn root(
         .show_separator_line(false)
         .show(ui, |ui| {
             // The space between the decks is the mixer's.
-            let space = screen
-                .decks
-                .show(ui, frame, monitor, &mut screen.covers, &sections);
+            let space = screen.decks.show(
+                ui,
+                frame,
+                monitor,
+                &mut screen.covers,
+                &sections,
+                &screen.commands,
+            );
             screen.mixer.show(ui, space, frame, monitor, &sections);
         });
     if middle {
