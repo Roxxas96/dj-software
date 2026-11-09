@@ -1,6 +1,7 @@
 //! Reads other DJ software's data and imports it into the library; nothing here writes
 //! to the other software's data.
 
+pub mod export;
 pub mod import;
 pub mod virtualdj;
 
