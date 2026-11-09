@@ -13,6 +13,7 @@ use crate::play::Pass;
 use crate::printer::Line;
 
 use super::detail::DetailJobs;
+use super::import::Import;
 use super::settings::Settings;
 use super::view::ViewStore;
 
@@ -48,6 +49,8 @@ pub(super) struct FrameParts {
     pub output_latency: Duration,
     /// Computes the decks' waveforms; none until the library is open.
     pub detail: Option<DetailJobs>,
+    /// The import from VirtualDJ; none until the library is open.
+    pub import: Option<Import>,
 }
 
 impl FrameParts {
@@ -69,6 +72,7 @@ impl FrameParts {
             audio: Err("opening the audio device".to_owned()),
             output_latency: Duration::ZERO,
             detail: None,
+            import: None,
         }
     }
 
@@ -133,7 +137,6 @@ impl FrameParts {
     }
 
     /// Reads the hotcue marks of the decks' tracks from the library again.
-    #[expect(dead_code, reason = "called by the VirtualDJ import")]
     pub fn refresh_marks(&mut self) {
         if let Some(detail) = self.detail.as_mut() {
             detail.refresh_marks();
@@ -158,6 +161,11 @@ impl FrameParts {
             mappings: controller::builtin::builtin_names()
                 .map(str::to_owned)
                 .collect(),
+            import: self
+                .import
+                .as_ref()
+                .map(|import| import.view().clone())
+                .unwrap_or_default(),
             ..ControlFrame::default()
         }
     }

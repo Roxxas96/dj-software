@@ -1,7 +1,8 @@
 //! Applies what the window asks for ([`UiCommand`]s) on the session thread: view changes
 //! and the zoom to the [`ViewStore`](super::view::ViewStore), actions to the controller
 //! runtime as a MIDI input would, settings to `config.toml` and, for the live ones, to
-//! the engine, the controller runtime and the view.
+//! the engine, the controller runtime and the view, and the import from VirtualDJ's steps
+//! to the [`Import`].
 
 use std::sync::mpsc::Receiver;
 use std::time::Instant;
@@ -14,6 +15,7 @@ use engine::{
 use ui::UiCommand;
 
 use super::frame::FrameParts;
+use super::import::Import;
 use super::settings::{Applied, Settings};
 use crate::config::{Config, StemsConfig, UiConfig};
 
@@ -50,7 +52,19 @@ pub(super) fn drain(commands: &Receiver<UiCommand>, parts: &mut FrameParts, mut 
             UiCommand::ResetSettings => {
                 change_settings(parts, Settings::reset_all, now);
             }
+            UiCommand::Import(step) => {
+                // Before the control loop runs, no track can be on a deck.
+                let decks_loaded = control.as_ref().is_some_and(|(_, engine)| {
+                    DeckId::ALL.into_iter().any(|deck| engine.deck(deck).loaded)
+                });
+                if let Some(import) = parts.import.as_mut() {
+                    import.step(step, decks_loaded);
+                }
+            }
         }
+    }
+    if parts.import.as_mut().is_some_and(Import::poll) {
+        parts.refresh_marks();
     }
     if let Some(settings) = parts.settings.as_mut() {
         let before = settings.config().ui.clone();

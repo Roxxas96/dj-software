@@ -15,6 +15,7 @@ mod worker;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -129,6 +130,8 @@ pub struct LibraryMode {
     analysis_status: Option<String>,
     last_poll: Instant,
     refresh_wanted: bool,
+    /// Set from another thread that changed the library: a refresh is wanted.
+    changed_elsewhere: Arc<AtomicBool>,
     last_refresh: Option<Instant>,
     /// The status lines should be redrawn now.
     dirty: bool,
@@ -138,6 +141,12 @@ impl LibraryMode {
     /// The open library, for threads that read it on their own.
     pub fn library(&self) -> Arc<Library> {
         Arc::clone(&self.lib)
+    }
+
+    /// A flag for a thread that changes the library (an import) to set: the browser and
+    /// the decks' rows are then read again, within a second.
+    pub fn changed_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.changed_elsewhere)
     }
 
     /// A read-only connection to the library.
@@ -223,6 +232,7 @@ impl LibraryMode {
             analysis_status: None,
             last_poll: Instant::now(),
             refresh_wanted: false,
+            changed_elsewhere: Arc::default(),
             last_refresh: None,
             dirty: true,
         };
@@ -369,6 +379,9 @@ impl LibraryMode {
         let playing = DeckId::ALL.into_iter().any(|d| engine.deck(d).playing);
         self.set_playing(playing);
         self.poll_stems(playing, engine, printer);
+        if self.changed_elsewhere.swap(false, Ordering::Relaxed) {
+            self.refresh_wanted = true;
+        }
         if now.duration_since(self.last_poll) >= POLL_EVERY {
             self.last_poll = now;
             self.report_failed_writes(printer);
@@ -2692,6 +2705,24 @@ mod tests {
             Vec::<std::path::PathBuf>::new()
         );
         mode.shutdown(&mut engine, &printer);
+        printer.finish();
+    }
+
+    #[test]
+    fn a_change_made_elsewhere_rereads_the_browser() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut mode = start(&dir.path().join("library.sqlite3"));
+        let (mut engine, _renderer) = engine::engine(engine::EngineConfig {
+            sample_rate: 44_100,
+            max_block_frames: 512,
+        });
+        let (printer, _events) = Printer::capturing();
+        mode.refresh_wanted = false;
+        let changed = mode.changed_flag();
+        changed.store(true, Ordering::Relaxed);
+        mode.poll(mode.last_poll, &mut engine, &printer);
+        assert!(mode.refresh_wanted);
+        assert!(!changed.load(Ordering::Relaxed));
         printer.finish();
     }
 }
