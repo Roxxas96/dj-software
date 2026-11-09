@@ -1,11 +1,12 @@
 //! Writes that never leave a half-written file under a real name.
 
+use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
-use super::{ExportError, PART_SUFFIX};
+use super::{ExportError, PART_SUFFIX, safe_component};
 
 fn io(path: &Path) -> impl FnOnce(std::io::Error) -> ExportError + '_ {
     move |source| ExportError::Io {
@@ -115,6 +116,41 @@ pub fn write_atomic(stick: &Path, path: &Path, bytes: &[u8]) -> Result<(), Expor
         let _ = fs::remove_file(&part);
     }
     result
+}
+
+/// `<base><ext>`, unless a file of that name is in `dir` and is not ours or is already used
+/// by another playlist of this export (`taken`, lowercase); then ` (Open Jockey)` is added to
+/// the base, and a number.
+pub(super) fn unique_name(
+    base: &str,
+    ext: &str,
+    dir: &Path,
+    ours: &HashSet<&str>,
+    taken: &HashSet<String>,
+) -> String {
+    let free = |file: &str| {
+        !taken.contains(&file.to_lowercase())
+            && (ours.contains(file) || fs::symlink_metadata(dir.join(file)).is_err())
+    };
+    let plain = format!("{base}{ext}");
+    if free(&plain) {
+        return plain;
+    }
+    let mut n = 1;
+    loop {
+        let suffix = if n == 1 {
+            " (Open Jockey)".to_string()
+        } else {
+            format!(" (Open Jockey {n})")
+        };
+        // Cut the base, not the suffix, so every candidate differs.
+        let cut = safe_component(base, 120usize.saturating_sub(suffix.chars().count()).max(1));
+        let name = format!("{cut}{suffix}{ext}");
+        if free(&name) {
+            return name;
+        }
+        n += 1;
+    }
 }
 
 /// Copies `from` to `to` through `<to>.ojpart`, runs `then` on the temporary file (to tag it),
