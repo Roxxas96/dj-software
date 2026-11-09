@@ -27,6 +27,37 @@ pub enum UiCommand {
     SetSetting { key: String, value: String },
     /// Puts every setting back to its default.
     ResetSettings,
+    /// A step of the import from VirtualDJ.
+    Import(ImportStep),
+}
+
+/// What the window asks of the import from VirtualDJ; the session answers with the
+/// frame's [`ImportView`](crate::ImportView).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportStep {
+    /// Reads VirtualDJ's data and shows what the import would do.
+    Scan,
+    /// Answers the question about `track`, and with `rest_too` every question left.
+    Resolve {
+        track: i64,
+        resolution: Resolution,
+        rest_too: bool,
+    },
+    /// Imports what the summary showed, asking first about each conflicting track.
+    Apply,
+    /// Stops before anything is written, or puts a finished import's result away.
+    Cancel,
+}
+
+/// What to do with a track that has hotcues both here and in VirtualDJ.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Resolution {
+    /// Keep Open Jockey's hotcues.
+    Keep,
+    /// Use VirtualDJ's hotcues instead.
+    Replace,
+    /// Keep Open Jockey's hotcues and fill the empty slots with VirtualDJ's.
+    Merge,
 }
 
 /// One change to the [`ViewState`](crate::ViewState), carrying the new value. The zoom

@@ -6,7 +6,10 @@ use std::sync::mpsc::{Receiver, channel};
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
-use ui::{ControlFrame, Layout, SettingRow, UiCommand, ViewChange};
+use ui::{
+    ControlFrame, ImportStep, ImportSummary, ImportView, Layout, Resolution, SettingRow,
+    TrackLabel, UiCommand, ViewChange,
+};
 
 fn row(key: &str, category: &'static str, value: &str, default: &str) -> SettingRow {
     SettingRow {
@@ -271,4 +274,167 @@ fn closing_the_window_drops_what_was_typed() {
     harness.get_by_label("Options").click();
     harness.run_steps(3);
     harness.get_by(field("417"));
+}
+
+/// The Library page of a window whose frame shows `import`.
+fn library_page(frame: &ControlFrame) -> (Harness<'_>, Receiver<UiCommand>) {
+    let (mut harness, asked) = open(frame);
+    harness.get_by_label("Library").click();
+    harness.run_steps(3);
+    (harness, asked)
+}
+
+fn summary() -> ImportSummary {
+    ImportSummary {
+        databases: 2,
+        tracks: 40,
+        with_marks: 31,
+        conflicting: 3,
+        hotcues: 95,
+        loops: 7,
+        dropped: 1,
+        other_markers: 12,
+        playlists_new: 4,
+        playlists_here: 1,
+        playlists_skipped: 2,
+        unmatched: 6,
+    }
+}
+
+#[test]
+fn the_library_page_starts_the_import() {
+    let frame = frame(rows());
+    let (mut harness, asked) = library_page(&frame);
+    harness.get_by_label("Import from VirtualDJ…").click();
+    harness.run_steps(3);
+    assert_eq!(
+        asked.try_iter().collect::<Vec<_>>(),
+        [UiCommand::Import(ImportStep::Scan)]
+    );
+}
+
+#[test]
+fn the_summary_shows_the_counts() {
+    let frame = ControlFrame {
+        import: ImportView::Summary(summary()),
+        ..frame(rows())
+    };
+    let (mut harness, asked) = library_page(&frame);
+    harness.get_by_label("VirtualDJ databases: 2");
+    harness.get_by_label("Tracks found in the library: 40, with hotcues or loops: 31");
+    harness.get_by_label("Tracks with hotcues here too, you choose for each: 3");
+    harness.get_by_label("Hotcues: 95, saved loops: 7");
+    harness.get_by_label("Dropped, over 8 slots: 1");
+    harness.get_by_label("Other markers, not imported: 12");
+    harness.get_by_label("Playlists to create: 4, already here: 1, skipped: 2");
+    harness.get_by_label("Not in the library, not added: 6");
+    harness.get_by_label("Import").click();
+    harness.run_steps(3);
+    assert_eq!(
+        asked.try_iter().collect::<Vec<_>>(),
+        [UiCommand::Import(ImportStep::Apply)]
+    );
+}
+
+#[test]
+fn cancel_sends_cancel() {
+    let frame = ControlFrame {
+        import: ImportView::Summary(summary()),
+        ..frame(rows())
+    };
+    let (mut harness, asked) = library_page(&frame);
+    harness.get_by_label("Cancel").click();
+    harness.run_steps(3);
+    assert_eq!(
+        asked.try_iter().collect::<Vec<_>>(),
+        [UiCommand::Import(ImportStep::Cancel)]
+    );
+}
+
+fn ask() -> ImportView {
+    ImportView::Ask {
+        track: TrackLabel {
+            id: 4,
+            name: "Artist – Title".to_owned(),
+        },
+        existing: 3,
+        incoming: 5,
+        left: 2,
+    }
+}
+
+#[test]
+fn a_conflict_asks_keep_replace_or_merge() {
+    let frame = ControlFrame {
+        import: ask(),
+        ..frame(rows())
+    };
+    let (mut harness, asked) = library_page(&frame);
+    harness.get_by_label("Artist – Title has 3 hotcues here and 5 in VirtualDJ.");
+    harness.get_by_label("Tracks left to choose for: 2");
+    harness.get_by_label("Use VirtualDJ's").click();
+    harness.run_steps(3);
+    harness.get_by_label("Keep mine").click();
+    harness.run_steps(3);
+    assert_eq!(
+        asked.try_iter().collect::<Vec<_>>(),
+        [
+            UiCommand::Import(ImportStep::Resolve {
+                track: 4,
+                resolution: Resolution::Replace,
+                rest_too: false,
+            }),
+            UiCommand::Import(ImportStep::Resolve {
+                track: 4,
+                resolution: Resolution::Keep,
+                rest_too: false,
+            }),
+        ]
+    );
+}
+
+#[test]
+fn choosing_for_all_remaining_sends_it() {
+    let frame = ControlFrame {
+        import: ask(),
+        ..frame(rows())
+    };
+    let (mut harness, asked) = library_page(&frame);
+    harness.get_by_label("for all remaining").click();
+    harness.run_steps(3);
+    harness.get_by_label("Merge").click();
+    harness.run_steps(3);
+    assert_eq!(
+        asked.try_iter().collect::<Vec<_>>(),
+        [UiCommand::Import(ImportStep::Resolve {
+            track: 4,
+            resolution: Resolution::Merge,
+            rest_too: true,
+        })]
+    );
+}
+
+#[test]
+fn busy_decks_and_the_result_show() {
+    let busy = ControlFrame {
+        import: ImportView::DecksBusy,
+        ..frame(rows())
+    };
+    let (harness, _) = library_page(&busy);
+    harness.get_by_label("Unload the decks to import: a loaded track would keep its old hotcues.");
+    harness.get_by_label("Import from VirtualDJ…");
+    drop(harness);
+    let done = "Imported 2 tracks and 1 playlists. Backup: /tmp/backup.sqlite3";
+    let finished = ControlFrame {
+        import: ImportView::Done(done.to_owned()),
+        ..frame(rows())
+    };
+    let (mut harness, asked) = library_page(&finished);
+    harness.get_by_label(done);
+    harness.get_by_label("OK").click();
+    harness.run_steps(3);
+    assert_eq!(
+        asked.try_iter().collect::<Vec<_>>(),
+        [UiCommand::Import(ImportStep::Cancel)]
+    );
 }

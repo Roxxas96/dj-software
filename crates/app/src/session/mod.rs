@@ -6,6 +6,7 @@
 mod commands;
 mod detail;
 mod frame;
+mod import;
 mod settings;
 mod view;
 
@@ -236,6 +237,11 @@ fn run_session(
         parts.set_settings(settings::Settings::load(path, config));
     }
     parts.detail = Some(DetailJobs::new(library.library()));
+    parts.import = Some(import::Import::new(
+        library.library(),
+        crate::vdj::Places::usual(),
+        Some(library.changed_flag()),
+    ));
     parts.samples_loaded = start.samples_loaded;
     for text in start.events.drain(..) {
         parts.event(text);

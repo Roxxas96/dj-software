@@ -153,6 +153,64 @@ pub struct SettingRow {
     pub error: Option<String>,
 }
 
+/// Where the import from VirtualDJ is, as the settings window shows it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ImportView {
+    #[default]
+    Idle,
+    Scanning,
+    /// What the import would do, before anything is written.
+    Summary(ImportSummary),
+    /// What to do with `track`, which has `existing` hotcues here and `incoming` in
+    /// VirtualDJ; `left` tracks are still to choose for, this one included.
+    Ask {
+        track: TrackLabel,
+        existing: usize,
+        incoming: usize,
+        left: usize,
+    },
+    Applying,
+    /// What was written, and where the backup taken before is.
+    Done(String),
+    /// Why the import stopped; nothing was written.
+    Failed(String),
+    /// Refused: a deck holds a track.
+    DecksBusy,
+}
+
+/// The counts the import shows before it writes anything.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ImportSummary {
+    /// VirtualDJ databases read.
+    pub databases: usize,
+    /// VirtualDJ songs found in the library.
+    pub tracks: usize,
+    /// Of those, the ones with hotcues or saved loops.
+    pub with_marks: usize,
+    /// Of those, the ones that have hotcues here too.
+    pub conflicting: usize,
+    pub hotcues: usize,
+    pub loops: usize,
+    /// Hotcues and loops that found no free slot.
+    pub dropped: usize,
+    /// Markers that are not hotcues or loops.
+    pub other_markers: usize,
+    pub playlists_new: usize,
+    /// Playlists already here with the same tracks.
+    pub playlists_here: usize,
+    /// Playlists that could not be read.
+    pub playlists_skipped: usize,
+    /// Songs and playlist entries not in the library.
+    pub unmatched: usize,
+}
+
+/// A library track, as a question names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackLabel {
+    pub id: i64,
+    pub name: String,
+}
+
 /// Everything the window shows that is not read from the engine's snapshots.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ControlFrame {
@@ -192,6 +250,8 @@ pub struct ControlFrame {
     pub devices: Vec<String>,
     /// The names of the built-in controller mappings.
     pub mappings: Vec<String>,
+    /// Where the import from VirtualDJ is.
+    pub import: ImportView,
 }
 
 impl Default for ControlFrame {
@@ -217,6 +277,7 @@ impl Default for ControlFrame {
             settings: Arc::default(),
             devices: Vec::new(),
             mappings: Vec::new(),
+            import: ImportView::default(),
         }
     }
 }

@@ -13,6 +13,7 @@ mod printer;
 mod samples;
 mod session;
 mod stems_cmd;
+mod vdj;
 
 #[cfg(test)]
 use std::path::Path;

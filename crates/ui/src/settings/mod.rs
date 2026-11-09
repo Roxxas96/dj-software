@@ -1,9 +1,10 @@
 //! The settings window, in the style of VirtualDJ's: a sidebar (Audio, Interface,
-//! Controllers, Options and what comes Later) and a page beside it. Every change is a
+//! Controllers, Options, Library and what comes Later) and a page beside it. Every change is a
 //! [`UiCommand`] for the session; the pages draw the rows the session published, so an
 //! edit shows one frame later.
 
 mod interface;
+mod library;
 pub mod options;
 
 use std::sync::mpsc::Sender;
@@ -27,15 +28,17 @@ enum Page {
     Interface,
     Controllers,
     Options,
+    Library,
     Later,
 }
 
 impl Page {
-    const ALL: [Page; 5] = [
+    const ALL: [Page; 6] = [
         Page::Audio,
         Page::Interface,
         Page::Controllers,
         Page::Options,
+        Page::Library,
         Page::Later,
     ];
 
@@ -45,6 +48,7 @@ impl Page {
             Page::Interface => "Interface",
             Page::Controllers => "Controllers",
             Page::Options => "Options",
+            Page::Library => "Library",
             Page::Later => "Later",
         }
     }
@@ -57,6 +61,8 @@ pub struct SettingsWindow {
     page: Page,
     options: options::Options,
     drafts: options::Drafts,
+    /// The import's "for all remaining" box.
+    import_rest: bool,
 }
 
 /// Draws the window while it is open.
@@ -110,6 +116,7 @@ fn page(
         Page::Controllers => controllers(ui, frame, state, commands),
         Page::Options if rows.is_empty() => unavailable(ui, frame),
         Page::Options => options::show(ui, rows, &mut state.options, &mut state.drafts, commands),
+        Page::Library => library::show(ui, &frame.import, &mut state.import_rest, commands),
         Page::Later => later(ui),
     }
 }
