@@ -251,6 +251,9 @@ pub enum ChannelCommand {
     /// and reverb keep the dry signal at unity up to 0.5 while the wet rises to unity, then
     /// fade the dry out (dry `min(1, 2(1 − a))`, wet `min(1, 2a)`); flanger crossfades.
     FxAmount(f32),
+    /// Sets the kind of the channel's effect slot `0..=2` and clears its state, as
+    /// [`MasterCommand::FxSlot`] does for every channel. A slot index `>= 3` is ignored.
+    FxSlot(usize, EffectKind),
 }
 
 /// Which side of the crossfader a channel follows.

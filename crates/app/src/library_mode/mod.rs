@@ -1004,7 +1004,7 @@ impl LibraryMode {
     pub fn status_lines(
         &self,
         engine: &EngineController,
-        fx_slots: &[engine::EffectKind; 3],
+        fx_slots: &[[engine::EffectKind; 3]; 4],
     ) -> Vec<String> {
         let mut lines = vec![browser_line(
             self.browser.as_ref(),
@@ -1020,7 +1020,7 @@ impl LibraryMode {
                     deck,
                     &snap,
                     current.map(|t| &t.row),
-                    fx_slots,
+                    &fx_slots[deck.index()],
                     &engine.channel(deck),
                     stems.as_deref(),
                 ));
@@ -2181,7 +2181,7 @@ mod tests {
 
     /// The status line of deck `n` (0-based), if loaded.
     fn deck_line_of(mode: &LibraryMode, engine: &EngineController, n: usize) -> String {
-        let slots = [engine::EffectKind::Echo; 3];
+        let slots = [[engine::EffectKind::Echo; 3]; 4];
         let lines = mode.status_lines(engine, &slots);
         lines
             .into_iter()

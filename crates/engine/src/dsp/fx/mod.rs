@@ -23,6 +23,9 @@ pub enum EffectKind {
 }
 
 impl EffectKind {
+    /// Every kind, in the order the effect lists show them.
+    pub const ALL: [EffectKind; 4] = [Self::Echo, Self::Reverb, Self::Flanger, Self::Filter];
+
     /// Stable identifier used in mapping files and settings.
     #[must_use]
     pub fn id(self) -> &'static str {

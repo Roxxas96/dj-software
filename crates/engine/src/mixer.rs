@@ -280,6 +280,11 @@ impl Mixer {
             ChannelCommand::FxAmount(v) if v.is_finite() => {
                 strip.fx_amount.target = v.clamp(0.0, 1.0);
             }
+            ChannelCommand::FxSlot(slot, kind) => {
+                if let Some(slot) = strip.fx.get_mut(slot) {
+                    slot.set_kind(kind);
+                }
+            }
             ChannelCommand::XfaderAssign(assign) => {
                 strip.assign = assign;
                 strip.xfade.target = strip_gain(assign, crossfader);

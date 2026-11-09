@@ -226,9 +226,11 @@ stretcher is trusted on its documented real-time behavior: it allocates only whe
 constructed, never in `process`, `seek` or `reset`.
 
 **Effects.** Every channel has three effect slots (`ChannelCommand::FxEnabled`) sharing one
-amount (`ChannelCommand::FxAmount`); the effect in each slot is a master setting
-(`MasterCommand::FxSlot`, an `EffectKind`), which `play` sends at startup from `[fx] slots`
-in `config.toml`. Echo and reverb follow a DJ mixer's dry/wet curve (dry
+amount (`ChannelCommand::FxAmount`); the effect in each slot is set per channel
+(`ChannelCommand::FxSlot`, an `EffectKind`) or for every channel at once
+(`MasterCommand::FxSlot`). `play` sends each deck's at startup from `[fx]` in
+`config.toml` (`fx.deckN`, else `fx.slots`), and the window's FX dropdowns send them while
+playing. Echo and reverb follow a DJ mixer's dry/wet curve (dry
 `min(1, 2(1 − a))`, wet `min(1, 2a)`: the dry stays at unity up to mid amount), the
 flanger crossfades by the amount, and the filter's amount is its cutoff. The actions
 `deck.fx_toggle_1` to `_3` and `deck.fx_level` drive the

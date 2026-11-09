@@ -344,7 +344,7 @@ fn loop_text(beats: f64) -> String {
 /// The status line with a controller: every loaded deck, playing ones marked with `>`.
 fn decks_line(
     snapshots: &[(DeckId, DeckSnapshot, ChannelSnapshot)],
-    slots: &[EffectKind; 3],
+    slots: &[[EffectKind; 3]; 4],
 ) -> String {
     snapshots
         .iter()
@@ -354,7 +354,7 @@ fn decks_line(
             format!(
                 "{mark}{}{}",
                 deck_line(*id, snap),
-                fx_suffix(slots, channel)
+                fx_suffix(&slots[id.index()], channel)
             )
         })
         .collect::<Vec<_>>()
@@ -486,11 +486,13 @@ pub(crate) fn configure_engine(
         controller,
         Command::Master(MasterCommand::StemKnobs(config.stems.knobs)),
     )?;
-    for (slot, kind) in config.fx_slots.into_iter().enumerate() {
-        send(
-            controller,
-            Command::Master(MasterCommand::FxSlot(slot, kind)),
-        )?;
+    for deck in DeckId::ALL {
+        for (slot, kind) in config.fx_slots_for(deck).into_iter().enumerate() {
+            send(
+                controller,
+                Command::Channel(deck, ChannelCommand::FxSlot(slot, kind)),
+            )?;
+        }
     }
     send(
         controller,
@@ -760,6 +762,8 @@ pub(crate) fn run_controller(
         keys,
     } = output;
     let name = mapping.controller.name.clone();
+    // The status lines' effect names; a window's dropdown choices do not reach them.
+    let fx_slots = DeckId::ALL.map(|deck| config.fx_slots_for(deck));
     let mut runtime = Runtime::new(mapping);
     // The size tables are not engine values, so there is no soft takeover to arm.
     let state = runtime.control_state_mut();
@@ -879,13 +883,13 @@ pub(crate) fn run_controller(
             }
             match &library {
                 Some(library) => {
-                    let mut lines = library.status_lines(engine, &config.fx_slots);
+                    let mut lines = library.status_lines(engine, &fx_slots);
                     lines.extend(extra_status(runtime.state(), engine));
                     printer.status_lines(lines);
                 }
                 None => {
                     let snapshots = DeckId::ALL.map(|id| (id, engine.deck(id), engine.channel(id)));
-                    let mut lines = vec![decks_line(&snapshots, &config.fx_slots)];
+                    let mut lines = vec![decks_line(&snapshots, &fx_slots)];
                     lines.extend(extra_status(runtime.state(), engine));
                     printer.status_lines(lines);
                 }
@@ -1194,7 +1198,7 @@ mod tests {
             ..snapshot
         };
         let ch = ChannelSnapshot::default();
-        let slots = [EffectKind::Echo, EffectKind::Reverb, EffectKind::Flanger];
+        let slots = [[EffectKind::Echo, EffectKind::Reverb, EffectKind::Flanger]; 4];
         let line = decks_line(
             &[
                 (DeckId::new(0).unwrap(), snapshot, ch),
@@ -1223,7 +1227,7 @@ mod tests {
         assert_eq!(fx_suffix(&slots, &channel), "");
         channel.fx_enabled = [true, false, true];
         assert_eq!(fx_suffix(&slots, &channel), "  fx: echo filter");
-        let line = decks_line(&[(deck, snapshot, channel)], &slots);
+        let line = decks_line(&[(deck, snapshot, channel)], &[slots; 4]);
         assert_eq!(line, ">Deck 1  00:00 / 03:20  keylock  fx: echo filter");
     }
 }

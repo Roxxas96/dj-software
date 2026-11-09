@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use actions::{Action, ApplyResult, Input};
 use controller::Runtime;
-use engine::EngineController;
+use engine::{ChannelCommand, Command, DeckId, EffectKind, EngineController};
 use ui::UiCommand;
 
 use super::frame::FrameParts;
@@ -16,7 +16,8 @@ use super::frame::FrameParts;
 pub(super) type Control<'a> = Option<(&'a mut Runtime, &'a mut EngineController)>;
 
 /// Applies every command the window sent since the last call. Before the control loop runs
-/// (`control` is `None`) actions are dropped: there is nothing to apply them to.
+/// (`control` is `None`) actions and effect choices are dropped: there is nothing to apply
+/// them to.
 pub(super) fn drain(commands: &Receiver<UiCommand>, parts: &mut FrameParts, mut control: Control) {
     let now = Instant::now();
     for command in commands.try_iter() {
@@ -32,7 +33,11 @@ pub(super) fn drain(commands: &Receiver<UiCommand>, parts: &mut FrameParts, mut 
                     action_from_window(&action, input, parts, runtime, engine);
                 }
             }
-            UiCommand::FxSlot { .. } => todo_command("choosing an FX slot", parts),
+            UiCommand::FxSlot { deck, slot, kind } => {
+                if let Some((_, engine)) = control.as_mut() {
+                    fx_from_window(deck, slot, kind, parts, engine);
+                }
+            }
             UiCommand::SetSetting { .. } | UiCommand::ResetSettings => {
                 todo_command("changing settings", parts);
             }
@@ -59,6 +64,27 @@ fn action_from_window(
             ));
         }
     }
+}
+
+/// Puts effect `kind` in `deck`'s FX `slot` and shows it in the frames once the engine
+/// has the command.
+fn fx_from_window(
+    deck: DeckId,
+    slot: usize,
+    kind: EffectKind,
+    parts: &mut FrameParts,
+    engine: &mut EngineController,
+) {
+    let Some(shown) = parts.fx_slots[deck.index()].get_mut(slot) else {
+        return;
+    };
+    let command = Command::Channel(deck, ChannelCommand::FxSlot(slot, kind));
+    if engine.send(command).is_err() {
+        parts.event("warning: an effect choice was dropped, the engine queue was full".to_owned());
+        return;
+    }
+    *shown = kind;
+    // Task 9 saves this: `parts.fx_slots[deck.index()]` as `fx.deckN`.
 }
 
 /// A command the session does not handle yet: it says so and ignores it.
@@ -97,6 +123,36 @@ mod tests {
             runtime.state().side(Side::Right).pad_mode,
             PadMode::Hardware
         );
+    }
+
+    #[test]
+    fn a_dropdown_fx_choice_reaches_the_engine() {
+        let mapping = controller::builtin::load_mapping_from("ddj-sb3", None).unwrap();
+        let mut runtime = Runtime::new(mapping);
+        let (mut engine, _renderer) = engine::engine(engine::EngineConfig {
+            sample_rate: 44_100,
+            max_block_frames: 512,
+        });
+        let mut parts = FrameParts::new(&Config::default());
+        let (tx, rx) = channel();
+        let deck = DeckId::new(0).unwrap();
+        let choose = UiCommand::FxSlot {
+            deck,
+            slot: 1,
+            kind: EffectKind::Filter,
+        };
+        tx.send(choose.clone()).unwrap();
+
+        // Before the loop runs there is no engine to send it to.
+        drain(&rx, &mut parts, None);
+        assert_eq!(parts.idle().fx_slots[0][1], EffectKind::Reverb);
+
+        tx.send(choose).unwrap();
+        drain(&rx, &mut parts, Some((&mut runtime, &mut engine)));
+        let frame = parts.idle();
+        assert_eq!(frame.fx_slots[0][1], EffectKind::Filter);
+        // The other decks keep theirs.
+        assert_eq!(frame.fx_slots[1][1], EffectKind::Reverb);
     }
 
     #[test]

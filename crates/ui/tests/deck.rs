@@ -2,14 +2,15 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::mpsc::channel;
+use std::sync::mpsc::{Sender, channel};
 
-use actions::PadMode;
+use actions::{Action, Input, PadMode, Side};
 use analysis::Waveform;
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use engine::{ChannelSnapshot, DeckId, DeckSnapshot, Grid, SamplerSnapshot};
+use egui_kittest::kittest::{AccessKitNode, NodeT};
+use engine::{ChannelSnapshot, DeckId, DeckSnapshot, EffectKind, Grid, SamplerSnapshot};
 use library::TrackRow;
 use ui::cover::Covers;
 use ui::deck::{DeckPanels, DeckReads, DeckView};
@@ -83,7 +84,7 @@ fn deck_panel_shows_title_and_bpm() {
     // The time cycles on a click; a deck starts on the time remaining.
     harness.get_by_label("−4:31.9");
     harness.get_by_label("0:57.1");
-    harness.get_by_label("pads");
+    harness.get_by_value("pads");
 }
 
 #[test]
@@ -166,7 +167,7 @@ fn deck_panel_draws_the_overview_stems_and_jump_pads() {
     let view = view(&snapshot, &frame);
     let harness = draw(&view);
     harness.get_by_label("stems 40%");
-    harness.get_by_label("BEAT JUMP");
+    harness.get_by_value("BEAT JUMP");
     harness.get_by_label("−4");
     harness.get_by_label("+32");
 }
@@ -175,10 +176,101 @@ fn deck_panel_draws_the_overview_stems_and_jump_pads() {
 fn starter_hides_the_pads() {
     let (snapshot, frame) = loaded();
     let view = view(&snapshot, &frame);
-    draw_in(&view, Layout::Pro).get_by_label("pads");
+    draw_in(&view, Layout::Pro).get_by_value("pads");
     let starter = draw_in(&view, Layout::Starter);
-    assert!(starter.query_by_label("pads").is_none());
+    assert!(starter.query_by_value("pads").is_none());
     starter.get_by_label("LOOP");
     let performance = draw_in(&view, Layout::Performance);
-    performance.get_by_label("pads");
+    performance.get_by_value("pads");
+}
+
+/// Draws `view` in the pro layout, sending what it asks for to `commands`.
+fn draw_sending(view: DeckView, commands: Sender<UiCommand>) -> Harness<'static> {
+    let sections = sections(Layout::Pro);
+    let mut harness = Harness::builder()
+        .with_size([560.0, 340.0])
+        .build_ui(move |ui| ui::deck::panel(ui, &view, None, &sections, &commands));
+    harness.run_steps(3);
+    harness
+}
+
+/// The entries of the open dropdown's list, in order.
+fn dropdown_entries(harness: &Harness<'_>) -> Vec<String> {
+    let list = harness.get_by_role(egui::accesskit::Role::ListBox);
+    let mut entries = Vec::new();
+    collect_labels(list.accesskit_node(), &mut entries);
+    entries
+}
+
+/// The first label down each branch under `node`.
+fn collect_labels(node: AccessKitNode<'_>, out: &mut Vec<String>) {
+    for child in node.children() {
+        match child.label().filter(|label| !label.is_empty()) {
+            Some(label) => out.push(label),
+            None => collect_labels(child, out),
+        }
+    }
+}
+
+#[test]
+fn the_pad_dropdown_offers_only_software_modes() {
+    let (snapshot, frame) = loaded();
+    let (commands, received) = channel();
+    let mut harness = draw_sending(view(&snapshot, &frame), commands);
+    harness.get_by_value("pads").click();
+    harness.run_steps(2);
+    assert_eq!(
+        dropdown_entries(&harness),
+        [
+            "pads (controller)",
+            "BEAT JUMP",
+            "LOOP ROLL",
+            "SLICER",
+            "PAD SCRATCH"
+        ]
+    );
+    for hardware in ["HOT CUE", "SAMPLER", "FX FADE"] {
+        assert!(harness.query_by_label(hardware).is_none(), "{hardware}");
+    }
+    harness.get_by_label("SLICER").click();
+    harness.run_steps(2);
+    assert_eq!(
+        received.try_recv().ok(),
+        Some(UiCommand::Action(
+            Action::PadMode(Side::Left, PadMode::Slicer),
+            Input::Press
+        ))
+    );
+}
+
+#[test]
+fn the_pad_dropdown_shows_the_last_hardware_button() {
+    let (snapshot, mut frame) = loaded();
+    frame.control.sides[0].hardware_mode = Some(actions::HardwarePadMode::Sampler);
+    let harness = draw_sending(view(&snapshot, &frame), channel().0);
+    harness.get_by_value("SAMPLER");
+}
+
+#[test]
+fn an_fx_dropdown_offers_every_effect() {
+    let (snapshot, mut frame) = loaded();
+    frame.fx_slots[0] = [EffectKind::Echo, EffectKind::Reverb, EffectKind::Echo];
+    let (commands, received) = channel();
+    let mut harness = draw_sending(view(&snapshot, &frame), commands);
+    harness.get_by_value("Reverb").click();
+    harness.run_steps(2);
+    assert_eq!(
+        dropdown_entries(&harness),
+        ["Echo", "Reverb", "Flanger", "Filter"]
+    );
+    harness.get_by_label("Filter").click();
+    harness.run_steps(2);
+    assert_eq!(
+        received.try_recv().ok(),
+        Some(UiCommand::FxSlot {
+            deck: DeckId::new(0).unwrap(),
+            slot: 1,
+            kind: EffectKind::Filter,
+        })
+    );
 }
