@@ -8,7 +8,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread::JoinHandle;
 
 use analysis::Waveform;
-use engine::TrackBuffer;
+use engine::{HotcueSlot, TrackBuffer};
 use library::Library;
 use ui::HotcueMark;
 
@@ -89,6 +89,15 @@ impl Slots {
             Part::Detail(detail) => slot.detail = Some(detail),
             // Marks that could not be read leave the ones shown.
             Part::Marks(marks) => slot.marks = marks.unwrap_or_else(|| slot.marks.clone()),
+        }
+    }
+
+    /// Forgets the mark of `deck`'s hotcue `slot`.
+    fn forget_mark(&mut self, deck: usize, slot: HotcueSlot) {
+        if let Some(held) = self.0[deck].as_mut()
+            && held.marks[slot.index()].is_some()
+        {
+            Arc::make_mut(&mut held.marks)[slot.index()] = None;
         }
     }
 
@@ -254,6 +263,16 @@ impl DetailJobs {
                 track_id: self.tracks[deck],
                 audio: None,
             });
+        }
+    }
+
+    /// Forgets the colour and name of `track`'s hotcue `slot` on every deck holding it, for
+    /// after the hotcue was deleted: one set again in that slot has neither.
+    pub fn forget_mark(&mut self, track: i64, slot: HotcueSlot) {
+        for deck in 0..self.tracks.len() {
+            if self.tracks[deck] == track {
+                self.slots.forget_mark(deck, slot);
+            }
         }
     }
 
@@ -424,6 +443,37 @@ mod tests {
         // A deck with nothing loaded has nothing to read again.
         jobs.empty(0);
         jobs.refresh_marks();
+        assert_eq!(*jobs.marks(0, 1), Marks::default());
+    }
+
+    #[test]
+    fn a_deleted_hotcue_loses_its_mark_on_every_deck_holding_the_track() {
+        let mut jobs = DetailJobs::start(
+            |_| None,
+            |_| Some(marks_of("Drop")),
+            |_| Waveform {
+                frames_per_bucket: 128,
+                buckets: Vec::new(),
+            },
+        );
+        let audio = Arc::new(TrackBuffer::new(44_100, vec![0.0; 2 * 441]).unwrap());
+        jobs.observe(0, 1, 7, &audio);
+        jobs.observe(1, 1, 7, &audio);
+        jobs.observe(2, 1, 8, &audio);
+        marks_after_collecting(&mut jobs, 0, 1, "Drop");
+        marks_after_collecting(&mut jobs, 1, 1, "Drop");
+        marks_after_collecting(&mut jobs, 2, 1, "Drop");
+        let shared = jobs.marks(1, 1);
+        // Hotcue 3 ("Drop", green) deleted on a deck holding track 7, then set again.
+        jobs.forget_mark(7, HotcueSlot::new(3).unwrap());
+        assert_eq!(*jobs.marks(0, 1), Marks::default());
+        assert_eq!(*jobs.marks(1, 1), Marks::default());
+        // Another track keeps its own.
+        assert_eq!(*jobs.marks(2, 1), marks_of("Drop"));
+        // A frame already holding the old marks keeps them.
+        assert_eq!(*shared, marks_of("Drop"));
+        // Another slot of the track has nothing to forget.
+        jobs.forget_mark(7, HotcueSlot::new(1).unwrap());
         assert_eq!(*jobs.marks(0, 1), Marks::default());
     }
 }

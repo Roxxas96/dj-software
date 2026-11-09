@@ -143,6 +143,16 @@ impl FrameParts {
         }
     }
 
+    /// Stops showing the colour and name of the hotcues `library` deleted in its latest
+    /// round. Called after every pass, published or not, so none is missed.
+    pub fn forget_deleted_marks(&mut self, library: Option<&LibraryMode>) {
+        if let (Some(detail), Some(library)) = (self.detail.as_mut(), library) {
+            for &(track, slot) in library.deleted_hotcues() {
+                detail.forget_mark(track, slot);
+            }
+        }
+    }
+
     /// The frame before the control loop runs: no controller, decks or browser yet.
     pub fn idle(&self) -> ControlFrame {
         ControlFrame {
