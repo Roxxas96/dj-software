@@ -28,7 +28,7 @@ pub use dsp::fx::EffectKind;
 #[doc(hidden)]
 pub use dsp::fx::{EffectForTests, effect_for_tests};
 pub use ids::DeckId;
-pub use memory::{Grid, HOTCUES, HotcueSlot, TrackMemory};
+pub use memory::{Grid, HOTCUES, Hotcue, HotcueSlot, TrackMemory};
 pub use monitor::EngineMonitor;
 pub use renderer::EngineRenderer;
 pub use sampler::{SAMPLER_SLOTS, SamplerSnapshot};

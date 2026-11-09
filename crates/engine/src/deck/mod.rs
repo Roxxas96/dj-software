@@ -12,8 +12,8 @@ mod slip;
 use crate::dsp::smooth::{Ramp, Segment};
 use crate::stems::{Garbage, PARTS};
 use crate::{
-    DeckCommand, DeckId, DeckSnapshot, EqMode, Grid, HOTCUES, StemKnobs, StemSet, TempoRange,
-    TrackBuffer, knob_law, pad_gains,
+    DeckCommand, DeckId, DeckSnapshot, EqMode, Grid, HOTCUES, Hotcue, StemKnobs, StemSet,
+    TempoRange, TrackBuffer, knob_law, pad_gains,
 };
 
 /// What a command hands back for the renderer to discard: at most a track, its stems and
@@ -37,7 +37,7 @@ pub(crate) struct Deck {
     play_latched: bool,
     tempo_slider: f32,
     tempo_range: TempoRange,
-    hotcues: [Option<f64>; HOTCUES],
+    hotcues: [Option<Hotcue>; HOTCUES],
     grid: Option<Grid>,
     loop_in: Option<f64>,
     loop_out: Option<f64>,
@@ -214,8 +214,8 @@ impl Deck {
             DeckCommand::HotcueRelease(slot) => self.hotcue_release(slot),
             DeckCommand::HotcueDelete(slot) => self.hotcue_set(slot, None),
             DeckCommand::SetHotcue(slot, None) => self.hotcue_set(slot, None),
-            DeckCommand::SetHotcue(slot, Some(frames)) if frames.is_finite() => {
-                self.hotcue_set(slot, Some(frames));
+            DeckCommand::SetHotcue(slot, Some(hotcue)) if hotcue.frames.is_finite() => {
+                self.hotcue_set(slot, Some(hotcue));
             }
             // A held roll or slice owns the playhead: the normal loop's buttons wait.
             DeckCommand::LoopIn

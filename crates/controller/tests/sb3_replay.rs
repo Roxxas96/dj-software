@@ -10,8 +10,8 @@ use controller::capture::{Control, Fixture, parse_fixture};
 use controller::mapping::Mapping;
 use controller::{BatchStats, MidiMessage, MidiOut, Runtime, TimedMidi};
 use engine::{
-    Command, DeckCommand, DeckId, EngineConfig, EngineController, EngineRenderer, Grid, HotcueSlot,
-    SamplerCommand, TrackBuffer, engine,
+    Command, DeckCommand, DeckId, EngineConfig, EngineController, EngineRenderer, Grid, Hotcue,
+    HotcueSlot, SamplerCommand, TrackBuffer, engine,
 };
 
 const CAPTURE: &str = include_str!("../../../controllers/ddj-sb3/capture.toml");
@@ -937,8 +937,8 @@ fn pads_set_trigger_and_delete_hotcues_on_the_side_deck() {
         assert_eq!(released, [Action::Hotcue(d(1), slot(n))]);
     }
     let snap = rig.engine.deck(d(1));
-    assert_eq!(snap.hotcues[0], Some(10_000.0));
-    assert_eq!(snap.hotcues[1], Some(20_000.0));
+    assert_eq!(snap.hotcues[0], Some(Hotcue::point(10_000.0)));
+    assert_eq!(snap.hotcues[1], Some(Hotcue::point(20_000.0)));
     assert!(!snap.previewing, "setting a pad does not preview");
 
     // Paused, a set pad jumps there and previews while held; the release stops.
@@ -957,7 +957,11 @@ fn pads_set_trigger_and_delete_hotcues_on_the_side_deck() {
     assert_eq!(deleted, [Action::HotcueDelete(d(1), slot(2))]);
     let snap = rig.engine.deck(d(1));
     assert_eq!(snap.hotcues[1], None);
-    assert_eq!(snap.hotcues[0], Some(10_000.0), "pad 1 stays");
+    assert_eq!(
+        snap.hotcues[0],
+        Some(Hotcue::point(10_000.0)),
+        "pad 1 stays"
+    );
 
     // After DECK the left pads drive deck 3 and leave deck 1 alone.
     rig.press("deck1.deck_select");
@@ -965,12 +969,18 @@ fn pads_set_trigger_and_delete_hotcues_on_the_side_deck() {
     let pressed = rig.pad("deck1.pads_hot_cue", 2, 127);
     assert_eq!(pressed, [Action::Hotcue(d(3), slot(3))]);
     rig.pad("deck1.pads_hot_cue", 2, 0);
-    assert_eq!(rig.engine.deck(d(3)).hotcues[2], Some(30_000.0));
+    assert_eq!(
+        rig.engine.deck(d(3)).hotcues[2],
+        Some(Hotcue::point(30_000.0))
+    );
     assert_eq!(rig.engine.deck(d(1)).hotcues[2], None);
     let deleted = rig.pad("deck1.pads_hot_cue.shift", 2, 127);
     assert_eq!(deleted, [Action::HotcueDelete(d(3), slot(3))]);
     assert_eq!(rig.engine.deck(d(3)).hotcues[2], None);
-    assert_eq!(rig.engine.deck(d(1)).hotcues[0], Some(10_000.0));
+    assert_eq!(
+        rig.engine.deck(d(1)).hotcues[0],
+        Some(Hotcue::point(10_000.0))
+    );
 
     // The right side's pads (channel 9) drive deck 2, all eight of them.
     for n in 1..=8 {
@@ -986,7 +996,10 @@ fn pads_set_trigger_and_delete_hotcues_on_the_side_deck() {
 #[test]
 fn held_jog_and_pad_across_deck_switch_release_on_the_pressed_deck() {
     let mut rig = Rig::attached();
-    rig.deck_command(1, DeckCommand::SetHotcue(slot(1), Some(10_000.0)));
+    rig.deck_command(
+        1,
+        DeckCommand::SetHotcue(slot(1), Some(Hotcue::point(10_000.0))),
+    );
     rig.deck_command(1, DeckCommand::Seek(10_000.0));
     let deck3_before = rig.engine.deck(d(3));
 
@@ -1253,7 +1266,10 @@ fn shift_touch_search_keeps_a_playing_deck_playing() {
 #[test]
 fn shift_during_a_held_pad_or_cue_still_ends_the_preview() {
     let mut rig = Rig::attached();
-    rig.deck_command(1, DeckCommand::SetHotcue(slot(1), Some(10_000.0)));
+    rig.deck_command(
+        1,
+        DeckCommand::SetHotcue(slot(1), Some(Hotcue::point(10_000.0))),
+    );
 
     // Paused, pad 1 held previews; SHIFT goes down and the note-off arrives on the shifted
     // note (0x08).
@@ -1269,7 +1285,7 @@ fn shift_during_a_held_pad_or_cue_still_ends_the_preview() {
     assert_eq!(snap.position_frames, 10_000.0, "back at the hotcue");
     assert_eq!(
         snap.hotcues[0],
-        Some(10_000.0),
+        Some(Hotcue::point(10_000.0)),
         "the release deletes nothing"
     );
     rig.button("deck1.shift", 0);
@@ -1330,8 +1346,14 @@ fn touch_ended_with_shift_then_deck_switch_releases_the_new_deck() {
 #[test]
 fn pad_or_cue_ended_with_shift_then_deck_switch_previews_the_new_deck() {
     let mut rig = Rig::attached();
-    rig.deck_command(1, DeckCommand::SetHotcue(slot(1), Some(10_000.0)));
-    rig.deck_command(3, DeckCommand::SetHotcue(slot(1), Some(20_000.0)));
+    rig.deck_command(
+        1,
+        DeckCommand::SetHotcue(slot(1), Some(Hotcue::point(10_000.0))),
+    );
+    rig.deck_command(
+        3,
+        DeckCommand::SetHotcue(slot(1), Some(Hotcue::point(20_000.0))),
+    );
 
     // On deck 1: hold pad 1 (previews), SHIFT down, lift on the shifted note, SHIFT up;
     // the same for CUE.
@@ -1411,8 +1433,14 @@ fn touch_held_across_deck_switch_then_shift_lift_releases_the_held_deck() {
 #[test]
 fn pad_held_across_deck_switch_then_shift_lift_ends_the_held_preview() {
     let mut rig = Rig::attached();
-    rig.deck_command(1, DeckCommand::SetHotcue(slot(1), Some(10_000.0)));
-    rig.deck_command(3, DeckCommand::SetHotcue(slot(1), Some(20_000.0)));
+    rig.deck_command(
+        1,
+        DeckCommand::SetHotcue(slot(1), Some(Hotcue::point(10_000.0))),
+    );
+    rig.deck_command(
+        3,
+        DeckCommand::SetHotcue(slot(1), Some(Hotcue::point(20_000.0))),
+    );
     let deck3_before = rig.engine.deck(d(3));
 
     // Paused deck 1: hold pad 1 (previews), DECK, SHIFT down, lift on 0x08.
@@ -1432,7 +1460,7 @@ fn pad_held_across_deck_switch_then_shift_lift_ends_the_held_preview() {
     assert_eq!(snap.position_frames, 10_000.0, "back at the hotcue");
     assert_eq!(
         snap.hotcues[0],
-        Some(10_000.0),
+        Some(Hotcue::point(10_000.0)),
         "the release deletes nothing"
     );
     assert_eq!(rig.engine.deck(d(3)), deck3_before, "deck 3 is unchanged");
@@ -2096,7 +2124,9 @@ fn pad_scratch_mode_anchors_the_playhead_and_leaves_hotcues_alone() {
     rig.deck_command(1, DeckCommand::Seek(30_000.0));
     let set = rig.pad("deck1.pads_hot_cue", 0, 127);
     assert_eq!(set, [Action::Hotcue(d(1), slot(1))]);
-    let cue = rig.engine.deck(d(1)).hotcues[0].expect("pad 1 set hotcue 1");
+    let cue = rig.engine.deck(d(1)).hotcues[0]
+        .expect("pad 1 set hotcue 1")
+        .frames;
     assert!((cue - 30_000.0).abs() < 2_000.0, "hotcue 1 at {cue}");
     // And the routine pads do nothing outside PAD SCRATCH mode.
     assert_eq!(rig.pad("deck1.pads_pad_scratch", 0, 127), []);

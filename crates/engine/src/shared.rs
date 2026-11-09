@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering, fence};
 
-use crate::{DeckId, Grid, HOTCUES, SAMPLER_SLOTS, SamplerSnapshot};
+use crate::{DeckId, Grid, HOTCUES, Hotcue, SAMPLER_SLOTS, SamplerSnapshot};
 
 /// A deck's state as last published by the renderer.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -18,8 +18,8 @@ pub struct DeckSnapshot {
     /// Cue is held and the deck is previewing from the cue point.
     pub previewing: bool,
     pub grid: Option<Grid>,
-    /// Hotcue positions in track frames, `None` for an empty slot.
-    pub hotcues: [Option<f64>; HOTCUES],
+    /// Hotcues and saved loops, `None` for an empty slot.
+    pub hotcues: [Option<Hotcue>; HOTCUES],
     /// Active or stored loop start and end in track frames.
     pub loop_in: Option<f64>,
     pub loop_out: Option<f64>,
@@ -238,6 +238,7 @@ struct DeckShared {
     grid_period: AtomicU64,
     grid_first_beat: AtomicU64,
     hotcues: [AtomicU64; HOTCUES],
+    hotcue_loops: [AtomicU64; HOTCUES],
     loop_in: AtomicU64,
     loop_out: AtomicU64,
     loop_active: AtomicBool,
@@ -320,8 +321,14 @@ impl DeckShared {
             s.grid.map_or(0.0, |g| g.first_beat_frames).to_bits(),
             Ordering::Relaxed,
         );
-        for (atomic, hotcue) in self.hotcues.iter().zip(s.hotcues) {
-            atomic.store(opt_bits(hotcue), Ordering::Relaxed);
+        for ((atomic, loop_atomic), hotcue) in
+            self.hotcues.iter().zip(&self.hotcue_loops).zip(s.hotcues)
+        {
+            atomic.store(opt_bits(hotcue.map(|h| h.frames)), Ordering::Relaxed);
+            loop_atomic.store(
+                opt_bits(hotcue.and_then(|h| h.loop_frames)),
+                Ordering::Relaxed,
+            );
         }
         self.loop_in.store(opt_bits(s.loop_in), Ordering::Relaxed);
         self.loop_out.store(opt_bits(s.loop_out), Ordering::Relaxed);
@@ -392,10 +399,12 @@ impl DeckShared {
                     first_beat_frames: f64::from_bits(self.grid_first_beat.load(Ordering::Relaxed)),
                 }
             }),
-            hotcues: self
-                .hotcues
-                .each_ref()
-                .map(|a| bits_opt(a.load(Ordering::Relaxed))),
+            hotcues: std::array::from_fn(|i| {
+                bits_opt(self.hotcues[i].load(Ordering::Relaxed)).map(|frames| Hotcue {
+                    frames,
+                    loop_frames: bits_opt(self.hotcue_loops[i].load(Ordering::Relaxed)),
+                })
+            }),
             loop_in: bits_opt(self.loop_in.load(Ordering::Relaxed)),
             loop_out: bits_opt(self.loop_out.load(Ordering::Relaxed)),
             loop_active: self.loop_active.load(Ordering::Relaxed),
@@ -426,7 +435,10 @@ mod tests {
             loaded: true,
             cue_frames: n as f64,
             position_frames: n as f64,
-            hotcues: [Some(n as f64); HOTCUES],
+            hotcues: [Some(Hotcue {
+                frames: n as f64,
+                loop_frames: Some(n as f64),
+            }); HOTCUES],
             load_seq: n,
             ..DeckSnapshot::default()
         }
@@ -468,7 +480,11 @@ mod tests {
         let check = |s: &DeckSnapshot| {
             let n = s.load_seq as f64;
             assert_eq!((s.cue_frames, s.position_frames), (n, n));
-            assert!(s.hotcues.iter().all(|h| *h == Some(n)), "{s:?}");
+            let hotcue = Hotcue {
+                frames: n,
+                loop_frames: Some(n),
+            };
+            assert!(s.hotcues.iter().all(|h| *h == Some(hotcue)), "{s:?}");
         };
         while !writer.is_finished() {
             if let Some(s) = deck.load_consistent() {

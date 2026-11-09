@@ -1,12 +1,17 @@
 use std::sync::Arc;
 
 use crate::{
-    DeckId, EffectKind, EqMode, Grid, HotcueSlot, Stem, StemKnobs, StemSet, TrackBuffer,
+    DeckId, EffectKind, EqMode, Grid, Hotcue, HotcueSlot, Stem, StemKnobs, StemSet, TrackBuffer,
     TrackMemory,
 };
 
 /// A message from the controller to the audio thread.
 #[derive(Debug, Clone)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a boxed `Load` would be freed on the audio thread; commands sit in a ring buffer \
+              allocated once"
+)]
 pub enum Command {
     Deck(DeckId, DeckCommand),
     Channel(DeckId, ChannelCommand),
@@ -30,6 +35,11 @@ pub enum Command {
 }
 
 #[derive(Debug, Clone)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a boxed `Load` would be freed on the audio thread; commands sit in a ring buffer \
+              allocated once"
+)]
 pub enum DeckCommand {
     /// Loads a track, paused at frame 0, then applies `memory.clamped(track.frames())`.
     /// The tempo slider keeps its position. Drops the previous track's stems and turns
@@ -71,8 +81,10 @@ pub enum DeckCommand {
     /// Replaces the beatgrid; `None` clears it. A grid whose period is not finite and
     /// positive, or whose first beat is not finite, is ignored.
     SetGrid(Option<Grid>),
-    /// Hotcue button down. An empty slot stores the playhead; a set slot jumps there and,
-    /// while paused, previews until [`DeckCommand::HotcueRelease`].
+    /// Hotcue button down. An empty slot stores the active normal loop as a saved loop, or
+    /// else the playhead (a held roll or slice is not saved). A set slot jumps there and,
+    /// while paused, previews until [`DeckCommand::HotcueRelease`]; a saved loop's slot also
+    /// makes its loop the active loop.
     HotcuePress(HotcueSlot),
     /// Hotcue button up. Only ends the preview started by this same slot: it returns to the
     /// hotcue and pauses, unless play was pressed during the hold.
@@ -80,9 +92,11 @@ pub enum DeckCommand {
     /// Clears a hotcue, ending its preview as a release would.
     HotcueDelete(HotcueSlot),
     /// Sets or clears a hotcue, in track frames clamped to `[0, frames]`, without moving the
-    /// playhead or changing the play state. A non-finite position is ignored. Used to restore
-    /// remembered hotcues; `None` behaves like [`DeckCommand::HotcueDelete`].
-    SetHotcue(HotcueSlot, Option<f64>),
+    /// playhead or changing the play state. A non-finite position is ignored; a non-finite or
+    /// non-positive loop length makes a plain hotcue, and a loop end past the track end is
+    /// cut to it. Used to restore remembered hotcues; `None` behaves like
+    /// [`DeckCommand::HotcueDelete`].
+    SetHotcue(HotcueSlot, Option<Hotcue>),
     /// Sets the loop-in point at the playhead, clears loop-out and deactivates the loop.
     LoopIn,
     /// With a loop-in before the playhead, sets loop-out at the playhead and activates the

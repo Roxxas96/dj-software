@@ -407,7 +407,7 @@ fn finish(printer: Printer, lines: &Receiver<Line>) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use crate::library_mode::testing;
-    use engine::{Command, DeckCommand, DeckId, HotcueSlot};
+    use engine::{Command, DeckCommand, DeckId, Hotcue, HotcueSlot};
 
     fn render(renderer: &mut engine::EngineRenderer) {
         let (mut master, mut headphones) = (vec![0.0; 1024], vec![0.0; 1024]);
@@ -467,7 +467,7 @@ mod tests {
         engine
             .send(Command::Deck(
                 deck1,
-                DeckCommand::SetHotcue(slot1, Some(100.0)),
+                DeckCommand::SetHotcue(slot1, Some(Hotcue::point(100.0))),
             ))
             .unwrap();
         render(&mut renderer);

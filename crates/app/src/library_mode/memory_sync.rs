@@ -2,7 +2,7 @@
 //! has applied the `Load` (which carries the remembered memory, and advances the deck's
 //! `load_seq`), then write every change through.
 
-use engine::{DeckSnapshot, Grid, HOTCUES, HotcueSlot, TrackMemory};
+use engine::{DeckSnapshot, Grid, HOTCUES, Hotcue, HotcueSlot, TrackMemory};
 use library::Beatgrid;
 
 /// A change to write to the library, seen in a deck's snapshot.
@@ -11,7 +11,7 @@ pub enum MemoryAction {
     /// Store this cue point.
     SaveCue(f64),
     /// Store this hotcue.
-    SaveHotcue(HotcueSlot, f64),
+    SaveHotcue(HotcueSlot, Hotcue),
     /// Forget this hotcue.
     DeleteHotcue(HotcueSlot),
 }
@@ -23,7 +23,7 @@ enum State {
     /// The library holds `cue` and `hotcues`.
     Tracking {
         cue: f64,
-        hotcues: [Option<f64>; HOTCUES],
+        hotcues: [Option<Hotcue>; HOTCUES],
     },
 }
 
@@ -42,7 +42,7 @@ pub struct MemorySync {
     /// Per slot, a hotcue sent to the deck because another deck holding the same track
     /// changed it (Ruling R18), not shown yet: the value the deck showed before it. Until
     /// the snapshot shows the sent value, that old value is not a change to save.
-    pushed: [Option<Option<f64>>; HOTCUES],
+    pushed: [Option<Option<Hotcue>>; HOTCUES],
 }
 
 impl MemorySync {
@@ -70,7 +70,7 @@ impl MemorySync {
 
     /// Whether the deck should be sent hotcue `slot` at `value`, which another deck holding
     /// the same track just saved: the load has applied and the deck holds another value.
-    pub fn wants_hotcue(&self, slot: HotcueSlot, value: Option<f64>) -> bool {
+    pub fn wants_hotcue(&self, slot: HotcueSlot, value: Option<Hotcue>) -> bool {
         match &self.state {
             State::AwaitLoad => false,
             State::Tracking { hotcues, .. } => hotcues[slot.index()] != value,
@@ -79,7 +79,7 @@ impl MemorySync {
 
     /// Hotcue `slot` was sent to the deck at `value` (see [`Self::wants_hotcue`]): the
     /// library already holds it, so it is not saved again when the snapshot shows it.
-    pub fn pushed_hotcue(&mut self, slot: HotcueSlot, value: Option<f64>) {
+    pub fn pushed_hotcue(&mut self, slot: HotcueSlot, value: Option<Hotcue>) {
         let State::Tracking { hotcues, .. } = &mut self.state else {
             return;
         };
@@ -140,12 +140,12 @@ impl MemorySync {
                 // Changed on this deck since: a change like any other.
                 self.pushed[slot.index()] = None;
             }
-            if now == *last || now.is_some_and(|v| !v.is_finite()) {
+            if now == *last || now.is_some_and(|h| !h.frames.is_finite()) {
                 continue;
             }
             *last = now;
             actions.push(match now {
-                Some(frames) => MemoryAction::SaveHotcue(slot, frames),
+                Some(hotcue) => MemoryAction::SaveHotcue(slot, hotcue),
                 None => MemoryAction::DeleteHotcue(slot),
             });
         }
@@ -187,11 +187,11 @@ mod tests {
         }
     }
 
-    fn with_hotcues(snap: DeckSnapshot, hotcues: [Option<f64>; HOTCUES]) -> DeckSnapshot {
+    fn with_hotcues(snap: DeckSnapshot, hotcues: [Option<Hotcue>; HOTCUES]) -> DeckSnapshot {
         DeckSnapshot { hotcues, ..snap }
     }
 
-    fn memory(cue: f64, hotcues: [Option<f64>; HOTCUES]) -> TrackMemory {
+    fn memory(cue: f64, hotcues: [Option<Hotcue>; HOTCUES]) -> TrackMemory {
         TrackMemory {
             cue,
             hotcues,
@@ -206,13 +206,13 @@ mod tests {
     #[test]
     fn load_applies_when_snapshot_shows_the_memory() {
         let mut hotcues = [None; HOTCUES];
-        hotcues[2] = Some(900.0);
+        hotcues[2] = Some(Hotcue::point(900.0));
         // The deck had applied 3 loads when this one was sent.
         let mut sync = MemorySync::new(1000, 44_100, memory(500.0, hotcues), 3);
         assert!(!sync.load_applied());
         // The previous track, with its own cue and hotcues, or reset: never saved.
         let mut previous = [None; HOTCUES];
-        previous[0] = Some(1.0);
+        previous[0] = Some(Hotcue::point(1.0));
         assert_eq!(sync.step(&with_hotcues(snap(3, 700.0), previous)), []);
         assert_eq!(sync.step(&snap(3, 0.0)), []);
         assert!(!sync.load_applied());
@@ -225,15 +225,15 @@ mod tests {
     #[test]
     fn a_change_in_the_block_of_the_load_is_saved() {
         let mut hotcues = [None; HOTCUES];
-        hotcues[2] = Some(900.0);
+        hotcues[2] = Some(Hotcue::point(900.0));
         let mut sync = MemorySync::new(1000, 44_100, memory(500.0, hotcues), 0);
         // The first snapshot showing the load already has hotcue 2 set and 3 deleted.
         let mut shown = [None; HOTCUES];
-        shown[1] = Some(42.0);
+        shown[1] = Some(Hotcue::point(42.0));
         assert_eq!(
             sync.step(&with_hotcues(snap(1, 500.0), shown)),
             [
-                MemoryAction::SaveHotcue(slot(2), 42.0),
+                MemoryAction::SaveHotcue(slot(2), Hotcue::point(42.0)),
                 MemoryAction::DeleteHotcue(slot(3)),
             ]
         );
@@ -246,23 +246,26 @@ mod tests {
         let mut sync = MemorySync::new(1000, 44_100, TrackMemory::default(), 0);
         assert_eq!(sync.step(&snap(1, 0.0)), []);
         let mut hotcues = [None; HOTCUES];
-        hotcues[1] = Some(321.0);
+        hotcues[1] = Some(Hotcue::point(321.0));
         let set = with_hotcues(snap(1, 0.0), hotcues);
-        assert_eq!(sync.step(&set), [MemoryAction::SaveHotcue(slot(2), 321.0)]);
+        assert_eq!(
+            sync.step(&set),
+            [MemoryAction::SaveHotcue(slot(2), Hotcue::point(321.0))]
+        );
         assert_eq!(sync.step(&set), [], "reported once");
         let deleted = snap(1, 0.0);
         assert_eq!(sync.step(&deleted), [MemoryAction::DeleteHotcue(slot(2))]);
         assert_eq!(sync.step(&deleted), [], "reported once");
         // A cue and two hotcues change in the same block.
         let mut both = [None; HOTCUES];
-        both[0] = Some(10.0);
-        both[7] = Some(20.0);
+        both[0] = Some(Hotcue::point(10.0));
+        both[7] = Some(Hotcue::point(20.0));
         assert_eq!(
             sync.step(&with_hotcues(snap(1, 5.0), both)),
             [
                 MemoryAction::SaveCue(5.0),
-                MemoryAction::SaveHotcue(slot(1), 10.0),
-                MemoryAction::SaveHotcue(slot(8), 20.0),
+                MemoryAction::SaveHotcue(slot(1), Hotcue::point(10.0)),
+                MemoryAction::SaveHotcue(slot(8), Hotcue::point(20.0)),
             ]
         );
     }
@@ -270,14 +273,14 @@ mod tests {
     #[test]
     fn clamped_memory_is_not_saved_back() {
         let mut hotcues = [None; HOTCUES];
-        hotcues[0] = Some(-5.0);
-        hotcues[1] = Some(f64::NAN);
-        hotcues[2] = Some(9000.0);
+        hotcues[0] = Some(Hotcue::point(-5.0));
+        hotcues[1] = Some(Hotcue::point(f64::NAN));
+        hotcues[2] = Some(Hotcue::point(9000.0));
         let mut sync = MemorySync::new(1000, 44_100, memory(5000.0, hotcues), 0);
         // What the engine shows: everything clamped like `TrackMemory::clamped`.
         let mut shown = [None; HOTCUES];
-        shown[0] = Some(0.0);
-        shown[2] = Some(1000.0);
+        shown[0] = Some(Hotcue::point(0.0));
+        shown[2] = Some(Hotcue::point(1000.0));
         let applied = with_hotcues(snap(1, 1000.0), shown);
         assert_eq!(sync.step(&applied), []);
         assert!(sync.load_applied());
@@ -321,7 +324,7 @@ mod tests {
             MemorySync::new(1000, 44_100, TrackMemory::default(), 0).without_hotcue_saves();
         assert_eq!(sync.step(&snap(1, 0.0)), []);
         let mut hotcues = [None; HOTCUES];
-        hotcues[0] = Some(10.0);
+        hotcues[0] = Some(Hotcue::point(10.0));
         assert_eq!(
             sync.step(&with_hotcues(snap(1, 5.0), hotcues)),
             [MemoryAction::SaveCue(5.0)]
@@ -337,17 +340,17 @@ mod tests {
     fn a_pushed_hotcue_is_not_saved_back() {
         let mut sync = MemorySync::new(1000, 44_100, TrackMemory::default(), 0);
         assert!(
-            !sync.wants_hotcue(slot(1), Some(10.0)),
+            !sync.wants_hotcue(slot(1), Some(Hotcue::point(10.0))),
             "before the load applies"
         );
         assert_eq!(sync.step(&snap(1, 0.0)), []);
-        assert!(sync.wants_hotcue(slot(1), Some(10.0)));
-        sync.pushed_hotcue(slot(1), Some(10.0));
-        assert!(!sync.wants_hotcue(slot(1), Some(10.0)));
+        assert!(sync.wants_hotcue(slot(1), Some(Hotcue::point(10.0))));
+        sync.pushed_hotcue(slot(1), Some(Hotcue::point(10.0)));
+        assert!(!sync.wants_hotcue(slot(1), Some(Hotcue::point(10.0))));
         // Not applied yet: the old (empty) pad is no deletion.
         assert_eq!(sync.step(&snap(1, 0.0)), []);
         let mut hotcues = [None; HOTCUES];
-        hotcues[0] = Some(10.0);
+        hotcues[0] = Some(Hotcue::point(10.0));
         // Applied: nothing to save.
         assert_eq!(sync.step(&with_hotcues(snap(1, 0.0), hotcues)), []);
         // From then on, the deck's own changes are saved, back to empty too.
@@ -357,12 +360,12 @@ mod tests {
         );
 
         // A change on the deck before the push shows is saved.
-        sync.pushed_hotcue(slot(2), Some(20.0));
+        sync.pushed_hotcue(slot(2), Some(Hotcue::point(20.0)));
         let mut mine = [None; HOTCUES];
-        mine[1] = Some(30.0);
+        mine[1] = Some(Hotcue::point(30.0));
         assert_eq!(
             sync.step(&with_hotcues(snap(1, 0.0), mine)),
-            [MemoryAction::SaveHotcue(slot(2), 30.0)]
+            [MemoryAction::SaveHotcue(slot(2), Hotcue::point(30.0))]
         );
     }
 
