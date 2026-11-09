@@ -1,25 +1,31 @@
-//! The browser at the bottom of the window: the folder tree, the track list and the
-//! highlighted track's info. The BROWSE knob drives the [`BrowserView`]; this only draws
-//! it and scrolls to keep the highlights in sight.
+//! The browser at the bottom of the window: the folder tree, the track list, the
+//! highlighted track's info and the sideview beside them. The BROWSE knob drives the
+//! [`BrowserView`]; this only draws it and scrolls to keep the highlights in sight. The
+//! dividers between the panes drag, and the info panel and the sideview fold away to a
+//! small tab on the right edge.
 
 use std::ops::Range;
 use std::path::Path;
 
 use analysis::KeyNotation;
 use egui::{
-    Color32, CornerRadius, Label, Rect, RichText, Sense, Stroke, Ui, UiBuilder, pos2, vec2,
+    Button, Color32, CornerRadius, CursorIcon, Label, Pos2, Rect, RichText, Sense, Stroke, Ui,
+    UiBuilder, Vec2, pos2, vec2,
 };
 use library::{BrowserView, Focus, ListRow, TreeKind, TreeRow};
 
+use crate::ViewChange;
 use crate::cover::{self, Covers};
 use crate::deck::{key_text, split_remix};
+use crate::layout::clamp_sizes;
 use crate::theme::{self, Palette};
+use crate::view::PanelSizes;
 
 const ROW_HEIGHT: f32 = 20.0;
-/// The share of the browser's width the folder tree takes.
-const TREE_SHARE: f32 = 0.20;
-/// The share of the browser's width the info panel takes.
-const INFO_SHARE: f32 = 0.18;
+/// How wide the strip around a divider that grabs the pointer is, in points.
+const GRAB: f32 = 8.0;
+/// The size of a folded panel's tab, in points.
+const TAB_HEIGHT: f32 = 20.0;
 /// Rows kept in view past the cursor.
 const MARGIN: usize = 2;
 /// The tree's indent per depth level, in points.
@@ -45,19 +51,176 @@ pub fn format_length(frames: u64, rate: u32) -> String {
     format!("{}:{:02}", seconds / 60, seconds % 60)
 }
 
-/// Draws the browser into all of `ui`'s space.
-pub fn show(ui: &mut Ui, view: &BrowserView, notation: KeyNotation, covers: &mut Covers) {
+/// How the browser's areas are arranged.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Arrangement {
+    /// The tree's, info panel's and sideview's shares of the window's width.
+    pub sizes: PanelSizes,
+    /// Whether the info panel shows; folded, a tab brings it back.
+    pub info: bool,
+    /// Whether the sideview shows; folded, a tab brings it back.
+    pub sideview: bool,
+    /// The window's size, for keeping the shares within what it can show.
+    pub window: Vec2,
+}
+
+impl Default for Arrangement {
+    fn default() -> Self {
+        Self {
+            sizes: PanelSizes::default(),
+            info: true,
+            sideview: false,
+            window: vec2(1440.0, 900.0),
+        }
+    }
+}
+
+/// What the viewer did to the browser's arrangement this frame.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct Changes {
+    /// The shares after a divider moved.
+    pub sizes: Option<PanelSizes>,
+    /// A divider was let go.
+    pub stopped: bool,
+    /// A folded panel's tab was clicked.
+    pub unfold: Option<ViewChange>,
+}
+
+/// A drag on a divider.
+pub(crate) struct Drag {
+    /// Where the pointer is while the divider is held.
+    pub pointer: Option<Pos2>,
+    pub stopped: bool,
+}
+
+/// A divider on `rect` that can be dragged; `name` tells it from the others in `ui`.
+pub(crate) fn divider(ui: &mut Ui, name: &str, rect: Rect, cursor: CursorIcon) -> Drag {
+    let response = ui.interact(rect, ui.scope_id().with(("divider", name)), Sense::drag());
+    if response.hovered() || response.dragged() {
+        ui.output_mut(|o| o.cursor_icon = cursor);
+        let p = theme::palette(ui.ctx());
+        let line = if cursor == CursorIcon::ResizeHorizontal {
+            [rect.center_top(), rect.center_bottom()]
+        } else {
+            [rect.left_center(), rect.right_center()]
+        };
+        ui.painter()
+            .line_segment(line, Stroke::new(2.0, p.text_dim));
+    }
+    Drag {
+        pointer: response
+            .dragged()
+            .then(|| response.interact_pointer_pos())
+            .flatten(),
+        stopped: response.drag_stopped(),
+    }
+}
+
+/// Draws the browser into all of `ui`'s space, with `sideview` drawn in the sideview's
+/// column when `arrangement` shows it.
+pub fn show(
+    ui: &mut Ui,
+    view: &BrowserView,
+    notation: KeyNotation,
+    covers: &mut Covers,
+    arrangement: &Arrangement,
+    sideview: impl FnOnce(&mut Ui),
+) -> Changes {
     let p = theme::palette(ui.ctx());
     let area = ui.available_rect_before_wrap();
     ui.painter().rect_filled(area, 0.0, p.background);
-    let tree_width = area.width() * TREE_SHARE;
-    let info_width = area.width() * INFO_SHARE;
-    let tree = Rect::from_min_max(area.min, pos2(area.min.x + tree_width, area.max.y));
-    let info = Rect::from_min_max(pos2(area.max.x - info_width, area.min.y), area.max);
-    let list = Rect::from_min_max(pos2(tree.max.x, area.min.y), pos2(info.min.x, area.max.y));
+    let mut sizes = arrangement.sizes;
+    let width = area.width().max(1.0);
+    let columns = |sizes: &PanelSizes| {
+        let side = if arrangement.sideview {
+            sizes.sideview * width
+        } else {
+            0.0
+        };
+        let info = if arrangement.info {
+            sizes.info * width
+        } else {
+            0.0
+        };
+        let tree_edge = area.min.x + sizes.tree * width;
+        let side_edge = area.max.x - side;
+        (tree_edge, side_edge - info, side_edge)
+    };
+    let (tree_edge, info_edge, side_edge) = columns(&sizes);
+    let strip = |x: f32| {
+        Rect::from_min_max(
+            pos2(x - GRAB / 2.0, area.min.y),
+            pos2(x + GRAB / 2.0, area.max.y),
+        )
+    };
+    let mut changes = Changes::default();
+    // Moves the share `set` stores to where the pointer is.
+    let mut drag = |ui: &mut Ui, name: &str, edge: f32, set: &dyn Fn(&mut PanelSizes, f32)| {
+        let drag = divider(ui, name, strip(edge), CursorIcon::ResizeHorizontal);
+        changes.stopped |= drag.stopped;
+        if let Some(pointer) = drag.pointer {
+            set(&mut sizes, pointer.x);
+            sizes = clamp_sizes(sizes, arrangement.window);
+        }
+    };
+    drag(ui, "tree_divider", tree_edge, &|sizes, x| {
+        sizes.tree = (x - area.min.x) / width;
+    });
+    if arrangement.info {
+        drag(ui, "info_divider", info_edge, &|sizes, x| {
+            sizes.info = (side_edge - x) / width;
+        });
+    }
+    if arrangement.sideview {
+        drag(ui, "side_divider", side_edge, &|sizes, x| {
+            sizes.sideview = (area.max.x - x) / width;
+        });
+    }
+    if sizes != arrangement.sizes {
+        changes.sizes = Some(sizes);
+    }
+    // The areas follow the shares as moved this frame.
+    let (tree_edge, info_edge, side_edge) = columns(&sizes);
+    let tree = Rect::from_min_max(area.min, pos2(tree_edge, area.max.y));
+    let list = Rect::from_min_max(pos2(tree_edge, area.min.y), pos2(info_edge, area.max.y));
+    let info = Rect::from_min_max(pos2(info_edge, area.min.y), pos2(side_edge, area.max.y));
+    let side = Rect::from_min_max(pos2(side_edge, area.min.y), area.max);
     pane(ui, tree, |ui| tree_pane(ui, view));
     pane(ui, list, |ui| list_pane(ui, view, notation));
-    pane(ui, info, |ui| info_pane(ui, view, notation, covers));
+    if arrangement.info {
+        pane(ui, info, |ui| info_pane(ui, view, notation, covers));
+    }
+    if arrangement.sideview {
+        ui.painter().rect_filled(side, 0.0, p.panel);
+        pane(ui, side, sideview);
+    }
+    // The tabs of folded panels sit at the bottom of the right edge, the sideview's
+    // outermost.
+    let mut bottom = area.max.y - 2.0;
+    let mut tab = |ui: &mut Ui, name: &str, right: f32, width: f32, change: ViewChange| {
+        let rect = Rect::from_min_size(
+            pos2(right - width, bottom - TAB_HEIGHT),
+            vec2(width, TAB_HEIGHT),
+        );
+        bottom -= TAB_HEIGHT + 2.0;
+        ui.put(rect, Button::new(RichText::new(name).small()))
+            .clicked()
+            .then_some(change)
+    };
+    if !arrangement.sideview {
+        changes.unfold = tab(
+            ui,
+            "sideview",
+            area.max.x,
+            62.0,
+            ViewChange::SetSideview(true),
+        );
+    }
+    if !arrangement.info {
+        let at = tab(ui, "info", side_edge, 40.0, ViewChange::SetInfoPanel(true));
+        changes.unfold = changes.unfold.or(at);
+    }
+    changes
 }
 
 fn pane(ui: &mut Ui, rect: Rect, add: impl FnOnce(&mut Ui)) {

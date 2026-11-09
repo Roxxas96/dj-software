@@ -6,6 +6,7 @@ use analysis::KeyNotation;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use library::{BrowserView, Focus, ListRow, TrackRow, TreeKind, TreeRow};
+use ui::browser::Arrangement;
 use ui::cover::Covers;
 
 fn tree_row(label: &str, depth: u8, kind: TreeKind) -> TreeRow {
@@ -67,7 +68,16 @@ fn draw(view: &BrowserView) -> Harness<'_> {
     let mut covers = Covers::default();
     let mut harness = Harness::builder()
         .with_size([1000.0, 300.0])
-        .build_ui(move |ui| ui::browser::show(ui, view, KeyNotation::default(), &mut covers));
+        .build_ui(move |ui| {
+            ui::browser::show(
+                ui,
+                view,
+                KeyNotation::default(),
+                &mut covers,
+                &Arrangement::default(),
+                |_| {},
+            );
+        });
     harness.run_steps(3);
     harness
 }
@@ -106,7 +116,16 @@ fn non_latin_text_draws_without_panicking() {
     let mut harness = Harness::builder()
         .with_size([1000.0, 300.0])
         .allow_missing_glyphs()
-        .build_ui(move |ui| ui::browser::show(ui, view, KeyNotation::default(), &mut covers));
+        .build_ui(move |ui| {
+            ui::browser::show(
+                ui,
+                view,
+                KeyNotation::default(),
+                &mut covers,
+                &Arrangement::default(),
+                |_| {},
+            );
+        });
     harness.run_steps(3);
     assert_eq!(harness.get_all_by_label("COMسN GO").count(), 2);
 }

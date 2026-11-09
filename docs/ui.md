@@ -72,6 +72,13 @@ like Ctrl-C in `play`.
   that is gone. An info panel shows the selected track. The own files of a folder that was
   never scanned are added and analysed in the background, so BPM and key fill in as they
   finish.
+- **Panels:** drag the dividers under the waveform lanes and the deck panels, and between
+  the tree, the list, the info panel and the sideview; the sizes are saved with the rest of the
+  view. The LAYOUT menu's Panels submenu folds the info panel and the sideview away, and a small
+  "info" or "sideview" tab at the browser's bottom right edge brings each back. The sideview
+  shows the sampler's 8 slots (lit when loaded, brighter while playing); it only displays. The
+  window will not shrink below 1024x700. Until a deck divider is dragged, the deck panels take
+  their layout's height; after that the dragged height applies to every layout.
 
 ## Browsing from the DDJ-SB3
 
