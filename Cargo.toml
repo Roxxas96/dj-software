@@ -47,6 +47,8 @@ jiff = "0.2.40"
 quick-xml = "0.42.0"
 # Free space on the USB stick before an export.
 fs4 = "1.1.0"
+# Percent-encodes the file paths in the Rekordbox XML.
+percent-encoding = "2"
 # Serato stores its cue tags as base64 inside a tag frame.
 base64 = "0.23"
 
