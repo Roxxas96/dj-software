@@ -24,7 +24,8 @@ use actions::{AppRequest, GridEditRequest};
 use analysis::KeyNotation;
 use anyhow::Context;
 use engine::{
-    Command, DeckCommand, DeckId, DeckSnapshot, EngineController, Grid, StemSet, TrackBuffer,
+    Command, DeckCommand, DeckId, DeckSnapshot, EngineController, Grid, HotcueSlot, StemSet,
+    TrackBuffer,
 };
 use library::{
     Analyzer, BrowserView, FailedWrite, GridEdit, KEY_NOTATION, Library, PendingTrack, TrackRow,
@@ -132,6 +133,9 @@ pub struct LibraryMode {
     refresh_wanted: bool,
     /// Set from another thread that changed the library: a refresh is wanted.
     changed_elsewhere: Arc<AtomicBool>,
+    /// The hotcues deleted in the latest round, as (track, slot): their colour and name
+    /// are gone from the library.
+    deleted_hotcues: Vec<(i64, HotcueSlot)>,
     last_refresh: Option<Instant>,
     /// The status lines should be redrawn now.
     dirty: bool,
@@ -147,6 +151,12 @@ impl LibraryMode {
     /// the decks' rows are then read again, within a second.
     pub fn changed_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.changed_elsewhere)
+    }
+
+    /// The hotcues deleted in the latest round, as (track, slot), for the window to stop
+    /// showing their colour and name.
+    pub fn deleted_hotcues(&self) -> &[(i64, HotcueSlot)] {
+        &self.deleted_hotcues
     }
 
     /// A read-only connection to the library.
@@ -233,6 +243,7 @@ impl LibraryMode {
             last_poll: Instant::now(),
             refresh_wanted: false,
             changed_elsewhere: Arc::default(),
+            deleted_hotcues: Vec::new(),
             last_refresh: None,
             dirty: true,
         };
@@ -562,6 +573,7 @@ impl LibraryMode {
     }
 
     fn sync_cues(&mut self, engine: &mut EngineController, printer: &Printer) {
+        self.deleted_hotcues.clear();
         for deck in DeckId::ALL {
             self.sync_deck(deck, engine, printer);
         }
@@ -684,10 +696,13 @@ impl LibraryMode {
                     frames: hotcue.frames,
                     loop_frames: hotcue.loop_frames,
                 },
-                MemoryAction::DeleteHotcue(slot) => WriteOp::DeleteHotcue {
-                    track: id,
-                    slot: slot.number(),
-                },
+                MemoryAction::DeleteHotcue(slot) => {
+                    self.deleted_hotcues.push((id, slot));
+                    WriteOp::DeleteHotcue {
+                        track: id,
+                        slot: slot.number(),
+                    }
+                }
             };
             if let Some((track, spot, value)) = memory_write(&op) {
                 self.latest_memory.insert((track, spot), value);
@@ -1496,6 +1511,43 @@ mod tests {
         mode.sync_cues(&mut engine, &printer);
         assert_eq!(stored_hotcues(&mode), [None; engine::HOTCUES]);
         assert_eq!(mode.lib.failed_write_count(), 0);
+        mode.shutdown(&mut engine, &printer);
+        printer.finish();
+    }
+
+    #[test]
+    fn a_deleted_hotcue_is_reported_for_one_round() {
+        let (_dir, mut mode, mut engine, mut renderer, printer) = mode_rendering();
+        add_track_7(&mode);
+        let d1 = DeckId::new(0).unwrap();
+        load_7(&mut mode, 0, &mut engine, &printer);
+        render(&mut renderer);
+        mode.sync_cues(&mut engine, &printer);
+        let slot2 = HotcueSlot::new(2).unwrap();
+        let send = |engine: &mut EngineController, command| {
+            engine.send(Command::Deck(d1, command)).unwrap();
+        };
+        send(
+            &mut engine,
+            DeckCommand::SetHotcue(slot2, Some(engine::Hotcue::point(100.0))),
+        );
+        render(&mut renderer);
+        mode.sync_cues(&mut engine, &printer);
+        assert!(mode.deleted_hotcues().is_empty());
+
+        send(&mut engine, DeckCommand::HotcueDelete(slot2));
+        render(&mut renderer);
+        mode.sync_cues(&mut engine, &printer);
+        assert_eq!(mode.deleted_hotcues(), [(7, slot2)]);
+        // Set again elsewhere: a new hotcue, nothing more deleted.
+        send(
+            &mut engine,
+            DeckCommand::SetHotcue(slot2, Some(engine::Hotcue::point(500.0))),
+        );
+        render(&mut renderer);
+        mode.sync_cues(&mut engine, &printer);
+        assert!(mode.deleted_hotcues().is_empty());
+        assert_eq!(stored_hotcues(&mode)[1], Some(500.0));
         mode.shutdown(&mut engine, &printer);
         printer.finish();
     }

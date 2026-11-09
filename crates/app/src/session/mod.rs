@@ -322,6 +322,7 @@ fn run_session(
             parts.take(line);
         }
         parts.settle_view(Some((pass.state.waveform_zoom, pass.state.layout_steps)));
+        parts.forget_deleted_marks(pass.library);
         let now = Instant::now();
         if last_publish.is_some_and(|last| now.duration_since(last) < PUBLISH_EVERY) {
             return;
