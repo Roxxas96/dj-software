@@ -521,9 +521,18 @@ mod tests {
             .send(UiCommand::Action(beat_jump, actions::Input::Press))
             .unwrap();
         window.send(UiCommand::Zoom(1)).unwrap();
-        while shared.frame.latest().control.sides[0].pad_mode != actions::PadMode::BeatJump
-            || shared.frame.latest().view.waveform_beats == 16.0
-        {
+        // A host without a MIDI backend (CI's Linux runners have no /dev/snd/seq) keeps the
+        // session waiting for it: the zoom still applies, but actions need the controller
+        // loop, so they are only checked where MIDI opens.
+        let applied = |frame: &ControlFrame| {
+            let no_midi = frame
+                .events
+                .iter()
+                .any(|(_, text)| text.starts_with("cannot open MIDI"));
+            frame.view.waveform_beats != 16.0
+                && (no_midi || frame.control.sides[0].pad_mode == actions::PadMode::BeatJump)
+        };
+        while !applied(&shared.frame.latest()) {
             assert!(
                 began.elapsed() < Duration::from_secs(10),
                 "the window's commands were never applied"
