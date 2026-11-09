@@ -81,10 +81,15 @@ impl Lanes {
             head.observe(snapshot, *rendered_at);
         }
         let snapshots = read.map(|(snapshot, _)| snapshot);
-        let shown = lanes(
-            Side::ALL.map(|side| frame.control.sides[side.index()].active_deck),
-            snapshots.each_ref().map(|s| s.playing),
-        );
+        // The 4-Decks view shows every deck, playing or not.
+        let shown = if frame.view.four_decks {
+            DeckId::ALL.to_vec()
+        } else {
+            lanes(
+                Side::ALL.map(|side| frame.control.sides[side.index()].active_deck),
+                snapshots.each_ref().map(|s| s.playing),
+            )
+        };
         let (area, _) = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
         let height = area.height() / shown.len() as f32;
         for (row, deck) in shown.into_iter().enumerate() {
