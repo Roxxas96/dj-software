@@ -6,7 +6,7 @@ mod plan;
 pub mod serato;
 pub mod timing;
 
-pub use files::{copy_atomic, remove_leftovers, write_atomic};
+pub use files::{copy_atomic, remove_leftovers, remove_regular_file, write_atomic};
 pub use layout::{
     MANIFEST, MUSIC_DIR, Manifest, OJ_DIR, PART_SUFFIX, SPACE_MARGIN, safe_component, stick_paths,
 };
