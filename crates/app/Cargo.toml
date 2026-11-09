@@ -28,6 +28,7 @@ dunce.workspace = true
 library = { path = "../library" }
 stems = { path = "../stems" }
 toml.workspace = true
+toml_edit.workspace = true
 analysis = { path = "../analysis" }
 ui = { path = "../ui" }
 

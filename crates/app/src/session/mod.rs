@@ -6,6 +6,7 @@
 mod commands;
 mod detail;
 mod frame;
+mod settings;
 mod view;
 
 use std::cell::RefCell;
@@ -45,6 +46,8 @@ struct Shared {
     monitor: Published<Option<EngineMonitor>>,
     /// Where the window's view state is kept; `None` keeps nothing.
     state_path: Option<PathBuf>,
+    /// The configuration file the settings are saved to; `None` saves none.
+    config_path: Option<PathBuf>,
 }
 
 /// The open audio output with the engine it plays.
@@ -69,6 +72,9 @@ pub fn run_window(config_path: Option<&Path>) -> anyhow::Result<()> {
         frame: Published::new(ControlFrame::default()),
         monitor: Published::new(None),
         state_path: state_path(config_path),
+        config_path: config_path
+            .map(Path::to_owned)
+            .or_else(crate::config::default_path),
     };
     let (commands_tx, commands) = channel();
     let session = {
@@ -225,6 +231,9 @@ fn run_session(
     let printer = Printer::to_channel(lines_tx);
     let mut parts = FrameParts::new(config);
     parts.view = view_store(config, shared);
+    if let Some(path) = shared.config_path.clone() {
+        parts.set_settings(settings::Settings::load(path, config));
+    }
     parts.detail = Some(DetailJobs::new(library.library()));
     parts.samples_loaded = start.samples_loaded;
     for text in start.events.drain(..) {
@@ -421,6 +430,7 @@ mod tests {
             frame: Published::new(ControlFrame::default()),
             monitor: Published::new(None),
             state_path: None,
+            config_path: None,
         };
         let quit = AtomicBool::new(false);
         let (_window, commands) = channel();
@@ -466,6 +476,7 @@ mod tests {
             frame: Published::new(ControlFrame::default()),
             monitor: Published::new(None),
             state_path: None,
+            config_path: None,
         };
         let quit = Arc::new(AtomicBool::new(false));
         let (window, commands) = channel();
