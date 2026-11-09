@@ -213,6 +213,13 @@ Owner, 2026-11-08: "very good for a first draft. I like the look of it and every
 smooth." The window, the waveforms and the SB3 mirroring work as a prototype. The owner has
 tweaks in mind and will bring them to the next plans.
 
+### Hands-on check (plan 10: customising the window)
+
+Owner, 2026-11-09: "Check went well, i so far very happy." The four layouts from the menu and
+from `ui.layout`, the light scheme, the waveform styles and positions, the info jog, the beat
+counter and the time display, 4-Decks, the panel dividers and folds kept across a restart, the
+pad and FX dropdowns, and the settings window all worked.
+
 ## The SB3's own pad routines
 
 In FX FADE, PAD SCRATCH and TRANS (SHIFT + SAMPLER) the SB3 runs routines of its own on
