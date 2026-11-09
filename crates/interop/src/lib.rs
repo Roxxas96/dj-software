@@ -1,8 +1,14 @@
-//! Reads other DJ software's data so it can be imported; nothing here writes to it.
+//! Reads other DJ software's data and imports it into the library; nothing here writes
+//! to the other software's data.
 
+pub mod import;
 pub mod virtualdj;
 
+pub use import::{
+    ImportPlan, ImportReport, PlaylistAction, PlaylistImport, Resolution, TrackImport, apply,
+};
+
 pub use virtualdj::{
-    InteropError, VdjPlaylist, VdjPoi, VdjSong, VdjSources, find_sources, read_database,
-    read_playlists,
+    InteropError, VdjPlaylist, VdjPoi, VdjSong, VdjSources, find_sources, plan_virtualdj,
+    read_database, read_playlists,
 };

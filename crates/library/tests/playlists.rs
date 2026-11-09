@@ -750,3 +750,31 @@ fn playlist_edit_boundaries() {
     let ids: Vec<i64> = playlists(&lib).into_iter().map(|s| s.id).collect();
     assert_eq!(ids, [q, r, p]);
 }
+
+#[test]
+fn create_playlist_with_tracks_in_one_op() {
+    let (_dir, lib) = open();
+    let ids = n_tracks(&lib, 3);
+    let outcome = lib
+        .writer()
+        .submit_wait(WriteOp::CreatePlaylistWith {
+            name: "Set".into(),
+            tracks: vec![ids[2], ids[0], ids[2]],
+        })
+        .unwrap();
+    let WriteOutcome::Created { id } = outcome else {
+        panic!("unexpected outcome {outcome:?}");
+    };
+    assert_eq!(order(&lib, id), vec![ids[2], ids[0], ids[2]]);
+    assert_eq!(playlists(&lib)[0].name, "Set");
+
+    let err = lib
+        .writer()
+        .submit_wait(WriteOp::CreatePlaylistWith {
+            name: "Bad".into(),
+            tracks: vec![ids[0], 9999],
+        })
+        .unwrap_err();
+    assert!(matches!(err, LibraryError::NoSuchTrack(9999)), "{err:?}");
+    assert_eq!(playlists(&lib).len(), 1, "a failed create leaves nothing");
+}
