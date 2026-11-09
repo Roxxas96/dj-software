@@ -220,6 +220,14 @@ from `ui.layout`, the light scheme, the waveform styles and positions, the info 
 counter and the time display, 4-Decks, the panel dividers and folds kept across a restart, the
 pad and FX dropdowns, and the settings window all worked.
 
+### Hands-on check (plan 11a: saved loops and the VirtualDJ import)
+
+Owner, 2026-11-09: "Hands on test are all successful." Saving a loop on an empty hotcue pad
+and playing it back (kept across a restart), the `library import-vdj` dry run, the import in
+the window with Merge, the test track's coloured and named hotcues and its 8-beat loop, hotcue
+positions matching VirtualDJ, and a second import changing nothing all worked. The owner
+noticed that loading a track takes a few seconds.
+
 ## The SB3's own pad routines
 
 In FX FADE, PAD SCRATCH and TRANS (SHIFT + SAMPLER) the SB3 runs routines of its own on
