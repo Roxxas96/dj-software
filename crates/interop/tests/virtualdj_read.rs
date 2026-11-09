@@ -174,9 +174,13 @@ fn playlists_keep_their_order_and_follow_the_order_file() {
         got[2].paths,
         [PathBuf::from("/m/a1.mp3"), PathBuf::from("/m/a2.mp3")]
     );
+    // A root-relative `/abs/two.mp3` resolves against the playlist folder's drive,
+    // so on Windows it becomes `C:/abs/two.mp3`. Joining onto the root avoids
+    // clippy's `join_absolute_paths` lint.
+    let root = lists.ancestors().last().unwrap();
     assert_eq!(
         got[3].paths,
-        [lists.join("songs/one.mp3"), PathBuf::from("/abs/two.mp3")]
+        [lists.join("songs/one.mp3"), root.join("abs/two.mp3")]
     );
 
     let (unordered, _) = read_playlists(&[lists], None).unwrap();
