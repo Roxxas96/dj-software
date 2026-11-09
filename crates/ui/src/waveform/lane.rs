@@ -40,8 +40,6 @@ const NAME_GAP: f32 = 3.0;
 const NAME_CHARS: usize = 14;
 /// How opaque a saved loop's band is.
 const SAVED_LOOP_ALPHA: u8 = 0x50;
-/// The brightness below which a flag's number is white rather than the background's.
-const FLAG_DARK: f32 = 0.35;
 /// The zoom buttons' side, and their gap from the area's top right corner.
 const ZOOM_BUTTON: f32 = 18.0;
 const ZOOM_MARGIN: f32 = 4.0;
@@ -318,12 +316,7 @@ impl Lane<'_> {
             if x + FLAG_SIZE < rect.left() || x > rect.right() {
                 continue;
             }
-            let flag = self.hotcue_colour(slot, p);
-            let number = if theme::luminance(flag) < FLAG_DARK {
-                Color32::WHITE
-            } else {
-                p.background
-            };
+            let number = flag_number(self.hotcue_colour(slot, p));
             painter.text(
                 pos2(x + FLAG_SIZE / 2.0, rect.top() + FLAG_SIZE / 2.0),
                 Align2::CENTER_CENTER,
@@ -349,6 +342,12 @@ impl Lane<'_> {
             }
         }
     }
+}
+
+/// The colour of the number on a hotcue flag of colour `flag`, from the flag alone: the
+/// scheme's background could be as bright as the flag.
+fn flag_number(flag: Color32) -> Color32 {
+    theme::text_on(flag)
 }
 
 /// `name` cut to the length a flag has room for (a slice: nothing is allocated).
@@ -454,6 +453,23 @@ mod tests {
 
     fn deck(number: usize) -> DeckId {
         DeckId::new(number - 1).unwrap()
+    }
+
+    #[test]
+    fn flag_numbers_read_on_any_colour_in_both_schemes() {
+        let saved = [
+            Some(Color32::from_rgb(0x00, 0xff, 0x00)),
+            Some(Color32::from_rgb(0xff, 0x00, 0x00)),
+            Some(Color32::from_rgb(0x00, 0x00, 0xff)),
+            None,
+        ];
+        for p in [Palette::DARK, Palette::LIGHT] {
+            for colour in saved {
+                let flag = p.mark(colour);
+                let ratio = theme::contrast(flag_number(flag), flag);
+                assert!(ratio >= 4.5, "{colour:?} on {:?}: {ratio:.2}", p.background);
+            }
+        }
     }
 
     #[test]
