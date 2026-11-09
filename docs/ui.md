@@ -115,8 +115,15 @@ default.
 | Pro | Everything | Everything | 38 % |
 | Performance | No jog; the pads, FX and the rest stay | Everything | 26 % |
 
-Until a deck divider is dragged, the deck panels take their layout's height; after that the
-dragged height applies to every layout.
+The deck panels never get less height than every one of their areas needs (about 300 points
+with the jog or the pads, a little less without the overview): in a small window the decks
+take more than their share, so the pads, the pad mode, CUE, PLAY, SYNC and the loop always
+show. Performance's 26 % is below that up to a window about 1160 points high. The mixer's
+knobs shrink to the height and width their strip gets.
+
+Until the deck divider itself is dragged, the deck panels take their layout's height;
+dragging another divider leaves that alone. Once the deck divider is dragged, its height
+applies to every layout.
 
 ## 4-Decks
 
@@ -124,7 +131,10 @@ The 4-Decks entry shows all four decks at once, whatever the layout: two compact
 each side, in the order deck 1 above deck 3 on the left and deck 2 above deck 4 on the right,
 and the mixer with four strips ordered 3, 1, 2, 4. The compact panels keep the overview,
 the loop controls, the EQ and the meters; they have no FX, pads, jog or tempo slider (the
-tempo slider, the states and the transport share one row) and take 40 % of the height. The
+transport, the states and the loop share one row) and take 40 % of the height, or what two
+stacked panels need when that is more. While 4-Decks is on, the layout cannot be chosen (the
+LAYOUT menu's layouts and the Interface page's tiles are greyed out, and say why), nor can
+the Jogwheel Display, which Performance greys out too. The
 waveform lanes show all four decks. The deck a controller side drives is still chosen on the
 controller (DECK buttons).
 
@@ -132,7 +142,10 @@ controller (DECK buttons).
 
 Drag the dividers under the waveform lanes and the deck panels, and between the browser's
 tree, list, info panel and the sideview; each share is kept between 5 % and 70 % of the
-window, and the window will not shrink below 1024x700. The sizes are saved.
+window and at least 80 points, the lanes and the deck panels together take at most 85 % of
+the height, and the tree, the info panel and the sideview at most 80 % of the width. The
+window will not shrink below 1024x700. A click on a divider that does not move it changes
+nothing. The sizes are saved.
 
 The Panels submenu folds the info panel and the sideview away, and a small "info" or
 "sideview" tab at the browser's bottom right edge brings each back. The sideview shows the
@@ -191,14 +204,18 @@ The gear at the left of the top bar opens a Settings window (about 70 % of the s
 closable) with a sidebar, as in VirtualDJ:
 
 - **Audio:** a dropdown of the output devices (listed once at launch), and the `audio.*` settings.
-- **Interface:** the four layouts as tiles, each a sketch of the sections it shows; click one to switch.
+- **Interface:** the four layouts as tiles, each a sketch of the sections it shows; click one
+  to switch (not while 4-Decks is on).
 - **Controllers:** a dropdown of the built-in mappings, and `controller.mapping`.
 - **Options:** every `config.toml` setting ([config.md](config.md)) with its value editor
   (checkbox, dropdown, or a text field sent on Enter or when it loses focus) and what it
   does. The search box matches the key, group or help; "Show modified" lists the settings
   that differ from their default; "Reset all" asks first and removes every listed key from
   the file. A setting that applies at the next launch says "applies at next launch" once
-  saved, and a value the file would not accept shows why on its row and changes nothing.
+  saved, and a value the file would not accept shows why on its row and changes nothing (a
+  "Reset all" the file cannot take says why in the events). Text typed and not yet sent is
+  dropped when the window closes. Before the session has read the settings the page says so
+  (or shows the error that stopped it).
 - **Later:** what will come (recording, broadcast, automix); nothing to set yet.
 
 Some settings apply at once: the crossfader, the effects, the sampler volume, the pad

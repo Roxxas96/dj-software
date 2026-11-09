@@ -6,7 +6,7 @@ use egui::{Align2, CornerRadius, FontId, Rect, Sense, Stroke, StrokeKind, Ui, Ve
 
 use crate::command::{UiCommand, ViewChange};
 use crate::layout::{self, LANES_SHARE};
-use crate::menu::layout_name;
+use crate::menu::{FOUR_DECKS_HINT, layout_name};
 use crate::theme;
 use crate::view::{Layout, ViewState};
 
@@ -14,13 +14,20 @@ const TILE: Vec2 = Vec2::new(170.0, 130.0);
 /// The room under a tile's sketch for its name.
 const NAME_HEIGHT: f32 = 22.0;
 
+/// The tiles; while the 4-Decks view is on they cannot be chosen, and say why.
 pub fn show(ui: &mut Ui, view: &ViewState, commands: &Sender<UiCommand>) {
-    ui.horizontal_wrapped(|ui| {
-        for layout in Layout::ALL {
-            if tile(ui, *layout, view.layout == *layout) {
-                let _ = commands.send(UiCommand::View(ViewChange::SetLayout(*layout)));
+    if view.four_decks {
+        let dim = theme::palette(ui.ctx()).text_dim;
+        ui.label(egui::RichText::new(FOUR_DECKS_HINT).color(dim));
+    }
+    ui.add_enabled_ui(!view.four_decks, |ui| {
+        ui.horizontal_wrapped(|ui| {
+            for layout in Layout::ALL {
+                if tile(ui, *layout, view.layout == *layout) {
+                    let _ = commands.send(UiCommand::View(ViewChange::SetLayout(*layout)));
+                }
             }
-        }
+        });
     });
 }
 
@@ -28,6 +35,7 @@ pub fn show(ui: &mut Ui, view: &ViewState, commands: &Sender<UiCommand>) {
 fn tile(ui: &mut Ui, layout: Layout, selected: bool) -> bool {
     let name = layout_name(layout);
     let (rect, response) = ui.allocate_exact_size(TILE, Sense::click());
+    let response = response.on_disabled_hover_text(FOUR_DECKS_HINT);
     response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, name));
     let p = theme::palette(ui.ctx());
     let painter = ui.painter();

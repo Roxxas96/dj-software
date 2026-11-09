@@ -10,6 +10,12 @@ use crate::command::{UiCommand, ViewChange};
 use crate::theme;
 use crate::view::{ColourScheme, JogDisplay, Layout, ViewState, WaveformPosition, WaveformStyle};
 
+/// Why the layouts cannot be chosen while the 4-Decks view is on.
+pub(crate) const FOUR_DECKS_HINT: &str =
+    "4-Decks is on: its compact panels show whatever the layout. Turn it off to choose one.";
+/// Why the jog's display cannot be chosen.
+const NO_JOG_HINT: &str = "This view has no jog wheel: 4-Decks and Performance hide it.";
+
 /// Draws the LAYOUT button, with the current layout's name beside it, and its menu.
 pub fn show(ui: &mut Ui, view: &ViewState, commands: &Sender<UiCommand>) {
     let dim = theme::palette(ui.ctx()).text_dim;
@@ -23,9 +29,11 @@ fn menu(ui: &mut Ui, view: &ViewState, commands: &Sender<UiCommand>) {
         let _ = commands.send(UiCommand::View(change));
     };
     let choose = |ui: &mut Ui, selected: bool, name: &str, change: ViewChange| {
-        if ui.radio(selected, name).clicked() {
+        let radio = ui.radio(selected, name);
+        if radio.clicked() {
             send(change);
         }
+        radio
     };
     let toggle = |ui: &mut Ui, on: bool, name: &str, change: fn(bool) -> ViewChange| {
         let mut value = on;
@@ -34,14 +42,17 @@ fn menu(ui: &mut Ui, view: &ViewState, commands: &Sender<UiCommand>) {
         }
     };
 
-    for layout in Layout::ALL {
-        choose(
-            ui,
-            view.layout == *layout,
-            layout_name(*layout),
-            ViewChange::SetLayout(*layout),
-        );
-    }
+    ui.add_enabled_ui(!view.four_decks, |ui| {
+        for layout in Layout::ALL {
+            choose(
+                ui,
+                view.layout == *layout,
+                layout_name(*layout),
+                ViewChange::SetLayout(*layout),
+            )
+            .on_disabled_hover_text(FOUR_DECKS_HINT);
+        }
+    });
     ui.separator();
     ui.menu_button("Colour Scheme", |ui| {
         for (scheme, name) in [(ColourScheme::Dark, "Dark"), (ColourScheme::Light, "Light")] {
@@ -81,15 +92,21 @@ fn menu(ui: &mut Ui, view: &ViewState, commands: &Sender<UiCommand>) {
         }
         toggle(ui, view.overview, "Overview", ViewChange::SetOverview);
     });
-    ui.menu_button("Jogwheel Display", |ui| {
-        for (display, name) in [(JogDisplay::Plain, "Plain"), (JogDisplay::Info, "Info")] {
-            choose(
-                ui,
-                view.jog_display == display,
-                name,
-                ViewChange::SetJogDisplay(display),
-            );
-        }
+    // The 4-Decks view and Performance have no jog to show it on.
+    let jog = !view.four_decks && view.layout != Layout::Performance;
+    ui.add_enabled_ui(jog, |ui| {
+        ui.menu_button("Jogwheel Display", |ui| {
+            for (display, name) in [(JogDisplay::Plain, "Plain"), (JogDisplay::Info, "Info")] {
+                choose(
+                    ui,
+                    view.jog_display == display,
+                    name,
+                    ViewChange::SetJogDisplay(display),
+                );
+            }
+        })
+        .response
+        .on_disabled_hover_text(NO_JOG_HINT);
     });
     ui.menu_button("Beat Counter", |ui| {
         toggle(ui, view.beat_counter, "On", ViewChange::SetBeatCounter);

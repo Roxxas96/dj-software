@@ -31,10 +31,7 @@ pub fn show(
             *settings_open = !*settings_open;
         }
         ui.separator();
-        match &frame.error {
-            Some(error) => ui.label(RichText::new(error.as_str()).color(p.error).strong()),
-            None => ui.label(frame.status_line(Instant::now())),
-        };
+        // The right-hand labels first; the status takes what they leave, cut short.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             match &frame.audio {
                 Ok(device) => ui.label(device.as_str()),
@@ -52,6 +49,14 @@ pub fn show(
             ui.separator();
             let peaks = monitor.map_or([0.0; 2], |m| m.meters().master_peak);
             master_meter(ui, peaks);
+            ui.separator();
+            let status = match &frame.error {
+                Some(error) => RichText::new(error.as_str()).color(p.error).strong(),
+                None => RichText::new(frame.status_line(Instant::now())),
+            };
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.add(egui::Label::new(status).truncate());
+            });
         });
     });
 }

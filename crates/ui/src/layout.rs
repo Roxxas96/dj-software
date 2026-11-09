@@ -5,7 +5,7 @@ use engine::DeckId;
 
 use egui::Vec2;
 
-use crate::view::{Layout, MAX_SHARE, MIN_SHARE, PanelSizes};
+use crate::view::{Layout, MAX_SHARE, MIN_SHARE, PanelSizes, ViewState};
 
 /// The share of the window's height the waveform lanes take, whatever the layout.
 pub const LANES_SHARE: f32 = 0.22;
@@ -31,8 +31,8 @@ pub struct Sections {
     pub overview: bool,
     pub mixer_eq: bool,
     pub mixer_meters: bool,
-    /// The deck panels are squeezed to fit two on a side (the 4-Decks view): the tempo
-    /// slider, the states and the transport share one row.
+    /// The deck panels are squeezed to fit two on a side (the 4-Decks view): no tempo
+    /// slider, and the transport, the states and the loop share one row.
     pub compact: bool,
     /// The browser's share of the window's height.
     pub browser_share: f32,
@@ -78,11 +78,14 @@ pub fn sections(layout: Layout) -> Sections {
 
 /// `sizes` kept within what `window` can show: each share at least [`MIN_SHARE`] and
 /// [`MIN_POINTS`] (of the height for the lanes and decks, of the width for the rest) and
-/// at most [`MAX_SHARE`]; the lanes and decks at most 0.85 together, and the tree, info
-/// panel and sideview 0.8. A share that is not a number goes back to its default.
-pub fn clamp_sizes(sizes: PanelSizes, window: Vec2) -> PanelSizes {
+/// at most [`MAX_SHARE`]; the decks' at least `min_decks` points too, so every area of
+/// the deck panels shows. The lanes and decks take at most 0.85 of the height together
+/// and the tree, info panel and sideview 0.8 of the width. A
+/// share that is not a number goes back to its default.
+pub fn clamp_sizes(sizes: PanelSizes, window: Vec2, min_decks: f32) -> PanelSizes {
     let defaults = PanelSizes::default();
     let rows = MIN_SHARE.max(MIN_POINTS / window.y.max(1.0));
+    let decks_min = rows.max(min_decks / window.y.max(1.0)).min(MAX_ROWS - rows);
     let columns = MIN_SHARE.max(MIN_POINTS / window.x.max(1.0));
     let one = |value: f32, default: f32, min: f32| {
         let value = if value.is_finite() { value } else { default };
@@ -91,9 +94,9 @@ pub fn clamp_sizes(sizes: PanelSizes, window: Vec2) -> PanelSizes {
     let [lanes, decks] = fit(
         [
             one(sizes.lanes, defaults.lanes, rows),
-            one(sizes.decks, defaults.decks, rows),
+            one(sizes.decks, defaults.decks, decks_min),
         ],
-        rows,
+        [rows, decks_min],
         MAX_ROWS,
     );
     let [tree, info, sideview] = fit(
@@ -102,7 +105,7 @@ pub fn clamp_sizes(sizes: PanelSizes, window: Vec2) -> PanelSizes {
             one(sizes.info, defaults.info, columns),
             one(sizes.sideview, defaults.sideview, columns),
         ],
-        columns,
+        [columns; 3],
         MAX_COLUMNS,
     );
     PanelSizes {
@@ -114,17 +117,39 @@ pub fn clamp_sizes(sizes: PanelSizes, window: Vec2) -> PanelSizes {
     }
 }
 
-/// `shares` (each at least `min`) shrunk together, above their minimum, until they add up
-/// to at most `cap`.
-fn fit<const N: usize>(shares: [f32; N], min: f32, cap: f32) -> [f32; N] {
+/// The shares `window` draws for the session's `sizes` with `sections`: the decks' share
+/// still at its default means the viewer never set it, and the layout's own applies.
+pub fn drawn_sizes(sizes: PanelSizes, sections: &Sections, window: Vec2) -> PanelSizes {
+    let mut sizes = sizes;
+    if sizes.decks == PanelSizes::default().decks {
+        sizes.decks = sections.decks_share;
+    }
+    clamp_sizes(sizes, window, crate::deck::row_height(sections))
+}
+
+/// `shares` (each at least its `mins`) shrunk together, above their minimum, until they
+/// add up to at most `cap`.
+fn fit<const N: usize>(shares: [f32; N], mins: [f32; N], cap: f32) -> [f32; N] {
     let sum: f32 = shares.iter().sum();
     if sum <= cap {
         return shares;
     }
-    let floor = min * N as f32;
+    let floor: f32 = mins.iter().sum();
     // A hair under the cap so rounding cannot put the sum over it.
     let keep = ((cap - 1e-5 - floor) / (sum - floor)).max(0.0);
-    shares.map(|share| min + (share - min) * keep)
+    std::array::from_fn(|i| mins[i] + (shares[i] - mins[i]) * keep)
+}
+
+/// The sections the window shows for `view`: the 4-Decks view's or the layout's, with the
+/// overview only when `view` has it on.
+pub fn shown_sections(view: &ViewState) -> Sections {
+    let mut sections = if view.four_decks {
+        four_deck_sections()
+    } else {
+        sections(view.layout)
+    };
+    sections.overview &= view.overview;
+    sections
 }
 
 /// The sections of the 4-Decks view, whatever the layout: compact panels with the
@@ -186,6 +211,7 @@ mod tests {
                         sideview: value,
                     },
                     window,
+                    0.0,
                 );
                 let rows = [sizes.lanes, sizes.decks];
                 let columns = [sizes.tree, sizes.info, sizes.sideview];
@@ -202,7 +228,7 @@ mod tests {
         }
         // Sizes already within the limits are left alone.
         let fine = PanelSizes::default();
-        assert_eq!(clamp_sizes(fine, vec2(1440.0, 900.0)), fine);
+        assert_eq!(clamp_sizes(fine, vec2(1440.0, 900.0), 0.0), fine);
     }
 
     #[test]

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, channel};
 
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use ui::{ControlFrame, Layout, SettingRow, UiCommand, ViewChange};
 
 fn row(key: &str, category: &'static str, value: &str, default: &str) -> SettingRow {
@@ -198,4 +198,77 @@ fn default_output_clears_the_device() {
             value: String::new()
         }]
     );
+}
+
+#[test]
+fn four_decks_disables_the_interface_tiles() {
+    let mut frame = frame(rows());
+    frame.view.four_decks = true;
+    let (mut harness, asked) = open(&frame);
+    harness.get_by_label("Interface").click();
+    harness.run_steps(3);
+    harness.get_by_label_contains("4-Decks is on");
+    let tile = harness.get_by_label("Performance");
+    assert!(tile.accesskit_node().is_disabled());
+    tile.click();
+    harness.run_steps(3);
+    assert_eq!(asked.try_iter().collect::<Vec<_>>(), []);
+}
+
+#[test]
+fn options_without_settings_say_so() {
+    let frame = frame(Vec::new());
+    let (mut harness, _) = open(&frame);
+    harness.get_by_label("Options").click();
+    harness.run_steps(3);
+    harness.get_by_label("settings are not available yet");
+    drop(harness);
+    let stopped = ControlFrame {
+        error: Some("the session stopped: no audio".to_owned()),
+        ..ControlFrame::default()
+    };
+    let (mut harness, _) = open(&stopped);
+    harness.get_by_label("Options").click();
+    harness.run_steps(3);
+    // The top bar and the browser's place show it too.
+    assert_eq!(
+        harness
+            .get_all_by_label("the session stopped: no audio")
+            .count(),
+        3
+    );
+}
+
+#[test]
+fn closing_the_window_drops_what_was_typed() {
+    let frame = frame(vec![row("stems.kicks_hz", "Stems", "417", "300")]);
+    let mut harness = Harness::builder()
+        .with_size([1440.0, 900.0])
+        .build_ui_state(
+            |ui, screen: &mut ui::Screen| ui::root(ui, &frame, None, screen),
+            ui::Screen::default(),
+        );
+    harness.state_mut().settings.open = true;
+    harness.run_steps(3);
+    harness.get_by_label("Options").click();
+    harness.run_steps(3);
+    let field = |value: &'static str| {
+        move |node: &egui_kittest::kittest::AccessKitNode<'_>| {
+            node.role() == egui::accesskit::Role::TextInput
+                && node.value().as_deref() == Some(value)
+        }
+    };
+    harness.get_by(field("417")).focus();
+    harness.run_steps(2);
+    harness.get_by(field("417")).type_text("9");
+    harness.run_steps(2);
+    harness.get_by(field("4179"));
+    // Closed as its close button does, while the field still has the focus.
+    harness.state_mut().settings.open = false;
+    harness.run_steps(3);
+    harness.state_mut().settings.open = true;
+    harness.run_steps(3);
+    harness.get_by_label("Options").click();
+    harness.run_steps(3);
+    harness.get_by(field("417"));
 }

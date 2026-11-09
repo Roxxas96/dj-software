@@ -24,6 +24,12 @@ const BOTTOM_HEIGHT: f32 = 56.0;
 const KNOB_RADIUS: f32 = 15.0;
 const KNOB_STEP: f32 = 42.0;
 const HEADER_HEIGHT: f32 = 24.0;
+/// The headphone button's width when the strip has room for it.
+const PFL_WIDTH: f32 = 40.0;
+/// Between the deck's name and the headphone button.
+const HEADER_GAP: f32 = 4.0;
+const CAPTION_FONT: f32 = 10.0;
+const CAPTION_HEIGHT: f32 = 10.0;
 const FADER_WIDTH: f32 = 14.0;
 const METER_WIDTH: f32 = 8.0;
 /// A knob's travel, either side of straight up, in radians.
@@ -133,12 +139,82 @@ fn split(rect: Rect, half: f32) -> [Rect; 2] {
     ]
 }
 
-/// A small caption centred in `rect`.
+/// A small caption centred in `rect`, cut short when it does not fit.
 fn caption(ui: &mut Ui, rect: Rect, text: &str, colour: Color32) {
     ui.put(
         rect,
-        Label::new(RichText::new(text).size(10.0).color(colour)).selectable(false),
+        Label::new(RichText::new(text).size(CAPTION_FONT).color(colour))
+            .selectable(false)
+            .truncate(),
     );
+}
+
+/// Where the parts of a channel strip go.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StripLayout {
+    /// The deck's name.
+    pub name: Rect,
+    /// The headphone (PFL) button.
+    pub pfl: Rect,
+    /// The knobs' centres, top to bottom.
+    pub knobs: Vec<Pos2>,
+    pub knob_radius: f32,
+    /// Each knob's caption, under it.
+    pub captions: Vec<Rect>,
+    /// The fader's travel.
+    pub fader: Rect,
+    /// The level meter, when the strip has one.
+    pub meter: Option<Rect>,
+}
+
+/// Lays out a strip of `knobs` knobs in `rect`, the knobs as large as the strip's height
+/// and width let them be (at most [`KNOB_RADIUS`]).
+pub fn strip_layout(rect: Rect, knobs: usize, meter: bool) -> StripLayout {
+    let inner = rect.shrink2(vec2(6.0, 4.0));
+    let header = Rect::from_min_size(inner.min, vec2(inner.width(), HEADER_HEIGHT));
+    let pfl_width = PFL_WIDTH.min(header.width() / 2.0 - HEADER_GAP / 2.0);
+    let pfl = Rect::from_min_max(pos2(header.right() - pfl_width, header.top()), header.max);
+    let name = Rect::from_min_max(header.min, pos2(pfl.left() - HEADER_GAP, header.bottom()));
+    let travel = (header.bottom() + 6.0)..=(rect.bottom() - 10.0);
+    let fader_x = inner.right() - 6.0 - METER_WIDTH * 2.0 - FADER_WIDTH;
+    let fader = Rect::from_x_y_ranges(fader_x..=fader_x + FADER_WIDTH, travel.clone());
+    let meter = meter.then(|| {
+        Rect::from_x_y_ranges(
+            fader.right() + METER_WIDTH..=fader.right() + METER_WIDTH * 2.0,
+            travel,
+        )
+    });
+    // The knobs share the height under the header; each has its caption under it.
+    let column = egui::Rangef::new(inner.left(), fader.left() - 4.0);
+    let top = header.bottom() + 6.0;
+    let room = (inner.bottom() - top).max(0.0);
+    let step = (room / knobs.max(1) as f32).min(KNOB_STEP);
+    let knob_radius = KNOB_RADIUS
+        .min((step - CAPTION_HEIGHT - 4.0) / 2.0)
+        .min(column.span() / 2.0)
+        .max(0.0);
+    let x = column.center();
+    let knobs: Vec<Pos2> = (0..knobs)
+        .map(|i| pos2(x, top + i as f32 * step + knob_radius))
+        .collect();
+    let captions = knobs
+        .iter()
+        .map(|centre| {
+            Rect::from_min_size(
+                pos2(column.min, centre.y + knob_radius + 2.0),
+                vec2(column.span(), CAPTION_HEIGHT),
+            )
+        })
+        .collect();
+    StripLayout {
+        name,
+        pfl,
+        knobs,
+        knob_radius,
+        captions,
+        fader,
+        meter,
+    }
 }
 
 /// Draws one channel in `rect`: the deck's header with the headphone button, the knobs,
@@ -153,35 +229,13 @@ pub fn strip(
     (level, held): (f32, f32),
     sections: &Sections,
 ) {
+    ui.set_clip_rect(rect.intersect(ui.clip_rect()));
     let p = theme::palette(ui.ctx());
     let accent = p.deck_accent(deck);
     let state = frame.control.deck(deck);
     let ghosts = &frame.ghosts[deck.index()];
     let painter = ui.painter().clone();
     painter.rect_filled(rect.shrink(2.0), CornerRadius::same(4), p.panel);
-
-    let header = Rect::from_min_size(
-        rect.min + vec2(6.0, 4.0),
-        vec2(rect.width() - 12.0, HEADER_HEIGHT),
-    );
-    caption(
-        ui,
-        Rect::from_min_size(header.min, vec2(header.width() / 2.0, header.height())),
-        &format!("DECK {}", deck.index() + 1),
-        accent,
-    );
-    let pfl = Rect::from_min_size(
-        pos2(header.right() - 40.0, header.top()),
-        vec2(40.0, header.height()),
-    );
-    painter.rect(
-        pfl,
-        CornerRadius::same(3),
-        if state.pfl { accent } else { p.background },
-        Stroke::new(1.0, accent),
-        StrokeKind::Inside,
-    );
-    caption(ui, pfl, "PFL", if state.pfl { p.on_accent } else { p.text });
 
     let [high, mid, low] = eq_labels(frame.eq_mode, stems_active, frame.stem_knobs);
     let gain = ("GAIN", state.trim, ghosts[GHOST_TRIM]);
@@ -195,55 +249,60 @@ pub fn strip(
     ];
     let without_eq = [gain, filter];
     let knobs: &[_] = if sections.mixer_eq { &all } else { &without_eq };
-    let knob_x = rect.left() + 8.0 + KNOB_RADIUS + 14.0;
+    let layout = strip_layout(rect, knobs.len(), sections.mixer_meters);
+
+    caption(
+        ui,
+        layout.name,
+        &format!("DECK {}", deck.index() + 1),
+        accent,
+    );
+    painter.rect(
+        layout.pfl,
+        CornerRadius::same(3),
+        if state.pfl { accent } else { p.background },
+        Stroke::new(1.0, accent),
+        StrokeKind::Inside,
+    );
+    let pfl_text = if state.pfl { p.on_accent } else { p.text };
+    caption(ui, layout.pfl, "PFL", pfl_text);
+
     for (i, &(name, value, ghost)) in knobs.iter().enumerate() {
-        let top = header.bottom() + 6.0 + i as f32 * KNOB_STEP;
-        let centre = pos2(knob_x, top + KNOB_RADIUS);
-        knob(&painter, centre, value, ghost, accent);
-        caption(
-            ui,
-            Rect::from_center_size(
-                pos2(centre.x, centre.y + KNOB_RADIUS + 6.0),
-                vec2(KNOB_RADIUS * 4.0 + 20.0, 10.0),
-            ),
-            name,
-            p.text_dim,
-        );
+        let centre = layout.knobs[i];
+        knob(&painter, centre, layout.knob_radius, value, ghost, accent);
+        caption(ui, layout.captions[i], name, p.text_dim);
     }
 
-    let travel_top = header.bottom() + 6.0;
-    let travel_bottom = rect.bottom() - 10.0;
-    let fader_x = rect.right() - 12.0 - METER_WIDTH * 2.0 - FADER_WIDTH;
-    let track = Rect::from_min_max(
-        pos2(fader_x, travel_top),
-        pos2(fader_x + FADER_WIDTH, travel_bottom),
+    fader(
+        &painter,
+        layout.fader,
+        state.fader,
+        ghosts[GHOST_FADER],
+        accent,
     );
-    fader(&painter, track, state.fader, ghosts[GHOST_FADER], accent);
-    if sections.mixer_meters {
-        let meter = Rect::from_min_max(
-            pos2(track.right() + METER_WIDTH, travel_top),
-            pos2(track.right() + METER_WIDTH * 2.0, travel_bottom),
-        );
+    if let Some(meter) = layout.meter {
         level_bar(&painter, meter, level);
         peak_line(&painter, meter, held);
     }
 }
 
 /// A knob at `value` (0 to 1) with its pickup marker, if any.
-fn knob(painter: &egui::Painter, centre: Pos2, value: f32, ghost: Option<f32>, accent: Color32) {
+fn knob(
+    painter: &egui::Painter,
+    centre: Pos2,
+    radius: f32,
+    value: f32,
+    ghost: Option<f32>,
+    accent: Color32,
+) {
     let p = theme::palette(painter.ctx());
     let on_rim = |v: f32, inset: f32| {
         let angle = (v.clamp(0.0, 1.0) * 2.0 - 1.0) * KNOB_SWEEP;
-        centre + vec2(angle.sin(), -angle.cos()) * (KNOB_RADIUS - inset)
+        centre + vec2(angle.sin(), -angle.cos()) * (radius - inset).max(0.0)
     };
-    painter.circle(
-        centre,
-        KNOB_RADIUS,
-        p.background,
-        Stroke::new(1.5, p.text_dim),
-    );
+    painter.circle(centre, radius, p.background, Stroke::new(1.5, p.text_dim));
     painter.line_segment(
-        [on_rim(value, 10.0), on_rim(value, 1.0)],
+        [on_rim(value, radius * 0.66), on_rim(value, 1.0)],
         Stroke::new(2.5, accent),
     );
     if let Some(at) = ghost_marker(ghost, |v| on_rim(v, -3.0)) {
@@ -368,6 +427,8 @@ fn centre(ui: &mut Ui, rect: Rect, frame: &ControlFrame, master_peak: Option<[f3
 
 #[cfg(test)]
 mod tests {
+    use egui::Vec2;
+
     use super::*;
 
     #[test]
@@ -386,6 +447,46 @@ mod tests {
         assert_eq!(ghost_marker(Some(0.2), at), Some(pos2(10.0, 80.0)));
         assert_eq!(ghost_marker(Some(1.5), at), Some(pos2(10.0, 0.0)));
         assert_eq!(ghost_marker(None, at), None);
+    }
+
+    #[test]
+    fn a_strip_keeps_its_knobs_inside() {
+        // 4-Decks at 1024 wide and 700 or 900 high, two decks at 1024x700 (Pro and
+        // Performance) and at 1440x900.
+        let sizes = [
+            (82.0, 224.0),
+            (82.0, 290.0),
+            (123.0, 248.0),
+            (123.0, 246.0),
+            (115.0, 290.0),
+            (173.0, 286.0),
+        ];
+        for (width, height) in sizes {
+            for knobs in [2, 5] {
+                let rect = Rect::from_min_size(pos2(10.0, 20.0), vec2(width, height));
+                let layout = strip_layout(rect, knobs, true);
+                let r = layout.knob_radius;
+                let at = format!("{knobs} knobs in {width}x{height}: {layout:?}");
+                assert!(r >= 8.0, "{at}");
+                assert!(!layout.name.intersects(layout.pfl), "{at}");
+                assert!(rect.contains_rect(layout.name) && rect.contains_rect(layout.pfl));
+                for (i, (centre, caption)) in layout.knobs.iter().zip(&layout.captions).enumerate()
+                {
+                    let circle = Rect::from_center_size(*centre, Vec2::splat(2.0 * r));
+                    assert!(rect.contains_rect(circle), "{at}");
+                    assert!(rect.contains_rect(*caption), "{at}");
+                    assert!(circle.top() >= layout.pfl.bottom(), "{at}");
+                    assert!(circle.right() < layout.fader.left(), "{at}");
+                    assert!(caption.right() < layout.fader.left(), "{at}");
+                    assert!(caption.top() >= circle.bottom(), "{at}");
+                    if let Some(next) = layout.knobs.get(i + 1) {
+                        assert!(caption.bottom() <= next.y - r, "{at}");
+                    }
+                }
+                assert!(rect.contains_rect(layout.fader));
+                assert!(rect.contains_rect(layout.meter.unwrap()));
+            }
+        }
     }
 
     #[test]
