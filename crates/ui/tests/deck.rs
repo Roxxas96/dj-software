@@ -89,10 +89,18 @@ fn deck_panel_shows_title_and_bpm() {
 #[test]
 fn the_time_shows_its_mode() {
     let (snapshot, mut frame) = loaded();
-    for (mode, label) in [(TimeMode::Elapsed, "0:57.1"), (TimeMode::Total, "5:29.0")] {
+    // The mode's time, then the other of elapsed and remaining beside it.
+    for (mode, labels) in [
+        (TimeMode::Remaining, ["−4:31.9", "0:57.1"]),
+        (TimeMode::Elapsed, ["0:57.1", "−4:31.9"]),
+        (TimeMode::Total, ["5:29.0", "0:57.1"]),
+    ] {
         frame.view.time_mode[0] = mode;
         let view = view(&snapshot, &frame);
-        draw(&view).get_by_label(label);
+        let harness = draw(&view);
+        for label in labels {
+            harness.get_by_label(label);
+        }
     }
 }
 

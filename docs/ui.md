@@ -53,8 +53,9 @@ like Ctrl-C in `play`.
   go back to it). A value in the file that cannot be read keeps its default, and the others
   still load.
 - **Deck panels:** cover, title, artist and remix, the overview waveform, BPM, key, the
-  elapsed and remaining times (click the brighter one to cycle it through remaining,
-  total and elapsed; the other of elapsed and remaining stays beside it), the bar.beat
+  times (click the brighter one to cycle it through remaining, total and elapsed;
+  the dimmer one beside it is the elapsed time, or the remaining time while the
+  brighter one shows elapsed), the bar.beat
   counter (LAYOUT menu), the FX slots, the jog (the LAYOUT menu's info jog draws the BPM,
   pitch and times inside it), the pitch fader with its pickup marker, VINYL,
   SLIP and KEYLOCK, the pad mode name and the 8 pads, the loop size, and CUE, PLAY and SYNC.
