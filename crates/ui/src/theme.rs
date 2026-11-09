@@ -137,6 +137,32 @@ pub(crate) fn luminance(colour: Color32) -> f32 {
         / 255.0
 }
 
+/// The WCAG contrast ratio of `a` on `b`.
+pub(crate) fn contrast(a: Color32, b: Color32) -> f32 {
+    let luminance = |c: Color32| {
+        let channel = |v: u8| {
+            let v = f32::from(v) / 255.0;
+            if v <= 0.040_45 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(c.r()) + 0.7152 * channel(c.g()) + 0.0722 * channel(c.b())
+    };
+    let (a, b) = (luminance(a), luminance(b));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+/// White or black, whichever reads better on `fill`: at least 4.5:1 on any colour.
+pub(crate) fn text_on(fill: Color32) -> Color32 {
+    if contrast(Color32::WHITE, fill) >= contrast(Color32::BLACK, fill) {
+        Color32::WHITE
+    } else {
+        Color32::BLACK
+    }
+}
+
 /// The brightness above which a hotcue colour is too pale for a light background.
 const PALE: f32 = 0.8;
 /// How much of a pale colour is kept when it is darkened.
@@ -184,23 +210,6 @@ pub fn apply(ctx: &Context, scheme: ColourScheme) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The WCAG contrast ratio of `a` on `b`.
-    fn contrast(a: Color32, b: Color32) -> f32 {
-        let luminance = |c: Color32| {
-            let channel = |v: u8| {
-                let v = f32::from(v) / 255.0;
-                if v <= 0.040_45 {
-                    v / 12.92
-                } else {
-                    ((v + 0.055) / 1.055).powf(2.4)
-                }
-            };
-            0.2126 * channel(c.r()) + 0.7152 * channel(c.g()) + 0.0722 * channel(c.b())
-        };
-        let (a, b) = (luminance(a), luminance(b));
-        (a.max(b) + 0.05) / (a.min(b) + 0.05)
-    }
 
     #[test]
     fn light_text_and_highs_read_on_light_grey() {
