@@ -312,6 +312,29 @@ fn jump_text(beats: f64) -> String {
     format!("{sign}{}", beats_text(beats.abs()))
 }
 
+/// What the engine reports for every deck, as the panels read it. Without a monitor every
+/// deck is empty.
+#[derive(Debug, Default)]
+pub struct DeckReads {
+    /// Each deck's snapshot and the time its block began rendering (0: unknown).
+    pub decks: [(DeckSnapshot, u64); 4],
+    pub channels: [ChannelSnapshot; 4],
+    pub sampler: SamplerSnapshot,
+}
+
+impl DeckReads {
+    pub fn read(monitor: Option<&EngineMonitor>) -> Self {
+        let Some(m) = monitor else {
+            return Self::default();
+        };
+        Self {
+            decks: DeckId::ALL.map(|id| m.deck_rendered_at(id)),
+            channels: DeckId::ALL.map(|id| m.channel(id)),
+            sampler: m.sampler(),
+        }
+    }
+}
+
 /// What the deck panels keep from frame to frame: each deck's playhead.
 #[derive(Debug, Default)]
 pub struct DeckPanels {
@@ -327,6 +350,19 @@ impl DeckPanels {
         ui: &mut Ui,
         frame: &ControlFrame,
         monitor: Option<&EngineMonitor>,
+        covers: &mut Covers,
+        sections: &Sections,
+    ) -> Rect {
+        let reads = DeckReads::read(monitor);
+        self.show_reads(ui, frame, &reads, covers, sections)
+    }
+
+    /// [`DeckPanels::show`] from what was already read from the engine.
+    pub fn show_reads(
+        &mut self,
+        ui: &mut Ui,
+        frame: &ControlFrame,
+        reads: &DeckReads,
         covers: &mut Covers,
         sections: &Sections,
     ) -> Rect {
@@ -360,16 +396,13 @@ impl DeckPanels {
         } else {
             vec![left, right]
         };
-        let sampler = monitor.map(EngineMonitor::sampler).unwrap_or_default();
         for (deck, rect) in slots.into_iter().zip(rects) {
-            let (mut snapshot, rendered_at) = monitor
-                .map(|m| m.deck_rendered_at(deck))
-                .unwrap_or_default();
-            let channel = monitor.map(|m| m.channel(deck)).unwrap_or_default();
+            let (mut snapshot, rendered_at) = reads.decks[deck.index()];
+            let channel = &reads.channels[deck.index()];
             let head = &mut self.playheads[deck.index()];
             head.observe(&snapshot, rendered_at);
             snapshot.position_frames = head.position(now, frame.output_latency);
-            let view = DeckView::new(deck, &snapshot, &channel, frame, &sampler);
+            let view = DeckView::new(deck, &snapshot, channel, frame, &reads.sampler);
             let cover = view
                 .path
                 .as_deref()

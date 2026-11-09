@@ -4,9 +4,10 @@ use std::path::PathBuf;
 
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use engine::{ChannelSnapshot, DeckId, DeckSnapshot, SamplerSnapshot};
+use engine::DeckSnapshot;
 use library::TrackRow;
-use ui::deck::DeckView;
+use ui::cover::Covers;
+use ui::deck::{DeckPanels, DeckReads};
 use ui::layout::four_deck_sections;
 use ui::{ControlFrame, DeckInfo};
 
@@ -67,29 +68,33 @@ fn four_decks_show_every_deck() {
 #[test]
 fn four_deck_panels_follow_their_decks() {
     let mut frame = four_decks();
-    frame.decks[2] = Some(info("Three"));
     frame.decks[0] = Some(info("One"));
-    // The engine plays deck 3's track, and deck 1 has nothing loaded.
-    let snapshot = DeckSnapshot {
-        loaded: true,
-        track_sample_rate: 44_100,
-        duration_frames: 441_000,
-        load_seq: 1,
-        ..DeckSnapshot::default()
-    };
-    let view = DeckView::new(
-        DeckId::new(2).unwrap(),
-        &snapshot,
-        &ChannelSnapshot::default(),
-        &frame,
-        &SamplerSnapshot::default(),
-    );
+    frame.decks[2] = Some(info("Three"));
+    // The engine plays each track: the snapshots carry the frames' load_seq.
+    let mut reads = DeckReads::default();
+    for deck in [0, 2] {
+        reads.decks[deck].0 = DeckSnapshot {
+            loaded: true,
+            track_sample_rate: 44_100,
+            duration_frames: 441_000,
+            load_seq: 1,
+            ..DeckSnapshot::default()
+        };
+    }
+    let mut panels = DeckPanels::default();
+    let mut covers = Covers::default();
     let sections = four_deck_sections();
     let mut harness = Harness::builder()
-        .with_size([560.0, 200.0])
-        .build_ui(move |ui| ui::deck::panel(ui, &view, None, &sections));
+        .with_size([1440.0, 400.0])
+        .build_ui(move |ui| {
+            panels.show_reads(ui, &frame, &reads, &mut covers, &sections);
+        });
     harness.run_steps(3);
-    harness.get_by_label("3");
+    harness.get_by_label("One");
     harness.get_by_label("Three");
-    assert!(harness.query_by_label("One").is_none());
+    // Each title sits in its own deck's panel: left column (1 over 3), by height.
+    let top = |label| harness.get_by_label(label).rect();
+    let (one, three) = (top("One"), top("Three"));
+    assert!(one.top() < three.top(), "{one:?} {three:?}");
+    assert!(one.left() < 720.0 && three.left() < 720.0);
 }

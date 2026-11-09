@@ -11,7 +11,7 @@ use egui::{
 };
 use engine::{DeckId, EngineMonitor, EqMode, StemKnobs};
 
-use crate::layout::Sections;
+use crate::layout::{Sections, mixer_order};
 use crate::model::{
     ControlFrame, GHOST_EQ_HIGH, GHOST_EQ_LOW, GHOST_EQ_MID, GHOST_FADER, GHOST_FILTER, GHOST_TRIM,
 };
@@ -94,7 +94,7 @@ impl Mixer {
         let active = Side::ALL.map(|side| frame.control.side(side).active_deck);
         // Four strips in VirtualDJ's order (3, 1, 2, 4) or one per side's active deck.
         let decks = if frame.view.four_decks {
-            [2, 0, 1, 3].map(|i| DeckId::ALL[i]).to_vec()
+            mixer_order().to_vec()
         } else {
             active.to_vec()
         };
