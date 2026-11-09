@@ -130,22 +130,19 @@ pub fn root(
     theme::apply(ui.ctx(), frame.view.colour_scheme);
     let p = theme::palette(ui.ctx());
     let window_height = ui.max_rect().height();
-    let sections = if frame.view.four_decks {
+    let mut sections = if frame.view.four_decks {
         layout::four_deck_sections()
     } else {
         layout::sections(frame.view.layout)
     };
+    sections.overview &= frame.view.overview;
+    let middle = frame.view.waveform_position == WaveformPosition::Middle;
     egui::Panel::top("top_bar")
         .frame(egui::Frame::new().fill(p.panel).inner_margin(6))
         .show(ui, |ui| topbar::show(ui, frame, monitor, &screen.commands));
-    egui::Panel::top("waveform_lanes")
-        .frame(egui::Frame::new().fill(p.background))
-        .exact_size(window_height * layout::LANES_SHARE)
-        .resizable(false)
-        .show_separator_line(false)
-        .show(ui, |ui| {
-            screen.lanes.show(ui, frame, monitor, &screen.commands)
-        });
+    if !middle {
+        waveform_lanes(ui, frame, monitor, screen, window_height, &p);
+    }
     egui::Panel::top("deck_panels")
         .frame(egui::Frame::new().fill(p.background))
         .exact_size(window_height * sections.decks_share)
@@ -158,6 +155,9 @@ pub fn root(
                 .show(ui, frame, monitor, &mut screen.covers, &sections);
             screen.mixer.show(ui, space, frame, monitor, &sections);
         });
+    if middle {
+        waveform_lanes(ui, frame, monitor, screen, window_height, &p);
+    }
     egui::CentralPanel::default()
         .frame(egui::Frame::new().fill(p.background))
         .show(ui, |ui| {
@@ -172,5 +172,24 @@ pub fn root(
             } else if let Some(view) = &frame.browser {
                 browser::show(ui, view, frame.key_notation, &mut screen.covers);
             }
+        });
+}
+
+/// The waveform lanes, in a panel below whatever was added before it.
+fn waveform_lanes(
+    ui: &mut egui::Ui,
+    frame: &ControlFrame,
+    monitor: Option<&EngineMonitor>,
+    screen: &mut Screen,
+    window_height: f32,
+    p: &theme::Palette,
+) {
+    egui::Panel::top("waveform_lanes")
+        .frame(egui::Frame::new().fill(p.background))
+        .exact_size(window_height * layout::LANES_SHARE)
+        .resizable(false)
+        .show_separator_line(false)
+        .show(ui, |ui| {
+            screen.lanes.show(ui, frame, monitor, &screen.commands)
         });
 }

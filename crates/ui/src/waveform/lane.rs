@@ -10,10 +10,12 @@ use analysis::Waveform;
 use egui::{Align2, Color32, FontId, Mesh, Painter, Pos2, Rect, Shape, Ui, pos2, vec2};
 use engine::{DeckId, DeckSnapshot, EngineMonitor};
 
-use super::{Playhead, ZoomGesture, colour, ticks};
+use super::styles::{self, MAX_BARS};
+use super::{Playhead, ZoomGesture, ticks};
 use crate::command::UiCommand;
 use crate::model::ControlFrame;
 use crate::theme::{self, Palette};
+use crate::view::WaveformStyle;
 
 /// The beat period, in seconds, of a lane whose deck has no grid: 120 BPM.
 const DEFAULT_BEAT_SECONDS: f64 = 0.5;
@@ -91,8 +93,12 @@ impl Lanes {
             )
         };
         let (area, _) = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
-        let height = area.height() / shown.len() as f32;
-        for (row, deck) in shown.into_iter().enumerate() {
+        // Overlaid, the first two decks share the first lane.
+        let overlaid = frame.view.waveform_style == WaveformStyle::Overlaid && shown.len() >= 2;
+        let rows = shown.len() - usize::from(overlaid);
+        let height = area.height() / rows as f32;
+        for (index, deck) in shown.into_iter().enumerate() {
+            let row = index.saturating_sub(usize::from(overlaid));
             let top = area.top() + row as f32 * height;
             let rect = Rect::from_min_max(
                 pos2(area.left(), top),
@@ -110,6 +116,8 @@ impl Lanes {
                 waveform: waveform.map(Arc::as_ref),
                 position_frames: self.playheads[deck.index()].position(now, frame.output_latency),
                 beats: frame.view.waveform_beats,
+                style: frame.view.waveform_style,
+                overlay: overlaid && index == 1,
             };
             lane.draw(&ui.painter_at(rect), rect, &mut self.meshes[deck.index()]);
         }
@@ -155,6 +163,9 @@ pub struct Lane<'a> {
     pub position_frames: f64,
     /// How many beats the lane spans.
     pub beats: f64,
+    pub style: WaveformStyle,
+    /// Drawn over another deck's lane in the same rect: no background of its own.
+    pub overlay: bool,
 }
 
 impl Lane<'_> {
@@ -162,7 +173,11 @@ impl Lane<'_> {
     /// nothing else holds it any more).
     pub fn draw(&self, painter: &Painter, rect: Rect, mesh: &mut Arc<Mesh>) {
         let p = theme::palette(painter.ctx());
-        painter.rect_filled(rect, 0.0, p.lane);
+        // An overlay's number sits beside the number below it.
+        let label_shift = if self.overlay { LABEL_FONT * 1.5 } else { 0.0 };
+        if !self.overlay {
+            painter.rect_filled(rect, 0.0, p.lane);
+        }
         if let Some(scale) = self.scale(rect, painter.pixels_per_point()) {
             let m = Arc::make_mut(mesh);
             // `Mesh::clear` frees the vertices; clear by hand to keep them.
@@ -173,7 +188,7 @@ impl Lane<'_> {
             self.hotcue_numbers(painter, rect, &scale, &p);
         }
         painter.text(
-            rect.left_top() + vec2(LABEL_OFFSET, LABEL_OFFSET),
+            rect.left_top() + vec2(LABEL_OFFSET + label_shift, LABEL_OFFSET),
             Align2::LEFT_TOP,
             self.deck.index() + 1,
             FontId::proportional(LABEL_FONT),
@@ -211,7 +226,7 @@ impl Lane<'_> {
     fn fill(&self, mesh: &mut Mesh, rect: Rect, scale: &Scale, p: &Palette) {
         let snapshot = self.snapshot;
         if let Some(waveform) = self.waveform {
-            columns(mesh, rect, scale, waveform, p.text_dim);
+            columns(mesh, rect, scale, waveform, (self.style, self.deck), p);
         }
         if let (true, Some(start), Some(end)) =
             (snapshot.loop_active, snapshot.loop_in, snapshot.loop_out)
@@ -297,16 +312,27 @@ impl Scale {
 /// One column per physical pixel, mirrored around the lane's middle, as tall as the
 /// loudest bucket under it and in its colour. Columns are cut at fixed track frames and
 /// only their place moves, so a column keeps its shape as the track scrolls.
-fn columns(mesh: &mut Mesh, rect: Rect, scale: &Scale, waveform: &Waveform, silent: Color32) {
+fn columns(
+    mesh: &mut Mesh,
+    rect: Rect,
+    scale: &Scale,
+    waveform: &Waveform,
+    (style, deck): (WaveformStyle, DeckId),
+    p: &Palette,
+) {
     let per_bucket = f64::from(waveform.frames_per_bucket.max(1));
     let buckets = &waveform.buckets;
     let fpc = scale.frames_per_column;
     let first = ((scale.centre_frame - scale.half_span) / fpc).floor() as i64;
     let last = ((scale.centre_frame + scale.half_span) / fpc).ceil() as i64;
-    let middle = rect.center().y;
-    let half_height = rect.height() / 2.0;
-    mesh.reserve_triangles(2 * (last - first + 1).max(0) as usize);
-    mesh.reserve_vertices(4 * (last - first + 1).max(0) as usize);
+    let per_column = if style == WaveformStyle::Bands {
+        MAX_BARS
+    } else {
+        1
+    };
+    let count = (last - first + 1).max(0) as usize * per_column;
+    mesh.reserve_triangles(2 * count);
+    mesh.reserve_vertices(4 * count);
     for column in first..=last {
         let start = column as f64 * fpc;
         let end = start + fpc;
@@ -321,12 +347,14 @@ fn columns(mesh: &mut Mesh, rect: Rect, scale: &Scale, waveform: &Waveform, sile
         let Some(loudest) = buckets[from..to].iter().max_by_key(|b| b[0]) else {
             continue;
         };
-        let reach = half_height * f32::from(loudest[0]) / 255.0;
-        let bar = Rect::from_min_max(
-            pos2(scale.x(start), middle - reach),
-            pos2(scale.x(end), middle + reach),
-        );
-        mesh.add_colored_rect(bar, colour(*loudest, silent));
+        let (bars, used) = styles::bars(style, *loudest, deck, p);
+        for bar in &bars[..used] {
+            let rect = Rect::from_min_max(
+                pos2(scale.x(start), rect.top() + rect.height() * bar.from),
+                pos2(scale.x(end), rect.top() + rect.height() * bar.to),
+            );
+            mesh.add_colored_rect(rect, bar.colour);
+        }
     }
 }
 
@@ -385,9 +413,24 @@ mod tests {
             half_span: 5000.0,
         };
         let mut a = Mesh::default();
-        columns(&mut a, rect, &scale(5000.0), &waveform, Color32::GRAY);
+        let deck = DeckId::new(0).unwrap();
+        columns(
+            &mut a,
+            rect,
+            &scale(5000.0),
+            &waveform,
+            (WaveformStyle::Frequency, deck),
+            &Palette::DARK,
+        );
         let mut b = Mesh::default();
-        columns(&mut b, rect, &scale(5025.0), &waveform, Color32::GRAY);
+        columns(
+            &mut b,
+            rect,
+            &scale(5025.0),
+            &waveform,
+            (WaveformStyle::Frequency, deck),
+            &Palette::DARK,
+        );
         // Moving a quarter column shifts every column a quarter point, unchanged.
         let shifted: Vec<f32> = b.vertices.iter().map(|v| v.pos.x + 0.25).collect();
         let (first_a, first_b) = (a.vertices[0].pos, b.vertices[0].pos);
