@@ -84,10 +84,24 @@ pub enum WriteOp {
     /// gone, changing nothing.
     SetCue { track: i64, frames: f64 },
     /// Stores `frames` as hotcue `slot` (1 to 8) of track `track`, keeping the color and name
-    /// of an existing hotcue. Fails with [`LibraryError::InvalidHotcueSlot`] for a slot outside
-    /// 1-8, with [`LibraryError::InvalidCue`] when `frames` is not finite or is negative and
-    /// with [`LibraryError::NoSuchTrack`] when the track is gone, changing nothing.
-    SetHotcue { track: i64, slot: u8, frames: f64 },
+    /// of an existing hotcue, and stores `loop_frames` as its loop length (`None` clears it).
+    /// Fails with [`LibraryError::InvalidHotcueSlot`] for a slot outside 1-8, with
+    /// [`LibraryError::InvalidCue`] when `frames` is not finite or is negative, with
+    /// [`LibraryError::InvalidLoop`] when `loop_frames` is not finite and above zero and with
+    /// [`LibraryError::NoSuchTrack`] when the track is gone, changing nothing.
+    SetHotcue {
+        track: i64,
+        slot: u8,
+        frames: f64,
+        loop_frames: Option<f64>,
+    },
+    /// Replaces hotcue `slot` (1 to 8) of track `track` with `point` whole: position, loop
+    /// length, color and name. Fails like [`WriteOp::SetHotcue`].
+    PutHotcue {
+        track: i64,
+        slot: u8,
+        point: crate::HotcuePoint,
+    },
     /// Removes hotcue `slot` (1 to 8) of track `track`; an empty slot is fine. Fails like
     /// [`WriteOp::SetHotcue`] for a bad slot or an unknown track, changing nothing.
     DeleteHotcue { track: i64, slot: u8 },
@@ -502,8 +516,13 @@ fn apply(tx: &Transaction<'_>, op: &WriteOp) -> Result<WriteOutcome, LibraryErro
             track,
             slot,
             frames,
+            loop_frames,
         } => {
-            cues::set_hotcue(tx, *track, *slot, *frames)?;
+            cues::set_hotcue(tx, *track, *slot, *frames, *loop_frames)?;
+            Ok(WriteOutcome::Done)
+        }
+        WriteOp::PutHotcue { track, slot, point } => {
+            cues::put_hotcue(tx, *track, *slot, point)?;
             Ok(WriteOutcome::Done)
         }
         WriteOp::DeleteHotcue { track, slot } => {

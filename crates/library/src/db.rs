@@ -103,6 +103,16 @@ impl Library {
         Ok(Reader { conn })
     }
 
+    /// Backs up the database now, even if a backup was taken moments ago, and prunes old
+    /// backups. Returns the new backup's path.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the integrity check or the backup does.
+    pub fn backup_now(&self) -> Result<PathBuf, LibraryError> {
+        backup::backup_now(&self.path)
+    }
+
     /// A handle for submitting changes. Cheap to clone and send to other threads.
     #[must_use]
     pub fn writer(&self) -> Writer {

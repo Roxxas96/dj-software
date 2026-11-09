@@ -39,6 +39,16 @@ const PARTIAL_SUFFIX: &str = ".sqlite3.partial";
 /// (see the module docs), then prunes old backups. `latest` is the schema version this
 /// build migrates to. Returns the new backup's path, or `None` when it was skipped.
 pub(crate) fn backup_if_needed(db: &Path, latest: usize) -> Result<Option<PathBuf>, LibraryError> {
+    backup(db, latest, false)
+}
+
+/// Backs up `db` now, whatever the interval policy says, then prunes old backups.
+pub(crate) fn backup_now(db: &Path) -> Result<PathBuf, LibraryError> {
+    let made = backup(db, usize::MAX, true)?;
+    made.ok_or_else(|| unreachable!("a forced backup is never skipped"))
+}
+
+fn backup(db: &Path, latest: usize, force: bool) -> Result<Option<PathBuf>, LibraryError> {
     let dir = db
         .parent()
         .unwrap_or_else(|| Path::new("."))
@@ -68,7 +78,7 @@ pub(crate) fn backup_if_needed(db: &Path, latest: usize) -> Result<Option<PathBu
             _ => LibraryError::Backup(e),
         })?;
     let migration_pending = usize::try_from(version).is_ok_and(|v| v < latest);
-    if !migration_pending && has_recent_backup(&dir, SystemTime::now()) {
+    if !force && !migration_pending && has_recent_backup(&dir, SystemTime::now()) {
         return Ok(None);
     }
     // Checked only when a backup is taken (it reads the whole file): a damaged database

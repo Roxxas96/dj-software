@@ -434,6 +434,7 @@ fn eviction_order_follows_the_spec() {
         track: hotcue,
         slot: 1,
         frames: 100.0,
+        loop_frames: None,
     })
     .unwrap();
     let playlist = match w
@@ -580,7 +581,7 @@ fn migration_adds_columns_and_keeps_data() {
     let version: i64 = conn
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 2);
+    assert_eq!(version, library::schema::MIGRATIONS.len() as i64);
     let (fingerprint, loaded): (Vec<u8>, Option<i64>) = conn
         .query_row("SELECT fingerprint, last_loaded_at FROM tracks", [], |r| {
             Ok((r.get(0)?, r.get(1)?))

@@ -669,6 +669,7 @@ impl LibraryMode {
                     track: id,
                     slot: slot.number(),
                     frames,
+                    loop_frames: None,
                 },
                 MemoryAction::DeleteHotcue(slot) => WriteOp::DeleteHotcue {
                     track: id,
@@ -1094,6 +1095,7 @@ fn memory_write(op: &WriteOp) -> Option<(i64, Spot, Option<u64>)> {
             track,
             slot,
             frames,
+            ..
         } => Some((track, Spot::Hotcue(slot), Some(frames.to_bits()))),
         WriteOp::DeleteHotcue { track, slot } => Some((track, Spot::Hotcue(slot), None)),
         _ => None,
@@ -1816,6 +1818,7 @@ mod tests {
             track: 7,
             slot: 3,
             frames,
+            loop_frames: None,
         };
         let delete = WriteOp::DeleteHotcue { track: 7, slot: 3 };
         // Track 7 does not exist yet: writes fail.
@@ -1872,6 +1875,7 @@ mod tests {
                 track: 7,
                 slot: 3,
                 frames: 1.0,
+                loop_frames: None,
             })
             .starts_with("warning: could not save hotcue 3 for track 7: ")
         );
