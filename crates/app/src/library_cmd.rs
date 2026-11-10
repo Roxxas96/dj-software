@@ -8,14 +8,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, bail};
-use interop::ExportProgress;
 use interop::export::TrackAction;
+use interop::{ExportPlan, ExportProgress};
 use library::{
     Analyzer, BPM_RANGE, GridEdit, GridError, KEY_NOTATION, Library, PlaylistSummary, Reader,
     ScanProgress, ScanReport, StemCache, StemKey, TrackFilter, TrackRow, TrackSort, TrackSortKey,
     WriteOp, WriteOutcome, default_threads, format_bpm_range, validate_bpm_range,
 };
 use stems::Separator;
+use ui::ExportSummary;
 
 use crate::format::{
     bpm_text, grid_text, is_long_mix, key_text, length_text, megabytes, notation_from_setting,
@@ -417,41 +418,11 @@ fn export_lines(
     let ids = export_playlist_ids(&reader, names)?;
     let set = interop::gather(&reader, &ids)?;
     let plan = interop::plan_export(set, to, &reader.folders()?)?;
-    let to_copy = plan
-        .tracks
-        .iter()
-        .filter(|t| t.action == TrackAction::Copy)
-        .count();
-    let mut lines = vec![
-        format!("Stick: {}", to.display()),
-        format!(
-            "Playlists: {}, tracks: {}",
-            plan.playlists.len(),
-            plan.tracks.len()
-        ),
-        format!(
-            "To copy: {to_copy} tracks ({}), already on the stick: {}",
-            megabytes(plan.copy_bytes),
-            plan.tracks.len() - to_copy
-        ),
-        format!("Free on the stick: {}", megabytes(plan.free_bytes)),
-        format!(
-            "Copied without Serato cues (not MP3 or WAV): {}",
-            plan.without_serato_cues
-        ),
-        format!("Skipped (missing or unreadable): {}", plan.skipped.len()),
-        format!(
-            "Removed from the stick (no longer exported): {}",
-            plan.stale_tracks.len()
-        ),
-    ];
-    if plan.too_small() {
-        bail!(
-            "The stick is too small: {} to copy, {} free.",
-            megabytes(plan.copy_bytes),
-            megabytes(plan.free_bytes)
-        );
+    let summary = export_summary(to.display().to_string(), &plan, megabytes(plan.free_bytes));
+    if summary.too_small {
+        bail!(summary.too_small_line());
     }
+    let mut lines = summary.lines().to_vec();
     if !write {
         lines.push("Nothing written. Run again with --write to export.".to_owned());
         return Ok(lines);
@@ -463,6 +434,29 @@ fn export_lines(
     ));
     lines.extend(report.notes);
     Ok(lines)
+}
+
+/// What exporting `plan` to the stick called `stick` would do, as `library export` and the
+/// window show it; `free` is the stick's free space as shown.
+pub(crate) fn export_summary(stick: String, plan: &ExportPlan, free: String) -> ExportSummary {
+    let to_copy = plan
+        .tracks
+        .iter()
+        .filter(|t| t.action == TrackAction::Copy)
+        .count();
+    ExportSummary {
+        stick,
+        playlists: plan.playlists.len(),
+        tracks: plan.tracks.len(),
+        to_copy,
+        copy_size: megabytes(plan.copy_bytes),
+        kept: plan.tracks.len() - to_copy,
+        free,
+        without_serato_cues: plan.without_serato_cues,
+        skipped: plan.skipped.len(),
+        to_remove: plan.stale_tracks.len(),
+        too_small: plan.too_small(),
+    }
 }
 
 /// How many unmatched songs the import summary lists.

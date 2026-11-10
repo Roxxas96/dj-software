@@ -5,6 +5,7 @@
 
 mod commands;
 mod detail;
+mod export;
 mod frame;
 mod import;
 mod settings;
@@ -241,6 +242,10 @@ fn run_session(
         library.library(),
         crate::vdj::Places::usual(),
         Some(library.changed_flag()),
+    ));
+    parts.export = Some(export::Export::new(
+        library.library(),
+        crate::sticks::Mounts::usual(),
     ));
     parts.samples_loaded = start.samples_loaded;
     for text in start.events.drain(..) {
