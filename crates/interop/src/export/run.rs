@@ -49,7 +49,9 @@ Rekordbox: open Preferences > Advanced > Database > rekordbox xml, choose
   Open Jockey/rekordbox.xml on this stick, then find the playlists under \"rekordbox xml\" in the
   browser and import them. On a computer where the stick has another name or drive letter,
   Rekordbox shows the tracks as missing: use Relocate on the Open Jockey/Music folder.
-VirtualDJ: plug the stick in. The playlists show under the stick's Lists folder.
+VirtualDJ: plug the stick in. The playlists show under the stick's Lists folder. If VirtualDJ
+  says the drive's database is corrupted and offers to fix it, say yes: it only updates the
+  drive letter, and your playlists and cues stay.
 
 The music is in Open Jockey/Music. Exporting again from Open Jockey updates the stick.
 ";
