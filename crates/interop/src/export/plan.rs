@@ -36,8 +36,8 @@ pub struct ExportPlan {
     pub skipped: Vec<Skipped>,
     /// Bytes the copies will take.
     pub copy_bytes: u64,
-    /// Free bytes on the stick; 0 when they cannot be read.
-    pub free_bytes: u64,
+    /// Free bytes on the stick; `None` when the system will not say.
+    pub free_bytes: Option<u64>,
     /// Tracks copied without Serato cues because their type carries no Serato tags.
     pub without_serato_cues: usize,
     /// Files an earlier export wrote that this one no longer uses, relative to `Open Jockey/`.
@@ -47,10 +47,12 @@ pub struct ExportPlan {
 }
 
 impl ExportPlan {
-    /// Whether the stick cannot hold the copies and the safety margin.
+    /// Whether the stick cannot hold the copies and the safety margin. Unknown free space
+    /// is not "too small": an export refuses it with its own reason.
     #[must_use]
     pub fn too_small(&self) -> bool {
-        self.copy_bytes + SPACE_MARGIN > self.free_bytes
+        self.free_bytes
+            .is_some_and(|free| self.copy_bytes + SPACE_MARGIN > free)
     }
 }
 
@@ -119,7 +121,7 @@ pub fn plan_export(
         playlists: set.playlists,
         skipped: set.skipped,
         copy_bytes,
-        free_bytes: free_space(stick).unwrap_or(0),
+        free_bytes: free_space(stick),
         without_serato_cues,
         stale_tracks,
         previous,

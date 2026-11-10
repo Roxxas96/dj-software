@@ -67,13 +67,14 @@ pub(super) fn show(
             for line in summary.lines() {
                 ui.label(line);
             }
-            if summary.too_small {
-                ui.label(RichText::new(summary.too_small_line()).color(p.error));
+            let refusal = summary.refusal();
+            if let Some(why) = &refusal {
+                ui.label(RichText::new(why.as_str()).color(p.error));
             }
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 if ui
-                    .add_enabled(!summary.too_small, Button::new("Export"))
+                    .add_enabled(refusal.is_none(), Button::new("Export"))
                     .clicked()
                 {
                     send(ExportStep::Write);

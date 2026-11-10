@@ -310,7 +310,7 @@ fn plan(stick: &Path, names: &[(&str, &[i64])], previous: Option<Manifest>) -> E
             .collect(),
         skipped: Vec::new(),
         copy_bytes: 0,
-        free_bytes: 0,
+        free_bytes: Some(0),
         without_serato_cues: 0,
         stale_tracks: Vec::new(),
         previous,

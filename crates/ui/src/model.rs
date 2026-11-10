@@ -251,6 +251,10 @@ pub struct PlaylistLabel {
     pub tracks: u32,
 }
 
+/// Why an export is refused when the system will not say how much is free on the stick.
+/// The same words as `interop::export::FREE_SPACE_UNKNOWN`, which the export run refuses with.
+const FREE_SPACE_UNKNOWN: &str = "Open Jockey cannot read the stick's free space.";
+
 /// The counts the export shows before it writes anything.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExportSummary {
@@ -274,6 +278,8 @@ pub struct ExportSummary {
     pub to_remove: usize,
     /// The stick cannot hold the copies: nothing will be written.
     pub too_small: bool,
+    /// The system will not say how much is free on the stick: nothing will be written.
+    pub free_unknown: bool,
 }
 
 impl ExportSummary {
@@ -307,6 +313,19 @@ impl ExportSummary {
             "The stick is too small: {} to copy, {} free.",
             self.copy_size, self.free
         )
+    }
+
+    /// Why this export is refused, if it is: the stick's free space is unknown, or it is
+    /// too small. Nothing is written then.
+    #[must_use]
+    pub fn refusal(&self) -> Option<String> {
+        if self.free_unknown {
+            Some(FREE_SPACE_UNKNOWN.to_owned())
+        } else if self.too_small {
+            Some(self.too_small_line())
+        } else {
+            None
+        }
     }
 }
 

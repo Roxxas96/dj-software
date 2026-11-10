@@ -98,7 +98,7 @@ fn first_export_copies_everything() {
     assert!(plan.tracks.iter().all(|t| t.action == TrackAction::Copy));
     assert_eq!(plan.copy_bytes, sum);
     assert_eq!(plan.previous, None);
-    assert!(plan.free_bytes > 0);
+    assert!(plan.free_bytes.is_some_and(|f| f > 0));
     assert_eq!(plan.without_serato_cues, 0);
 }
 
@@ -199,7 +199,7 @@ fn too_small_when_free_space_is_short() {
         playlists: vec![],
         skipped: vec![],
         copy_bytes: 10,
-        free_bytes: SPACE_MARGIN,
+        free_bytes: Some(SPACE_MARGIN),
         without_serato_cues: 0,
         stale_tracks: vec![],
         previous: None,

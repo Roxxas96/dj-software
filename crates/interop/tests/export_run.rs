@@ -563,7 +563,7 @@ fn refuses_when_too_small() {
     let ids = add_tracks(&s, &["a.wav"]);
     let x = playlist(&s, "X", &ids);
     let mut p = plan(&s, &[x]);
-    p.free_bytes = 0;
+    p.free_bytes = Some(0);
     let (result, calls) = run_plan(&p);
     match result {
         Err(ExportError::Refused(m)) => assert!(m.starts_with("the stick is too small: "), "{m}"),
@@ -805,6 +805,25 @@ fn a_failed_first_export_leaves_its_files_ours() {
         all_files(&music),
         [Path::new("Unknown Artist").join("b.wav")]
     );
+}
+
+#[test]
+fn refuses_when_free_space_is_unknown() {
+    let s = setup();
+    let ids = add_tracks(&s, &["a.wav"]);
+    let x = playlist(&s, "X", &ids);
+    let mut p = plan(&s, &[x]);
+    p.free_bytes = None;
+    assert!(!p.too_small());
+    let (result, calls) = run_plan(&p);
+    match result {
+        Err(ExportError::Refused(m)) => {
+            assert_eq!(m, "Open Jockey cannot read the stick's free space.");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(calls.is_empty());
+    assert_eq!(fs::read_dir(&s.stick).unwrap().count(), 0);
 }
 
 #[test]

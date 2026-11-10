@@ -83,7 +83,7 @@ fn plan(stick: &Path, tracks: Vec<ExportTrack>, names: &[&str]) -> ExportPlan {
             .collect(),
         skipped: Vec::new(),
         copy_bytes: 0,
-        free_bytes: 0,
+        free_bytes: Some(0),
         without_serato_cues: 0,
         stale_tracks: Vec::new(),
         previous: None,

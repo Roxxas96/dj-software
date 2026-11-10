@@ -54,6 +54,9 @@ VirtualDJ: plug the stick in. The playlists show under the stick's Lists folder.
 The music is in Open Jockey/Music. Exporting again from Open Jockey updates the stick.
 ";
 
+/// Why an export to a stick whose free space the system will not tell is refused.
+pub const FREE_SPACE_UNKNOWN: &str = "Open Jockey cannot read the stick's free space.";
+
 /// How far an export has got.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExportProgress {
@@ -98,18 +101,21 @@ fn megabytes(bytes: u64) -> String {
 ///
 /// # Errors
 ///
-/// [`ExportError::Refused`] when the stick is too small (nothing is written) or a write would
-/// go through a link, [`ExportError::Io`] or [`ExportError::Format`] when a file cannot be
-/// read or written.
+/// [`ExportError::Refused`] when the stick is too small or its free space is unknown (nothing
+/// is written) or a write would go through a link, [`ExportError::Io`] or
+/// [`ExportError::Format`] when a file cannot be read or written.
 pub fn run(
     plan: &ExportPlan,
     progress: &dyn Fn(ExportProgress),
 ) -> Result<ExportReport, ExportError> {
+    let Some(free) = plan.free_bytes else {
+        return Err(ExportError::Refused(FREE_SPACE_UNKNOWN.to_owned()));
+    };
     if plan.too_small() {
         return Err(ExportError::Refused(format!(
             "the stick is too small: {} to copy, {} free",
             megabytes(plan.copy_bytes),
-            megabytes(plan.free_bytes)
+            megabytes(free)
         )));
     }
     let stick = plan.stick.as_path();
