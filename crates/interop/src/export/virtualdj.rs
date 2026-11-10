@@ -62,22 +62,7 @@ impl StickFormat for VirtualDjFormat {
         }
 
         let path = join(stick, DB_PATH);
-        let existing = match std::fs::symlink_metadata(&path) {
-            Ok(meta) if meta.file_type().is_file() => {
-                Some(std::fs::read(&path).map_err(|source| ExportError::Io {
-                    path: path.clone(),
-                    source,
-                })?)
-            }
-            Ok(_) => {
-                return Err(ExportError::Refused(format!(
-                    "{} is not a regular file; Open Jockey will not touch it",
-                    path.display()
-                )));
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-            Err(source) => return Err(ExportError::Io { path, source }),
-        };
+        let existing = files::read_existing(&path)?;
         let (bytes, left_out) =
             database(existing.as_deref(), cx).map_err(|why| ExportError::Format {
                 path: path.clone(),
@@ -91,6 +76,21 @@ impl StickFormat for VirtualDjFormat {
         }
         Ok(output)
     }
+}
+
+/// Refuses a stick whose `database.xml` is there but is not a regular file or is not one
+/// [`database`] can merge into, so an export never starts on a database it would fail on.
+pub(crate) fn check_database(stick: &Path) -> Result<(), ExportError> {
+    let path = join(stick, DB_PATH);
+    let Some(bytes) = files::read_existing(&path)? else {
+        return Ok(());
+    };
+    foreign_elements(&bytes).map(drop).map_err(|why| {
+        ExportError::Refused(format!(
+            "{} cannot be read as VirtualDJ's database ({why}); Open Jockey will not change it",
+            path.display()
+        ))
+    })
 }
 
 /// `relative` (with `/` separators) under `root`, one component at a time.

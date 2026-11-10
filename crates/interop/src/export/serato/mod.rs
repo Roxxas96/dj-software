@@ -10,9 +10,25 @@ use super::run::{FormatOutput, StickContext, StickFormat};
 use super::{ExportError, files, safe_component};
 
 /// The folder on the stick that Serato reads.
-const SERATO_DIR: &str = "_Serato_";
-const SUBCRATES: &str = "Subcrates";
+pub(crate) const SERATO_DIR: &str = "_Serato_";
+/// The folder inside [`SERATO_DIR`] that holds the crates.
+pub(crate) const SUBCRATES: &str = "Subcrates";
 const DATABASE: &str = "database V2";
+
+/// Refuses a stick whose `database V2` is there but is not a regular file or does not parse,
+/// so an export never starts on a database it would fail to merge into.
+pub(crate) fn check_database(stick: &std::path::Path) -> Result<(), ExportError> {
+    let path = stick.join(SERATO_DIR).join(DATABASE);
+    let Some(bytes) = files::read_existing(&path)? else {
+        return Ok(());
+    };
+    tlv::decode(&bytes).map(drop).map_err(|why| {
+        ExportError::Refused(format!(
+            "{} cannot be read as Serato's database ({why}); Open Jockey will not change it",
+            path.display()
+        ))
+    })
+}
 
 /// Writes the library files Serato reads from a stick: one crate per playlist, and our tracks
 /// merged into `database V2`.
@@ -56,27 +72,7 @@ impl StickFormat for SeratoFormat {
         }
 
         let database = serato.join(DATABASE);
-        let existing = match std::fs::symlink_metadata(&database) {
-            Ok(meta) if meta.file_type().is_file() => {
-                Some(std::fs::read(&database).map_err(|source| ExportError::Io {
-                    path: database.clone(),
-                    source,
-                })?)
-            }
-            Ok(_) => {
-                return Err(ExportError::Refused(format!(
-                    "{} is not a regular file; Open Jockey will not touch it",
-                    database.display()
-                )));
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-            Err(source) => {
-                return Err(ExportError::Io {
-                    path: database,
-                    source,
-                });
-            }
-        };
+        let existing = files::read_existing(&database)?;
         let records = plan
             .tracks
             .iter()
