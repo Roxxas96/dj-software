@@ -165,20 +165,20 @@ impl Manifest {
     ///
     /// # Errors
     ///
-    /// [`ExportError::Refused`] when the file is damaged, [`ExportError::Io`] when it cannot
-    /// be read.
+    /// [`ExportError::Refused`] when the file is damaged or is not a regular file,
+    /// [`ExportError::Io`] when it cannot be read.
     pub fn read(stick: &Path) -> Result<Option<Self>, ExportError> {
         let path = Self::path(stick);
-        let text = match std::fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(source) => return Err(ExportError::Io { path, source }),
+        // A link or a folder in its place is refused, never followed.
+        let Some(bytes) = files::read_existing(&path)? else {
+            return Ok(None);
         };
         let damaged = |why: String| {
             ExportError::Refused(format!(
                 "Open Jockey's manifest on the stick is damaged: {why}"
             ))
         };
+        let text = String::from_utf8(bytes).map_err(|e| damaged(e.to_string()))?;
         let manifest: Self = toml::from_str(&text).map_err(|e| damaged(e.to_string()))?;
         manifest.validate().map_err(damaged)?;
         Ok(Some(manifest))

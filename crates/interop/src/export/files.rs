@@ -193,6 +193,26 @@ pub(super) fn settle_case(dir: &Path, file: &str, ours: &HashSet<&str>) -> Resul
     Ok(())
 }
 
+/// Copies everything `source` (the file `from`) holds into `sink` (the file `to`). A failed
+/// read names `from`, a failed write names `to`.
+fn copy_into(
+    source: &mut impl std::io::Read,
+    from: &Path,
+    sink: &mut impl Write,
+    to: &Path,
+) -> Result<(), ExportError> {
+    let mut buf = vec![0; 64 * 1024];
+    loop {
+        let n = match source.read(&mut buf) {
+            Ok(0) => return Ok(()),
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(io(from)(e)),
+        };
+        sink.write_all(&buf[..n]).map_err(io(to))?;
+    }
+}
+
 /// Copies `from` to `to` through `<to>.ojpart`, runs `then` on the temporary file (to tag it),
 /// and renames it into place. `to` must lie inside `stick`, and no folder on the way may be a
 /// link. The temporary file is never read-only, whatever `from` is.
@@ -212,15 +232,19 @@ pub fn copy_atomic(
     let part = part_path(to);
     let mut source = fs::File::open(from).map_err(io(from))?;
     let mut file = create_part(&part)?;
-    let result = std::io::copy(&mut source, &mut file)
-        .map_err(io(from))
-        .and_then(|_| {
+    let result = copy_into(&mut source, from, &mut file, &part)
+        .and_then(|()| {
             drop(file);
             // Closed before the rename: Windows will not replace a file that is open, and `from`
             // is `to` when a kept copy is re-tagged.
             drop(source);
             // The handle was created writable; this keeps that true if a platform copies flags.
+            // Only a read-only file is changed: on Unix clearing the flag makes it writable by
+            // everyone.
             let mut perms = fs::metadata(&part).map_err(io(&part))?.permissions();
+            if !perms.readonly() {
+                return Ok(());
+            }
             #[allow(clippy::permissions_set_readonly_false)]
             perms.set_readonly(false);
             fs::set_permissions(&part, perms).map_err(io(&part))
@@ -365,6 +389,62 @@ mod tests {
         .unwrap();
         assert_eq!(std::fs::read(&to).unwrap(), b"abcd");
         assert!(!dir.path().join("x").join("to.bin.ojpart").exists());
+    }
+
+    /// A reader or writer that always fails.
+    struct Broken;
+
+    impl std::io::Read for Broken {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("broken"))
+        }
+    }
+
+    impl Write for Broken {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("broken"))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn failed_path(result: Result<(), ExportError>) -> PathBuf {
+        match result {
+            Err(ExportError::Io { path, .. }) => path,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_copy_error_names_the_side_that_failed() {
+        let (from, to) = (Path::new("from.mp3"), Path::new("to.mp3.ojpart"));
+        let mut sink = Vec::new();
+        assert_eq!(
+            failed_path(copy_into(&mut Broken, from, &mut sink, to)),
+            from
+        );
+        assert_eq!(
+            failed_path(copy_into(&mut &b"abc"[..], from, &mut Broken, to)),
+            to
+        );
+        copy_into(&mut &b"abc"[..], from, &mut sink, to).unwrap();
+        assert_eq!(sink, b"abc");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_copy_keeps_the_permissions_it_was_created_with() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let from = dir.path().join("from.bin");
+        std::fs::write(&from, b"abc").unwrap();
+        std::fs::set_permissions(&from, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let to = dir.path().join("x").join("to.bin");
+        copy_atomic(dir.path(), &from, &to, |_| Ok(())).unwrap();
+        let mode = std::fs::metadata(&to).unwrap().permissions().mode();
+        assert_eq!(mode & 0o002, 0, "world-writable: {mode:o}");
     }
 
     #[test]

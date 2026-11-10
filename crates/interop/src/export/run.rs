@@ -7,8 +7,8 @@ use super::layout::{Manifest, OJ_DIR, name_key};
 use super::plan::TrackAction;
 use super::rekordbox::RekordboxFormat;
 use super::serato::tags::{needs_tagging, write_tags};
-use super::serato::{SERATO_DIR, SUBCRATES, SeratoFormat};
-use super::virtualdj::{LISTS_DIR, VirtualDjFormat};
+use super::serato::{SERATO_DIR, SUBCRATES, SeratoFormat, crate_names};
+use super::virtualdj::{LISTS_DIR, VirtualDjFormat, list_names};
 use super::{ExportError, ExportPlan, files};
 
 /// What every format reads; each `PlannedTrack` carries its `stick_path`.
@@ -80,6 +80,11 @@ pub struct ExportReport {
     pub notes: Vec<String>,
 }
 
+/// `n` and the noun for it: `one` when `n` is 1, else `many`.
+pub(super) fn count(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
 /// Bytes as megabytes, for the user.
 fn megabytes(bytes: u64) -> String {
     format!("{:.1} MB", bytes as f64 / 1_000_000.0)
@@ -108,7 +113,27 @@ pub fn run(
         )));
     }
     let stick = plan.stick.as_path();
-    files::remove_leftovers(&stick.join(OJ_DIR))?;
+    // Only a real folder reached without links is cleaned: a linked one is not the stick's.
+    if let Some((dir, meta)) = files::reach(stick, OJ_DIR)
+        && meta.is_dir()
+    {
+        files::remove_leftovers(&dir)?;
+    }
+
+    // Before anything else is written, the manifest claims what this export is about to
+    // write, besides what earlier ones did: an export that stops halfway then leaves no crate
+    // or list that the next one takes for another app's, and no copy it cannot clean up.
+    let tracks = manifest_tracks(plan);
+    let previous = plan.previous.as_ref();
+    let earlier = |field: fn(&Manifest) -> &Vec<String>| previous.map_or(&[][..], |m| field(m));
+    Manifest {
+        version: 1,
+        playlists: union(earlier(|m| &m.playlists), &playlist_names(plan)),
+        crates: union(earlier(|m| &m.crates), &crate_names(plan)),
+        vdj_lists: union(earlier(|m| &m.vdj_lists), &list_names(plan)),
+        tracks: union(earlier(|m| &m.tracks), &tracks),
+    }
+    .write(stick)?;
 
     let mut report = ExportReport::default();
     let total = plan.tracks.len() + 1;
@@ -179,19 +204,10 @@ pub fn run(
 
     Manifest {
         version: 1,
-        playlists: plan.playlists.iter().map(|p| p.name.clone()).collect(),
+        playlists: playlist_names(plan),
         crates: crates.files,
         vdj_lists: lists.files,
-        tracks: plan
-            .tracks
-            .iter()
-            .map(|t| {
-                t.stick_path
-                    .strip_prefix(OJ_DIR)
-                    .map_or(t.stick_path.as_str(), |s| s.trim_start_matches('/'))
-                    .to_string()
-            })
-            .collect(),
+        tracks,
     }
     .write(stick)?;
 
@@ -199,12 +215,41 @@ pub fn run(
     report.notes = [crates.notes, rekordbox.notes, lists.notes].concat();
     if plan.without_serato_cues > 0 {
         report.notes.push(format!(
-            "{} tracks copied without Serato cues (not MP3 or WAV)",
-            plan.without_serato_cues
+            "{} copied without Serato cues (not MP3 or WAV)",
+            count(plan.without_serato_cues, "track", "tracks")
         ));
     }
     progress(ExportProgress { done: total, total });
     Ok(report)
+}
+
+/// The names of the playlists of `plan`, for the manifest.
+fn playlist_names(plan: &ExportPlan) -> Vec<String> {
+    plan.playlists.iter().map(|p| p.name.clone()).collect()
+}
+
+/// The copies of `plan`, relative to `Open Jockey/`, for the manifest.
+fn manifest_tracks(plan: &ExportPlan) -> Vec<String> {
+    plan.tracks
+        .iter()
+        .map(|t| {
+            t.stick_path
+                .strip_prefix(OJ_DIR)
+                .map_or(t.stick_path.as_str(), |s| s.trim_start_matches('/'))
+                .to_string()
+        })
+        .collect()
+}
+
+/// `old`, then each name of `new` not in it.
+fn union(old: &[String], new: &[String]) -> Vec<String> {
+    let mut all = old.to_vec();
+    for name in new {
+        if !all.contains(name) {
+            all.push(name.clone());
+        }
+    }
+    all
 }
 
 /// `relative` (with `/` separators) under `root`, one component at a time.

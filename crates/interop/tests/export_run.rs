@@ -521,14 +521,8 @@ fn failed_write_leaves_previous_export_usable() {
     let ids = add_tracks(&s, &["a.wav", "b.wav"]);
     let x = playlist(&s, "X", &[ids[0]]);
     export(&s, &[x]);
-    let snapshot = |s: &Setup| {
-        [
-            crate_path(s, "X"),
-            xml_path(s),
-            s.stick.join("Open Jockey").join("export.toml"),
-        ]
-        .map(|p| fs::read(p).unwrap())
-    };
+    // The manifest changes: it claims what the export was about to write.
+    let snapshot = |s: &Setup| [crate_path(s, "X"), xml_path(s)].map(|p| fs::read(p).unwrap());
     let before = snapshot(&s);
 
     raw(
@@ -545,6 +539,12 @@ fn failed_write_leaves_previous_export_usable() {
     let (result, _) = run_plan(&p);
     assert!(result.is_err());
     assert_eq!(snapshot(&s), before);
+    let manifest = Manifest::read(&s.stick).unwrap().unwrap();
+    assert_eq!(
+        manifest.tracks,
+        ["Music/Unknown Artist/a.wav", "Music/Unknown Artist/b.wav"]
+    );
+    assert_eq!(manifest.crates, ["X.crate"]);
 
     fs::remove_dir(&blocker).unwrap();
     let report = export(&s, &[x]);
@@ -573,7 +573,10 @@ fn refuses_when_too_small() {
     assert_eq!(fs::read_dir(&s.stick).unwrap().count(), 0);
 }
 
+/// Asserts that `result` is refused naming `file`, which exists; the plan names the stick by
+/// its canonical path.
 fn refused_naming(result: Result<ExportPlan, ExportError>, file: &Path) {
+    let file = dunce::canonicalize(file).unwrap();
     match result {
         Err(ExportError::Refused(m)) => {
             assert!(m.contains(&file.display().to_string()), "{m}");
@@ -728,4 +731,160 @@ fn playlist_case_change_keeps_the_crate_and_list() {
         ["Techno.vdjfolder"]
     );
     every_reference_resolves(&s, "Techno", "Techno");
+}
+
+/// A folder at `VirtualDJ/database.xml.ojpart`: VirtualDJ's database cannot be written, so
+/// an export fails after Serato's crates and VirtualDJ's lists are written.
+fn block_virtualdj(s: &Setup) -> PathBuf {
+    let blocker = s.stick.join("VirtualDJ").join("database.xml.ojpart");
+    fs::create_dir_all(&blocker).unwrap();
+    blocker
+}
+
+/// The files in `dir` whose names hold "(Open Jockey)".
+fn renamed(dir: &Path) -> Vec<PathBuf> {
+    all_files(dir)
+        .into_iter()
+        .filter(|f| f.to_string_lossy().contains("(Open Jockey"))
+        .collect()
+}
+
+#[test]
+fn a_failed_reexport_leaves_its_crates_and_lists_ours() {
+    let s = setup();
+    let ids = add_tracks(&s, &["a.wav", "b.wav"]);
+    let x = playlist(&s, "X", &[ids[0]]);
+    let y = playlist(&s, "Set A", &[ids[1]]);
+    export(&s, &[x]);
+    let blocker = block_virtualdj(&s);
+    assert!(run_plan(&plan(&s, &[y])).0.is_err());
+    assert!(crate_path(&s, "Set A").is_file(), "Serato wrote first");
+
+    fs::remove_dir(&blocker).unwrap();
+    let report = export(&s, &[y]);
+    assert_eq!(renamed(&s.stick), Vec::<PathBuf>::new());
+    assert!(crate_path(&s, "Set A").is_file());
+    assert!(list_path(&s, "Set A").is_file());
+    assert!(!crate_path(&s, "X").exists());
+    assert!(!list_path(&s, "X").exists());
+    assert_eq!(report.removed, 1, "the first export's a.wav goes");
+    let music = s.stick.join("Open Jockey").join("Music");
+    assert_eq!(
+        all_files(&music),
+        [Path::new("Unknown Artist").join("b.wav")]
+    );
+    let manifest = Manifest::read(&s.stick).unwrap().unwrap();
+    assert_eq!(manifest.crates, ["Set A.crate"]);
+    assert_eq!(manifest.vdj_lists, ["Set A.vdjfolder"]);
+    assert_eq!(manifest.tracks, ["Music/Unknown Artist/b.wav"]);
+}
+
+#[test]
+fn a_failed_first_export_leaves_its_files_ours() {
+    let s = setup();
+    let ids = add_tracks(&s, &["a.wav", "b.wav"]);
+    let y = playlist(&s, "Set A", &[ids[0]]);
+    let blocker = block_virtualdj(&s);
+    assert!(run_plan(&plan(&s, &[y])).0.is_err());
+    let manifest = Manifest::read(&s.stick).unwrap().unwrap();
+    assert_eq!(manifest.crates, ["Set A.crate"]);
+    assert_eq!(manifest.tracks, ["Music/Unknown Artist/a.wav"]);
+
+    fs::remove_dir(&blocker).unwrap();
+    raw(
+        &s.lib,
+        "UPDATE playlist_tracks SET track_id = ?1 WHERE playlist_id = ?2",
+        vec![Value::Integer(ids[1]), Value::Integer(y)],
+    );
+    let report = export(&s, &[y]);
+    assert_eq!(renamed(&s.stick), Vec::<PathBuf>::new());
+    assert_eq!(crate_tracks(&crate_path(&s, "Set A")), ["b.wav"]);
+    assert_eq!(report.removed, 1, "the failed export's a.wav goes");
+    let music = s.stick.join("Open Jockey").join("Music");
+    assert_eq!(
+        all_files(&music),
+        [Path::new("Unknown Artist").join("b.wav")]
+    );
+}
+
+#[test]
+fn a_relative_stick_is_written_with_absolute_paths() {
+    let s = setup();
+    let ids = add_tracks(&s, &["a.wav"]);
+    let x = playlist(&s, "X", &ids);
+    // Integration tests run in the package's folder: a stick there has a relative path.
+    let here = tempfile::tempdir_in(".").unwrap();
+    let relative = Path::new(".").join(here.path().file_name().unwrap());
+    let set = gather(&s.lib.reader().unwrap(), &[x]).unwrap();
+    let p = plan_export(set, &relative, std::slice::from_ref(&s.music)).unwrap();
+    assert_eq!(p.stick, dunce::canonicalize(here.path()).unwrap());
+    run_plan(&p).0.unwrap();
+    let (lists, errors) =
+        read_playlists(&[here.path().join("VirtualDJ").join("MyLists")], None).unwrap();
+    assert!(errors.is_empty());
+    assert!(
+        lists[0]
+            .paths
+            .iter()
+            .all(|p| p.is_absolute() && p.is_file())
+    );
+    let xml = fs::read_to_string(here.path().join("Open Jockey").join("rekordbox.xml")).unwrap();
+    let absolute = interop::export::rekordbox::location(&p.stick, &p.tracks[0].stick_path);
+    assert!(
+        xml.contains(&format!("Location=\"{absolute}\"")),
+        "{absolute} not in {xml}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn leftovers_behind_a_linked_open_jockey_folder_stay() {
+    let s = setup();
+    let ids = add_tracks(&s, &["a.wav"]);
+    let x = playlist(&s, "X", &ids);
+    let outside = s.music.parent().unwrap().join("outside");
+    fs::create_dir(&outside).unwrap();
+    fs::write(outside.join("keep.ojpart"), b"keep").unwrap();
+    std::os::unix::fs::symlink(&outside, s.stick.join("Open Jockey")).unwrap();
+    let p = plan(&s, &[x]);
+    assert!(run_plan(&p).0.is_err());
+    assert_eq!(fs::read(outside.join("keep.ojpart")).unwrap(), b"keep");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_linked_manifest_is_refused() {
+    let s = setup();
+    let outside = s.music.parent().unwrap().join("export.toml");
+    fs::write(
+        &outside,
+        "version = 1\nplaylists = []\ncrates = []\nvdj_lists = []\ntracks = []\n",
+    )
+    .unwrap();
+    fs::create_dir(s.stick.join("Open Jockey")).unwrap();
+    std::os::unix::fs::symlink(&outside, s.stick.join("Open Jockey").join("export.toml")).unwrap();
+    assert!(matches!(
+        Manifest::read(&s.stick),
+        Err(ExportError::Refused(_))
+    ));
+}
+
+#[test]
+fn notes_count_one_in_the_singular() {
+    let s = setup();
+    let ids = add_tracks(&s, &["a.wav", "b.wav"]);
+    let x = playlist(&s, "X", &ids);
+    let mut p = plan(&s, &[x]);
+    p.without_serato_cues = 1;
+    let report = run_plan(&p).0.unwrap();
+    assert_eq!(
+        report.notes,
+        ["1 track copied without Serato cues (not MP3 or WAV)"]
+    );
+    p.without_serato_cues = 2;
+    let report = run_plan(&p).0.unwrap();
+    assert_eq!(
+        report.notes,
+        ["2 tracks copied without Serato cues (not MP3 or WAV)"]
+    );
 }
