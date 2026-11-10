@@ -228,6 +228,20 @@ the window with Merge, the test track's coloured and named hotcues and its 8-bea
 positions matching VirtualDJ, and a second import changing nothing all worked. The owner
 noticed that loading a track takes a few seconds.
 
+### Hands-on check (plan 11c: USB export)
+
+Owner, 2026-11-10 and 11 (macOS; Serato DJ Lite, Rekordbox, VirtualDJ 2026). Playlists showed
+in order in all three, and hotcue positions were exact in all three (Serato MP3 with an Info
+frame 1152 frames later, the others unshifted). Exporting again copied nothing new and showed
+a moved hotcue; an unticked playlist disappeared from all three. Serato showed a repeated
+track once (its limit; the export now says so) and has no saved loops in DJ Lite (Pro only,
+not checked). Rekordbox imported the playlists through the XML; the steps are now in
+`IMPORT TO REKORDBOX.txt` on the stick and on the export screen. VirtualDJ showed playlists and
+cues correctly, and offered a one-time "database is corrupted, fix it?" because of the drive
+letter; an export now keeps VirtualDJ's letter. To confirm: a re-export no longer asks and no
+track is listed twice. Not verified: CDJ (not exported), another computer or Windows, Serato
+DJ Pro's saved loops.
+
 ## The SB3's own pad routines
 
 In FX FADE, PAD SCRATCH and TRANS (SHIFT + SAMPLER) the SB3 runs routines of its own on
