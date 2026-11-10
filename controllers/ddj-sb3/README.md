@@ -238,8 +238,8 @@ track once (its limit; the export now says so) and has no saved loops in DJ Lite
 not checked). Rekordbox imported the playlists through the XML; the steps are now in
 `IMPORT TO REKORDBOX.txt` on the stick and on the export screen. VirtualDJ showed playlists and
 cues correctly, and offered a one-time "database is corrupted, fix it?" because of the drive
-letter; an export now keeps VirtualDJ's letter. To confirm: a re-export no longer asks and no
-track is listed twice. Not verified: CDJ (not exported), another computer or Windows, Serato
+letter; an export now keeps VirtualDJ's letter. A re-export then no longer asked and no
+track was listed twice. Not verified: CDJ (not exported), another computer or Windows, Serato
 DJ Pro's saved loops.
 
 ## The SB3's own pad routines
