@@ -534,6 +534,52 @@ fn export_page_lists_sticks_and_ticks_exported() {
 }
 
 #[test]
+fn refresh_keeps_the_chosen_stick_and_its_ticks() {
+    let frame = std::cell::RefCell::new(export_page(ExportView::Choose(choice())));
+    let (commands, asked) = channel();
+    let mut screen = ui::Screen {
+        commands,
+        ..ui::Screen::default()
+    };
+    let mut harness = Harness::builder()
+        .with_size([1440.0, 900.0])
+        .build_ui(|ui| ui::root(ui, &frame.borrow(), None, &mut screen));
+    harness.run_steps(2);
+    harness.get_by_label("Open settings").click();
+    harness.run_steps(3);
+    harness.get_by_label("USB export").click();
+    harness.run_steps(3);
+    harness.get_by_label("USB stick").click();
+    harness.run_steps(3);
+    harness.get_by_label("BRAVO (512.0 MB free)").click();
+    harness.run_steps(3);
+    // BRAVO holds Peak; Warmup is ticked by hand.
+    harness.get_by_label("Warmup (12)").click();
+    harness.run_steps(3);
+    harness.get_by_label("Refresh").click();
+    harness.run_steps(3);
+    frame.borrow_mut().export = ExportView::Listing;
+    harness.run_steps(3);
+    // A new stick comes first: BRAVO's index changes.
+    let mut refreshed = choice();
+    refreshed.sticks.insert(0, stick("AARDVARK", Vec::new()));
+    frame.borrow_mut().export = ExportView::Choose(refreshed);
+    harness.run_steps(3);
+    harness.get_by_label("Check").click();
+    harness.run_steps(3);
+    assert_eq!(
+        asked.try_iter().collect::<Vec<_>>(),
+        [
+            UiCommand::Export(ExportStep::Open),
+            UiCommand::Export(ExportStep::Check {
+                stick: 2,
+                playlists: vec![1, 2],
+            }),
+        ]
+    );
+}
+
+#[test]
 fn ticking_a_playlist_adds_it_to_the_check() {
     let frame = export_page(ExportView::Choose(choice()));
     let (mut harness, asked) = open_export(&frame);
