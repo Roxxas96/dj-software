@@ -258,3 +258,47 @@ fn list_bpm_is_plain_bpm() {
     let list = fs::read_to_string(stick.path().join("VirtualDJ/MyLists/Plain.vdjfolder")).unwrap();
     assert!(list.contains("bpm=\"120.000\""), "{list}");
 }
+
+const FRIEND: &str =
+    "<Song FilePath=\"E:/Music/friend.mp3\" FileSize=\"7\">\n  <Tags Title=\"F\"   />\n </Song>";
+
+fn relettered() -> String {
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<VirtualDJ_Database Version=\"2026\">\n <Song FilePath=\"E:/Open Jockey/Music/A/x.wav\" FileSize=\"1\">\n  <Tags Title=\"x\"/>\n </Song>\n {FRIEND}\n</VirtualDJ_Database>\n"
+    )
+}
+
+#[test]
+fn reexport_after_virtualdj_relettered_replaces_its_songs() {
+    let stick = TempDir::new().unwrap();
+    let mut p = plan(stick.path(), vec![track(1)], &[]);
+    p.tracks[0].stick_path = "Open Jockey/Music/A/x.wav".into();
+    let existing = relettered();
+    let (bytes, _) = database(Some(existing.as_bytes()), &cx(&p)).unwrap();
+    let text = String::from_utf8(bytes).unwrap();
+    assert_eq!(text.matches("x.wav").count(), 1, "{text}");
+    assert!(
+        text.contains("FilePath=\"E:/Open Jockey/Music/A/x.wav\""),
+        "{text}"
+    );
+    assert!(text.contains(FRIEND), "{text}");
+}
+
+#[test]
+fn uses_the_letter_already_on_the_stick() {
+    let stick = TempDir::new().unwrap();
+    let p = plan(stick.path(), vec![track(1)], &[]);
+    let existing = relettered();
+    let (bytes, _) = database(Some(existing.as_bytes()), &cx(&p)).unwrap();
+    let text = String::from_utf8(bytes).unwrap();
+    assert!(
+        text.contains("FilePath=\"E:/Open Jockey/Music/1.mp3\""),
+        "{text}"
+    );
+    let (bytes, _) = database(None, &cx(&p)).unwrap();
+    let text = String::from_utf8(bytes).unwrap();
+    assert!(
+        text.contains("FilePath=\"D:/Open Jockey/Music/1.mp3\""),
+        "{text}"
+    );
+}

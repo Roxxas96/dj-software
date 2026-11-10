@@ -359,6 +359,9 @@ fn exports_all_three_formats() {
     assert_eq!(done, (1..=total).collect::<Vec<_>>());
     assert!(calls.iter().all(|c| c.total == total));
     assert!(README_TEXT.starts_with("This stick was made by Open Jockey."));
+    assert!(README_TEXT.contains(
+        "VirtualDJ: plug the stick in. The playlists show under the stick's Lists folder. If VirtualDJ\n  says the drive's database is corrupted and offers to fix it, say yes: it only updates the\n  drive letter, and your playlists and cues stay.\n"
+    ));
 }
 
 #[test]

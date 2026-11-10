@@ -67,7 +67,10 @@ To export, see [library.md](library.md#exporting-to-a-usb-stick) for the command
 - **VirtualDJ:** the drive's own `VirtualDJ/database.xml`, which VirtualDJ reads from an
   external drive, with the hotcues (colour and name) and saved loops, and a list per playlist
   under `VirtualDJ/MyLists`. VirtualDJ keeps a loop's length in beats, so a saved loop on a
-  track with no BPM is left out, and the export says how many.
+  track with no BPM is left out, and the export says how many. The drive letter in the
+  database is the one VirtualDJ assigns to the volume, so VirtualDJ may offer a one-time fix
+  ("the drive's database is corrupted") on a new computer; say yes, it only updates the letter.
+  An export reuses the letter already on the stick (`D:` when there is none yet).
 
 `README.txt` on the stick repeats these steps for whoever plugs it in.
 

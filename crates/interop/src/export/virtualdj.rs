@@ -17,10 +17,11 @@ pub const DB_PATH: &str = "VirtualDJ/database.xml";
 /// Where VirtualDJ keeps a drive's playlists, relative to the stick's root.
 pub const LISTS_DIR: &str = "VirtualDJ/MyLists";
 
-/// What VirtualDJ writes for a drive's own root.
-const DRIVE: &str = "D:/";
-/// Songs under this prefix are ours; every other element of an existing database is kept.
-const OURS: &str = "D:/Open Jockey/";
+/// The drive letter written when the stick's database has no song to take one from.
+const DEFAULT_LETTER: char = 'D';
+/// Songs under this folder, on any drive letter, are ours; every other element of an existing
+/// database is kept.
+const OURS_FOLDER: &str = "/Open Jockey/";
 const ROOT: &str = "VirtualDJ_Database";
 const DECLARATION: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>";
 const LIST_EXT: &str = ".vdjfolder";
@@ -176,10 +177,12 @@ pub fn database(
     existing: Option<&[u8]>,
     cx: &StickContext<'_>,
 ) -> Result<(Vec<u8>, usize), String> {
-    let foreign = match existing {
+    let (foreign, letter) = match existing {
         Some(bytes) => foreign_elements(bytes)?,
-        None => Vec::new(),
+        None => (Vec::new(), None),
     };
+    // The letter VirtualDJ already uses for this stick, else its usual first guess.
+    let letter = letter.unwrap_or(DEFAULT_LETTER);
     let mut out: Vec<u8> = Vec::new();
     out.extend_from_slice(DECLARATION.as_bytes());
     out.extend_from_slice(format!("\n<{ROOT} Version=\"2025\">\n").as_bytes());
@@ -191,21 +194,42 @@ pub fn database(
     let mut left_out = 0;
     let mut songs = String::new();
     for planned in &cx.plan.tracks {
-        left_out += song(&mut songs, planned, &cx.plan.stick);
+        left_out += song(&mut songs, planned, &cx.plan.stick, letter);
     }
     out.extend_from_slice(songs.as_bytes());
     out.extend_from_slice(format!("</{ROOT}>\n").as_bytes());
     Ok((out, left_out))
 }
 
-/// The source bytes of each child of the root that is not one of our songs.
-fn foreign_elements(bytes: &[u8]) -> Result<Vec<&[u8]>, String> {
-    let is_ours = |e: &BytesStart<'_>| {
-        e.attributes()
+/// The drive letter and what follows it in a song's `FilePath` (`:/...`), if it has that form.
+fn split_drive(path: &str) -> Option<(char, &str)> {
+    let mut chars = path.chars();
+    let letter = chars.next().filter(char::is_ascii_alphabetic)?;
+    let rest = chars.as_str();
+    rest.strip_prefix(":")
+        .filter(|r| r.starts_with('/'))
+        .map(|r| (letter, r))
+}
+
+/// The source bytes of each child of the root that is not one of our songs, and the drive
+/// letter of the first song (ours or not) whose `FilePath` starts with `<letter>:/`.
+fn foreign_elements(bytes: &[u8]) -> Result<(Vec<&[u8]>, Option<char>), String> {
+    let mut letter: Option<char> = None;
+    let mut inspect = |e: &BytesStart<'_>| {
+        let path = e
+            .attributes()
             .flatten()
             .find(|a| a.key.as_ref() == "FilePath")
-            .and_then(|a| a.normalized_value(XmlVersion::Implicit1_0).ok())
-            .is_some_and(|v| v.starts_with(OURS))
+            .and_then(|a| {
+                a.normalized_value(XmlVersion::Implicit1_0)
+                    .ok()
+                    .map(String::from)
+            });
+        let drive = path.as_deref().and_then(split_drive);
+        if e.name().as_ref() == "Song" && letter.is_none() {
+            letter = drive.map(|(l, _)| l);
+        }
+        drive.is_some_and(|(_, rest)| rest.starts_with(OURS_FOLDER))
     };
     let not_a_database = || "not a VirtualDJ database".to_string();
     let is_root = |e: &BytesStart<'_>| {
@@ -241,11 +265,15 @@ fn foreign_elements(bytes: &[u8]) -> Result<Vec<&[u8]>, String> {
                 saw_root = true;
             }
             Event::Start(e) if depth == 1 => {
-                child = (before, !is_ours(&e));
+                child = (before, !inspect(&e));
                 depth = 2;
             }
             Event::Start(_) if depth > 1 => depth += 1,
-            Event::Empty(e) if depth == 1 && !is_ours(&e) => out.push(&bytes[before..after]),
+            Event::Empty(e) if depth == 1 => {
+                if !inspect(&e) {
+                    out.push(&bytes[before..after]);
+                }
+            }
             Event::End(_) if depth > 0 => {
                 depth -= 1;
                 if depth == 1 && child.1 {
@@ -263,15 +291,15 @@ fn foreign_elements(bytes: &[u8]) -> Result<Vec<&[u8]>, String> {
     if depth != 0 {
         return Err("the file ends inside an element".into());
     }
-    Ok(out)
+    Ok((out, letter))
 }
 
 /// Appends the `Song` element of `planned` to `out`; returns the loops left out.
-fn song(out: &mut String, planned: &PlannedTrack, stick: &Path) -> usize {
+fn song(out: &mut String, planned: &PlannedTrack, stick: &Path, letter: char) -> usize {
     let t = &planned.track;
     let _ = writeln!(
         out,
-        " <Song FilePath=\"{DRIVE}{}\" FileSize=\"{}\">",
+        " <Song FilePath=\"{letter}:/{}\" FileSize=\"{}\">",
         esc(&planned.stick_path),
         copy_size(stick, planned)
     );
