@@ -11,7 +11,8 @@ pub mod virtualdj;
 
 pub use files::{copy_atomic, remove_leftovers, remove_regular_file, write_atomic};
 pub use layout::{
-    MANIFEST, MUSIC_DIR, Manifest, OJ_DIR, PART_SUFFIX, SPACE_MARGIN, safe_component, stick_paths,
+    MANIFEST, MUSIC_DIR, Manifest, OJ_DIR, PART_SUFFIX, SPACE_MARGIN, name_key, safe_component,
+    stick_paths,
 };
 pub use plan::{ExportPlan, PlannedTrack, TrackAction, plan_export};
 pub use run::{

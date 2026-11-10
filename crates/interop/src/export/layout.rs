@@ -71,6 +71,14 @@ pub fn safe_component(text: &str, max_chars: usize) -> String {
     format!("{cut}{ext}")
 }
 
+/// The key two names on a stick compare by: most sticks (FAT32, exFAT, default APFS) ignore
+/// case, so `techno.crate` and `Techno.crate` are the same file. Every "is this name taken,
+/// ours or still used" check compares these keys.
+#[must_use]
+pub fn name_key(name: &str) -> String {
+    name.to_lowercase()
+}
+
 /// The components of a relative path made only of plain names, or why it is not one.
 fn relative_parts(text: &str) -> Result<impl Iterator<Item = &std::ffi::OsStr>, String> {
     let path = Path::new(text);
@@ -123,7 +131,7 @@ pub fn stick_paths(tracks: &[ExportTrack]) -> HashMap<i64, String> {
                 format!("{stem} ({n}){ext}")
             };
             let path = format!("{OJ_DIR}/{MUSIC_DIR}/{artist}/{name}");
-            if taken.insert(path.to_lowercase()) {
+            if taken.insert(name_key(&path)) {
                 break path;
             }
             n += 1;

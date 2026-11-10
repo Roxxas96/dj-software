@@ -10,7 +10,7 @@ use quick_xml::{Reader, XmlVersion};
 
 use super::run::{FormatOutput, StickContext, StickFormat};
 use super::timing::{App, app_seconds};
-use super::{ExportError, ExportTrack, PlannedTrack, files, safe_component};
+use super::{ExportError, ExportTrack, PlannedTrack, files, name_key, safe_component};
 
 /// The drive's database, relative to the stick's root.
 pub const DB_PATH: &str = "VirtualDJ/database.xml";
@@ -51,13 +51,14 @@ impl StickFormat for VirtualDjFormat {
         for playlist in &plan.playlists {
             let base = safe_component(&playlist.name, 120);
             let file = files::unique_name(&base, LIST_EXT, &lists, &ours, &taken);
-            taken.insert(file.to_lowercase());
+            taken.insert(name_key(&file));
             let entries: Vec<&PlannedTrack> = playlist
                 .tracks
                 .iter()
                 .filter_map(|id| by_id.get(id).copied())
                 .collect();
             files::write_atomic(stick, &lists.join(&file), list(&entries, stick).as_bytes())?;
+            files::settle_case(&lists, &file, &ours)?;
             output.files.push(file);
         }
 

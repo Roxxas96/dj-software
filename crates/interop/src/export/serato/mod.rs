@@ -7,7 +7,7 @@ pub mod tlv;
 use std::collections::{HashMap, HashSet};
 
 use super::run::{FormatOutput, StickContext, StickFormat};
-use super::{ExportError, files, safe_component};
+use super::{ExportError, files, name_key, safe_component};
 
 /// The folder on the stick that Serato reads.
 pub(crate) const SERATO_DIR: &str = "_Serato_";
@@ -61,13 +61,14 @@ impl StickFormat for SeratoFormat {
         for playlist in &plan.playlists {
             let base = safe_component(&playlist.name.replace("%%", "_"), 120);
             let file = files::unique_name(&base, ".crate", &subcrates, &ours, &taken);
-            taken.insert(file.to_lowercase());
+            taken.insert(name_key(&file));
             let listed: Vec<&str> = playlist
                 .tracks
                 .iter()
                 .filter_map(|id| paths.get(id).copied())
                 .collect();
             files::write_atomic(stick, &subcrates.join(&file), &tlv::crate_file(&listed))?;
+            files::settle_case(&subcrates, &file, &ours)?;
             output.files.push(file);
         }
 

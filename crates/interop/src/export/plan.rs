@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use super::layout::{Manifest, OJ_DIR, SPACE_MARGIN, stick_paths};
+use super::layout::{Manifest, OJ_DIR, SPACE_MARGIN, name_key, stick_paths};
 use super::{
     ExportError, ExportPlaylist, ExportSet, ExportTrack, FileKind, Skipped, files, free_space,
 };
@@ -94,18 +94,21 @@ pub fn plan_export(
             action,
         });
     }
-    let used: HashSet<&str> = tracks
+    // A path that differs only in case is the same file on most sticks: still used.
+    let used: HashSet<String> = tracks
         .iter()
         .map(|t| {
-            t.stick_path
-                .strip_prefix(OJ_DIR)
-                .map_or(t.stick_path.as_str(), |s| s.trim_start_matches('/'))
+            name_key(
+                t.stick_path
+                    .strip_prefix(OJ_DIR)
+                    .map_or(t.stick_path.as_str(), |s| s.trim_start_matches('/')),
+            )
         })
         .collect();
     let stale_tracks = previous
         .iter()
         .flat_map(|m| m.tracks.iter())
-        .filter(|t| !used.contains(t.as_str()))
+        .filter(|t| !used.contains(&name_key(t)))
         .cloned()
         .collect();
     Ok(ExportPlan {
