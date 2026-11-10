@@ -21,8 +21,7 @@ VirtualDJ 2026 on macOS (2026-11-10 and 11):
   `IMPORT TO REKORDBOX.txt` at the top of the stick (they are also shown when an export ends).
 - VirtualDJ shows the playlists and cues correctly. It offered a one-time "database is
   corrupted, fix it?" because of the drive letter; an export now keeps the letter VirtualDJ
-  uses. Still to confirm by the owner: that exporting again no longer asks, and that no track
-  is listed twice.
+  uses: exporting again no longer asks, and no track is listed twice.
 
 Not verified yet: a CDJ (not exported), another computer or Windows, and Serato DJ Pro's saved
 loops.

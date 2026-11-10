@@ -289,8 +289,7 @@ In the window: Settings, Library, "Import from VirtualDJ…" (see [ui.md](ui.md)
 Copies playlists, in order, with their hotcues and saved loops, to a USB stick for Serato,
 Rekordbox and VirtualDJ. Your music files are never changed. What goes on the stick and what
 each app gets is in [interop.md](interop.md); the formats were checked by hand in Serato DJ
-Lite, Rekordbox and VirtualDJ on macOS. Still unchecked: the VirtualDJ re-export check, a CDJ,
-Windows or another computer, and Serato DJ Pro's saved loops.
+Lite, Rekordbox and VirtualDJ on macOS. Still unchecked: a CDJ, Windows or another computer, and Serato DJ Pro's saved loops.
 
 ```sh
 open-jockey library export --to /Volumes/STICK --playlist "Warm up" --playlist "Peak time"
