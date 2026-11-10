@@ -22,6 +22,8 @@ pub(crate) struct Stick {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Mounts {
     pub dirs: Vec<PathBuf>,
+    /// Whether to scan the drive letters `D:` to `Z:` too (Windows only; tests leave it off).
+    pub drive_letters: bool,
 }
 
 impl Mounts {
@@ -42,7 +44,10 @@ impl Mounts {
             dirs.push(PathBuf::from("/media"));
             dirs
         };
-        Self { dirs }
+        Self {
+            dirs,
+            drive_letters: cfg!(windows),
+        }
     }
 }
 
@@ -160,7 +165,7 @@ pub(crate) fn list_sticks(reader: &Reader, mounts: &Mounts) -> anyhow::Result<Ve
         library_volumes.extend(canonical.ancestors().last().map(Path::to_path_buf));
     }
     let mut candidates = mounted_dirs(&mounts.dirs);
-    if cfg!(windows) {
+    if mounts.drive_letters {
         let system = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_owned());
         candidates.extend(letter_roots(&system, |root| root.exists()));
     }
@@ -194,6 +199,7 @@ mod tests {
     fn mounts_at(temp: &Path) -> Mounts {
         Mounts {
             dirs: vec![dunce::canonicalize(temp).unwrap()],
+            drive_letters: false,
         }
     }
 
@@ -246,6 +252,7 @@ mod tests {
         let lib = library_on(temp.path(), "lib");
         let mounts = Mounts {
             dirs: vec![temp.path().join("nowhere")],
+            drive_letters: false,
         };
         assert!(
             list_sticks(&lib.reader().unwrap(), &mounts)
@@ -296,6 +303,7 @@ mod tests {
         let lib = library_on(temp.path(), "lib");
         let mounts = Mounts {
             dirs: vec![user.clone(), media.clone()],
+            drive_letters: false,
         };
         let sticks = list_sticks(&lib.reader().unwrap(), &mounts).unwrap();
         let names: Vec<&str> = sticks.iter().map(|s| s.name.as_str()).collect();
