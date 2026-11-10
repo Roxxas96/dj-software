@@ -8,6 +8,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, bail};
+use interop::ExportProgress;
+use interop::export::TrackAction;
 use library::{
     Analyzer, BPM_RANGE, GridEdit, GridError, KEY_NOTATION, Library, PlaylistSummary, Reader,
     ScanProgress, ScanReport, StemCache, StemKey, TrackFilter, TrackRow, TrackSort, TrackSortKey,
@@ -16,7 +18,7 @@ use library::{
 use stems::Separator;
 
 use crate::format::{
-    bpm_text, grid_text, is_long_mix, key_text, length_text, notation_from_setting,
+    bpm_text, grid_text, is_long_mix, key_text, length_text, megabytes, notation_from_setting,
     notation_setting, truncate,
 };
 use crate::vdj::{Places, Scan, Scanned};
@@ -90,6 +92,21 @@ pub enum LibraryCommand {
         /// default folders. Library drives are always searched for VirtualDJ/database.xml
         #[arg(long = "vdj-dir", value_name = "DIR")]
         vdj_dir: Vec<PathBuf>,
+    },
+    /// Export playlists to a USB stick for Serato, Rekordbox and VirtualDJ. Copies the
+    /// tracks (Serato cues written into the copies of MP3 and WAV files) and writes each
+    /// program's library files under the stick's own folders. Without --write, only prints
+    /// what would be done
+    Export {
+        /// The stick (its mount point or drive); never a drive holding a library folder
+        #[arg(long, value_name = "DIR")]
+        to: PathBuf,
+        /// A playlist to export, by exact name; repeatable
+        #[arg(long = "playlist", value_name = "NAME", num_args = 1.., required = true)]
+        playlists: Vec<String>,
+        /// Write the export. Exporting again copies only new or changed tracks
+        #[arg(long)]
+        write: bool,
     },
     /// Change a library setting
     #[command(subcommand)]
@@ -307,6 +324,11 @@ pub fn run(args: &LibraryArgs) -> anyhow::Result<()> {
         LibraryCommand::List(list) => list_tracks(&lib, list),
         LibraryCommand::Analyze { tracks, force, .. } => analyze(&lib, tracks, *force),
         LibraryCommand::ImportVdj { apply, vdj_dir } => import_vdj(&lib, *apply, vdj_dir),
+        LibraryCommand::Export {
+            to,
+            playlists,
+            write,
+        } => export(&lib, to, playlists, *write),
         LibraryCommand::Set(set) => set_setting(&lib, set),
         LibraryCommand::Playlist(cmd) => playlist(&lib, cmd),
         LibraryCommand::Grid { track, action } => grid(&lib, *track, *action),
@@ -330,6 +352,117 @@ pub fn run(args: &LibraryArgs) -> anyhow::Result<()> {
         err_out!("warning: a library change was not saved: {}", failed.error);
     }
     result
+}
+
+/// Exports the playlists named `names` to the stick `to`, printing the plan and, with
+/// `write`, the result.
+fn export(lib: &Library, to: &Path, names: &[String], write: bool) -> anyhow::Result<()> {
+    let tty = std::io::stderr().is_terminal();
+    let progress = |p: ExportProgress| {
+        if tty {
+            eprint!("\rexporting {}/{}", p.done, p.total);
+        }
+    };
+    let result = export_lines(lib, to, names, write, &progress);
+    if tty {
+        eprintln!();
+    }
+    for line in result? {
+        out!("{line}");
+    }
+    Ok(())
+}
+
+/// The playlist ids for `names`, each name matched exactly and to one playlist.
+fn export_playlist_ids(reader: &Reader, names: &[String]) -> anyhow::Result<Vec<i64>> {
+    let all = reader.playlists()?;
+    let mut ids = Vec::new();
+    for name in names {
+        let matching: Vec<&PlaylistSummary> = all.iter().filter(|p| &p.name == name).collect();
+        match matching.as_slice() {
+            [] => {
+                let known: Vec<&str> = all.iter().map(|p| p.name.as_str()).collect();
+                bail!(
+                    "Unknown playlist \"{name}\". Playlists: {}",
+                    known.join(", ")
+                );
+            }
+            [one] => {
+                if !ids.contains(&one.id) {
+                    ids.push(one.id);
+                }
+            }
+            several => {
+                let listed: Vec<String> = several.iter().map(|p| format!("id {}", p.id)).collect();
+                bail!(
+                    "Several playlists are named \"{name}\" ({}); rename one first",
+                    listed.join(", ")
+                );
+            }
+        }
+    }
+    Ok(ids)
+}
+
+/// Plans (and with `write`, runs) the export of the playlists `names` to `to`, returning
+/// the lines to print. A stick that is too small is an error, and nothing is written.
+fn export_lines(
+    lib: &Library,
+    to: &Path,
+    names: &[String],
+    write: bool,
+    progress: &dyn Fn(ExportProgress),
+) -> anyhow::Result<Vec<String>> {
+    let reader = lib.reader()?;
+    let ids = export_playlist_ids(&reader, names)?;
+    let set = interop::gather(&reader, &ids)?;
+    let plan = interop::plan_export(set, to, &reader.folders()?)?;
+    let to_copy = plan
+        .tracks
+        .iter()
+        .filter(|t| t.action == TrackAction::Copy)
+        .count();
+    let mut lines = vec![
+        format!("Stick: {}", to.display()),
+        format!(
+            "Playlists: {}, tracks: {}",
+            plan.playlists.len(),
+            plan.tracks.len()
+        ),
+        format!(
+            "To copy: {to_copy} tracks ({}), already on the stick: {}",
+            megabytes(plan.copy_bytes),
+            plan.tracks.len() - to_copy
+        ),
+        format!("Free on the stick: {}", megabytes(plan.free_bytes)),
+        format!(
+            "Copied without Serato cues (not MP3 or WAV): {}",
+            plan.without_serato_cues
+        ),
+        format!("Skipped (missing or unreadable): {}", plan.skipped.len()),
+        format!(
+            "Removed from the stick (no longer exported): {}",
+            plan.stale_tracks.len()
+        ),
+    ];
+    if plan.too_small() {
+        bail!(
+            "The stick is too small: {} to copy, {} free.",
+            megabytes(plan.copy_bytes),
+            megabytes(plan.free_bytes)
+        );
+    }
+    if !write {
+        lines.push("Nothing written. Run again with --write to export.".to_owned());
+        return Ok(lines);
+    }
+    let report = interop::run(&plan, progress)?;
+    lines.push(format!(
+        "Exported: {} copied, {} kept, {} re-tagged, {} removed.",
+        report.copied, report.kept, report.retagged, report.removed
+    ));
+    lines.extend(report.notes);
+    Ok(lines)
 }
 
 /// How many unmatched songs the import summary lists.
@@ -1336,6 +1469,126 @@ mod tests {
         assert!(matches_search(&row(1, None), Some("song 1")));
         assert!(matches_search(&row(1, None), Some("ARTIST")));
         assert!(!matches_search(&row(1, None), Some("nope")));
+    }
+
+    mod export {
+        use super::*;
+
+        /// A library with one scanned wav in `<temp>/music`, in the playlist "Mix", and an
+        /// empty `<temp>/stick`.
+        fn export_fixture() -> (tempfile::TempDir, Library, PathBuf) {
+            let dir = tempfile::tempdir().unwrap();
+            let music = dir.path().join("music");
+            let stick = dir.path().join("stick");
+            std::fs::create_dir_all(&music).unwrap();
+            std::fs::create_dir_all(&stick).unwrap();
+            write_wav(&music.join("a.wav"), 1.0);
+            let lib = Library::open(&dir.path().join("library.sqlite3")).unwrap();
+            library::add_folder(&lib, &music).unwrap();
+            library::scan_folder(&lib, &music, &mut |_| {}).unwrap();
+            let id = match lib
+                .writer()
+                .submit_wait(WriteOp::CreatePlaylist { name: "Mix".into() })
+                .unwrap()
+            {
+                WriteOutcome::Created { id } => id,
+                other => panic!("{other:?}"),
+            };
+            let track: i64 = lib
+                .reader()
+                .unwrap()
+                .connection()
+                .query_row("SELECT id FROM tracks", [], |r| r.get(0))
+                .unwrap();
+            lib.writer()
+                .submit_wait(WriteOp::AddToPlaylist {
+                    playlist: id,
+                    track,
+                    at: None,
+                })
+                .unwrap();
+            (dir, lib, stick)
+        }
+
+        /// Asserts that the stick the export touches is inside `root`.
+        fn assert_inside(stick: &Path, root: &Path) {
+            assert!(
+                dunce::canonicalize(stick)
+                    .unwrap()
+                    .starts_with(dunce::canonicalize(root).unwrap()),
+                "{} is outside the temp dir",
+                stick.display()
+            );
+        }
+
+        fn mix() -> Vec<String> {
+            vec!["Mix".to_owned()]
+        }
+
+        #[test]
+        fn export_dry_run_writes_nothing() {
+            let (dir, lib, stick) = export_fixture();
+            assert_inside(&stick, dir.path());
+            let lines = export_lines(&lib, &stick, &mix(), false, &|_| {}).unwrap();
+            assert_eq!(lines[0], format!("Stick: {}", stick.display()));
+            assert_eq!(lines[1], "Playlists: 1, tracks: 1");
+            assert!(
+                lines[2].starts_with("To copy: 1 tracks (")
+                    && lines[2].ends_with("), already on the stick: 0"),
+                "{lines:?}"
+            );
+            assert!(lines[3].starts_with("Free on the stick: "), "{lines:?}");
+            assert_eq!(lines[4], "Copied without Serato cues (not MP3 or WAV): 0");
+            assert_eq!(lines[5], "Skipped (missing or unreadable): 0");
+            assert_eq!(lines[6], "Removed from the stick (no longer exported): 0");
+            assert_eq!(
+                lines[7],
+                "Nothing written. Run again with --write to export."
+            );
+            assert_eq!(lines.len(), 8);
+            assert_eq!(std::fs::read_dir(&stick).unwrap().count(), 0);
+        }
+
+        #[test]
+        fn export_write_makes_the_stick() {
+            let (dir, lib, stick) = export_fixture();
+            assert_inside(&stick, dir.path());
+            let lines = export_lines(&lib, &stick, &mix(), true, &|_| {}).unwrap();
+            assert!(stick.join("Open Jockey").join("export.toml").is_file());
+            assert!(
+                lines.contains(&"Exported: 1 copied, 0 kept, 0 re-tagged, 0 removed.".to_owned()),
+                "{lines:?}"
+            );
+            // Again: the track is already there.
+            let again = export_lines(&lib, &stick, &mix(), true, &|_| {}).unwrap();
+            assert!(again[2].ends_with("already on the stick: 1"), "{again:?}");
+        }
+
+        #[test]
+        fn export_refuses_a_library_folder() {
+            let (dir, lib, _) = export_fixture();
+            let music = dir.path().join("music");
+            assert_inside(&music, dir.path());
+            let err = export_lines(&lib, &music, &mix(), true, &|_| {}).unwrap_err();
+            assert!(!format!("{err:#}").is_empty());
+            assert_eq!(
+                std::fs::read_dir(&music).unwrap().count(),
+                1,
+                "nothing added"
+            );
+        }
+
+        #[test]
+        fn export_unknown_playlist_lists_names() {
+            let (dir, lib, stick) = export_fixture();
+            assert_inside(&stick, dir.path());
+            let err = export_lines(&lib, &stick, &["Nope".to_owned()], true, &|_| {}).unwrap_err();
+            assert_eq!(
+                format!("{err:#}"),
+                "Unknown playlist \"Nope\". Playlists: Mix"
+            );
+            assert_eq!(std::fs::read_dir(&stick).unwrap().count(), 0);
+        }
     }
 
     mod import_vdj {

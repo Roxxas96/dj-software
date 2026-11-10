@@ -128,6 +128,11 @@ pub fn grid_text(grid: &Beatgrid, sample_rate: Option<u32>) -> String {
     format!("{bpm}{first}, {lock}")
 }
 
+/// A size in bytes as megabytes of 1,000,000 bytes, like "12.3 MB".
+pub fn megabytes(bytes: u64) -> String {
+    format!("{:.1} MB", bytes as f64 / 1_000_000.0)
+}
+
 /// Cuts `text` to at most `max` characters, ending with "…" when cut.
 pub fn truncate(text: &str, max: usize) -> String {
     let text = sanitize_for_terminal(text);

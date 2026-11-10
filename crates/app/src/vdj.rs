@@ -7,6 +7,8 @@ use anyhow::Context;
 use interop::{ImportPlan, InteropError, PlaylistAction, VdjSources};
 use library::Reader;
 
+use crate::sticks::volume_of;
+
 /// Where mounted drives appear on macOS.
 const VOLUMES_DIR: &str = "/Volumes";
 
@@ -70,23 +72,6 @@ fn default_vdj_dirs() -> Vec<PathBuf> {
     } else {
         Vec::new()
     }
-}
-
-/// The drive holding `folder`: `<mounts>/<name>` when it is under `mounts`, else the
-/// filesystem root. Both are compared by canonical path, so a short or symlinked spelling
-/// still matches; the drive comes back in canonical form.
-fn volume_of(folder: &Path, mounts: &Path) -> PathBuf {
-    let canonical = |path: &Path| dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let (folder, mounts) = (canonical(folder), canonical(mounts));
-    if let Ok(rest) = folder.strip_prefix(&mounts)
-        && let Some(name) = rest.components().next()
-    {
-        return mounts.join(name);
-    }
-    folder
-        .ancestors()
-        .last()
-        .map_or_else(|| folder.clone(), Path::to_path_buf)
 }
 
 /// The drives of the library's folders, each once: where a per-drive database is looked
@@ -170,34 +155,5 @@ impl Scanned {
             playlists_skipped: self.skipped.len(),
             unmatched: plan.unmatched.len(),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_drive_is_the_mount_holding_the_folder() {
-        let mounts = Path::new("/Volumes");
-        assert_eq!(
-            volume_of(Path::new("/Volumes/Mix/music/a"), mounts),
-            Path::new("/Volumes/Mix")
-        );
-        assert_eq!(
-            volume_of(Path::new("/Users/me/music"), mounts),
-            Path::new("/")
-        );
-    }
-
-    #[test]
-    fn a_folder_is_matched_to_its_drive_by_canonical_path() {
-        let temp = tempfile::tempdir().unwrap();
-        let folder = temp.path().join("Mix/music");
-        std::fs::create_dir_all(&folder).unwrap();
-        // The mounts are canonical; the folder keeps the temp dir's own spelling, which
-        // differs on macOS (/var vs /private/var) and Windows (8.3 short names).
-        let mounts = dunce::canonicalize(temp.path()).unwrap();
-        assert_eq!(volume_of(&folder, &mounts), mounts.join("Mix"));
     }
 }
