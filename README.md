@@ -25,7 +25,8 @@ start (the 10 newest backups are kept):
 - Export of playlists to a USB stick for Serato, Rekordbox and VirtualDJ, in order, with their
   hotcues and saved loops (`library export`, or Settings, USB export in the window); your
   music files are never changed. See [docs/interop.md](docs/interop.md): the stick formats
-  were checked by hand in all three apps on macOS (not yet on Windows or in Serato DJ Pro).
+  were checked by hand in all three apps on macOS. Still unchecked: the VirtualDJ re-export check,
+  a CDJ, Windows or another computer, and Serato DJ Pro's saved loops.
 
 ## Stems
 
