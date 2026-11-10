@@ -44,17 +44,38 @@ pub trait StickFormat {
 pub const README_TEXT: &str = "\
 This stick was made by Open Jockey. Your playlists are on it for Serato, Rekordbox and VirtualDJ.
 
-Serato DJ: plug the stick in. The playlists show as crates under the stick's name.
-Rekordbox: open Preferences > Advanced > Database > rekordbox xml, choose
-  Open Jockey/rekordbox.xml on this stick, then find the playlists under \"rekordbox xml\" in the
-  browser and import them. On a computer where the stick has another name or drive letter,
-  Rekordbox shows the tracks as missing: use Relocate on the Open Jockey/Music folder.
+Serato DJ: plug the stick in. The playlists show as crates under the stick's name. A track
+  listed twice in a playlist shows once (Serato keeps a track once per crate), and saved
+  loops show in Serato DJ Pro only.
+Rekordbox: follow IMPORT TO REKORDBOX.txt at the top of this stick.
 VirtualDJ: plug the stick in. The playlists show under the stick's Lists folder. If VirtualDJ
   says the drive's database is corrupted and offers to fix it, say yes: it only updates the
   drive letter, and your playlists and cues stay.
 
 The music is in Open Jockey/Music. Exporting again from Open Jockey updates the stick.
 ";
+
+/// Where, at the stick's root, the Rekordbox import steps are written.
+pub const REKORDBOX_STEPS_PATH: &str = "IMPORT TO REKORDBOX.txt";
+
+/// The steps to open the exported playlists in Rekordbox; the window and the CLI show them
+/// after an export, and `IMPORT TO REKORDBOX.txt` holds them.
+pub const REKORDBOX_STEPS: &str = "\
+1. In Rekordbox, open Preferences > Advanced > Database. Under \"rekordbox xml\", next to
+   \"Imported Library\", click Browse and choose Open Jockey/rekordbox.xml on this stick.
+2. Still in Preferences, open View > Layout and tick \"rekordbox xml\".
+3. In the tree on the left, open \"rekordbox xml\" > Playlists. Right-click a playlist and
+   choose \"Import Playlist\". It appears under Playlists with its hotcues and saved loops.";
+
+/// The text of `IMPORT TO REKORDBOX.txt`.
+fn rekordbox_file() -> String {
+    format!(
+        "How to open these playlists in Rekordbox (made by Open Jockey)\n\n{REKORDBOX_STEPS}\n\n\
+         After a new export from Open Jockey, do step 3 again to update a playlist.\n\
+         On a computer where this stick has another name or drive letter, Rekordbox shows the\n\
+         tracks as missing: use Relocate and pick the Open Jockey/Music folder on this stick.\n"
+    )
+}
 
 /// Why an export to a stick whose free space the system will not tell is refused.
 pub const FREE_SPACE_UNKNOWN: &str = "Open Jockey cannot read the stick's free space.";
@@ -192,6 +213,9 @@ pub fn run(
 
     let readme = stick.join(OJ_DIR).join("README.txt");
     files::write_atomic(stick, &readme, README_TEXT.as_bytes())?;
+    // At the stick's root, where the owner looks first; it is ours by name.
+    let steps = stick.join(REKORDBOX_STEPS_PATH);
+    files::write_atomic(stick, &steps, rekordbox_file().as_bytes())?;
 
     let mut folders = BTreeSet::new();
     for stale in &plan.stale_tracks {
@@ -225,6 +249,20 @@ pub fn run(
         report.notes.push(format!(
             "{} copied without Serato cues (not MP3 or WAV)",
             count(plan.without_serato_cues, "track", "tracks")
+        ));
+    }
+    let twice = plan
+        .playlists
+        .iter()
+        .filter(|p| {
+            let mut seen = HashSet::new();
+            !p.tracks.iter().all(|t| seen.insert(t))
+        })
+        .count();
+    if twice > 0 {
+        report.notes.push(format!(
+            "{} a track twice: Serato shows it once",
+            count(twice, "playlist lists", "playlists list")
         ));
     }
     progress(ExportProgress { done: total, total });

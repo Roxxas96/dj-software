@@ -685,11 +685,12 @@ fn the_export_shows_progress_then_the_result() {
     let (harness, _) = open_export(&frame);
     harness.get_by_label("Exporting… 3 of 9");
     drop(harness);
-    let done = "Exported 2 playlists to BRAVO: 5 copied, 35 kept. In Rekordbox, import \
-                Open Jockey/rekordbox.xml (see README.txt on the stick).";
+    let done = "Exported 2 playlists to BRAVO: 5 copied, 35 kept.\nTo open them in Rekordbox (also in IMPORT TO REKORDBOX.txt on the stick):\n\
+                1. In Rekordbox, open Preferences > Advanced > Database.";
     let frame = export_page(ExportView::Done(format!("{done}\nA note")));
     let (mut harness, asked) = open_export(&frame);
     harness.get_by_label_contains("Exported 2 playlists to BRAVO");
+    harness.get_by_label_contains("IMPORT TO REKORDBOX.txt");
     harness.get_by_label_contains("A note");
     harness.get_by_label("OK").click();
     harness.run_steps(3);

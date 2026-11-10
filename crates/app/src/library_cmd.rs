@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, bail};
-use interop::export::TrackAction;
+use interop::export::{REKORDBOX_STEPS, TrackAction};
 use interop::{ExportPlan, ExportProgress};
 use library::{
     Analyzer, BPM_RANGE, GridEdit, GridError, KEY_NOTATION, Library, PlaylistSummary, Reader,
@@ -439,6 +439,10 @@ fn export_lines(
         "Exported: {} copied, {} kept, {} re-tagged, {} removed.",
         report.copied, report.kept, report.retagged, report.removed
     ));
+    lines.push(
+        "To open them in Rekordbox (also in IMPORT TO REKORDBOX.txt on the stick):".to_owned(),
+    );
+    lines.extend(REKORDBOX_STEPS.lines().map(str::to_owned));
     lines.extend(report.notes);
     Ok(lines)
 }
@@ -1609,6 +1613,11 @@ mod tests {
                 lines.contains(&"Exported: 1 copied, 0 kept, 0 re-tagged, 0 removed.".to_owned()),
                 "{lines:?}"
             );
+            let heading =
+                "To open them in Rekordbox (also in IMPORT TO REKORDBOX.txt on the stick):";
+            let at = lines.iter().position(|l| l == heading).unwrap();
+            assert!(lines[at - 1].starts_with("Exported: "), "{lines:?}");
+            assert!(lines[at + 1].starts_with("1. In Rekordbox,"), "{lines:?}");
             // Again: the track is already there.
             let again = export_lines(&lib, &stick, &mix(), true, &mounts(&dir), &|_| {}).unwrap();
             assert!(again[2].ends_with("already on the stick: 1"), "{again:?}");
