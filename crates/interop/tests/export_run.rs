@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use interop::export::serato::markers::markers2_geob;
 use interop::export::serato::tlv::{Body, Record, decode};
 use interop::export::{
-    ExportError, ExportPlan, ExportProgress, ExportReport, Manifest, README_TEXT, TrackAction,
-    gather, plan_export, run,
+    ExportError, ExportPlan, ExportProgress, ExportReport, Manifest, README_TEXT, REKORDBOX_STEPS,
+    REKORDBOX_STEPS_PATH, TrackAction, gather, plan_export, run,
 };
 use interop::{VdjPoi, read_database, read_playlists};
 use library::{HotcuePoint, Library, RawStatement, WriteOp, add_folder, scan_folder};
@@ -20,6 +20,21 @@ use lofty::iff::wav::WavFile;
 use quick_xml::Reader;
 use quick_xml::events::Event;
 use rusqlite::types::Value;
+
+/// The exact text of `IMPORT TO REKORDBOX.txt` at the stick's root.
+const REKORDBOX_FILE: &str = "\
+How to open these playlists in Rekordbox (made by Open Jockey)
+
+1. In Rekordbox, open Preferences > Advanced > Database. Under \"rekordbox xml\", next to
+   \"Imported Library\", click Browse and choose Open Jockey/rekordbox.xml on this stick.
+2. Still in Preferences, open View > Layout and tick \"rekordbox xml\".
+3. In the tree on the left, open \"rekordbox xml\" > Playlists. Right-click a playlist and
+   choose \"Import Playlist\". It appears under Playlists with its hotcues and saved loops.
+
+After a new export from Open Jockey, do step 3 again to update a playlist.
+On a computer where this stick has another name or drive letter, Rekordbox shows the
+tracks as missing: use Relocate and pick the Open Jockey/Music folder on this stick.
+";
 
 struct Setup {
     _dir: tempfile::TempDir,
@@ -359,6 +374,20 @@ fn exports_all_three_formats() {
     assert_eq!(done, (1..=total).collect::<Vec<_>>());
     assert!(calls.iter().all(|c| c.total == total));
     assert!(README_TEXT.starts_with("This stick was made by Open Jockey."));
+    assert!(README_TEXT.contains(
+        "Serato DJ: plug the stick in. The playlists show as crates under the stick's name. A track\n  listed twice in a playlist shows once (Serato keeps a track once per crate), and saved\n  loops show in Serato DJ Pro only.\n"
+    ));
+    assert!(
+        README_TEXT
+            .contains("Rekordbox: follow IMPORT TO REKORDBOX.txt at the top of this stick.\n")
+    );
+    assert!(!README_TEXT.contains("Preferences"));
+    assert_eq!(REKORDBOX_STEPS_PATH, "IMPORT TO REKORDBOX.txt");
+    let steps = fs::read_to_string(s.stick.join(REKORDBOX_STEPS_PATH)).unwrap();
+    assert_eq!(steps, REKORDBOX_FILE);
+    assert!(steps.contains(REKORDBOX_STEPS));
+    assert!(REKORDBOX_STEPS.starts_with("1. In Rekordbox, open Preferences"));
+    assert!(REKORDBOX_STEPS.ends_with("hotcues and saved loops."));
     assert!(README_TEXT.contains(
         "VirtualDJ: plug the stick in. The playlists show under the stick's Lists folder. If VirtualDJ\n  says the drive's database is corrupted and offers to fix it, say yes: it only updates the\n  drive letter, and your playlists and cues stay.\n"
     ));
@@ -909,4 +938,21 @@ fn notes_count_one_in_the_singular() {
         report.notes,
         ["2 tracks copied without Serato cues (not MP3 or WAV)"]
     );
+}
+
+#[test]
+fn a_track_listed_twice_in_a_playlist_gets_a_serato_note() {
+    let s = setup();
+    let ids = add_tracks(&s, &["a.wav", "b.wav"]);
+    let (a, b) = (ids[0], ids[1]);
+    let note = "1 playlist lists a track twice: Serato shows it once";
+    let x = playlist(&s, "X", &[a, b, a]);
+    assert_eq!(export(&s, &[x]).notes, [note]);
+    let y = playlist(&s, "Y", &[b, a, b]);
+    assert_eq!(
+        export(&s, &[x, y]).notes,
+        ["2 playlists list a track twice: Serato shows it once"]
+    );
+    let z = playlist(&s, "Z", &[a, b]);
+    assert!(export(&s, &[z]).notes.is_empty());
 }

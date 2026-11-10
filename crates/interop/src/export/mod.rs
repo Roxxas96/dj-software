@@ -16,8 +16,8 @@ pub use layout::{
 };
 pub use plan::{ExportPlan, PlannedTrack, TrackAction, plan_export};
 pub use run::{
-    ExportProgress, ExportReport, FREE_SPACE_UNKNOWN, FormatOutput, README_TEXT, StickContext,
-    StickFormat, run,
+    ExportProgress, ExportReport, FREE_SPACE_UNKNOWN, FormatOutput, README_TEXT, REKORDBOX_STEPS,
+    REKORDBOX_STEPS_PATH, StickContext, StickFormat, run,
 };
 
 use std::collections::{HashMap, HashSet};

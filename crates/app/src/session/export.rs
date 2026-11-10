@@ -7,6 +7,7 @@
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
+use interop::export::REKORDBOX_STEPS;
 use interop::{ExportPlan, ExportProgress, ExportReport, Manifest};
 use library::Library;
 use ui::{ExportChoice, ExportStep, ExportSummary, ExportView, PlaylistLabel, StickLabel};
@@ -323,8 +324,8 @@ fn done_text(report: &ExportReport, stick: &str) -> String {
         "playlists"
     };
     let mut text = format!(
-        "Exported {} {playlists} to {stick}: {} copied, {} kept. In Rekordbox, import \
-         Open Jockey/rekordbox.xml (see README.txt on the stick).",
+        "Exported {} {playlists} to {stick}: {} copied, {} kept.\n\
+         To open them in Rekordbox (also in IMPORT TO REKORDBOX.txt on the stick):\n{REKORDBOX_STEPS}",
         report.playlists, report.copied, report.kept
     );
     for note in &report.notes {
@@ -495,11 +496,12 @@ mod tests {
         };
         assert!(
             text.starts_with(
-                "Exported 1 playlist to STICK: 1 copied, 0 kept. In Rekordbox, import \
-                 Open Jockey/rekordbox.xml (see README.txt on the stick)."
+                "Exported 1 playlist to STICK: 1 copied, 0 kept.\n\
+                 To open them in Rekordbox (also in IMPORT TO REKORDBOX.txt on the stick):\n1. In Rekordbox,"
             ),
             "{text}"
         );
+        assert!(text.contains("\n3. In the tree on the left"), "{text}");
         assert!(s.manifest().is_file());
         assert_eq!(s.send(ExportStep::Close), ExportView::Idle);
         // Listed again, the stick holds the playlist: it comes ticked.
