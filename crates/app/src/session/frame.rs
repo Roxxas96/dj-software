@@ -13,6 +13,7 @@ use crate::play::Pass;
 use crate::printer::Line;
 
 use super::detail::DetailJobs;
+use super::export::Export;
 use super::import::Import;
 use super::settings::Settings;
 use super::view::ViewStore;
@@ -51,6 +52,8 @@ pub(super) struct FrameParts {
     pub detail: Option<DetailJobs>,
     /// The import from VirtualDJ; none until the library is open.
     pub import: Option<Import>,
+    /// The export to a USB stick; none until the library is open.
+    pub export: Option<Export>,
 }
 
 impl FrameParts {
@@ -73,6 +76,7 @@ impl FrameParts {
             output_latency: Duration::ZERO,
             detail: None,
             import: None,
+            export: None,
         }
     }
 
@@ -175,6 +179,11 @@ impl FrameParts {
                 .import
                 .as_ref()
                 .map(|import| import.view().clone())
+                .unwrap_or_default(),
+            export: self
+                .export
+                .as_ref()
+                .map(|export| export.view().clone())
                 .unwrap_or_default(),
             ..ControlFrame::default()
         }

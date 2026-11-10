@@ -29,6 +29,8 @@ pub enum UiCommand {
     ResetSettings,
     /// A step of the import from VirtualDJ.
     Import(ImportStep),
+    /// A step of the export to a USB stick.
+    Export(ExportStep),
 }
 
 /// What the window asks of the import from VirtualDJ; the session answers with the
@@ -47,6 +49,23 @@ pub enum ImportStep {
     Apply,
     /// Stops before anything is written, or puts a finished import's result away.
     Cancel,
+}
+
+/// What the window asks of the export to a USB stick; the session answers with the
+/// frame's [`ExportView`](crate::ExportView).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExportStep {
+    /// Lists the sticks and the playlists again.
+    Open,
+    /// Works out what exporting `playlists` (library ids) to stick `stick`, an index in
+    /// the choice's sticks, would do; writes nothing.
+    Check { stick: usize, playlists: Vec<i64> },
+    /// Writes what the summary showed.
+    Write,
+    /// Goes from the summary back to the choice.
+    Back,
+    /// Puts the choice, or a finished export's result, away.
+    Close,
 }
 
 /// What to do with a track that has hotcues both here and in VirtualDJ.

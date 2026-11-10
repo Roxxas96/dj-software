@@ -1,8 +1,8 @@
 //! Applies what the window asks for ([`UiCommand`]s) on the session thread: view changes
 //! and the zoom to the [`ViewStore`](super::view::ViewStore), actions to the controller
 //! runtime as a MIDI input would, settings to `config.toml` and, for the live ones, to
-//! the engine, the controller runtime and the view, and the import from VirtualDJ's steps
-//! to the [`Import`].
+//! the engine, the controller runtime and the view, the import from VirtualDJ's steps to
+//! the [`Import`], and the export's to the [`Export`](super::export::Export).
 
 use std::sync::mpsc::Receiver;
 use std::time::Instant;
@@ -61,10 +61,19 @@ pub(super) fn drain(commands: &Receiver<UiCommand>, parts: &mut FrameParts, mut 
                     import.step(step, decks_loaded);
                 }
             }
+            UiCommand::Export(step) => {
+                // The export only reads the library: the decks can hold tracks.
+                if let Some(export) = parts.export.as_mut() {
+                    export.step(step);
+                }
+            }
         }
     }
     if parts.import.as_mut().is_some_and(Import::poll) {
         parts.refresh_marks();
+    }
+    if let Some(export) = parts.export.as_mut() {
+        export.poll();
     }
     if let Some(settings) = parts.settings.as_mut() {
         let before = settings.config().ui.clone();

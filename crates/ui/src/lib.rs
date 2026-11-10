@@ -26,10 +26,11 @@ use std::sync::mpsc::{Sender, channel};
 use anyhow::anyhow;
 use engine::EngineMonitor;
 
-pub use command::{ImportStep, Resolution, UiCommand, ViewChange};
+pub use command::{ExportStep, ImportStep, Resolution, UiCommand, ViewChange};
 pub use model::{
-    ControlFrame, DeckInfo, EVENT_SHOWN, EVENTS_KEPT, GHOSTS, HotcueMark, ImportSummary,
-    ImportView, Published, SettingRow, TrackLabel,
+    ControlFrame, DeckInfo, EVENT_SHOWN, EVENTS_KEPT, ExportChoice, ExportSummary, ExportView,
+    GHOSTS, HotcueMark, ImportSummary, ImportView, PlaylistLabel, Published, SettingRow,
+    StickLabel, TrackLabel,
 };
 pub use view::{
     ColourScheme, JogDisplay, Layout, MAX_SHARE, MIN_SHARE, PanelSizes, TimeMode, ViewState,

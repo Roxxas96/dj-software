@@ -1,8 +1,5 @@
 //! Finding the USB sticks an export can go to, and which drive a folder is on.
 
-// The window's export (a later task) is the other caller of the stick list.
-#![allow(dead_code)]
-
 use std::path::{Path, PathBuf};
 
 use library::Reader;

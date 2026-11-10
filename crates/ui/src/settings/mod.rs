@@ -1,8 +1,9 @@
 //! The settings window, in the style of VirtualDJ's: a sidebar (Audio, Interface,
-//! Controllers, Options, Library and what comes Later) and a page beside it. Every change is a
+//! Controllers, Options, Library, USB export and what comes Later) and a page beside it. Every change is a
 //! [`UiCommand`] for the session; the pages draw the rows the session published, so an
 //! edit shows one frame later.
 
+mod export;
 mod interface;
 mod library;
 pub mod options;
@@ -29,16 +30,18 @@ enum Page {
     Controllers,
     Options,
     Library,
+    Export,
     Later,
 }
 
 impl Page {
-    const ALL: [Page; 6] = [
+    const ALL: [Page; 7] = [
         Page::Audio,
         Page::Interface,
         Page::Controllers,
         Page::Options,
         Page::Library,
+        Page::Export,
         Page::Later,
     ];
 
@@ -49,6 +52,7 @@ impl Page {
             Page::Controllers => "Controllers",
             Page::Options => "Options",
             Page::Library => "Library",
+            Page::Export => "USB export",
             Page::Later => "Later",
         }
     }
@@ -63,6 +67,8 @@ pub struct SettingsWindow {
     drafts: options::Drafts,
     /// The import's "for all remaining" box.
     import_rest: bool,
+    /// The export's chosen stick and ticked playlists.
+    export: export::Draft,
 }
 
 /// Draws the window while it is open.
@@ -117,6 +123,7 @@ fn page(
         Page::Options if rows.is_empty() => unavailable(ui, frame),
         Page::Options => options::show(ui, rows, &mut state.options, &mut state.drafts, commands),
         Page::Library => library::show(ui, &frame.import, &mut state.import_rest, commands),
+        Page::Export => export::show(ui, &frame.export, &mut state.export, commands),
         Page::Later => later(ui),
     }
 }

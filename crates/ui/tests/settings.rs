@@ -7,8 +7,9 @@ use std::sync::mpsc::{Receiver, channel};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use ui::{
-    ControlFrame, ImportStep, ImportSummary, ImportView, Layout, Resolution, SettingRow,
-    TrackLabel, UiCommand, ViewChange,
+    ControlFrame, ExportChoice, ExportStep, ExportSummary, ExportView, ImportStep, ImportSummary,
+    ImportView, Layout, PlaylistLabel, Resolution, SettingRow, StickLabel, TrackLabel, UiCommand,
+    ViewChange,
 };
 
 fn row(key: &str, category: &'static str, value: &str, default: &str) -> SettingRow {
@@ -436,5 +437,209 @@ fn busy_decks_and_the_result_show() {
     assert_eq!(
         asked.try_iter().collect::<Vec<_>>(),
         [UiCommand::Import(ImportStep::Cancel)]
+    );
+}
+
+/// The USB export page of a window whose frame shows `export`.
+fn export_page(export: ExportView) -> ControlFrame {
+    ControlFrame {
+        export,
+        ..frame(rows())
+    }
+}
+
+fn open_export(frame: &ControlFrame) -> (Harness<'_>, Receiver<UiCommand>) {
+    let (mut harness, asked) = open(frame);
+    harness.get_by_label("USB export").click();
+    harness.run_steps(3);
+    (harness, asked)
+}
+
+fn stick(name: &str, exported: Vec<i64>) -> StickLabel {
+    StickLabel {
+        name: name.to_owned(),
+        free: "512.0 MB".to_owned(),
+        exported,
+    }
+}
+
+fn choice() -> ExportChoice {
+    ExportChoice {
+        sticks: vec![stick("ALPHA", Vec::new()), stick("BRAVO", vec![2])],
+        playlists: vec![
+            PlaylistLabel {
+                id: 1,
+                name: "Warmup".to_owned(),
+                tracks: 12,
+            },
+            PlaylistLabel {
+                id: 2,
+                name: "Peak".to_owned(),
+                tracks: 30,
+            },
+        ],
+    }
+}
+
+fn export_summary(too_small: bool) -> ExportSummary {
+    ExportSummary {
+        stick: "BRAVO".to_owned(),
+        playlists: 2,
+        tracks: 40,
+        to_copy: 5,
+        copy_size: "52.4 MB".to_owned(),
+        kept: 35,
+        free: "12.0 MB".to_owned(),
+        without_serato_cues: 3,
+        skipped: 1,
+        to_remove: 4,
+        too_small,
+    }
+}
+
+#[test]
+fn the_export_page_starts_with_a_button() {
+    let frame = export_page(ExportView::Idle);
+    let (mut harness, asked) = open_export(&frame);
+    harness.get_by_label_contains("Your music files are never changed.");
+    harness.get_by_label("Export to USB stick…").click();
+    harness.run_steps(3);
+    assert_eq!(
+        asked.try_iter().collect::<Vec<_>>(),
+        [UiCommand::Export(ExportStep::Open)]
+    );
+}
+
+#[test]
+fn export_page_lists_sticks_and_ticks_exported() {
+    let frame = export_page(ExportView::Choose(choice()));
+    let (mut harness, asked) = open_export(&frame);
+    // The first stick has nothing on it: nothing ticked, so no check.
+    assert!(harness.get_by_label("Check").accesskit_node().is_disabled());
+    harness.get_by_label("Warmup (12)");
+    harness.get_by_label("USB stick").click();
+    harness.run_steps(3);
+    harness.get_by_label("BRAVO (512.0 MB free)").click();
+    harness.run_steps(3);
+    harness.get_by_label("Check").click();
+    harness.run_steps(3);
+    assert_eq!(
+        asked.try_iter().collect::<Vec<_>>(),
+        [UiCommand::Export(ExportStep::Check {
+            stick: 1,
+            playlists: vec![2],
+        })]
+    );
+}
+
+#[test]
+fn ticking_a_playlist_adds_it_to_the_check() {
+    let frame = export_page(ExportView::Choose(choice()));
+    let (mut harness, asked) = open_export(&frame);
+    harness.get_by_label("Peak (30)").click();
+    harness.run_steps(3);
+    harness.get_by_label("Warmup (12)").click();
+    harness.run_steps(3);
+    harness.get_by_label("Check").click();
+    harness.run_steps(3);
+    harness.get_by_label("Refresh").click();
+    harness.run_steps(3);
+    harness.get_by_label("Cancel").click();
+    harness.run_steps(3);
+    assert_eq!(
+        asked.try_iter().collect::<Vec<_>>(),
+        [
+            UiCommand::Export(ExportStep::Check {
+                stick: 0,
+                playlists: vec![1, 2],
+            }),
+            UiCommand::Export(ExportStep::Open),
+            UiCommand::Export(ExportStep::Close),
+        ]
+    );
+}
+
+#[test]
+fn no_stick_message() {
+    let frame = export_page(ExportView::Choose(ExportChoice {
+        sticks: Vec::new(),
+        ..choice()
+    }));
+    let (mut harness, asked) = open_export(&frame);
+    harness.get_by_label("No USB stick found. Plug one in, then Refresh.");
+    assert!(harness.query_by_label("Check").is_none());
+    harness.get_by_label("Refresh").click();
+    harness.run_steps(3);
+    assert_eq!(
+        asked.try_iter().collect::<Vec<_>>(),
+        [UiCommand::Export(ExportStep::Open)]
+    );
+}
+
+#[test]
+fn the_export_summary_shows_the_cli_lines() {
+    let summary = export_summary(false);
+    let frame = export_page(ExportView::Summary(summary.clone()));
+    let (mut harness, asked) = open_export(&frame);
+    harness.get_by_label("Stick: BRAVO");
+    harness.get_by_label("Playlists: 2, tracks: 40");
+    harness.get_by_label("To copy: 5 tracks (52.4 MB), already on the stick: 35");
+    harness.get_by_label("Free on the stick: 12.0 MB");
+    harness.get_by_label("Copied without Serato cues (not MP3 or WAV): 3");
+    harness.get_by_label("Skipped (missing or unreadable): 1");
+    harness.get_by_label("Removed from the stick (no longer exported): 4");
+    assert!(harness.query_by_label(&summary.too_small_line()).is_none());
+    harness.get_by_label("Export").click();
+    harness.run_steps(3);
+    harness.get_by_label("Back").click();
+    harness.run_steps(3);
+    assert_eq!(
+        asked.try_iter().collect::<Vec<_>>(),
+        [
+            UiCommand::Export(ExportStep::Write),
+            UiCommand::Export(ExportStep::Back),
+        ]
+    );
+}
+
+#[test]
+fn export_disabled_when_too_small() {
+    let frame = export_page(ExportView::Summary(export_summary(true)));
+    let (mut harness, asked) = open_export(&frame);
+    harness.get_by_label("The stick is too small: 52.4 MB to copy, 12.0 MB free.");
+    let export = harness.get_by_label("Export");
+    assert!(export.accesskit_node().is_disabled());
+    export.click();
+    harness.run_steps(3);
+    assert_eq!(asked.try_iter().collect::<Vec<_>>(), []);
+}
+
+#[test]
+fn the_export_shows_progress_then_the_result() {
+    let frame = export_page(ExportView::Writing { done: 3, total: 9 });
+    let (harness, _) = open_export(&frame);
+    harness.get_by_label("Exporting… 3 of 9");
+    drop(harness);
+    let done = "Exported 2 playlists to BRAVO: 5 copied, 35 kept. In Rekordbox, import \
+                Open Jockey/rekordbox.xml (see README.txt on the stick).";
+    let frame = export_page(ExportView::Done(format!("{done}\nA note")));
+    let (mut harness, asked) = open_export(&frame);
+    harness.get_by_label_contains("Exported 2 playlists to BRAVO");
+    harness.get_by_label_contains("A note");
+    harness.get_by_label("OK").click();
+    harness.run_steps(3);
+    assert_eq!(
+        asked.try_iter().collect::<Vec<_>>(),
+        [UiCommand::Export(ExportStep::Close)]
+    );
+    drop(harness);
+    let frame = export_page(ExportView::Failed("the stick is gone".to_owned()));
+    let (mut harness, asked) = open_export(&frame);
+    harness.get_by_label("the stick is gone");
+    harness.get_by_label("OK").click();
+    harness.run_steps(3);
+    assert_eq!(
+        asked.try_iter().collect::<Vec<_>>(),
+        [UiCommand::Export(ExportStep::Close)]
     );
 }

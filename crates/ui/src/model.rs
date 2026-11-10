@@ -204,6 +204,112 @@ pub struct ImportSummary {
     pub unmatched: usize,
 }
 
+/// Where the export to a USB stick is, as the settings window shows it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ExportView {
+    #[default]
+    Idle,
+    /// Looking for sticks and reading the playlists.
+    Listing,
+    /// The sticks and playlists to choose from.
+    Choose(ExportChoice),
+    /// Working out what the export would do.
+    Checking,
+    /// What the export would do, before anything is written.
+    Summary(ExportSummary),
+    /// `done` of `total` steps written.
+    Writing { done: usize, total: usize },
+    /// What was written.
+    Done(String),
+    /// Why the export stopped.
+    Failed(String),
+}
+
+/// The sticks an export can go to, and the library's playlists.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExportChoice {
+    pub sticks: Vec<StickLabel>,
+    pub playlists: Vec<PlaylistLabel>,
+}
+
+/// A USB stick, as the export's choice names it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StickLabel {
+    pub name: String,
+    /// Free space, like "512.0 MB", or "?" when the system does not say.
+    pub free: String,
+    /// The library playlists already on the stick, by id: those whose names are in the
+    /// manifest an earlier export left there.
+    pub exported: Vec<i64>,
+}
+
+/// A library playlist, as the export's choice names it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PlaylistLabel {
+    pub id: i64,
+    pub name: String,
+    pub tracks: u32,
+}
+
+/// The counts the export shows before it writes anything.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExportSummary {
+    /// The stick's name, or its path from the command line.
+    pub stick: String,
+    pub playlists: usize,
+    /// Tracks in the playlists, each counted once.
+    pub tracks: usize,
+    /// Tracks to copy, and their size like "12.3 MB".
+    pub to_copy: usize,
+    pub copy_size: String,
+    /// Tracks already on the stick.
+    pub kept: usize,
+    /// Free space on the stick, like "512.0 MB".
+    pub free: String,
+    /// Tracks copied without Serato cues: not MP3 or WAV.
+    pub without_serato_cues: usize,
+    /// Tracks missing or unreadable, left out.
+    pub skipped: usize,
+    /// Copies from an earlier export no longer exported, to delete.
+    pub to_remove: usize,
+    /// The stick cannot hold the copies: nothing will be written.
+    pub too_small: bool,
+}
+
+impl ExportSummary {
+    /// The summary, a count per line, as both the window and `library export` show it.
+    #[must_use]
+    pub fn lines(&self) -> [String; 7] {
+        [
+            format!("Stick: {}", self.stick),
+            format!("Playlists: {}, tracks: {}", self.playlists, self.tracks),
+            format!(
+                "To copy: {} tracks ({}), already on the stick: {}",
+                self.to_copy, self.copy_size, self.kept
+            ),
+            format!("Free on the stick: {}", self.free),
+            format!(
+                "Copied without Serato cues (not MP3 or WAV): {}",
+                self.without_serato_cues
+            ),
+            format!("Skipped (missing or unreadable): {}", self.skipped),
+            format!(
+                "Removed from the stick (no longer exported): {}",
+                self.to_remove
+            ),
+        ]
+    }
+
+    /// Why a stick that is [`too_small`](Self::too_small) is refused.
+    #[must_use]
+    pub fn too_small_line(&self) -> String {
+        format!(
+            "The stick is too small: {} to copy, {} free.",
+            self.copy_size, self.free
+        )
+    }
+}
+
 /// A library track, as a question names it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrackLabel {
@@ -252,6 +358,8 @@ pub struct ControlFrame {
     pub mappings: Vec<String>,
     /// Where the import from VirtualDJ is.
     pub import: ImportView,
+    /// Where the export to a USB stick is.
+    pub export: ExportView,
 }
 
 impl Default for ControlFrame {
@@ -278,6 +386,7 @@ impl Default for ControlFrame {
             devices: Vec::new(),
             mappings: Vec::new(),
             import: ImportView::default(),
+            export: ExportView::default(),
         }
     }
 }
