@@ -213,7 +213,7 @@ fn loop_without_bpm_is_left_out_and_counted() {
     let out = VirtualDjFormat.write_library(&cx(&p)).unwrap();
     assert_eq!(
         out.notes,
-        ["1 saved loops left out of VirtualDJ: their tracks have no BPM"]
+        ["1 saved loop left out of VirtualDJ: its track has no BPM"]
     );
     let list = fs::read_to_string(stick.path().join("VirtualDJ/MyLists/L.vdjfolder")).unwrap();
     assert!(!list.contains("bpm="), "{list}");

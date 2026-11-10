@@ -7,7 +7,7 @@ pub mod tlv;
 use std::collections::{HashMap, HashSet};
 
 use super::run::{FormatOutput, StickContext, StickFormat};
-use super::{ExportError, files, name_key, safe_component};
+use super::{ExportError, ExportPlan, files, name_key, safe_component};
 
 /// The folder on the stick that Serato reads.
 pub(crate) const SERATO_DIR: &str = "_Serato_";
@@ -30,6 +30,31 @@ pub(crate) fn check_database(stick: &std::path::Path) -> Result<(), ExportError>
     })
 }
 
+/// The crate files an earlier export wrote, by exact name.
+fn ours(plan: &ExportPlan) -> HashSet<&str> {
+    plan.previous
+        .iter()
+        .flat_map(|m| m.crates.iter().map(String::as_str))
+        .collect()
+}
+
+/// The crate file name of each playlist of `plan`, in order, as [`SeratoFormat`] writes them:
+/// worked out before anything is written, so the manifest can claim them first.
+pub(crate) fn crate_names(plan: &ExportPlan) -> Vec<String> {
+    let subcrates = plan.stick.join(SERATO_DIR).join(SUBCRATES);
+    let ours = ours(plan);
+    let mut taken = HashSet::new();
+    plan.playlists
+        .iter()
+        .map(|playlist| {
+            let base = safe_component(&playlist.name.replace("%%", "_"), 120);
+            let file = files::unique_name(&base, ".crate", &subcrates, &ours, &taken);
+            taken.insert(name_key(&file));
+            file
+        })
+        .collect()
+}
+
 /// Writes the library files Serato reads from a stick: one crate per playlist, and our tracks
 /// merged into `database V2`.
 #[derive(Debug, Clone, Copy, Default)]
@@ -50,18 +75,10 @@ impl StickFormat for SeratoFormat {
             .iter()
             .map(|t| (t.track.id, t.stick_path.as_str()))
             .collect();
-        let ours: HashSet<&str> = plan
-            .previous
-            .iter()
-            .flat_map(|m| m.crates.iter().map(String::as_str))
-            .collect();
+        let ours = ours(plan);
 
         let mut output = FormatOutput::default();
-        let mut taken = HashSet::new();
-        for playlist in &plan.playlists {
-            let base = safe_component(&playlist.name.replace("%%", "_"), 120);
-            let file = files::unique_name(&base, ".crate", &subcrates, &ours, &taken);
-            taken.insert(name_key(&file));
+        for (playlist, file) in plan.playlists.iter().zip(crate_names(plan)) {
             let listed: Vec<&str> = playlist
                 .tracks
                 .iter()

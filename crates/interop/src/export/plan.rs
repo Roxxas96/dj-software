@@ -29,6 +29,7 @@ pub struct PlannedTrack {
 /// Everything an export would do, and what it needs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExportPlan {
+    /// The stick's canonical, absolute path.
     pub stick: PathBuf,
     pub tracks: Vec<PlannedTrack>,
     pub playlists: Vec<ExportPlaylist>,
@@ -65,7 +66,8 @@ pub fn plan_export(
     stick: &Path,
     library_folders: &[PathBuf],
 ) -> Result<ExportPlan, ExportError> {
-    refuse_library_folders(stick, library_folders)?;
+    // Absolute from here on: Rekordbox and VirtualDJ name each copy by its full path.
+    let stick = &refuse_library_folders(stick, library_folders)?;
     let previous = Manifest::read(stick)?;
     super::serato::check_database(stick)?;
     super::virtualdj::check_database(stick)?;
@@ -124,8 +126,9 @@ pub fn plan_export(
     })
 }
 
-/// Refuses a stick that holds, is, or is inside a library folder.
-fn refuse_library_folders(stick: &Path, folders: &[PathBuf]) -> Result<(), ExportError> {
+/// Refuses a stick that holds, is, or is inside a library folder; else the stick's canonical
+/// path.
+fn refuse_library_folders(stick: &Path, folders: &[PathBuf]) -> Result<PathBuf, ExportError> {
     let canon_stick = dunce::canonicalize(stick).map_err(|source| ExportError::Io {
         path: stick.to_path_buf(),
         source,
@@ -147,5 +150,5 @@ fn refuse_library_folders(stick: &Path, folders: &[PathBuf]) -> Result<(), Expor
             folder.display()
         )));
     }
-    Ok(())
+    Ok(canon_stick)
 }
