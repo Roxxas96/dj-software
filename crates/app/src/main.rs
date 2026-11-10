@@ -13,6 +13,7 @@ mod printer;
 mod samples;
 mod session;
 mod stems_cmd;
+mod sticks;
 mod vdj;
 
 #[cfg(test)]
