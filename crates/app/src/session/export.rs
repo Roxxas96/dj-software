@@ -200,7 +200,7 @@ impl Export {
         let State::Checked(_, checked) = &self.state else {
             return;
         };
-        if checked.summary.too_small {
+        if checked.summary.refusal().is_some() {
             return;
         }
         let State::Checked(_, checked) = std::mem::replace(&mut self.state, State::Rest) else {
@@ -305,8 +305,7 @@ fn checked(lib: &Library, stick: &Stick, playlists: &[i64]) -> Result<Checked, S
         .folders()
         .map_err(|e| fail(interop::ExportError::Library(e)))?;
     let plan = interop::plan_export(set, &stick.root, &folders).map_err(fail)?;
-    // The plan counts unknown free space as none; the window says it is unknown.
-    let free = free_text(stick.free_bytes.map(|_| plan.free_bytes));
+    let free = free_text(plan.free_bytes);
     let summary = export_summary(safe(&stick.name), &plan, free);
     Ok(Checked { plan, summary })
 }

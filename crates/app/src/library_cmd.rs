@@ -406,7 +406,8 @@ fn export_playlist_ids(reader: &Reader, names: &[String]) -> anyhow::Result<Vec<
 }
 
 /// Plans (and with `write`, runs) the export of the playlists `names` to `to`, returning
-/// the lines to print. A stick that is too small is an error, and nothing is written.
+/// the lines to print. A stick that is too small, or whose free space is unknown, is an
+/// error, and nothing is written.
 fn export_lines(
     lib: &Library,
     to: &Path,
@@ -418,9 +419,10 @@ fn export_lines(
     let ids = export_playlist_ids(&reader, names)?;
     let set = interop::gather(&reader, &ids)?;
     let plan = interop::plan_export(set, to, &reader.folders()?)?;
-    let summary = export_summary(to.display().to_string(), &plan, megabytes(plan.free_bytes));
-    if summary.too_small {
-        bail!(summary.too_small_line());
+    let free = plan.free_bytes.map_or_else(|| "?".to_owned(), megabytes);
+    let summary = export_summary(to.display().to_string(), &plan, free);
+    if let Some(why) = summary.refusal() {
+        bail!(why);
     }
     let mut lines = summary.lines().to_vec();
     if !write {
@@ -456,6 +458,7 @@ pub(crate) fn export_summary(stick: String, plan: &ExportPlan, free: String) -> 
         skipped: plan.skipped.len(),
         to_remove: plan.stale_tracks.len(),
         too_small: plan.too_small(),
+        free_unknown: plan.free_bytes.is_none(),
     }
 }
 
@@ -1570,6 +1573,33 @@ mod tests {
                 1,
                 "nothing added"
             );
+        }
+
+        #[test]
+        fn unknown_free_space_is_refused_with_its_own_reason() {
+            let (dir, lib, stick) = export_fixture();
+            assert_inside(&stick, dir.path());
+            let reader = lib.reader().unwrap();
+            let set = interop::gather(&reader, &[1]).unwrap();
+            let mut plan = interop::plan_export(set, &stick, &reader.folders().unwrap()).unwrap();
+            plan.free_bytes = None;
+            let summary = export_summary("S".to_owned(), &plan, "?".to_owned());
+            assert!(!summary.too_small && summary.free_unknown, "{summary:?}");
+            assert_eq!(
+                summary.refusal().as_deref(),
+                Some("Open Jockey cannot read the stick's free space.")
+            );
+            // The window and the CLI say what the export run itself refuses with.
+            assert_eq!(
+                summary.refusal().as_deref(),
+                Some(interop::export::FREE_SPACE_UNKNOWN)
+            );
+            plan.free_bytes = Some(0);
+            let summary = export_summary("S".to_owned(), &plan, "0.0 MB".to_owned());
+            assert_eq!(summary.refusal(), Some(summary.too_small_line()));
+            plan.free_bytes = Some(u64::MAX);
+            let summary = export_summary("S".to_owned(), &plan, "lots".to_owned());
+            assert_eq!(summary.refusal(), None);
         }
 
         #[test]

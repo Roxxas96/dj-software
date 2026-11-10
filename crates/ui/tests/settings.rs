@@ -494,6 +494,7 @@ fn export_summary(too_small: bool) -> ExportSummary {
         skipped: 1,
         to_remove: 4,
         too_small,
+        free_unknown: false,
     }
 }
 
@@ -607,6 +608,24 @@ fn export_disabled_when_too_small() {
     let frame = export_page(ExportView::Summary(export_summary(true)));
     let (mut harness, asked) = open_export(&frame);
     harness.get_by_label("The stick is too small: 52.4 MB to copy, 12.0 MB free.");
+    let export = harness.get_by_label("Export");
+    assert!(export.accesskit_node().is_disabled());
+    export.click();
+    harness.run_steps(3);
+    assert_eq!(asked.try_iter().collect::<Vec<_>>(), []);
+}
+
+#[test]
+fn export_disabled_when_free_space_is_unknown() {
+    let summary = ExportSummary {
+        free: "?".to_owned(),
+        free_unknown: true,
+        ..export_summary(false)
+    };
+    let frame = export_page(ExportView::Summary(summary.clone()));
+    let (mut harness, asked) = open_export(&frame);
+    harness.get_by_label("Open Jockey cannot read the stick's free space.");
+    assert!(harness.query_by_label(&summary.too_small_line()).is_none());
     let export = harness.get_by_label("Export");
     assert!(export.accesskit_node().is_disabled());
     export.click();
