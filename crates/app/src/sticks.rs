@@ -92,13 +92,40 @@ fn mounted_dirs(dirs: &[PathBuf]) -> Vec<PathBuf> {
     found
 }
 
-/// The candidates that are not a library drive, sorted by name. A candidate whose canonical
-/// path has no parent is the filesystem root: never a stick.
-fn sticks_among(candidates: Vec<PathBuf>, library_volumes: &[PathBuf]) -> Vec<Stick> {
+/// Whether `candidate` is the system's own root (`/`, or `%SystemDrive%\\` on Windows):
+/// never a stick. A pure comparison; a drive such as `D:\\` is not the system root.
+fn is_system_root(candidate: &Path, system_root: &Path) -> bool {
+    candidate
+        .to_string_lossy()
+        .eq_ignore_ascii_case(&system_root.to_string_lossy())
+}
+
+/// The system's root: `/`, or the system drive's root on Windows.
+fn system_root() -> PathBuf {
+    if cfg!(windows) {
+        let drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_owned());
+        PathBuf::from(format!("{drive}\\"))
+    } else {
+        PathBuf::from("/")
+    }
+}
+
+/// The candidates that are not a library drive, sorted by name. Left out are the system
+/// root, and a candidate that is a mount dir or holds one (like `/media/<user>` when
+/// `/media` and `/media/<user>` are both mount dirs): only the volumes under it are sticks.
+fn sticks_among(
+    candidates: Vec<PathBuf>,
+    library_volumes: &[PathBuf],
+    mount_dirs: &[PathBuf],
+    system_root: &Path,
+) -> Vec<Stick> {
     let mut sticks: Vec<Stick> = Vec::new();
     for candidate in candidates {
         let root = dunce::canonicalize(&candidate).unwrap_or(candidate);
-        if root.parent().is_none() || library_volumes.contains(&root) {
+        if is_system_root(&root, system_root)
+            || library_volumes.contains(&root)
+            || mount_dirs.iter().any(|m| m.starts_with(&root))
+        {
             continue;
         }
         if sticks.iter().any(|s| s.root == root) {
@@ -137,7 +164,17 @@ pub(crate) fn list_sticks(reader: &Reader, mounts: &Mounts) -> anyhow::Result<Ve
         let system = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_owned());
         candidates.extend(letter_roots(&system, |root| root.exists()));
     }
-    Ok(sticks_among(candidates, &library_volumes))
+    let mount_dirs: Vec<PathBuf> = mounts
+        .dirs
+        .iter()
+        .map(|m| dunce::canonicalize(m).unwrap_or_else(|_| m.clone()))
+        .collect();
+    Ok(sticks_among(
+        candidates,
+        &library_volumes,
+        &mount_dirs,
+        &system_root(),
+    ))
 }
 
 #[cfg(test)]
@@ -228,12 +265,41 @@ mod tests {
     }
 
     #[test]
-    fn a_root_candidate_is_never_a_stick() {
-        let root = Path::new("/").to_path_buf();
-        let found = sticks_among(vec![root], &[]);
-        if cfg!(unix) {
-            assert!(found.is_empty());
-        }
+    fn only_the_system_root_is_the_system_root() {
+        assert!(is_system_root(Path::new("/"), Path::new("/")));
+        assert!(is_system_root(Path::new("C:\\"), Path::new("c:\\")));
+        assert!(!is_system_root(Path::new("D:\\"), Path::new("C:\\")));
+        assert!(!is_system_root(Path::new("/Volumes/X"), Path::new("/")));
+    }
+
+    #[test]
+    fn a_windows_drive_is_a_stick_and_the_system_drive_is_not() {
+        // Constructed candidates: no drive has to exist, and a drive root has no parent.
+        let found = sticks_among(
+            vec![PathBuf::from("D:\\"), PathBuf::from("C:\\")],
+            &[],
+            &[],
+            Path::new("C:\\"),
+        );
+        // Off Windows these do not exist, so they come back as given.
+        let roots: Vec<&Path> = found.iter().map(|s| s.root.as_path()).collect();
+        assert_eq!(roots, [Path::new("D:\\")]);
+    }
+
+    #[test]
+    fn nested_mount_dirs_list_only_the_volumes() {
+        let temp = tempfile::tempdir().unwrap();
+        let media = dunce::canonicalize(temp.path()).unwrap().join("media");
+        let user = media.join("me");
+        std::fs::create_dir_all(user.join("STICK")).unwrap();
+        std::fs::create_dir_all(media.join("OTHER")).unwrap();
+        let lib = library_on(temp.path(), "lib");
+        let mounts = Mounts {
+            dirs: vec![user.clone(), media.clone()],
+        };
+        let sticks = list_sticks(&lib.reader().unwrap(), &mounts).unwrap();
+        let names: Vec<&str> = sticks.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["OTHER", "STICK"]);
     }
 
     #[test]
