@@ -22,6 +22,7 @@ use crate::format::{
     bpm_text, grid_text, is_long_mix, key_text, length_text, megabytes, notation_from_setting,
     notation_setting, truncate,
 };
+use crate::sticks::{Mounts, refuse_library_drive};
 use crate::vdj::{Places, Scan, Scanned};
 
 /// `println!` of one line with every control character in it (from library tags, file
@@ -364,7 +365,7 @@ fn export(lib: &Library, to: &Path, names: &[String], write: bool) -> anyhow::Re
             eprint!("\rexporting {}/{}", p.done, p.total);
         }
     };
-    let result = export_lines(lib, to, names, write, &progress);
+    let result = export_lines(lib, to, names, write, &Mounts::usual(), &progress);
     if tty {
         eprintln!();
     }
@@ -405,7 +406,8 @@ fn export_playlist_ids(reader: &Reader, names: &[String]) -> anyhow::Result<Vec<
     Ok(ids)
 }
 
-/// Plans (and with `write`, runs) the export of the playlists `names` to `to`, returning
+/// Plans (and with `write`, runs) the export of the playlists `names` to `to`, refusing a
+/// `to` on the drive of a library folder (drives are found under `mounts`), and returns
 /// the lines to print. A stick that is too small, or whose free space is unknown, is an
 /// error, and nothing is written.
 fn export_lines(
@@ -413,12 +415,15 @@ fn export_lines(
     to: &Path,
     names: &[String],
     write: bool,
+    mounts: &Mounts,
     progress: &dyn Fn(ExportProgress),
 ) -> anyhow::Result<Vec<String>> {
     let reader = lib.reader()?;
     let ids = export_playlist_ids(&reader, names)?;
+    let folders = reader.folders()?;
+    refuse_library_drive(to, &folders, mounts)?;
     let set = interop::gather(&reader, &ids)?;
-    let plan = interop::plan_export(set, to, &reader.folders()?)?;
+    let plan = interop::plan_export(set, to, &folders)?;
     let free = plan.free_bytes.map_or_else(|| "?".to_owned(), megabytes);
     let summary = export_summary(to.display().to_string(), &plan, free);
     if let Some(why) = summary.refusal() {
@@ -1472,11 +1477,18 @@ mod tests {
         use super::*;
 
         /// A library with one scanned wav in `<temp>/music`, in the playlist "Mix", and an
-        /// empty `<temp>/stick`.
+        /// empty stick `<temp>/volumes/STICK`.
         fn export_fixture() -> (tempfile::TempDir, Library, PathBuf) {
+            export_fixture_in(&["music"])
+        }
+
+        /// [`export_fixture`] with the music in `<temp>/<music...>`.
+        fn export_fixture_in(music: &[&str]) -> (tempfile::TempDir, Library, PathBuf) {
             let dir = tempfile::tempdir().unwrap();
-            let music = dir.path().join("music");
-            let stick = dir.path().join("stick");
+            let music = music
+                .iter()
+                .fold(dir.path().to_path_buf(), |p, c| p.join(c));
+            let stick = dir.path().join("volumes").join("STICK");
             std::fs::create_dir_all(&music).unwrap();
             std::fs::create_dir_all(&stick).unwrap();
             write_wav(&music.join("a.wav"), 1.0);
@@ -1518,6 +1530,47 @@ mod tests {
             );
         }
 
+        /// `<temp>/volumes` stands for `/Volumes`: no real drive is looked at.
+        fn mounts(dir: &tempfile::TempDir) -> Mounts {
+            Mounts {
+                dirs: vec![dunce::canonicalize(dir.path().join("volumes")).unwrap()],
+                drive_letters: false,
+            }
+        }
+
+        #[test]
+        fn export_refuses_the_drive_that_holds_the_library() {
+            let (dir, lib, _) = export_fixture_in(&["volumes", "LIB", "music"]);
+            let to = dir.path().join("volumes").join("LIB").join("out");
+            std::fs::create_dir_all(&to).unwrap();
+            assert_inside(&to, dir.path());
+            let err = export_lines(&lib, &to, &mix(), true, &mounts(&dir), &|_| {}).unwrap_err();
+            let folder = lib.reader().unwrap().folders().unwrap().remove(0);
+            assert_eq!(
+                format!("{err:#}"),
+                format!(
+                    "{} is on the drive that holds the library folder {}: export to a USB \
+                     stick, not the music drive",
+                    to.display(),
+                    folder.display()
+                )
+            );
+            assert_eq!(std::fs::read_dir(&to).unwrap().count(), 0);
+        }
+
+        #[test]
+        fn export_refuses_a_folder_on_the_system_drive_with_the_library() {
+            let (dir, lib, _) = export_fixture();
+            let to = dir.path().join("elsewhere");
+            std::fs::create_dir_all(&to).unwrap();
+            let err = export_lines(&lib, &to, &mix(), true, &mounts(&dir), &|_| {}).unwrap_err();
+            assert!(
+                format!("{err:#}").contains("is on the drive that holds the library folder"),
+                "{err:#}"
+            );
+            assert_eq!(std::fs::read_dir(&to).unwrap().count(), 0);
+        }
+
         fn mix() -> Vec<String> {
             vec!["Mix".to_owned()]
         }
@@ -1526,7 +1579,7 @@ mod tests {
         fn export_dry_run_writes_nothing() {
             let (dir, lib, stick) = export_fixture();
             assert_inside(&stick, dir.path());
-            let lines = export_lines(&lib, &stick, &mix(), false, &|_| {}).unwrap();
+            let lines = export_lines(&lib, &stick, &mix(), false, &mounts(&dir), &|_| {}).unwrap();
             assert_eq!(lines[0], format!("Stick: {}", stick.display()));
             assert_eq!(lines[1], "Playlists: 1, tracks: 1");
             assert!(
@@ -1550,14 +1603,14 @@ mod tests {
         fn export_write_makes_the_stick() {
             let (dir, lib, stick) = export_fixture();
             assert_inside(&stick, dir.path());
-            let lines = export_lines(&lib, &stick, &mix(), true, &|_| {}).unwrap();
+            let lines = export_lines(&lib, &stick, &mix(), true, &mounts(&dir), &|_| {}).unwrap();
             assert!(stick.join("Open Jockey").join("export.toml").is_file());
             assert!(
                 lines.contains(&"Exported: 1 copied, 0 kept, 0 re-tagged, 0 removed.".to_owned()),
                 "{lines:?}"
             );
             // Again: the track is already there.
-            let again = export_lines(&lib, &stick, &mix(), true, &|_| {}).unwrap();
+            let again = export_lines(&lib, &stick, &mix(), true, &mounts(&dir), &|_| {}).unwrap();
             assert!(again[2].ends_with("already on the stick: 1"), "{again:?}");
         }
 
@@ -1566,7 +1619,7 @@ mod tests {
             let (dir, lib, _) = export_fixture();
             let music = dir.path().join("music");
             assert_inside(&music, dir.path());
-            let err = export_lines(&lib, &music, &mix(), true, &|_| {}).unwrap_err();
+            let err = export_lines(&lib, &music, &mix(), true, &mounts(&dir), &|_| {}).unwrap_err();
             assert!(!format!("{err:#}").is_empty());
             assert_eq!(
                 std::fs::read_dir(&music).unwrap().count(),
@@ -1606,7 +1659,15 @@ mod tests {
         fn export_unknown_playlist_lists_names() {
             let (dir, lib, stick) = export_fixture();
             assert_inside(&stick, dir.path());
-            let err = export_lines(&lib, &stick, &["Nope".to_owned()], true, &|_| {}).unwrap_err();
+            let err = export_lines(
+                &lib,
+                &stick,
+                &["Nope".to_owned()],
+                true,
+                &mounts(&dir),
+                &|_| {},
+            )
+            .unwrap_err();
             assert_eq!(
                 format!("{err:#}"),
                 "Unknown playlist \"Nope\". Playlists: Mix"

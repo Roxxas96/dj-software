@@ -65,6 +65,63 @@ pub(crate) fn volume_of(folder: &Path, mounts: &Path) -> PathBuf {
         .map_or_else(|| folder.clone(), Path::to_path_buf)
 }
 
+/// The drive holding `path` among the mount dirs `mount_dirs`: `<mount>/<name>` for the
+/// deepest mount dir it is under (so `/media/<user>/X`, not `/media/<user>`, when both
+/// `/media` and `/media/<user>` are mount dirs), else the filesystem root (the drive root on
+/// Windows). Compared by canonical path; the drive comes back canonical.
+pub(crate) fn volume(path: &Path, mount_dirs: &[PathBuf]) -> PathBuf {
+    let canonical = |path: &Path| dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let path = canonical(path);
+    mount_dirs
+        .iter()
+        .map(|m| canonical(m))
+        .filter_map(|m| {
+            let name = path.strip_prefix(&m).ok()?.components().next()?;
+            Some(m.join(name))
+        })
+        .max_by_key(|v| v.components().count())
+        .unwrap_or_else(|| {
+            path.ancestors()
+                .last()
+                .map_or_else(|| path.clone(), Path::to_path_buf)
+        })
+}
+
+/// Each library folder in `folders` with the drive that holds it ([`volume`]).
+pub(crate) fn library_volumes(folders: &[PathBuf], mounts: &Mounts) -> Vec<(PathBuf, PathBuf)> {
+    folders
+        .iter()
+        .map(|folder| (volume(folder, &mounts.dirs), folder.clone()))
+        .collect()
+}
+
+/// Refuses an export to `to` when the drive holding it ([`volume`]) also holds one of the
+/// library folders `folders`: the window lists no such drive, and `library export` keeps to
+/// the same rule.
+///
+/// # Errors
+///
+/// When `to` is on a library folder's drive, naming both.
+pub(crate) fn refuse_library_drive(
+    to: &Path,
+    folders: &[PathBuf],
+    mounts: &Mounts,
+) -> anyhow::Result<()> {
+    let drive = volume(to, &mounts.dirs);
+    if let Some((_, folder)) = library_volumes(folders, mounts)
+        .into_iter()
+        .find(|(v, _)| *v == drive)
+    {
+        anyhow::bail!(
+            "{} is on the drive that holds the library folder {}: export to a USB stick, not \
+             the music drive",
+            to.display(),
+            folder.display()
+        );
+    }
+    Ok(())
+}
+
 /// The drive letters `D:` to `Z:` that exist, other than the system drive (`system_drive`,
 /// like `C:`). `exists` says whether a root is there.
 fn letter_roots(system_drive: &str, exists: impl Fn(&Path) -> bool) -> Vec<PathBuf> {
@@ -112,14 +169,16 @@ fn system_root() -> PathBuf {
     }
 }
 
-/// The candidates that are not a library drive, sorted by name. Left out are the system
-/// root, and a candidate that is a mount dir or holds one (like `/media/<user>` when
-/// `/media` and `/media/<user>` are both mount dirs): only the volumes under it are sticks.
+/// The candidates that are not a library drive, sorted by name, with their free space from
+/// `free`. Left out are the system root, and a candidate that is a mount dir or holds one
+/// (like `/media/<user>` when `/media` and `/media/<user>` are both mount dirs): only the
+/// volumes under it are sticks.
 fn sticks_among(
     candidates: Vec<PathBuf>,
     library_volumes: &[PathBuf],
     mount_dirs: &[PathBuf],
     system_root: &Path,
+    free: impl Fn(&Path) -> Option<u64>,
 ) -> Vec<Stick> {
     let mut sticks: Vec<Stick> = Vec::new();
     for candidate in candidates {
@@ -137,7 +196,7 @@ fn sticks_among(
             || root.display().to_string(),
             |n| n.to_string_lossy().into_owned(),
         );
-        let free_bytes = interop::free_space(&root);
+        let free_bytes = free(&root);
         sticks.push(Stick {
             root,
             name,
@@ -153,14 +212,10 @@ fn sticks_among(
 /// letter `D:` to `Z:` besides the system drive. A volume holding a library folder is left
 /// out. Sorted by name.
 pub(crate) fn list_sticks(reader: &Reader, mounts: &Mounts) -> anyhow::Result<Vec<Stick>> {
-    let mut library_volumes = Vec::new();
-    for folder in reader.folders()? {
-        for mount in &mounts.dirs {
-            library_volumes.push(volume_of(&folder, mount));
-        }
-        let canonical = dunce::canonicalize(&folder).unwrap_or(folder);
-        library_volumes.extend(canonical.ancestors().last().map(Path::to_path_buf));
-    }
+    let library_volumes: Vec<PathBuf> = library_volumes(&reader.folders()?, mounts)
+        .into_iter()
+        .map(|(volume, _)| volume)
+        .collect();
     let mut candidates = mounted_dirs(&mounts.dirs);
     if mounts.drive_letters {
         let system = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_owned());
@@ -176,6 +231,7 @@ pub(crate) fn list_sticks(reader: &Reader, mounts: &Mounts) -> anyhow::Result<Ve
         &library_volumes,
         &mount_dirs,
         &system_root(),
+        interop::free_space,
     ))
 }
 
@@ -278,16 +334,37 @@ mod tests {
 
     #[test]
     fn a_windows_drive_is_a_stick_and_the_system_drive_is_not() {
-        // Constructed candidates: no drive has to exist, and a drive root has no parent.
+        // Constructed candidates on letters no CI machine has, and free space made up: no
+        // real drive is read. A drive root has no parent.
         let found = sticks_among(
-            vec![PathBuf::from("D:\\"), PathBuf::from("C:\\")],
+            vec![PathBuf::from("Q:\\"), PathBuf::from("P:\\")],
             &[],
             &[],
-            Path::new("C:\\"),
+            Path::new("P:\\"),
+            |_| Some(7),
         );
-        // Off Windows these do not exist, so they come back as given.
+        // These do not exist, so they come back as given.
         let roots: Vec<&Path> = found.iter().map(|s| s.root.as_path()).collect();
-        assert_eq!(roots, [Path::new("D:\\")]);
+        assert_eq!(roots, [Path::new("Q:\\")]);
+        assert_eq!(found[0].free_bytes, Some(7));
+    }
+
+    #[test]
+    fn a_path_is_on_the_deepest_mount_holding_it() {
+        let temp = tempfile::tempdir().unwrap();
+        let media = dunce::canonicalize(temp.path()).unwrap().join("media");
+        let user = media.join("me");
+        std::fs::create_dir_all(user.join("LIB").join("music")).unwrap();
+        // Either order: /media/<user>/LIB is the volume, not /media/<user>.
+        for dirs in [
+            vec![media.clone(), user.clone()],
+            vec![user.clone(), media.clone()],
+        ] {
+            assert_eq!(
+                volume(&user.join("LIB").join("music"), &dirs),
+                user.join("LIB")
+            );
+        }
     }
 
     #[test]
