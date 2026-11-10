@@ -4,7 +4,9 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use super::layout::{Manifest, OJ_DIR, SPACE_MARGIN, stick_paths};
-use super::{ExportError, ExportPlaylist, ExportSet, ExportTrack, FileKind, Skipped, free_space};
+use super::{
+    ExportError, ExportPlaylist, ExportSet, ExportTrack, FileKind, Skipped, files, free_space,
+};
 
 /// What happens to one track's file on the stick.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,8 +57,9 @@ impl ExportPlan {
 ///
 /// # Errors
 ///
-/// [`ExportError::Refused`] when `stick` holds or is inside a library folder or the manifest
-/// on it is damaged, [`ExportError::Io`] when `stick` cannot be read.
+/// [`ExportError::Refused`] when `stick` holds or is inside a library folder, or when the
+/// manifest, Serato's `database V2` or VirtualDJ's `database.xml` on it is damaged or not a
+/// regular file; [`ExportError::Io`] when `stick` cannot be read.
 pub fn plan_export(
     set: ExportSet,
     stick: &Path,
@@ -64,17 +67,18 @@ pub fn plan_export(
 ) -> Result<ExportPlan, ExportError> {
     refuse_library_folders(stick, library_folders)?;
     let previous = Manifest::read(stick)?;
+    super::serato::check_database(stick)?;
+    super::virtualdj::check_database(stick)?;
     let paths = stick_paths(&set.tracks);
     let mut tracks = Vec::with_capacity(set.tracks.len());
     let mut copy_bytes = 0;
     let mut without_serato_cues = 0;
     for track in set.tracks {
         let stick_path = paths[&track.id].clone();
-        let on_stick = stick_path
-            .split('/')
-            .fold(stick.to_path_buf(), |p, part| p.join(part));
-        let unchanged = on_stick.is_file()
-            && library::fingerprint::of_file(&on_stick).is_ok_and(|f| f == track.fingerprint);
+        // A link is never read: the copy then replaces it.
+        let unchanged = files::regular_file(stick, &stick_path).is_some_and(|on_stick| {
+            library::fingerprint::of_file(&on_stick).is_ok_and(|f| f == track.fingerprint)
+        });
         let action = if unchanged {
             TrackAction::Keep
         } else {

@@ -176,6 +176,9 @@ pub fn copy_atomic(
         .map_err(io(from))
         .and_then(|_| {
             drop(file);
+            // Closed before the rename: Windows will not replace a file that is open, and `from`
+            // is `to` when a kept copy is re-tagged.
+            drop(source);
             // The handle was created writable; this keeps that true if a platform copies flags.
             let mut perms = fs::metadata(&part).map_err(io(&part))?.permissions();
             #[allow(clippy::permissions_set_readonly_false)]
@@ -189,6 +192,57 @@ pub fn copy_atomic(
         let _ = fs::remove_file(&part);
     }
     result
+}
+
+/// `relative` (with `/` separators) under `stick` and what is there, when every folder on the
+/// way is a real folder (not a link) and the name itself exists; the name's own metadata does
+/// not follow a link. `None` when anything on the way is missing, a link or not a plain name.
+pub(super) fn reach(stick: &Path, relative: &str) -> Option<(PathBuf, fs::Metadata)> {
+    let mut at = stick.to_path_buf();
+    let mut parts = relative.split('/').peekable();
+    while let Some(part) = parts.next() {
+        if !matches!(
+            Path::new(part).components().collect::<Vec<_>>()[..],
+            [Component::Normal(_)]
+        ) {
+            return None;
+        }
+        at.push(part);
+        let meta = fs::symlink_metadata(&at).ok()?;
+        if parts.peek().is_none() {
+            return Some((at, meta));
+        }
+        if !meta.is_dir() {
+            return None;
+        }
+    }
+    None
+}
+
+/// `relative` (with `/` separators) under `stick`, when it is a regular file reached without
+/// any link.
+pub(super) fn regular_file(stick: &Path, relative: &str) -> Option<PathBuf> {
+    reach(stick, relative)
+        .filter(|(_, meta)| meta.file_type().is_file())
+        .map(|(path, _)| path)
+}
+
+/// The bytes of a file another app also writes (a database), or `None` when it is not there.
+///
+/// # Errors
+///
+/// [`ExportError::Refused`] when something other than a regular file is there (a link is not
+/// followed), [`ExportError::Io`] when it cannot be read.
+pub(super) fn read_existing(path: &Path) -> Result<Option<Vec<u8>>, ExportError> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_file() => fs::read(path).map(Some).map_err(io(path)),
+        Ok(_) => Err(ExportError::Refused(format!(
+            "{} is not a regular file; Open Jockey will not touch it",
+            path.display()
+        ))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(io(path)(e)),
+    }
 }
 
 /// Deletes `path` if it is a regular file, without following links; a link, a folder or a
