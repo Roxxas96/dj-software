@@ -69,11 +69,21 @@ pub fn encode(records: &[Record]) -> Vec<u8> {
     out
 }
 
+/// Serato nests records two levels deep; deeper input is refused.
+pub const MAX_DEPTH: usize = 16;
+
 /// Parses `bytes` into records, descending into tags that start with `o`.
 ///
 /// # Errors
-/// When a record's header or body runs past the end.
+/// When a record's header or body runs past the end, or records nest deeper than [`MAX_DEPTH`].
 pub fn decode(bytes: &[u8]) -> Result<Vec<Record>, String> {
+    decode_at(bytes, 0)
+}
+
+fn decode_at(bytes: &[u8], depth: usize) -> Result<Vec<Record>, String> {
+    if depth > MAX_DEPTH {
+        return Err("records nested deeper than 16 levels".to_string());
+    }
     let mut out = Vec::new();
     let mut at = 0;
     while at < bytes.len() {
@@ -88,7 +98,7 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<Record>, String> {
             .and_then(|end| bytes.get(start..end))
             .ok_or_else(|| format!("a record runs past the end at byte {at}"))?;
         let body = if t[0] == b'o' {
-            Body::Records(decode(body)?)
+            Body::Records(decode_at(body, depth + 1)?)
         } else {
             Body::Bytes(body.to_vec())
         };
@@ -235,6 +245,27 @@ mod tests {
     #[test]
     fn merge_refuses_garbage() {
         assert!(merge_database(Some(b"\x00\x01"), vec![]).is_err());
+    }
+
+    #[test]
+    fn deep_nesting_is_refused() {
+        let mut bytes = Vec::new();
+        for _ in 0..10_000 {
+            let mut next = b"otrk".to_vec();
+            next.extend_from_slice(&u32::try_from(bytes.len()).unwrap().to_be_bytes());
+            next.extend_from_slice(&bytes);
+            bytes = next;
+        }
+        assert!(decode(&bytes).is_err());
+        assert!(merge_database(Some(&bytes), vec![]).is_err());
+    }
+
+    #[test]
+    fn normal_nesting_still_decodes() {
+        let bytes = crate_file(&["Open Jockey/Music/A/x.mp3"]);
+        assert_eq!(decode(&bytes).unwrap().len(), 6);
+        let existing = encode(&[otrk("Music/friend.mp3")]);
+        assert!(merge_database(Some(&existing), vec![otrk("Open Jockey/a.mp3")]).is_ok());
     }
 
     #[test]
