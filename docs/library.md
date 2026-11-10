@@ -298,8 +298,9 @@ open-jockey library export --to /Volumes/STICK --playlist "Warm up" --write
 In the window: Settings, USB export, "Export to USB stick…" (see [ui.md](ui.md)).
 
 - **`--to`** is the stick's mount point (`/Volumes/<name>` on macOS, `/media/<user>/<name>`
-  on Linux) or drive (`E:\` on Windows). A stick that is, holds or is inside a library folder
-  is refused, and so is a stick that is too small: nothing is written.
+  on Linux) or drive (`E:\` on Windows). A `--to` on the drive that holds a library folder
+  is refused, as the window lists no such drive; so is a stick that is too small or whose
+  free space the system will not tell: nothing is written.
 - **`--playlist`** names a playlist exactly; repeat it for more. The playlists keep the order
   given. A name that matches no playlist, or several, is an error that lists them.
 - **The dry run:** without `--write`, nothing is written. It prints the stick, the playlists

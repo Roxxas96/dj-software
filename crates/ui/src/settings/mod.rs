@@ -1,7 +1,7 @@
 //! The settings window, in the style of VirtualDJ's: a sidebar (Audio, Interface,
-//! Controllers, Options, Library, USB export and what comes Later) and a page beside it. Every change is a
-//! [`UiCommand`] for the session; the pages draw the rows the session published, so an
-//! edit shows one frame later.
+//! Controllers, Options, Library, USB export and what comes Later) and a page beside it.
+//! Every change is a [`UiCommand`] for the session; the pages draw the rows the session
+//! published, so an edit shows one frame later.
 
 mod export;
 mod interface;

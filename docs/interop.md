@@ -38,16 +38,17 @@ To export, see [library.md](library.md#exporting-to-a-usb-stick) for the command
   Open Jockey wrote. On the stick, Open Jockey changes or deletes only what the manifest
   lists, and inside Serato's `database V2` and VirtualDJ's `database.xml` only the entries
   that point into `Open Jockey/`. What other apps put on the stick stays as it is.
-- **Exporting again** copies only new or changed tracks (by size and fingerprint), rewrites
+- **Exporting again** copies only new or changed tracks (by fingerprint), rewrites
   the Serato tags of a copy whose hotcues changed, and deletes the copies, crates and lists of
   playlists no longer exported. The window ticks the playlists the stick already holds.
 - **Before anything is written** the export checks the free space (with a 32 MiB margin); a
-  stick that is too small is refused. A stick that is, holds or is inside one of the library's
+  stick that is too small, or whose free space the system will not tell, is refused. A stick that is, holds or is inside one of the library's
   folders is refused too, as is one whose manifest, `database V2` or `database.xml` cannot be
   read.
 - **An interrupted export** (stick pulled, app closed) leaves the stick usable: every file is
   written under a temporary `.ojpart` name and renamed into place, and the next export
-  removes what is left over.
+  removes what is left over. Before the first copy the manifest already lists the crates,
+  lists and copies the export is about to write, so the next export knows them as its own.
 
 ## What each app gets
 
@@ -88,6 +89,14 @@ These are starting values. The hands-on calibrates them with a click track: a 60
 8.0 s and a 4-beat saved loop at 16.0 s. Exported and opened in each app at full zoom, hotcue 1
 must sit on the click's start. A shift seen in an app changes that app's constant in
 `timing.rs`, and the check is run again.
+
+The hands-on also checks two things the tests cannot:
+
+- **A track twice in one playlist:** Serato's crate must keep both entries, in order (the
+  other apps too).
+- **VirtualDJ lists on another computer:** a `.vdjfolder` names each track by its absolute
+  path, so the stick is plugged into a computer where it mounts under another name (or drive
+  letter), and VirtualDJ must still find the tracks of each list.
 
 ## Known limits
 
