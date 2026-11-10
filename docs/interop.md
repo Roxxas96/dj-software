@@ -45,6 +45,7 @@ To export, see [library.md](library.md#exporting-to-a-usb-stick) for the command
   VirtualDJ/
     database.xml                our tracks, merged in
     MyLists/<playlist>.vdjfolder
+  IMPORT TO REKORDBOX.txt      the Rekordbox import steps, rewritten on each export
 ```
 
 - **The copies:** each track is copied once, under `Open Jockey/Music/<artist>/<file name>`
@@ -107,16 +108,16 @@ Open Jockey stores positions in frames, counted from the first sample after the 
 These values were confirmed in the hands-on with a click track: a 60 s file with a
 4 ms, 2 kHz click every half second (120 BPM), as MP3 and as WAV, with hotcue 1 on the click at
 8.0 s and a 4-beat saved loop at 16.0 s. Exported and opened in each app at full zoom, hotcue 1
-must sit on the click's start. A shift seen in an app changes that app's constant in
-`timing.rs`, and the check is run again.
+must sit on the click's start. If an app ever shows a shift, change that app's constant in
+`crates/interop/src/export/timing.rs` and repeat the click-track check.
 
 Two things the hands-on checked or still has to check:
 
 - **A track twice in one playlist:** Serato shows it once (its limit); Rekordbox and
   VirtualDJ keep both entries.
-- **VirtualDJ lists on another computer (not checked yet):** a `.vdjfolder` names each track by its absolute
-  path, so the stick is plugged into a computer where it mounts under another name (or drive
-  letter), and VirtualDJ must still find the tracks of each list.
+- **VirtualDJ lists on another computer (not checked yet):** a `.vdjfolder` names each track by
+  its absolute path, so the stick is plugged into a computer where it mounts under another name
+  (or drive letter), and VirtualDJ must still find the tracks of each list.
 
 ## Known limits
 
