@@ -290,8 +290,11 @@ impl ExportSummary {
             format!("Stick: {}", self.stick),
             format!("Playlists: {}, tracks: {}", self.playlists, self.tracks),
             format!(
-                "To copy: {} tracks ({}), already on the stick: {}",
-                self.to_copy, self.copy_size, self.kept
+                "To copy: {} {} ({}), already on the stick: {}",
+                self.to_copy,
+                if self.to_copy == 1 { "track" } else { "tracks" },
+                self.copy_size,
+                self.kept
             ),
             format!("Free on the stick: {}", self.free),
             format!(
