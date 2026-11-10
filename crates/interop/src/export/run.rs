@@ -1,9 +1,9 @@
 //! What every stick format reads and writes, and the export run that ties them together.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
 
-use super::layout::{Manifest, OJ_DIR};
+use super::layout::{Manifest, OJ_DIR, name_key};
 use super::plan::TrackAction;
 use super::rekordbox::RekordboxFormat;
 use super::serato::tags::{needs_tagging, write_tags};
@@ -149,7 +149,9 @@ pub fn run(
             (subcrates.as_str(), &previous.crates, &crates.files),
             (LISTS_DIR, &previous.vdj_lists, &lists.files),
         ] {
-            for name in old.iter().filter(|n| !new.contains(n)) {
+            // A name that differs only in case is the file just written on most sticks.
+            let new: HashSet<String> = new.iter().map(|n| name_key(n)).collect();
+            for name in old.iter().filter(|n| !new.contains(&name_key(n))) {
                 remove(stick, &format!("{dir}/{name}"))?;
             }
         }

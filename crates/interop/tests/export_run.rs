@@ -197,6 +197,11 @@ fn utf16be(bytes: &[u8]) -> String {
 
 /// The file names of the tracks a crate lists, in order.
 fn crate_tracks(path: &Path) -> Vec<String> {
+    crate_paths(path).iter().map(|p| file_name(p)).collect()
+}
+
+/// The paths a crate lists, relative to the stick, in order.
+fn crate_paths(path: &Path) -> Vec<String> {
     decode(&fs::read(path).unwrap())
         .unwrap()
         .into_iter()
@@ -205,14 +210,13 @@ fn crate_tracks(path: &Path) -> Vec<String> {
             let Body::Records(fields) = r.body else {
                 panic!("otrk holds records");
             };
-            let ptrk = fields
+            fields
                 .iter()
                 .find_map(|f: &Record| match &f.body {
                     Body::Bytes(b) if &f.tag == b"ptrk" => Some(utf16be(b)),
                     _ => None,
                 })
-                .unwrap();
-            file_name(&ptrk)
+                .unwrap()
         })
         .collect()
 }
@@ -630,4 +634,98 @@ fn a_linked_copy_is_replaced_not_followed() {
     assert_eq!(report.copied, 1);
     assert_eq!(fs::read(&outside).unwrap(), snapshot);
     assert!(fs::symlink_metadata(&copy).unwrap().file_type().is_file());
+}
+
+/// Every reference each format holds resolves to a regular file on the stick.
+fn every_reference_resolves(s: &Setup, crate_name: &str, list_name: &str) {
+    let crates = crate_paths(&crate_path(s, crate_name));
+    assert!(!crates.is_empty());
+    for p in crates {
+        assert!(at(&s.stick, &p).is_file(), "crate: {p}");
+    }
+    let (lists, errors) =
+        read_playlists(&[s.stick.join("VirtualDJ").join("MyLists")], None).unwrap();
+    assert!(errors.is_empty());
+    let list = lists.into_iter().find(|l| l.name == list_name).unwrap();
+    assert!(!list.paths.is_empty());
+    for p in &list.paths {
+        assert!(p.is_file(), "list: {}", p.display());
+    }
+    let songs = read_database(
+        &s.stick.join("VirtualDJ").join("database.xml"),
+        Some(&s.stick),
+    )
+    .unwrap();
+    for song in &songs {
+        assert!(song.path.is_file(), "database: {}", song.path.display());
+    }
+    let manifest = Manifest::read(&s.stick).unwrap().unwrap();
+    for t in &manifest.tracks {
+        assert!(
+            at(&s.stick.join("Open Jockey"), t).is_file(),
+            "manifest: {t}"
+        );
+    }
+    let xml = fs::read_to_string(xml_path(s)).unwrap();
+    for t in &manifest.tracks {
+        assert!(xml.contains(&file_name(t)), "xml: {t}");
+    }
+}
+
+#[test]
+fn artist_case_change_keeps_the_copy() {
+    let s = setup();
+    let id = add_tracks(&s, &["b.wav"])[0];
+    let set_artist = |name: &str| {
+        raw(
+            &s.lib,
+            "UPDATE tracks SET artist = ?1 WHERE id = ?2",
+            vec![Value::Text(name.into()), Value::Integer(id)],
+        );
+    };
+    set_artist("bee");
+    let x = playlist(&s, "X", &[id]);
+    export(&s, &[x]);
+    set_artist("Bee");
+    let report = export(&s, &[x]);
+    assert_eq!(report.removed, 0);
+    let manifest = Manifest::read(&s.stick).unwrap().unwrap();
+    assert_eq!(manifest.tracks, ["Music/Bee/b.wav"]);
+    every_reference_resolves(&s, "X", "X");
+}
+
+#[test]
+fn playlist_case_change_keeps_the_crate_and_list() {
+    let s = setup();
+    let ids = add_tracks(&s, &["a.wav"]);
+    let p = playlist(&s, "techno", &ids);
+    export(&s, &[p]);
+    raw(
+        &s.lib,
+        "UPDATE playlists SET name = 'Techno' WHERE id = ?1",
+        vec![Value::Integer(p)],
+    );
+    export(&s, &[p]);
+    let manifest = Manifest::read(&s.stick).unwrap().unwrap();
+    assert_eq!(manifest.playlists, ["Techno"]);
+    assert_eq!(manifest.crates, ["Techno.crate"]);
+    assert_eq!(manifest.vdj_lists, ["Techno.vdjfolder"]);
+    assert_eq!(crate_tracks(&crate_path(&s, "Techno")), ["a.wav"]);
+    assert!(list_path(&s, "Techno").is_file());
+    // The files carry the new case, and the old names are gone.
+    let names = |dir: PathBuf| -> Vec<String> {
+        fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect()
+    };
+    assert_eq!(
+        names(s.stick.join("_Serato_").join("Subcrates")),
+        ["Techno.crate"]
+    );
+    assert_eq!(
+        names(s.stick.join("VirtualDJ").join("MyLists")),
+        ["Techno.vdjfolder"]
+    );
+    every_reference_resolves(&s, "Techno", "Techno");
 }

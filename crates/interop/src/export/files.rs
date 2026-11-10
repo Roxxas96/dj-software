@@ -6,7 +6,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
-use super::{ExportError, PART_SUFFIX, safe_component};
+use super::{ExportError, PART_SUFFIX, name_key, safe_component};
 
 fn io(path: &Path) -> impl FnOnce(std::io::Error) -> ExportError + '_ {
     move |source| ExportError::Io {
@@ -118,9 +118,21 @@ pub fn write_atomic(stick: &Path, path: &Path, bytes: &[u8]) -> Result<(), Expor
     result
 }
 
-/// `<base><ext>`, unless a file of that name is in `dir` and is not ours or is already used
-/// by another playlist of this export (`taken`, lowercase); then ` (Open Jockey)` is added to
-/// the base, and a number.
+/// The names in `dir` that are the same as `file` once case is ignored ([`name_key`]); on a
+/// stick that ignores case there is at most one, in whatever case it was created.
+fn same_names(dir: &Path, file: &str) -> Vec<String> {
+    let key = name_key(file);
+    fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok()?.file_name().into_string().ok())
+        .filter(|name| name_key(name) == key)
+        .collect()
+}
+
+/// `<base><ext>`, unless a file of that name, in any case, is in `dir` and is not ours
+/// (`ours`, exact names), or the name is already used by another playlist of this export
+/// (`taken`, [`name_key`]s); then ` (Open Jockey)` is added to the base, and a number.
 pub(super) fn unique_name(
     base: &str,
     ext: &str,
@@ -129,8 +141,10 @@ pub(super) fn unique_name(
     taken: &HashSet<String>,
 ) -> String {
     let free = |file: &str| {
-        !taken.contains(&file.to_lowercase())
-            && (ours.contains(file) || fs::symlink_metadata(dir.join(file)).is_err())
+        !taken.contains(&name_key(file))
+            && same_names(dir, file)
+                .iter()
+                .all(|name| ours.contains(name.as_str()))
     };
     let plain = format!("{base}{ext}");
     if free(&plain) {
@@ -151,6 +165,32 @@ pub(super) fn unique_name(
         }
         n += 1;
     }
+}
+
+/// After `file` was written in `dir`: our earlier file whose name differs only in case
+/// (`ours`, exact names) takes the new name. A stick that ignores case kept the old case when
+/// the new file replaced it, so it is renamed; a stick that does not now holds both, so the old
+/// one is deleted. Only regular files are touched.
+///
+/// # Errors
+///
+/// [`ExportError::Io`] when the old file cannot be renamed or removed.
+pub(super) fn settle_case(dir: &Path, file: &str, ours: &HashSet<&str>) -> Result<(), ExportError> {
+    let names = same_names(dir, file);
+    let both = names.iter().any(|n| n == file);
+    for old in names
+        .iter()
+        .filter(|n| *n != file && ours.contains(n.as_str()))
+    {
+        let path = dir.join(old);
+        if both {
+            remove_regular_file(&path)?;
+        } else if fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_file()) {
+            let to = dir.join(file);
+            fs::rename(&path, &to).map_err(io(&to))?;
+        }
+    }
+    Ok(())
 }
 
 /// Copies `from` to `to` through `<to>.ojpart`, runs `then` on the temporary file (to tag it),
