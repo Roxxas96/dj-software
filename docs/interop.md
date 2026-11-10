@@ -5,10 +5,27 @@ computer show them in order, with their hotcues and saved loops. One export writ
 three apps need; there is no choice of app. Your music files are never changed: the Serato
 tags go into the copies on the stick only.
 
-**Not verified in Serato, Rekordbox and VirtualDJ yet: the plan 11c hands-on will check
-them.** The formats follow each app's documented or widely used layout and are covered by
-tests, but no stick has been opened in the apps themselves yet. Until the hands-on is
-recorded here, treat positions, colours and loop lengths as unchecked.
+**Checked by hand.** The owner opened an exported stick in Serato DJ Lite, Rekordbox and
+VirtualDJ 2026 on macOS (2026-11-10 and 11):
+
+- The playlists show in order in all three, and hotcue positions are exact in all three. The
+  timing constants below are confirmed: a Serato MP3 with an Info frame is 1152 frames
+  later, the others are unshifted.
+- Exporting again copies nothing new and shows a hotcue that was moved; a playlist that is
+  unticked disappears from all three.
+- Serato shows a track that is repeated in a playlist once: that is Serato's own limit (it
+  keeps a track once per crate), and the export says so in a note. Saved loops are written,
+  but Serato DJ Lite has no saved loops; they are for Serato DJ Pro, which has not been
+  checked.
+- Rekordbox imports the playlists through the XML, with the steps in
+  `IMPORT TO REKORDBOX.txt` at the top of the stick (they are also shown when an export ends).
+- VirtualDJ shows the playlists and cues correctly. It offered a one-time "database is
+  corrupted, fix it?" because of the drive letter; an export now keeps the letter VirtualDJ
+  uses. Still to confirm by the owner: that exporting again no longer asks, and that no track
+  is listed twice.
+
+Not verified yet: a CDJ (not exported), another computer or Windows, and Serato DJ Pro's saved
+loops.
 
 To export, see [library.md](library.md#exporting-to-a-usb-stick) for the command line, and
 [ui.md](ui.md#the-settings-window) for Settings, USB export in the window.
@@ -87,23 +104,24 @@ Open Jockey stores positions in frames, counted from the first sample after the 
 | Serato, MP3 with an Info frame | one MP3 frame (1152 samples, about 26 ms) later | `SERATO_INFO_FRAME_FRAMES` |
 | Serato, WAV or MP3 without one | none | none |
 
-These are starting values. The hands-on calibrates them with a click track: a 60 s file with a
+These values were confirmed in the hands-on with a click track: a 60 s file with a
 4 ms, 2 kHz click every half second (120 BPM), as MP3 and as WAV, with hotcue 1 on the click at
 8.0 s and a 4-beat saved loop at 16.0 s. Exported and opened in each app at full zoom, hotcue 1
 must sit on the click's start. A shift seen in an app changes that app's constant in
 `timing.rs`, and the check is run again.
 
-The hands-on also checks two things the tests cannot:
+Two things the hands-on checked or still has to check:
 
-- **A track twice in one playlist:** Serato's crate must keep both entries, in order (the
-  other apps too).
-- **VirtualDJ lists on another computer:** a `.vdjfolder` names each track by its absolute
+- **A track twice in one playlist:** Serato shows it once (its limit); Rekordbox and
+  VirtualDJ keep both entries.
+- **VirtualDJ lists on another computer (not checked yet):** a `.vdjfolder` names each track by its absolute
   path, so the stick is plugged into a computer where it mounts under another name (or drive
   letter), and VirtualDJ must still find the tracks of each list.
 
 ## Known limits
 
-- The stick formats are not verified in the apps yet (see the top of this page).
+- Not verified: another computer or Windows, and Serato DJ Pro's saved loops (see the top of
+  this page).
 - One level of playlists: folders are not exported.
 - No CDJ export (`PIONEER/` with `export.pdb`): there is no CDJ to verify it on.
 - Guest sticks (playing a friend's Serato, Rekordbox or VirtualDJ stick in Open Jockey) come in
