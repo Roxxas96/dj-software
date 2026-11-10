@@ -322,8 +322,8 @@ fn list(entries: &[&PlannedTrack], stick: &Path) -> String {
             let _ = write!(attrs, " songlength=\"{seconds:.1}\"");
         }
         if let Some(bpm) = usable_bpm(t) {
-            // VirtualDJ keeps a tempo as seconds per beat.
-            let _ = write!(attrs, " bpm=\"{:.3}\"", 60.0 / bpm);
+            // Plain BPM here; only database.xml keeps seconds per beat.
+            let _ = write!(attrs, " bpm=\"{bpm:.3}\"");
         }
         if let Some(key) = t.key.as_deref().filter(|k| !k.is_empty()) {
             let _ = write!(attrs, " key=\"{}\"", esc(key));
