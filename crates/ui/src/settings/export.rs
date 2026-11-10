@@ -14,8 +14,9 @@ const NO_STICK: &str = "No USB stick found. Plug one in, then Refresh.";
 /// What the page keeps between frames while the sticks and playlists are chosen.
 #[derive(Debug, Default)]
 pub(super) struct Draft {
-    /// The chosen stick, an index in the choice's sticks.
-    stick: usize,
+    /// The chosen stick's name: a Refresh may list the sticks in another order, and the same
+    /// stick stays chosen. `None` (or a stick no longer listed) chooses the first.
+    stick: Option<String>,
     /// The ticked playlists, by library id.
     ticked: Vec<i64>,
     /// The name of the stick the ticks were taken from; when the chosen stick is another,
@@ -120,23 +121,26 @@ fn choose(ui: &mut Ui, choice: &ExportChoice, draft: &mut Draft) -> Option<Expor
         });
         return step;
     }
-    if draft.stick >= choice.sticks.len() {
-        draft.stick = 0;
-    }
+    let mut chosen = draft
+        .stick
+        .as_deref()
+        .and_then(|name| choice.sticks.iter().position(|s| s.name == name))
+        .unwrap_or(0);
     let label = |i: usize| {
         let stick = &choice.sticks[i];
         format!("{} ({} free)", stick.name, stick.free)
     };
     let combo = ComboBox::from_id_salt("export.stick")
-        .selected_text(label(draft.stick))
+        .selected_text(label(chosen))
         .show_ui(ui, |ui| {
             for i in 0..choice.sticks.len() {
-                ui.selectable_value(&mut draft.stick, i, label(i));
+                ui.selectable_value(&mut chosen, i, label(i));
             }
         });
     ui.ctx()
         .accesskit_node_builder(combo.response.id, |node| node.set_label("USB stick"));
-    let stick = &choice.sticks[draft.stick];
+    let stick = &choice.sticks[chosen];
+    draft.stick = Some(stick.name.clone());
     if draft.ticks_from.as_deref() != Some(stick.name.as_str()) {
         draft.ticked.clone_from(&stick.exported);
         draft.ticks_from = Some(stick.name.clone());
@@ -167,7 +171,7 @@ fn choose(ui: &mut Ui, choice: &ExportChoice, draft: &mut Draft) -> Option<Expor
             .clicked()
         {
             step = Some(ExportStep::Check {
-                stick: draft.stick,
+                stick: chosen,
                 playlists: ticked.clone(),
             });
         }
