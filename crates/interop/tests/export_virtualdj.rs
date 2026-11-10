@@ -249,3 +249,12 @@ fn a_database_that_is_not_a_regular_file_is_refused() {
     let p = plan(stick.path(), vec![track(1)], &[]);
     assert!(VirtualDjFormat.write_library(&cx(&p)).is_err());
 }
+
+#[test]
+fn list_bpm_is_plain_bpm() {
+    let stick = TempDir::new().unwrap();
+    let p = plan(stick.path(), vec![track(1)], &["Plain"]);
+    VirtualDjFormat.write_library(&cx(&p)).unwrap();
+    let list = fs::read_to_string(stick.path().join("VirtualDJ/MyLists/Plain.vdjfolder")).unwrap();
+    assert!(list.contains("bpm=\"120.000\""), "{list}");
+}
