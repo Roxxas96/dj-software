@@ -224,6 +224,15 @@ closable) with a sidebar, as in VirtualDJ:
   hotcues here too (Keep mine, Use VirtualDJ's or Merge, with a "for all remaining" box), takes
   a library backup, writes, and shows the backup's path. It refuses while a deck holds a
   track: unload the decks first.
+- **USB export:** "Export to USB stick…" copies playlists, in order, with their hotcues and
+  saved loops, to a stick for Serato, Rekordbox and VirtualDJ (see
+  [library.md](library.md#exporting-to-a-usb-stick) and [interop.md](interop.md)). It lists
+  the plugged-in sticks (with their free space) and the playlists; the playlists already on
+  the chosen stick come ticked. Check shows what the export would do, the same lines as
+  `library export`, with a stick too small said in red and Export disabled; Back returns to
+  the choice. Export writes in the background with a progress bar, then says what was copied
+  and kept and how to open the stick in Rekordbox. With no stick plugged in it says so: plug
+  one in, then Refresh. The decks can stay loaded.
 - **Later:** what will come (recording, broadcast, automix); nothing to set yet.
 
 Some settings apply at once: the crossfader, the effects, the sampler volume, the pad

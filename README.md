@@ -22,6 +22,10 @@ start (the 10 newest backups are kept):
 - Browsing and loading from the DDJ-SB3 (BROWSE knob and LOAD buttons) with `play --library`.
 - A one-time import of VirtualDJ hotcues, saved loops and playlists (`library import-vdj`, or
   Settings, Library in the window); see [docs/library.md](docs/library.md#importing-from-virtualdj).
+- Export of playlists to a USB stick for Serato, Rekordbox and VirtualDJ, in order, with their
+  hotcues and saved loops (`library export`, or Settings, USB export in the window); your
+  music files are never changed. See [docs/interop.md](docs/interop.md): the stick formats
+  are not verified in the apps yet.
 
 ## Stems
 

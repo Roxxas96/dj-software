@@ -284,6 +284,37 @@ In the window: Settings, Library, "Import from VirtualDJ…" (see [ui.md](ui.md)
   would write them back, so the window refuses to start or to write while a deck holds a
   track: unload the decks first. The command line does not check; run it with `play` closed.
 
+## Exporting to a USB stick
+
+Copies playlists, in order, with their hotcues and saved loops, to a USB stick for Serato,
+Rekordbox and VirtualDJ. Your music files are never changed. What goes on the stick and what
+each app gets is in [interop.md](interop.md); the formats are not verified in the apps yet.
+
+```sh
+open-jockey library export --to /Volumes/STICK --playlist "Warm up" --playlist "Peak time"
+open-jockey library export --to /Volumes/STICK --playlist "Warm up" --write
+```
+
+In the window: Settings, USB export, "Export to USB stick…" (see [ui.md](ui.md)).
+
+- **`--to`** is the stick's mount point (`/Volumes/<name>` on macOS, `/media/<user>/<name>`
+  on Linux) or drive (`E:\` on Windows). A stick that is, holds or is inside a library folder
+  is refused, and so is a stick that is too small: nothing is written.
+- **`--playlist`** names a playlist exactly; repeat it for more. The playlists keep the order
+  given. A name that matches no playlist, or several, is an error that lists them.
+- **The dry run:** without `--write`, nothing is written. It prints the stick, the playlists
+  and tracks, the tracks to copy with their size and those already on the stick, the free
+  space, the tracks copied without Serato cues (not MP3 or WAV), the tracks skipped (missing or
+  unreadable), and the copies to remove (no longer exported). The window shows the same lines
+  before it writes.
+- **`--write`** copies the tracks, writes each app's files and prints what it did:
+  `Exported: <n> copied, <n> kept, <n> re-tagged, <n> removed.`, then anything worth knowing
+  (a saved loop VirtualDJ cannot take, say).
+- **Exporting again** copies only new or changed tracks and removes the playlists no longer
+  exported, so the stick holds exactly the playlists of the last export.
+- **The decks can stay loaded:** the export only reads the library. In the window it runs in
+  the background.
+
 ## Stems
 
 With `[stems] enabled = true` ([config.md](config.md)), `play --library` separates each loaded
