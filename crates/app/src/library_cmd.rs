@@ -1583,7 +1583,7 @@ mod tests {
             assert_eq!(lines[0], format!("Stick: {}", stick.display()));
             assert_eq!(lines[1], "Playlists: 1, tracks: 1");
             assert!(
-                lines[2].starts_with("To copy: 1 tracks (")
+                lines[2].starts_with("To copy: 1 track (")
                     && lines[2].ends_with("), already on the stick: 0"),
                 "{lines:?}"
             );

@@ -317,8 +317,13 @@ fn free_text(bytes: Option<u64>) -> String {
 
 /// What the window shows once `report` is written to the stick called `stick`.
 fn done_text(report: &ExportReport, stick: &str) -> String {
+    let playlists = if report.playlists == 1 {
+        "playlist"
+    } else {
+        "playlists"
+    };
     let mut text = format!(
-        "Exported {} playlists to {stick}: {} copied, {} kept. In Rekordbox, import \
+        "Exported {} {playlists} to {stick}: {} copied, {} kept. In Rekordbox, import \
          Open Jockey/rekordbox.xml (see README.txt on the stick).",
         report.playlists, report.copied, report.kept
     );
@@ -490,7 +495,7 @@ mod tests {
         };
         assert!(
             text.starts_with(
-                "Exported 1 playlists to STICK: 1 copied, 0 kept. In Rekordbox, import \
+                "Exported 1 playlist to STICK: 1 copied, 0 kept. In Rekordbox, import \
                  Open Jockey/rekordbox.xml (see README.txt on the stick)."
             ),
             "{text}"
