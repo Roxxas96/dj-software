@@ -24,6 +24,14 @@ pub(crate) const GHOST_FILTER: usize = 4;
 pub(crate) const GHOST_FADER: usize = 5;
 pub(crate) const GHOST_TEMPO: usize = 6;
 const _: () = assert!(GHOSTS > GHOST_TEMPO);
+/// The soft-takeover targets of no deck that can show a pickup value.
+pub const GLOBAL_GHOSTS: usize = 4;
+// Each target's place in `ControlFrame::global_ghosts`.
+pub(crate) const GHOST_CROSSFADER: usize = 0;
+pub(crate) const GHOST_MASTER: usize = 1;
+pub(crate) const GHOST_HEADPHONE: usize = 2;
+pub(crate) const GHOST_HEADPHONE_MIX: usize = 3;
+const _: () = assert!(GLOBAL_GHOSTS > GHOST_HEADPHONE_MIX);
 /// How many events a frame keeps, newest last.
 pub const EVENTS_KEPT: usize = 20;
 /// How long an event shows in the top bar.
@@ -346,6 +354,8 @@ pub struct ControlFrame {
     /// Per deck and soft-takeover target, the value the control must reach to pick it up
     /// (`None`: it has).
     pub ghosts: [[Option<f32>; GHOSTS]; 4],
+    /// The same for the crossfader, the master level and the headphones' level and mix.
+    pub global_ghosts: [Option<f32>; GLOBAL_GHOSTS],
     /// How long a rendered block takes to be heard.
     pub output_latency: Duration,
     pub crossfader_enabled: bool,
@@ -389,6 +399,7 @@ impl Default for ControlFrame {
         Self {
             control: ControlState::default(),
             ghosts: [[None; GHOSTS]; 4],
+            global_ghosts: [None; GLOBAL_GHOSTS],
             output_latency: Duration::ZERO,
             crossfader_enabled: true,
             decks: [None, None, None, None],

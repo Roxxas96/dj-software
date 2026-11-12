@@ -5,16 +5,19 @@
 
 use std::time::{Duration, Instant};
 
-use actions::Side;
+use actions::{Action, Side};
 use egui::{
-    Color32, CornerRadius, Label, Pos2, Rect, RichText, Stroke, StrokeKind, Ui, pos2, vec2,
+    Color32, CornerRadius, Id, Label, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Ui, Vec2,
+    pos2, vec2,
 };
 use engine::{DeckId, EqMode, StemKnobs};
 
+use crate::controls::{Sink, fader_input, turn_knob};
 use crate::deck::DeckReads;
 use crate::layout::{Sections, mixer_order};
 use crate::model::{
-    ControlFrame, GHOST_EQ_HIGH, GHOST_EQ_LOW, GHOST_EQ_MID, GHOST_FADER, GHOST_FILTER, GHOST_TRIM,
+    ControlFrame, GHOST_CROSSFADER, GHOST_EQ_HIGH, GHOST_EQ_LOW, GHOST_EQ_MID, GHOST_FADER,
+    GHOST_FILTER, GHOST_HEADPHONE, GHOST_HEADPHONE_MIX, GHOST_MASTER, GHOST_TRIM,
 };
 use crate::theme::{self, SECTION_GAP};
 
@@ -39,6 +42,22 @@ const PFL_HEIGHT: f32 = 18.0;
 const METER_GAP: f32 = 4.0;
 /// The width of the master level's caption.
 const MASTER_CAPTION: f32 = 44.0;
+/// The least width of the master level, caption and bar, in the two-deck mixer's top row.
+const MASTER_MIN: f32 = 76.0;
+/// The least width the top row leaves each deck's name in the two-deck mixer ("DECK 1" is
+/// 32 points wide).
+const NAME_MIN: f32 = 36.0;
+/// The headphone knobs' radius: as tall as the top row.
+const HEADPHONE_RADIUS: f32 = TOP_ROW / 2.0 - 1.0;
+/// The headphone knobs' captions: the words, and the width each takes.
+const HEADPHONE_WORDS: [&str; 2] = ["HEADPHONE", "MIX"];
+const HEADPHONE_WORD_WIDTHS: [f32; 2] = [62.0, 20.0];
+/// The same as letters, where the words do not fit (and in the four-deck mixer).
+const HEADPHONE_LETTERS: [&str; 2] = ["HP", "MX"];
+const HEADPHONE_LETTER_WIDTHS: [f32; 2] = [16.0, 16.0];
+/// Between a headphone knob and its caption, and between it and the master level.
+const HEADPHONE_CAPTION_GAP: f32 = 2.0;
+const HEADPHONE_GAP: f32 = 4.0;
 const KNOB_RADIUS: f32 = 15.0;
 const KNOB_STEP: f32 = 42.0;
 const HEADER_HEIGHT: f32 = 24.0;
@@ -60,6 +79,17 @@ const DECK_NAMES: [&str; 4] = ["DECK 1", "DECK 2", "DECK 3", "DECK 4"];
 /// A knob's travel, either side of straight up, in radians.
 const KNOB_SWEEP: f32 = 0.75 * std::f32::consts::PI;
 const METER_HOT: f32 = 0.95;
+/// Where a double-click puts a channel's knobs: the gain at unity (the engine's
+/// `trim_gain` gives 0 dB at 0.5), the EQ and the filter in the middle.
+const KNOB_RESET: f32 = 0.5;
+/// Where a double-click puts the crossfader: the middle.
+const CROSSFADER_RESET: f32 = 0.5;
+/// Where a double-click puts the master and headphone levels and the headphone mix: their
+/// defaults in `ControlState`.
+const LEVEL_RESET: f32 = 0.8;
+const MIX_RESET: f32 = 0.0;
+/// How far past a fader's track (either side) a click still takes it.
+const FADER_GRAB: f32 = 4.0;
 
 /// The labels of the three EQ knobs, top to bottom. The stems' names show only where the
 /// knobs control the stems: in stems mode, on a deck whose stems are ready.
@@ -126,6 +156,7 @@ impl Mixer {
         frame: &ControlFrame,
         reads: &DeckReads,
         sections: &Sections,
+        sink: &mut Sink<'_>,
     ) {
         let now = Instant::now();
         let peaks = reads.meters.map(|m| m.channel_peak).unwrap_or_default();
@@ -156,11 +187,21 @@ impl Mixer {
                 let stems_active = reads.decks[deck.index()].0.stems_active;
                 let level = levels(deck);
                 ui.scope_builder(egui::UiBuilder::new().max_rect(strip_rect), |ui| {
-                    strip(ui, strip_rect, deck, frame, stems_active, level, sections);
+                    strip(
+                        ui,
+                        strip_rect,
+                        deck,
+                        frame,
+                        stems_active,
+                        level,
+                        sections,
+                        sink,
+                    );
                 });
             }
-            master(ui, master_rect, frame, master_peak);
-            crossfader(ui, crossfader_rect, frame);
+            let row = top_row(top, master_rect.center().x, master_rect.width(), false);
+            master(ui, &row, frame, master_peak, sink);
+            crossfader(ui, crossfader_rect, frame, sink);
         } else {
             let layout = mixer_layout(rect, sections.mixer_eq, sections.mixer_meters);
             for (side, part) in Side::ALL.into_iter().zip(&layout.sides) {
@@ -172,10 +213,10 @@ impl Mixer {
                     level: levels(deck),
                     eq: sections.mixer_eq,
                 };
-                side_strip(ui, part, layout.knob_radius, &channel);
+                side_strip(ui, part, layout.knob_radius, &channel, sink);
             }
-            master(ui, layout.master, frame, master_peak);
-            crossfader(ui, layout.crossfader, frame);
+            master(ui, &layout.top, frame, master_peak, sink);
+            crossfader(ui, layout.crossfader, frame, sink);
         }
     }
 }
@@ -190,8 +231,8 @@ struct Channel<'a> {
     eq: bool,
 }
 
-/// A knob's caption, value (0 to 1) and pickup marker.
-type Knob = (&'static str, f32, Option<f32>);
+/// A knob's caption, value (0 to 1), pickup marker and the action it sends.
+type Knob = (&'static str, f32, Option<f32>, Action);
 
 /// A channel's knobs, top to bottom: the gain, the EQ's three (when it shows) and the
 /// filter. Only the first of the count are shown.
@@ -203,14 +244,26 @@ fn knobs(channel: &Channel) -> ([Knob; 5], usize) {
         channel.stems_active,
         channel.frame.stem_knobs,
     );
-    let gain = ("GAIN", state.trim, ghosts[GHOST_TRIM]);
-    let filter = ("FILTER", state.filter, ghosts[GHOST_FILTER]);
+    let deck = channel.deck;
+    let gain = ("GAIN", state.trim, ghosts[GHOST_TRIM], Action::Trim(deck));
+    let filter = (
+        "FILTER",
+        state.filter,
+        ghosts[GHOST_FILTER],
+        Action::Filter(deck),
+    );
+    // In stems mode the knobs still send the EQ's actions, as the hardware's do.
     if channel.eq {
         let all = [
             gain,
-            (high, state.eq_high, ghosts[GHOST_EQ_HIGH]),
-            (mid, state.eq_mid, ghosts[GHOST_EQ_MID]),
-            (low, state.eq_low, ghosts[GHOST_EQ_LOW]),
+            (
+                high,
+                state.eq_high,
+                ghosts[GHOST_EQ_HIGH],
+                Action::EqHigh(deck),
+            ),
+            (mid, state.eq_mid, ghosts[GHOST_EQ_MID], Action::EqMid(deck)),
+            (low, state.eq_low, ghosts[GHOST_EQ_LOW], Action::EqLow(deck)),
             filter,
         ];
         (all, 5)
@@ -220,8 +273,14 @@ fn knobs(channel: &Channel) -> ([Knob; 5], usize) {
 }
 
 /// Draws one side of the two-deck mixer: its deck's name, knobs, fader, headphone button
-/// and meter bar.
-fn side_strip(ui: &mut Ui, layout: &SideLayout, knob_radius: f32, channel: &Channel) {
+/// and meter bar. The mouse plays the knobs, the fader and the button through `sink`.
+fn side_strip(
+    ui: &mut Ui,
+    layout: &SideLayout,
+    knob_radius: f32,
+    channel: &Channel,
+    sink: &mut Sink<'_>,
+) {
     let p = theme::palette(ui.ctx());
     let accent = p.deck_accent(channel.deck);
     let state = channel.frame.control.deck(channel.deck);
@@ -229,10 +288,13 @@ fn side_strip(ui: &mut Ui, layout: &SideLayout, knob_radius: f32, channel: &Chan
     let painter = ui.painter().clone();
     caption(ui, layout.header, DECK_NAMES[channel.deck.index()], accent);
     let (all, count) = knobs(channel);
-    for (i, &(name, value, ghost)) in all[..count].iter().enumerate() {
-        knob(&painter, layout.knobs[i], knob_radius, value, ghost, accent);
+    for (i, &(name, value, ghost, action)) in all[..count].iter().enumerate() {
+        let centre = layout.knobs[i];
+        play_knob(ui, sink, centre, knob_radius, value, KNOB_RESET, action);
+        knob(&painter, centre, knob_radius, value, ghost, accent);
         caption(ui, layout.captions[i], name, p.text_dim);
     }
+    play_fader(ui, sink, layout.fader, Action::Fader(channel.deck));
     fader(
         &painter,
         layout.fader,
@@ -240,7 +302,7 @@ fn side_strip(ui: &mut Ui, layout: &SideLayout, knob_radius: f32, channel: &Chan
         ghosts[GHOST_FADER],
         accent,
     );
-    pfl_button(ui, layout.pfl, state.pfl, accent);
+    pfl_button(ui, layout.pfl, channel.deck, state.pfl, sink);
     if let Some(meter) = layout.meter {
         let (level, held) = channel.level;
         level_bar(&painter, meter, level);
@@ -248,8 +310,42 @@ fn side_strip(ui: &mut Ui, layout: &SideLayout, knob_radius: f32, channel: &Chan
     }
 }
 
-/// The headphone button in `rect`, lit in the deck's `accent` when `on`.
-fn pfl_button(ui: &mut Ui, rect: Rect, on: bool, accent: Color32) {
+/// The id of the mixer's control that sends `action`.
+fn control_id(action: Action) -> Id {
+    Id::NULL.with(("mixer", action))
+}
+
+/// Lets the mouse turn the knob at `centre` showing `value`: it sends `action` the new
+/// value, and `reset` on a double-click.
+fn play_knob(
+    ui: &mut Ui,
+    sink: &Sink<'_>,
+    centre: Pos2,
+    radius: f32,
+    value: f32,
+    reset: f32,
+    action: Action,
+) {
+    let rect = Rect::from_center_size(centre, Vec2::splat(2.0 * radius));
+    let response = ui.interact(rect, control_id(action), Sense::click_and_drag());
+    sink.act(action, turn_knob(&response, value, reset, ui));
+}
+
+/// Lets the mouse set the vertical fader on `track`: a click or a drag sends `action`
+/// the value under the pointer. A channel fader has no reset.
+fn play_fader(ui: &mut Ui, sink: &Sink<'_>, track: Rect, action: Action) {
+    let grab = track.expand2(vec2(FADER_GRAB, FADER_GRAB));
+    let response = ui.interact(grab, control_id(action), Sense::click_and_drag());
+    sink.act(action, fader_input(&response, track, true, None));
+}
+
+/// The headphone button of `deck` in `rect`, lit in the deck's accent when `on`; the
+/// mouse presses it through `sink`.
+fn pfl_button(ui: &mut Ui, rect: Rect, deck: DeckId, on: bool, sink: &mut Sink<'_>) {
+    let action = Action::PflToggle(deck);
+    let response = ui.interact(rect, control_id(action), Sense::click_and_drag());
+    sink.button(&response, action);
+    let accent = theme::palette(ui.ctx()).deck_accent(deck);
     let p = theme::palette(ui.ctx());
     ui.painter().rect(
         rect,
@@ -301,8 +397,83 @@ pub struct MixerLayout {
     /// Both sides' meters, between the faders.
     pub centre_meter: Option<Rect>,
     pub crossfader: Rect,
-    /// The master level, in the top row's middle.
+    /// The master level and the headphone knobs, in the top row's middle.
+    pub top: TopRow,
+}
+
+/// The middle of the mixer's top row: the master level, with the headphone level's knob
+/// left of it and the headphone mix's right of it, each captioned on its outer side.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TopRow {
+    /// The master level: its caption, then its bar.
     pub master: Rect,
+    pub master_caption: Rect,
+    /// The bar, which a click or a drag sets.
+    pub master_bar: Rect,
+    /// The headphone level's knob, then the mix's.
+    pub headphone: [Pos2; 2],
+    pub headphone_radius: f32,
+    pub headphone_captions: [Rect; 2],
+    /// The captions are the words (HEADPHONE, MIX); else the letters (HP, MX).
+    pub words: bool,
+}
+
+impl TopRow {
+    /// The captions of the headphone knobs.
+    pub fn captions(&self) -> [&'static str; 2] {
+        if self.words {
+            HEADPHONE_WORDS
+        } else {
+            HEADPHONE_LETTERS
+        }
+    }
+}
+
+/// The headphone knobs' captions' widths, in `words` or letters.
+fn headphone_caption_widths(words: bool) -> [f32; 2] {
+    if words {
+        HEADPHONE_WORD_WIDTHS
+    } else {
+        HEADPHONE_LETTER_WIDTHS
+    }
+}
+
+/// How far the headphone knobs and their captions reach out from the master level, on
+/// the side of the wider caption.
+fn headphone_reach(words: bool) -> f32 {
+    let [level, mix] = headphone_caption_widths(words);
+    level.max(mix) + HEADPHONE_CAPTION_GAP + 2.0 * HEADPHONE_RADIUS + HEADPHONE_GAP
+}
+
+/// Lays out the top row's middle in `top`: the master level `master_width` wide, centred
+/// on `centre`, with the headphone knobs either side, captioned in `words` or letters.
+fn top_row(top: Rect, centre: f32, master_width: f32, words: bool) -> TopRow {
+    let master = Rect::from_x_y_ranges(
+        centre - master_width / 2.0..=centre + master_width / 2.0,
+        top.y_range(),
+    );
+    let width = MASTER_CAPTION.min(master.width() / 2.0);
+    let (master_caption, bar) = master.split_left_right_at_x(master.left() + width);
+    let master_bar = Rect::from_center_size(bar.center(), vec2(bar.width() - 4.0, 6.0));
+    let r = HEADPHONE_RADIUS;
+    let y = top.center().y;
+    let level = pos2(master.left() - HEADPHONE_GAP - r, y);
+    let mix = pos2(master.right() + HEADPHONE_GAP + r, y);
+    let [level_width, mix_width] = headphone_caption_widths(words);
+    let near = r + HEADPHONE_CAPTION_GAP;
+    let captions = [
+        Rect::from_x_y_ranges(level.x - near - level_width..=level.x - near, top.y_range()),
+        Rect::from_x_y_ranges(mix.x + near..=mix.x + near + mix_width, top.y_range()),
+    ];
+    TopRow {
+        master,
+        master_caption,
+        master_bar,
+        headphone: [level, mix],
+        headphone_radius: r,
+        headphone_captions: captions,
+        words,
+    }
 }
 
 /// The mixer's rows: the top one (names and master), the body and the crossfader's.
@@ -336,6 +507,15 @@ pub fn mixer_layout(rect: Rect, eq: bool, meters: bool) -> MixerLayout {
     let (top, body, bottom) = rows(rect);
     let (master, crossfader) = centre_parts(rect, top, bottom);
     let centre = rect.center().x;
+    // The top row keeps room for the decks' names: the master level narrows, then the
+    // headphone knobs' captions shrink to letters.
+    let master_room = |words| top.width() - 2.0 * (NAME_MIN + HEADER_GAP + headphone_reach(words));
+    let words = master_room(true) >= MASTER_MIN.min(master.width());
+    let master_width = master_room(words)
+        .min(master.width())
+        .max(MASTER_MIN.min(master.width()));
+    let top_middle = top_row(top, centre, master_width, words);
+    let names = master_width / 2.0 + headphone_reach(words) + HEADER_GAP;
     // The middle band holds the faders, the meter between them and the headphone buttons.
     let band = rect.width() * MIDDLE_SHARE / 2.0;
     let offset = band * FADER_OFFSET;
@@ -381,7 +561,10 @@ pub fn mixer_layout(rect: Rect, eq: bool, meters: bool) -> MixerLayout {
             body.right()
         };
         let column = egui::Rangef::new(edge.min(outer), edge.max(outer));
-        let header = Rect::from_x_y_ranges(column, top.y_range());
+        // The name keeps clear of the top row's middle.
+        let inner = centre + sign * names;
+        let name = egui::Rangef::new(inner.min(outer), inner.max(outer));
+        let header = Rect::from_x_y_ranges(column.intersection(name), top.y_range());
         let gain = pos2(x, gain_y);
         let knobs: Vec<Pos2> = std::iter::once(gain)
             .chain(
@@ -419,7 +602,7 @@ pub fn mixer_layout(rect: Rect, eq: bool, meters: bool) -> MixerLayout {
             )
         }),
         crossfader,
-        master,
+        top: top_middle,
     }
 }
 
@@ -496,7 +679,12 @@ pub fn strip_layout(rect: Rect, knobs: usize, meter: bool) -> StripLayout {
 
 /// Draws one channel of the 4-Decks mixer in `rect`: the deck's header with the headphone
 /// button, the knobs, the fader and the meter. The meter's bar shows `level`, the live
-/// peak, and a line marks `held`, the highest recent peak.
+/// peak, and a line marks `held`, the highest recent peak. The mouse plays the knobs, the
+/// fader and the button through `sink`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "what the strip shows, each part from a different source"
+)]
 pub fn strip(
     ui: &mut Ui,
     rect: Rect,
@@ -505,6 +693,7 @@ pub fn strip(
     stems_active: bool,
     (level, held): (f32, f32),
     sections: &Sections,
+    sink: &mut Sink<'_>,
 ) {
     ui.set_clip_rect(rect.intersect(ui.clip_rect()));
     let p = theme::palette(ui.ctx());
@@ -523,12 +712,14 @@ pub fn strip(
     let layout = strip_layout(rect, count, sections.mixer_meters);
 
     caption(ui, layout.name, DECK_NAMES[deck.index()], accent);
-    pfl_button(ui, layout.pfl, state.pfl, accent);
-    for (i, &(name, value, ghost)) in all[..count].iter().enumerate() {
-        let centre = layout.knobs[i];
-        knob(&painter, centre, layout.knob_radius, value, ghost, accent);
+    pfl_button(ui, layout.pfl, deck, state.pfl, sink);
+    for (i, &(name, value, ghost, action)) in all[..count].iter().enumerate() {
+        let (centre, radius) = (layout.knobs[i], layout.knob_radius);
+        play_knob(ui, sink, centre, radius, value, KNOB_RESET, action);
+        knob(&painter, centre, radius, value, ghost, accent);
         caption(ui, layout.captions[i], knob_letter(name), p.text_dim);
     }
+    play_fader(ui, sink, layout.fader, Action::Fader(deck));
     fader(
         &painter,
         layout.fader,
@@ -625,27 +816,55 @@ fn peak_line(painter: &egui::Painter, bar: Rect, peak: f32) {
     );
 }
 
-/// The crossfader in `rect`, dimmed when the configuration turned it off.
-fn crossfader(ui: &mut Ui, rect: Rect, frame: &ControlFrame) {
+/// The crossfader in `rect`, dimmed when the configuration turned it off; the mouse sets
+/// it through `sink`.
+fn crossfader(ui: &mut Ui, rect: Rect, frame: &ControlFrame, sink: &Sink<'_>) {
     let p = theme::palette(ui.ctx());
-    let painter = ui.painter();
     let dim = if frame.crossfader_enabled { 1.0 } else { 0.35 };
     let slot = Rect::from_center_size(rect.center(), vec2(rect.width() - 10.0, 4.0));
+    let action = Action::Crossfader;
+    let response = ui.interact(rect, control_id(action), Sense::click_and_drag());
+    let input = fader_input(&response, slot, false, Some(CROSSFADER_RESET));
+    sink.act(action, input);
+    let painter = ui.painter();
     painter.rect_filled(slot, CornerRadius::same(2), p.background);
     let x = slot.left() + frame.control.crossfader.clamp(0.0, 1.0) * slot.width();
     let handle = Rect::from_center_size(pos2(x, slot.center().y), vec2(10.0, rect.height() - 4.0));
     painter.rect_filled(handle, CornerRadius::same(2), p.text.gamma_multiply(dim));
+    let at = |v: f32| pos2(slot.left() + v * slot.width(), slot.center().y);
+    if let Some(at) = ghost_marker(frame.global_ghosts[GHOST_CROSSFADER], at) {
+        let marker = Rect::from_center_size(at, vec2(10.0, rect.height() - 4.0));
+        painter.rect_stroke(
+            marker,
+            CornerRadius::same(2),
+            Stroke::new(1.5, p.cue),
+            StrokeKind::Outside,
+        );
+    }
 }
 
-/// The master level in `rect`: its caption, then a bar with the master's peak on its
-/// edge.
-fn master(ui: &mut Ui, rect: Rect, frame: &ControlFrame, master_peak: Option<[f32; 2]>) {
+/// The top row's middle: the master level's caption, then its bar with the master's
+/// peak on its edge, and the headphone knobs either side. The mouse sets the bar and turns
+/// the knobs through `sink`.
+fn master(
+    ui: &mut Ui,
+    row: &TopRow,
+    frame: &ControlFrame,
+    master_peak: Option<[f32; 2]>,
+    sink: &Sink<'_>,
+) {
     let p = theme::palette(ui.ctx());
     let painter = ui.painter().clone();
-    let width = MASTER_CAPTION.min(rect.width() / 2.0);
-    let (label, bar) = rect.split_left_right_at_x(rect.left() + width);
-    caption(ui, label, "MASTER", p.text_dim);
-    let bar = Rect::from_center_size(bar.center(), vec2(bar.width() - 4.0, 6.0));
+    caption(ui, row.master_caption, "MASTER", p.text_dim);
+    let bar = row.master_bar;
+    let action = Action::MasterLevel;
+    // The whole row's height takes a click, the bar being thin.
+    let grab = Rect::from_x_y_ranges(bar.x_range(), row.master.y_range());
+    let response = ui.interact(grab, control_id(action), Sense::click_and_drag());
+    sink.act(
+        action,
+        fader_input(&response, bar, false, Some(LEVEL_RESET)),
+    );
     painter.rect_filled(bar, CornerRadius::ZERO, p.background);
     let level = frame.control.master_level.clamp(0.0, 1.0);
     painter.rect_filled(
@@ -669,6 +888,32 @@ fn master(ui: &mut Ui, rect: Rect, frame: &ControlFrame, master_peak: Option<[f3
             ),
         );
     }
+    let ghost = frame.global_ghosts[GHOST_MASTER];
+    if let Some(at) = ghost_marker(ghost, |v| {
+        pos2(bar.left() + v * bar.width(), bar.center().y)
+    }) {
+        let marker = Rect::from_center_size(at, vec2(6.0, bar.height() + 6.0));
+        painter.rect_stroke(
+            marker,
+            CornerRadius::same(1),
+            Stroke::new(1.5, p.cue),
+            StrokeKind::Outside,
+        );
+    }
+    let control = &frame.control;
+    let values = [control.headphone_level, control.headphone_mix];
+    let ghosts = [
+        frame.global_ghosts[GHOST_HEADPHONE],
+        frame.global_ghosts[GHOST_HEADPHONE_MIX],
+    ];
+    let actions = [Action::HeadphoneLevel, Action::HeadphoneMix];
+    let resets = [LEVEL_RESET, MIX_RESET];
+    for i in 0..2 {
+        let (centre, radius) = (row.headphone[i], row.headphone_radius);
+        play_knob(ui, sink, centre, radius, values[i], resets[i], actions[i]);
+        knob(&painter, centre, radius, values[i], ghosts[i], p.text);
+        caption(ui, row.headphone_captions[i], row.captions()[i], p.text_dim);
+    }
 }
 
 #[cfg(test)]
@@ -676,6 +921,17 @@ mod tests {
     use egui::Vec2;
 
     use super::*;
+
+    #[test]
+    fn resets_match_the_defaults() {
+        let defaults = actions::ControlState::default();
+        assert_eq!(LEVEL_RESET, defaults.master_level);
+        assert_eq!(LEVEL_RESET, defaults.headphone_level);
+        assert_eq!(MIX_RESET, defaults.headphone_mix);
+        assert_eq!(CROSSFADER_RESET, defaults.crossfader);
+        // The gain's unity.
+        assert_eq!(engine::mixer::trim_gain(KNOB_RESET), 1.0);
+    }
 
     #[test]
     fn deck_names_are_numbered_from_one() {
@@ -834,14 +1090,14 @@ mod tests {
                     .iter()
                     .all(|k| k.y + layout.knob_radius <= cross.top())
             );
-            assert!(layout.master.bottom() <= side.fader.top());
+            assert!(layout.top.master.bottom() <= side.fader.top());
             assert!(
                 side.knobs
                     .iter()
-                    .all(|k| k.y - layout.knob_radius >= layout.master.bottom())
+                    .all(|k| k.y - layout.knob_radius >= layout.top.master.bottom())
             );
         }
-        assert!(rect.contains_rect(cross) && rect.contains_rect(layout.master));
+        assert!(rect.contains_rect(cross) && rect.contains_rect(layout.top.master));
     }
 
     #[test]
@@ -900,6 +1156,44 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn the_top_row_keeps_room_for_the_names() {
+        // Two decks at 1024 and 1440 wide, and the tests' size; the words where they fit.
+        for (width, words) in [(246.0, false), (346.0, true), (360.0, true)] {
+            let rect = Rect::from_min_size(pos2(10.0, 20.0), vec2(width, 300.0));
+            let layout = mixer_layout(rect, true, true);
+            let top = &layout.top;
+            let at = format!("{width}: {top:?}");
+            assert_eq!(top.words, words, "{at}");
+            assert!(
+                (top.master.center().x - rect.center().x).abs() < 0.5,
+                "{at}"
+            );
+            assert!(top.master.width() >= MASTER_MIN, "{at}");
+            assert!(top.master.contains_rect(top.master_bar), "{at}");
+            let r = top.headphone_radius;
+            for (knob, caption) in top.headphone.iter().zip(&top.headphone_captions) {
+                let circle = Rect::from_center_size(*knob, Vec2::splat(2.0 * r));
+                assert!(
+                    rect.contains_rect(circle) && rect.contains_rect(*caption),
+                    "{at}"
+                );
+                assert!(
+                    !circle.intersects(top.master) && !caption.intersects(circle),
+                    "{at}"
+                );
+                for side in &layout.sides {
+                    assert!(!side.header.intersects(*caption), "{at}");
+                    assert!(!side.header.intersects(circle), "{at}");
+                    assert!(side.header.width() >= NAME_MIN, "{at}");
+                }
+            }
+            // The level left of the master, the mix right of it.
+            assert!(top.headphone[0].x < top.master.left(), "{at}");
+            assert!(top.headphone[1].x > top.master.right(), "{at}");
         }
     }
 

@@ -14,6 +14,7 @@ use egui::{Rect, Vec2, pos2, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{By, NodeT, Queryable};
 use support::loaded;
+use ui::controls::{HeldButtons, Sink};
 use ui::cover::Covers;
 use ui::deck::{DeckPanels, DeckReads};
 use ui::layout::{drawn_sizes, shown_sections};
@@ -40,8 +41,11 @@ fn draw_row(frame: ControlFrame, reads: DeckReads, window: Vec2) -> (Harness<'st
     let mut harness = Harness::builder()
         .with_size(row + Vec2::splat(2.0 * MARGIN))
         .build_ui(move |ui| {
-            let space = panels.show_reads(ui, &frame, &reads, &mut covers, &sections, &channel().0);
-            mixer.show(ui, space, &frame, &reads, &sections);
+            let commands = channel().0;
+            let mut held = HeldButtons::default();
+            let mut sink = Sink::new(&commands, &mut held);
+            let space = panels.show_reads(ui, &frame, &reads, &mut covers, &sections, &mut sink);
+            mixer.show(ui, space, &frame, &reads, &sections, &mut sink);
         });
     harness.run_steps(3);
     (harness, row)

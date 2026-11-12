@@ -2,16 +2,18 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::mpsc::{Sender, channel};
+use std::sync::mpsc::{Receiver, Sender, channel};
 
 use actions::{Action, Input, PadMode, Side};
 use analysis::Waveform;
 
+use egui::{Event, Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use egui_kittest::kittest::{AccessKitNode, NodeT};
 use engine::{ChannelSnapshot, DeckId, DeckSnapshot, EffectKind, Grid, SamplerSnapshot};
 use library::TrackRow;
+use ui::controls::{HeldButtons, Sink};
 use ui::cover::Covers;
 use ui::deck::{DeckPanels, DeckReads, DeckView};
 use ui::layout::sections;
@@ -60,7 +62,15 @@ fn draw_in(view: &DeckView, layout: Layout) -> Harness<'_> {
     let sections = sections(layout);
     let mut harness = Harness::builder()
         .with_size([560.0, 340.0])
-        .build_ui(move |ui| ui::deck::panel(ui, view, None, &sections, &channel().0));
+        .build_ui(move |ui| {
+            ui::deck::panel(
+                ui,
+                view,
+                None,
+                &sections,
+                &mut Sink::new(&channel().0, &mut HeldButtons::default()),
+            )
+        });
     harness.run_steps(3);
     harness
 }
@@ -148,7 +158,14 @@ fn clicking_the_time_cycles_it() {
     let mut harness = Harness::builder()
         .with_size([1440.0, 400.0])
         .build_ui(move |ui| {
-            panels.show_reads(ui, &frame, &reads, &mut covers, &sections, &commands);
+            panels.show_reads(
+                ui,
+                &frame,
+                &reads,
+                &mut covers,
+                &sections,
+                &mut Sink::new(&commands, &mut HeldButtons::default()),
+            );
         });
     harness.run_steps(3);
     harness.get_by_label_contains("0:5").click();
@@ -213,7 +230,15 @@ fn draw_sending(view: DeckView, commands: Sender<UiCommand>) -> Harness<'static>
     let sections = sections(Layout::Pro);
     let mut harness = Harness::builder()
         .with_size([560.0, 340.0])
-        .build_ui(move |ui| ui::deck::panel(ui, &view, None, &sections, &commands));
+        .build_ui(move |ui| {
+            ui::deck::panel(
+                ui,
+                &view,
+                None,
+                &sections,
+                &mut Sink::new(&commands, &mut HeldButtons::default()),
+            )
+        });
     harness.run_steps(3);
     harness
 }
@@ -281,7 +306,8 @@ fn an_fx_dropdown_offers_every_effect() {
     frame.fx_slots[0] = [EffectKind::Echo, EffectKind::Reverb, EffectKind::Echo];
     let (commands, received) = channel();
     let mut harness = draw_sending(view(&snapshot, &frame), commands);
-    harness.get_by_value("Reverb").click();
+    // The slot's arrow opens the list.
+    harness.get_by_label("FX 2").click();
     harness.run_steps(2);
     assert_eq!(
         dropdown_entries(&harness),
@@ -311,7 +337,13 @@ fn a_coloured_hotcue_pad_is_filled_with_its_colour() {
     let ctx = egui::Context::default();
     let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
         ui.set_min_size(egui::vec2(560.0, 340.0));
-        ui::deck::panel(ui, &view, None, &sections, &channel().0);
+        ui::deck::panel(
+            ui,
+            &view,
+            None,
+            &sections,
+            &mut Sink::new(&channel().0, &mut HeldButtons::default()),
+        );
     });
     output.textures_delta.clear();
     let mut fills = Vec::new();
@@ -395,7 +427,14 @@ fn deck_rects(frame: &ControlFrame) -> Vec<egui::epaint::RectShape> {
     let ctx = egui::Context::default();
     let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
         ui.set_min_size(egui::vec2(1440.0, 400.0));
-        panels.show_reads(ui, frame, &reads, &mut covers, &sections, &channel().0);
+        panels.show_reads(
+            ui,
+            frame,
+            &reads,
+            &mut covers,
+            &sections,
+            &mut Sink::new(&channel().0, &mut HeldButtons::default()),
+        );
     });
     output.textures_delta.clear();
     let mut rects = Vec::new();
@@ -489,10 +528,218 @@ fn the_right_decks_are_mirrored_in_four_decks() {
         );
         let mut harness = Harness::builder()
             .with_size([480.0, 120.0])
-            .build_ui(move |ui| ui::deck::panel(ui, &view, None, &sections, &channel().0));
+            .build_ui(move |ui| {
+                ui::deck::panel(
+                    ui,
+                    &view,
+                    None,
+                    &sections,
+                    &mut Sink::new(&channel().0, &mut HeldButtons::default()),
+                )
+            });
         harness.run_steps(3);
         let cue = harness.get_by_label("CUE").rect();
         let out = harness.get_by_label("OUT").rect();
         assert_eq!(cue.min.x > out.max.x, mirrored, "deck {number}");
     }
+}
+
+/// What a panel sending to a channel keeps: the view, whether it is drawn, the buttons
+/// held and where the commands go.
+struct Sending {
+    view: DeckView,
+    drawn: bool,
+    held: HeldButtons,
+    commands: Sender<UiCommand>,
+}
+
+/// Draws `view` in the pro layout, sending what it asks for to the receiver returned and
+/// sweeping the held buttons at the end of each frame, as the window does. Short steps,
+/// so two clicks in a row make a double-click.
+fn sending(view: DeckView) -> (Harness<'static, Sending>, Receiver<UiCommand>) {
+    let (commands, received) = channel();
+    let sections = sections(Layout::Pro);
+    let state = Sending {
+        view,
+        drawn: true,
+        held: HeldButtons::default(),
+        commands,
+    };
+    let mut harness = Harness::builder()
+        .with_size([560.0, 340.0])
+        .with_step_dt(0.01)
+        .build_ui_state(
+            move |ui, state: &mut Sending| {
+                if state.drawn {
+                    let mut sink = Sink::new(&state.commands, &mut state.held);
+                    ui::deck::panel(ui, &state.view, None, &sections, &mut sink);
+                }
+                state.held.sweep(ui.ctx(), &state.commands);
+            },
+            state,
+        );
+    harness.run_steps(3);
+    (harness, received)
+}
+
+fn pointer(pressed: bool, at: Pos2) -> Event {
+    Event::PointerButton {
+        pos: at,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    }
+}
+
+/// Presses at `at`, holds for two frames and lets go.
+fn press_and_release<S>(harness: &mut Harness<'_, S>, at: Pos2) {
+    harness.event(Event::PointerMoved(at));
+    harness.run_steps(1);
+    harness.event(pointer(true, at));
+    harness.run_steps(2);
+    harness.event(pointer(false, at));
+    harness.run_steps(2);
+}
+
+/// Presses and lets go of the control labelled `label`.
+fn press_label<S>(harness: &mut Harness<'_, S>, label: &str) {
+    let at = harness.get_by_label(label).rect().center();
+    press_and_release(harness, at);
+}
+
+fn press_release(action: Action) -> [UiCommand; 2] {
+    [
+        UiCommand::Action(action, Input::Press),
+        UiCommand::Action(action, Input::Release),
+    ]
+}
+
+#[test]
+fn play_cue_sync_and_states_send_their_actions() {
+    for number in [1, 2] {
+        let (snapshot, mut frame) = loaded_plain();
+        let id = DeckId::new(number - 1).unwrap();
+        frame.decks.swap(0, id.index());
+        let view = DeckView::new(
+            id,
+            &snapshot,
+            &ChannelSnapshot::default(),
+            &frame,
+            &SamplerSnapshot::default(),
+        );
+        let (mut harness, received) = sending(view);
+        for (label, action) in [
+            ("PLAY", Action::PlayPause(id)),
+            ("CUE", Action::Cue(id)),
+            ("SYNC", Action::Sync(id)),
+            ("VINYL", Action::VinylToggle(id)),
+            ("SLIP", Action::SlipToggle(id)),
+            ("KEYLOCK", Action::KeylockToggle(id)),
+            ("IN", Action::LoopIn(id)),
+            ("OUT", Action::LoopOut(id)),
+        ] {
+            press_label(&mut harness, label);
+            let sent: Vec<UiCommand> = received.try_iter().collect();
+            assert_eq!(sent, press_release(action), "deck {number} {label}");
+        }
+    }
+}
+
+#[test]
+fn a_held_cue_no_longer_drawn_is_released() {
+    let (snapshot, frame) = loaded_plain();
+    let (mut harness, received) = sending(view(&snapshot, &frame));
+    let cue = harness.get_by_label("CUE").rect().center();
+    harness.event(Event::PointerMoved(cue));
+    harness.run_steps(1);
+    harness.event(pointer(true, cue));
+    harness.run_steps(2);
+    harness.state_mut().drawn = false;
+    harness.run_steps(1);
+    let sent: Vec<UiCommand> = received.try_iter().collect();
+    assert_eq!(sent, press_release(Action::Cue(DeckId::new(0).unwrap())));
+}
+
+#[test]
+fn double_click_resets_pitch_to_zero() {
+    let (snapshot, mut frame) = loaded_plain();
+    frame.control.decks[0].tempo = 0.8;
+    let (mut harness, received) = sending(view(&snapshot, &frame));
+    // The slider is over its pitch in percent.
+    let label = harness.get_by_label("+0.0%").rect();
+    let at = label.center_top() - vec2(0.0, 30.0);
+    harness.event(Event::PointerMoved(at));
+    harness.run_steps(1);
+    for _ in 0..2 {
+        harness.event(pointer(true, at));
+        harness.event(pointer(false, at));
+        harness.run_steps(1);
+    }
+    harness.run_steps(1);
+    let tempo = Action::Tempo(DeckId::new(0).unwrap());
+    let last = received
+        .try_iter()
+        .filter(|c| matches!(c, UiCommand::Action(a, _) if *a == tempo))
+        .last();
+    assert_eq!(last, Some(UiCommand::Action(tempo, Input::Absolute(0.5))));
+}
+
+#[test]
+fn loop_arrows_halve_and_double() {
+    let (mut snapshot, frame) = loaded_plain();
+    snapshot.loop_beats = 0.5;
+    let (mut harness, received) = sending(view(&snapshot, &frame));
+    let id = DeckId::new(0).unwrap();
+    for (label, action) in [
+        ("<", Action::LoopHalve(id)),
+        (">", Action::LoopDouble(id)),
+        ("1/2", Action::AutoLoop(id)),
+    ] {
+        press_label(&mut harness, label);
+        let sent: Vec<UiCommand> = received.try_iter().collect();
+        assert_eq!(sent, press_release(action), "{label}");
+    }
+}
+
+#[test]
+fn pad_mode_arrows_step_and_wrap() {
+    for (mode, previous, next) in [
+        (PadMode::Hardware, PadMode::PadScratch, PadMode::BeatJump),
+        (PadMode::PadScratch, PadMode::Slicer, PadMode::Hardware),
+    ] {
+        let (snapshot, mut frame) = loaded_plain();
+        frame.control.sides[0].pad_mode = mode;
+        let (mut harness, received) = sending(view(&snapshot, &frame));
+        for (label, to) in [("previous pad mode", previous), ("next pad mode", next)] {
+            press_label(&mut harness, label);
+            let sent: Vec<UiCommand> = received.try_iter().collect();
+            let action = Action::PadMode(Side::Left, to);
+            assert_eq!(sent, press_release(action), "{mode:?} {label}");
+        }
+    }
+}
+
+#[test]
+fn fx_toggle_and_level() {
+    let (snapshot, frame) = loaded_plain();
+    let (mut harness, received) = sending(view(&snapshot, &frame));
+    let id = DeckId::new(0).unwrap();
+    // The slot's effect toggles it; its arrow opens the list.
+    press_label(&mut harness, "Reverb");
+    let sent: Vec<UiCommand> = received.try_iter().collect();
+    assert_eq!(sent, press_release(Action::FxToggle(id, 1)));
+    // The level is the bar over its caption: a click three quarters along sets 0.75.
+    let caption = harness.get_by_label("FX 50%").rect();
+    let bar = caption.center_top() - vec2(0.0, 6.0);
+    let at = bar + vec2(caption.width() / 4.0, 0.0);
+    press_and_release(&mut harness, at);
+    let level = received
+        .try_iter()
+        .filter_map(|c| match c {
+            UiCommand::Action(Action::FxLevel(d), Input::Absolute(v)) if d == id => Some(v),
+            _ => None,
+        })
+        .last()
+        .expect("no FxLevel");
+    assert!((level - 0.75).abs() < 0.03, "got {level}");
 }
