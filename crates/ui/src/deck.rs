@@ -26,6 +26,14 @@ use crate::theme::{self, EDGE_LABEL_WIDTH, SECTION_GAP, edge_label};
 use crate::view::{JogDisplay, TimeMode, WaveformPalette};
 use crate::waveform::{Playhead, band_colours, layers, loudest};
 
+/// What each deck's panel is called for screen readers, by deck index.
+const PANEL_NAMES: [&str; 4] = [
+    "deck panel 1",
+    "deck panel 2",
+    "deck panel 3",
+    "deck panel 4",
+];
+
 /// The brightness below which a lit box takes white text instead of dark.
 const DARK_FILL: f32 = 0.35;
 /// A record's speed: the jog's marker turns at this at the original tempo.
@@ -510,7 +518,7 @@ impl DeckPanels {
                 .path
                 .as_deref()
                 .and_then(|path| covers.get(ui.ctx(), path));
-            crate::landmark_rect(ui, rect, &format!("deck panel {}", deck.index() + 1));
+            crate::landmark_rect(ui, rect, PANEL_NAMES[deck.index()]);
             ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| {
                 // Nothing a panel draws reaches its neighbours.
                 ui.set_clip_rect(rect.intersect(ui.clip_rect()));
