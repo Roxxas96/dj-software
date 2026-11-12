@@ -24,7 +24,7 @@ use crate::mixer;
 use crate::model::{ControlFrame, GHOST_TEMPO, HotcueMark};
 use crate::theme::{self, EDGE_LABEL_WIDTH, SECTION_GAP, edge_label};
 use crate::view::{JogDisplay, TimeMode, WaveformPalette};
-use crate::waveform::{Playhead, band_colours};
+use crate::waveform::{Playhead, band_colours, layers};
 
 /// The brightness below which a lit box takes white text instead of dark.
 const DARK_FILL: f32 = 0.35;
@@ -925,8 +925,10 @@ fn overview_strip(ui: &Ui, view: &DeckView, rect: Rect) {
 }
 
 /// One column per point, mirrored around the middle, as tall as the loudest bucket under
-/// it and in the three layers of the lane: low, mid and high in `bands`, back to front.
+/// it and in the three layers of the lane: low, mid and high in `bands`, back to front,
+/// blended as the lane blends them ([`layers`]).
 fn overview_columns(mesh: &mut Mesh, rect: Rect, waveform: &Waveform, bands: [Color32; 3]) {
+    let bands = layers(bands);
     let buckets = &waveform.buckets;
     let columns = rect.width().floor().max(0.0) as usize;
     if buckets.is_empty() || columns == 0 {
@@ -1324,6 +1326,29 @@ mod tests {
         assert_eq!(view.key.as_deref(), Some("8A"));
         assert_eq!(view.loop_beats, "4");
         assert!(view.playing && !view.cueing);
+    }
+
+    #[test]
+    fn overview_layers_blend() {
+        // One bucket in a one-column overview: low, mid and high, back to front.
+        let waveform = Waveform {
+            frames_per_bucket: 256,
+            buckets: vec![[255, 200, 100, 50]],
+        };
+        let mut mesh = Mesh::default();
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(1.0, 40.0));
+        let bands = band_colours(WaveformPalette::Rgb, &theme::Palette::DARK);
+        overview_columns(&mut mesh, rect, &waveform, bands);
+        // Four corners a layer.
+        let alphas: Vec<u8> = mesh
+            .vertices
+            .iter()
+            .step_by(4)
+            .map(|v| v.color.a())
+            .collect();
+        assert_eq!(alphas.len(), 3, "{alphas:?}");
+        assert_eq!(alphas[0], 255, "{alphas:?}");
+        assert!(alphas[1] < 255 && alphas[2] < 255, "{alphas:?}");
     }
 
     #[test]
