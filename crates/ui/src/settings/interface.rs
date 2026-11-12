@@ -169,9 +169,10 @@ mod tests {
 
     #[test]
     fn the_sketch_deck_band_follows_the_window() {
+        let window = egui::vec2(1440.0, 900.0);
         for layout in Layout::ALL {
             let sections = layout::sections(*layout);
-            let want = crate::deck::row_height(&sections) / SKETCH_WINDOW_HEIGHT;
+            let want = layout::drawn_sizes(crate::PanelSizes::default(), &sections, window).decks;
             let share = deck_band_share(*layout);
             assert!(
                 (share - want).abs() <= 0.02,
