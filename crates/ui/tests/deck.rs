@@ -1070,3 +1070,55 @@ fn a_right_click_on_a_pad_in_another_mode_opens_nothing() {
     assert!(harness.query_by_label("Set hotcue here").is_none());
     assert!(harness.query_by_label("Delete").is_none());
 }
+
+#[test]
+fn a_swatch_saves_the_name_as_typed() {
+    let view = with_drop();
+    let (mut harness, received) = editing(view.clone());
+    let at = pad_at(&harness, &view, 3);
+    right_click(&mut harness, at);
+    harness.get_by_role(Role::TextInput).focus();
+    harness.run_steps(1);
+    harness.key_combination_modifiers(Modifiers::COMMAND, &[Key::A]);
+    harness.run_steps(1);
+    harness
+        .get_by_role(Role::TextInput)
+        .type_text("  Big drop ");
+    harness.run_steps(1);
+    let (blue, colour) = ui::hotcue_menu::SWATCHES[2];
+    press_label(&mut harness, blue);
+    let sent: Vec<UiCommand> = received.try_iter().collect();
+    assert_eq!(sent, [label_step(Some("Big drop"), colour)]);
+    // The field has the keyboard again: Enter still saves, and closes the editor.
+    harness.key_press(Key::Enter);
+    harness.run_steps(2);
+    let sent: Vec<UiCommand> = received.try_iter().collect();
+    assert_eq!(sent, [label_step(Some("Big drop"), colour)]);
+    assert!(harness.query_by_role(Role::TextInput).is_none());
+}
+
+#[test]
+fn the_click_that_closes_the_editor_plays_no_pad() {
+    let view = with_drop();
+    let (mut harness, received) = editing(view.clone());
+    let at = pad_at(&harness, &view, 3);
+    right_click(&mut harness, at);
+    harness.get_by_label("Delete");
+    let other = pad_at(&harness, &view, 5);
+    press_and_release(&mut harness, other);
+    assert!(
+        harness.query_by_label("Delete").is_none(),
+        "the click closes it"
+    );
+    assert_eq!(
+        received.try_iter().collect::<Vec<_>>(),
+        [],
+        "and presses nothing"
+    );
+    // The next click plays the pad.
+    press_and_release(&mut harness, other);
+    assert_eq!(
+        received.try_iter().collect::<Vec<_>>(),
+        press_release(Action::Hotcue(DeckId::new(0).unwrap(), slot(5)))
+    );
+}

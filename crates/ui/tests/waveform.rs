@@ -209,7 +209,7 @@ fn flag_right_click_opens_the_same_editor() {
     });
     let mut reads = DeckReads::default();
     reads.decks[0] = (snapshot, 0);
-    let (commands, _received) = std::sync::mpsc::channel();
+    let (commands, received) = std::sync::mpsc::channel();
     let mut lanes = ui::waveform::Lanes::default();
     let mut held = HeldButtons::default();
     let mut harness = Harness::builder()
@@ -241,4 +241,29 @@ fn flag_right_click_opens_the_same_editor() {
     assert_eq!(name.value().as_deref(), Some("Drop"));
     harness.get_by_label("No colour");
     harness.get_by_label("Delete");
+    // A swatch saves for the flag's deck, track and slot.
+    let (green, colour) = ui::hotcue_menu::SWATCHES[4];
+    let swatch = harness.get_by_label(green).rect().center();
+    harness.event(Event::PointerMoved(swatch));
+    harness.run_steps(1);
+    for pressed in [true, false] {
+        harness.event(Event::PointerButton {
+            pos: swatch,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        });
+        harness.run_steps(1);
+    }
+    let sent: Vec<ui::UiCommand> = received.try_iter().collect();
+    assert_eq!(
+        sent,
+        [ui::UiCommand::Library(ui::LibraryStep::HotcueLabel {
+            deck: DeckId::new(0).unwrap(),
+            track: 1,
+            slot: engine::HotcueSlot::new(2).unwrap(),
+            name: Some("Drop".into()),
+            color: colour,
+        })]
+    );
 }
