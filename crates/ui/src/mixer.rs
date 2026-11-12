@@ -55,6 +55,8 @@ const LETTER_GAP: f32 = 2.0;
 const STRIP_KNOB_GAP: f32 = 2.0;
 const FADER_WIDTH: f32 = 14.0;
 const METER_WIDTH: f32 = 8.0;
+/// Each strip's name, by deck: a static table, so no frame formats it.
+const DECK_NAMES: [&str; 4] = ["DECK 1", "DECK 2", "DECK 3", "DECK 4"];
 /// A knob's travel, either side of straight up, in radians.
 const KNOB_SWEEP: f32 = 0.75 * std::f32::consts::PI;
 const METER_HOT: f32 = 0.95;
@@ -225,12 +227,7 @@ fn side_strip(ui: &mut Ui, layout: &SideLayout, knob_radius: f32, channel: &Chan
     let state = channel.frame.control.deck(channel.deck);
     let ghosts = &channel.frame.ghosts[channel.deck.index()];
     let painter = ui.painter().clone();
-    caption(
-        ui,
-        layout.header,
-        &format!("DECK {}", channel.deck.index() + 1),
-        accent,
-    );
+    caption(ui, layout.header, DECK_NAMES[channel.deck.index()], accent);
     let (all, count) = knobs(channel);
     for (i, &(name, value, ghost)) in all[..count].iter().enumerate() {
         knob(&painter, layout.knobs[i], knob_radius, value, ghost, accent);
@@ -525,12 +522,7 @@ pub fn strip(
     let (all, count) = knobs(&channel);
     let layout = strip_layout(rect, count, sections.mixer_meters);
 
-    caption(
-        ui,
-        layout.name,
-        &format!("DECK {}", deck.index() + 1),
-        accent,
-    );
+    caption(ui, layout.name, DECK_NAMES[deck.index()], accent);
     pfl_button(ui, layout.pfl, state.pfl, accent);
     for (i, &(name, value, ghost)) in all[..count].iter().enumerate() {
         let centre = layout.knobs[i];
@@ -684,6 +676,16 @@ mod tests {
     use egui::Vec2;
 
     use super::*;
+
+    #[test]
+    fn deck_names_are_numbered_from_one() {
+        for deck in DeckId::ALL {
+            assert_eq!(
+                DECK_NAMES[deck.index()],
+                format!("DECK {}", deck.index() + 1)
+            );
+        }
+    }
 
     #[test]
     fn eq_labels_follow_the_mode() {
