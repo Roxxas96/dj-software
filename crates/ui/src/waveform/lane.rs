@@ -394,8 +394,8 @@ impl Scale {
     }
 }
 
-/// One column per physical pixel, mirrored around the lane's middle, as tall as the
-/// loudest bucket under it and in its colour. Columns are cut at fixed track frames and
+/// One column per physical pixel, mirrored around the lane's middle, each band as tall as
+/// its loudest under it ([`styles::loudest`]) and in its colour. Columns are cut at fixed track frames and
 /// only their place moves, so a column keeps its shape as the track scrolls.
 fn columns(
     mesh: &mut Mesh,
@@ -429,10 +429,10 @@ fn columns(
             break;
         }
         let to = ((end / per_bucket).floor() as usize).clamp(from + 1, buckets.len());
-        let Some(loudest) = buckets[from..to].iter().max_by_key(|b| b[0]) else {
+        let Some(loudest) = styles::loudest(&buckets[from..to]) else {
             continue;
         };
-        let (bars, used) = styles::bars(style, *loudest, deck, p, bands);
+        let (bars, used) = styles::bars(style, loudest, deck, p, bands);
         for bar in &bars[..used] {
             let rect = Rect::from_min_max(
                 pos2(scale.x(start), rect.top() + rect.height() * bar.from),
@@ -538,6 +538,49 @@ mod tests {
         let (first_a, first_b) = (a.vertices[0].pos, b.vertices[0].pos);
         assert_eq!(first_a.y, first_b.y);
         assert!((shifted[0] - first_a.x).abs() < 1e-3, "{shifted:?}");
+    }
+
+    #[test]
+    fn a_column_shows_every_band_peak() {
+        // Zoomed out: two buckets under each column, the kick's and a bright one.
+        let waveform = Waveform {
+            frames_per_bucket: 50,
+            buckets: vec![[255, 200, 10, 10], [100, 20, 150, 120]],
+        };
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(100.0, 40.0));
+        let scale = Scale {
+            centre_x: 0.0,
+            centre_frame: 0.0,
+            frames_per_column: 100.0,
+            frames_per_point: 100.0,
+            half_span: 50.0,
+        };
+        let mut mesh = Mesh::default();
+        columns(
+            &mut mesh,
+            rect,
+            &scale,
+            &waveform,
+            (WaveformStyle::Frequency, deck(1)),
+            (&Palette::DARK, [Color32::RED; 3]),
+        );
+        let reaches: Vec<f32> = mesh
+            .vertices
+            .chunks(4)
+            .map(|corners| {
+                let top = corners.iter().map(|v| v.pos.y).fold(f32::MAX, f32::min);
+                let bottom = corners.iter().map(|v| v.pos.y).fold(f32::MIN, f32::max);
+                (bottom - top) / 2.0
+            })
+            .collect();
+        let expected = [200.0, 150.0, 120.0].map(|level| 20.0 * level / 255.0);
+        assert_eq!(reaches.len(), 3, "{reaches:?}");
+        for (reach, want) in reaches.iter().zip(expected) {
+            assert!(
+                (reach - want).abs() < 1e-3,
+                "{reaches:?} against {expected:?}"
+            );
+        }
     }
 
     fn marked_lane<'a>(
