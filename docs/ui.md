@@ -29,6 +29,21 @@ configuration file or mapping does not close it either: the window shows the err
 the file and the problem, until it is closed. Closing the window saves cues and hotcues,
 like Ctrl-C in `play`.
 
+## The compact look
+
+The window copies VirtualDJ's compact arrangement. Sections have no outlines: they touch,
+a thin gap of background between them, and tell themselves apart by their fills. A section
+that VirtualDJ names (FX, PADS, LOOP) carries its name turned a quarter anticlockwise
+at its edge. The panel of a deck that a controller side drives has its side's accent
+along its outer edge (the active deck's tab), and the right deck's panel is the left one
+mirrored below the header: the transport, the pitch fader and the jog sit in the same order
+counted from the mixer, and the states, FX and pads on the outside.
+
+The deck row is as tall as its contents (Pro needs about 265 points), so the browser takes
+all the rest of the height. The same holds for every layout and for 4-Decks. Dragging the
+deck divider overrides that height (see
+[Dividers](#dividers-folding-and-the-sideview)).
+
 ## What each area shows
 
 - **Top bar:** the LAYOUT menu (see [The LAYOUT menu](#the-layout-menu)), the layout's name,
@@ -41,7 +56,9 @@ like Ctrl-C in `play`.
   or in the Middle (between the deck panels and the browser). Beat ticks are drawn, with a
   red tick on the first beat of each bar. Cue and hotcue markers and the loop band show on
   the lane; a hotcue shows its colour, and its name cut at 14 characters when it has one.
-  The playhead is fixed at the centre.
+  The playhead is fixed at the centre. Each lane blends three layers, low, mid and high,
+  one colour per band (see [Waveform colours](#waveform-colours)), so where the bands overlap
+  the colours mix as they do in VirtualDJ.
 - **Zoom:** scroll (or pinch) over the waveforms, or click the `-` and `+` buttons at their
   top right. Each step is 1.25 times, between `ui.waveform_min_beats` and
   `ui.waveform_max_beats` (4 and 64 beats by default). Both lanes always share the zoom, so
@@ -66,22 +83,40 @@ like Ctrl-C in `play`.
   - **Beat counter:** `bar.beat` under the key, counted from 1 from the grid's first beat,
     4 beats to a bar. Before the first beat the bars count backwards from 0. It shows only
     when the LAYOUT menu's Beat Counter is on and the track has a grid.
-  - **Jog:** with the Info jogwheel display the wheel shows the BPM, the pitch and both the
+  - **Jog:** the Info jogwheel display is the default: the wheel shows the BPM, the pitch and both the
     elapsed and the remaining time inside it, and its marker moves to the rim.
-- **Mixer:** GAIN, three EQ knobs, FILTER, the channel fader, PFL, the level meters (the live
-  level, with a line marking the highest peak of the last second), the crossfader and the
-  master level. The EQ labels follow the mode: HIGH, MID, LOW, or once
+- **Mixer:** one strip per deck, compact and in VirtualDJ's order: the master level on top,
+  each channel's knobs (the three EQ knobs and FILTER) outside, in the columns next to the
+  decks, GAIN over the channel fader in the middle, PFL under it, the level meters beside the
+  faders (the live level, with a line marking the highest peak of the last second), and the
+  crossfader at the bottom. With four decks the strips are narrower and the knobs carry
+  letters instead of names: G (gain), H, M, B (high, mid, bass) and F (filter). The EQ labels
+  follow the mode: HIGH, MID, LOW, or once
   stems are active HIHAT, MEL/VOX, KICK (`vdj` knobs) or VOCALS, INSTRU, BASS (`raw` knobs).
   Ghost markers show where a physical control is while soft takeover has not caught up with
   the value on screen (after a DECK switch, for instance).
 - **Browser:** the drives and real folders, then playlists, as a tree. A drive plugged in or
   out shows at the next refresh, which follows library changes. Columns are Title,
-  Artist, Remix, Length, BPM and Key. "•" marks a track with saved cues, and "missing" a file
+  Artist, Remix, Length, BPM and Key, left-aligned under a header row, and the rows
+  alternate in shade. A track that is loaded on a deck has a marker in that deck's accent at
+  the left of its row. "•" marks a track with saved cues, and "missing" a file
   that is gone. An info panel shows the selected track. The own files of a folder that was
   never scanned are added and analysed in the background, so BPM and key fill in as they
   finish.
 - **Panels:** the dividers, the info panel and the sideview are described in
   [Dividers, folding and the sideview](#dividers-folding-and-the-sideview).
+
+## Waveform colours
+
+Each frequency band has its own colour, and the lanes and the overviews blend the three. The
+LAYOUT menu's Waveform Display entry (below the styles) and the Settings window's Interface
+page choose the palette, and the choice is saved:
+
+| Palette | Low | Mid | High |
+|---|---|---|---|
+| Red / green / blue (default) | red | green | blue |
+| Blue / orange / white | blue | orange | white (dark scheme) or dark slate (light scheme) |
+| Orange / yellow / cyan | orange | yellow | cyan |
 
 ## The LAYOUT menu
 
@@ -94,8 +129,8 @@ saved in `ui-state.toml` (see below).
 |---|---|
 | Starter, Essentials, Pro, Performance | The layout (below) |
 | Colour Scheme | Dark or Light |
-| Waveform Display | Frequency, Deck colour, Bands or Overlaid; Top or Middle for the position of the lanes; Overview, which shows or hides the deck panels' overview waveform |
-| Jogwheel Display | Plain or Info |
+| Waveform Display | Frequency, Deck colour, Bands or Overlaid; the waveform palette; Top or Middle for the position of the lanes; Overview, which shows or hides the deck panels' overview waveform |
+| Jogwheel Display | Info (the default) or Plain |
 | Beat Counter | On shows `bar.beat` in the deck panels |
 | 4-Decks | The 4-Decks view |
 | Panels | Info and Sideview, which show or fold the browser's info panel and the sideview |
@@ -106,24 +141,24 @@ Performance, then back to Starter. The Settings window's Interface page picks a 
 
 ## The four layouts
 
-Each layout decides which controls the deck panels and the mixer draw, and how the height is
-shared between the deck panels and the browser (the lanes always take 22 %). Pro is the
-default.
+Each layout decides which controls the deck panels and the mixer draw. The lanes always
+take 22 % of the height, the deck row takes what its contents need and the browser the rest.
+Pro is the default.
 
-| Layout | Deck panels | Mixer | Decks' share of the height |
-|---|---|---|---|
-| Starter | No FX slots and no pads | No level meters | 42 % |
-| Essentials | Everything but the FX level bar | Everything | 40 % |
-| Pro | Everything | Everything | 38 % |
-| Performance | No jog; the pads, FX and the rest stay | Everything | 26 % |
+| Layout | Deck panels | Mixer |
+|---|---|---|
+| Starter | No FX slots and no pads | No level meters |
+| Essentials | Everything but the FX level bar | Everything |
+| Pro | Everything | Everything |
+| Performance | No jog; the pads, FX and the rest stay | Everything |
 
-The deck panels never get less height than every one of their areas needs (about 300 points
-with the jog or the pads, a little less without the overview): in a small window the decks
-take more than their share, so the pads, the pad mode, CUE, PLAY, SYNC and the loop always
-show. Performance's 26 % is below that up to a window about 1160 points high. The mixer's
-knobs shrink to the height and width their strip gets.
+The deck panels never get less height than every one of their areas needs, so the pads, the
+pad mode, CUE, PLAY, SYNC and the loop always show, and at the smallest window (1024 by 700)
+the browser still lists at least three rows. The mixer's knobs shrink to the height and
+width their strip gets. The Interface page's sketches draw each layout with the same
+proportions.
 
-Until the deck divider itself is dragged, the deck panels take their layout's height;
+Until the deck divider itself is dragged, the deck panels take their contents' height;
 dragging another divider leaves that alone. Once the deck divider is dragged, its height
 applies to every layout.
 
@@ -133,8 +168,8 @@ The 4-Decks entry shows all four decks at once, whatever the layout: two compact
 each side, in the order deck 1 above deck 3 on the left and deck 2 above deck 4 on the right,
 and the mixer with four strips ordered 3, 1, 2, 4. The compact panels keep the overview,
 the loop controls, the EQ and the meters; they have no FX, pads, jog or tempo slider (the
-transport, the states and the loop share one row) and take 40 % of the height, or what two
-stacked panels need when that is more. While 4-Decks is on, the layout cannot be chosen (the
+transport, the states and the loop share one row); the deck row is as tall as two stacked
+panels need. While 4-Decks is on, the layout cannot be chosen (the
 LAYOUT menu's layouts and the Interface page's tiles are greyed out, and say why), nor can
 the Jogwheel Display, which Performance greys out too. The
 waveform lanes show all four decks. The deck a controller side drives is still chosen on the
@@ -186,7 +221,7 @@ theirs.
 ## `ui-state.toml`
 
 The window's view is kept in `ui-state.toml` next to `config.toml`, as a `[view]` table. It
-holds the layout, colour scheme, waveform style and position, jogwheel display, the beat
+holds the layout, colour scheme, waveform style, palette and position, jogwheel display, the beat
 counter, 4-Decks, overview, info panel and sideview switches, each deck's time mode, the
 panel sizes (`[view.sizes]`: lanes, decks, tree, info, sideview) and the waveform zoom
 (`waveform_beats`). It is saved about 2 seconds after the last change, and when the window
