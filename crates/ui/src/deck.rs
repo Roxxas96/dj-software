@@ -450,22 +450,8 @@ pub struct DeckPanels {
 
 impl DeckPanels {
     /// Draws the left side's active deck at the left of the space `ui` has left and the
-    /// right side's at its right, and returns the space between them, for the mixer.
-    /// Without `monitor` every deck is empty.
-    pub fn show(
-        &mut self,
-        ui: &mut Ui,
-        frame: &ControlFrame,
-        monitor: Option<&EngineMonitor>,
-        covers: &mut Covers,
-        sections: &Sections,
-        commands: &Sender<UiCommand>,
-    ) -> Rect {
-        let reads = DeckReads::read(monitor);
-        self.show_reads(ui, frame, &reads, covers, sections, commands)
-    }
-
-    /// [`DeckPanels::show`] from what was already read from the engine.
+    /// right side's at its right, each as `reads` has it, and returns the space between
+    /// them, for the mixer.
     pub fn show_reads(
         &mut self,
         ui: &mut Ui,

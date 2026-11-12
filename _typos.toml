@@ -7,3 +7,7 @@ trak = "trak"
 anull = "anull"
 # torch.arange in the stems export wrapper (docs/stems-backend.md)
 arange = "arange"
+
+[default.extend-identifiers]
+# Plural of PNG: split as "PN" + "Gs", it reads as a typo of "ON".
+PNGs = "PNGs"
