@@ -9,9 +9,10 @@ use std::path::Path;
 
 use analysis::KeyNotation;
 use egui::{
-    Button, Color32, CornerRadius, CursorIcon, Label, Pos2, Rect, RichText, Sense, Stroke, Ui,
-    UiBuilder, Vec2, pos2, vec2,
+    Align, Button, Color32, CornerRadius, CursorIcon, Label, Layout, Pos2, Rect, RichText, Sense,
+    Stroke, Ui, UiBuilder, Vec2, pos2, vec2,
 };
+use engine::DeckId;
 use library::{BrowserView, Focus, ListRow, TreeKind, TreeRow};
 
 use crate::ViewChange;
@@ -117,11 +118,19 @@ pub(crate) fn divider(ui: &mut Ui, name: &str, rect: Rect, cursor: CursorIcon) -
     }
 }
 
+/// The list's column headers, after the cue dot's empty one.
+pub const COLUMNS: [&str; 6] = ["Title", "Artist", "Remix", "Length", "BPM", "Key"];
+
+/// The width of a deck marker at a loaded track's row, in points.
+const MARKER_WIDTH: f32 = 3.0;
+
 /// Draws the browser into all of `ui`'s space, with `sideview` drawn in the sideview's
-/// column when `arrangement` shows it.
+/// column when `arrangement` shows it. `loaded` holds each deck's loaded track id, to mark
+/// those tracks in the list.
 pub fn show(
     ui: &mut Ui,
     view: &BrowserView,
+    loaded: [Option<i64>; 4],
     notation: KeyNotation,
     covers: &mut Covers,
     arrangement: &Arrangement,
@@ -192,7 +201,7 @@ pub fn show(
     let info = Rect::from_min_max(pos2(info_edge, area.min.y), pos2(side_edge, area.max.y));
     let side = Rect::from_min_max(pos2(side_edge, area.min.y), area.max);
     pane(ui, tree, |ui| tree_pane(ui, view));
-    pane(ui, list, |ui| list_pane(ui, view, notation));
+    pane(ui, list, |ui| list_pane(ui, view, loaded, notation));
     if arrangement.info {
         pane(ui, info, |ui| info_pane(ui, view, notation, covers));
     }
@@ -261,7 +270,10 @@ fn highlight(p: &Palette, selected: bool, focused: bool) -> Option<Color32> {
 /// Puts `text` in a cell starting at `x` and `width` wide, cut with "…" when too long.
 fn cell(ui: &mut Ui, row: Rect, x: f32, width: f32, text: RichText) {
     let rect = Rect::from_min_size(pos2(x, row.min.y), vec2(width.max(0.0), row.height()));
-    ui.put(rect, Label::new(text).truncate());
+    let layout = Layout::left_to_right(Align::Center);
+    ui.scope_builder(UiBuilder::new().max_rect(rect).layout(layout), |ui| {
+        ui.add(Label::new(text).truncate());
+    });
 }
 
 fn tree_pane(ui: &mut Ui, view: &BrowserView) {
@@ -370,7 +382,7 @@ fn drawn_rows(view: &BrowserView, rows: usize) -> impl Iterator<Item = (usize, &
     page_window(view, rows).map(move |at| (at, &view.list[at - view.list_offset]))
 }
 
-fn list_pane(ui: &mut Ui, view: &BrowserView, notation: KeyNotation) {
+fn list_pane(ui: &mut Ui, view: &BrowserView, loaded: [Option<i64>; 4], notation: KeyNotation) {
     let p = theme::palette(ui.ctx());
     let header = row(ui, None);
     // The library separates the path with "▸" (U+25B8), which egui's bundled fonts lack and
@@ -397,40 +409,72 @@ fn list_pane(ui: &mut Ui, view: &BrowserView, notation: KeyNotation) {
         count_width,
         RichText::new(count).color(p.text_dim),
     );
+    // The column headers, over the same cells as the rows.
+    let head = row(ui, None);
+    let cells = columns(head.min.x, head.width());
+    for (&(x, width), name) in cells[1..].iter().zip(COLUMNS) {
+        cell(ui, head, x, width, RichText::new(name).color(p.text_dim));
+    }
     let rows = rows_fitting(ui.available_height());
     let focused = view.focus == Focus::List;
-    let p = theme::palette(ui.ctx());
-    let total = ui.available_width();
+    for (at, entry) in drawn_rows(view, rows) {
+        let alt = (at % 2 == 1).then_some(p.row_alt);
+        let fill = highlight(&p, at == view.list_cursor, focused).or(alt);
+        let rect = row(ui, fill);
+        let fields = Fields::of(entry, notation);
+        if let Some(deck) = entry
+            .track
+            .as_ref()
+            .and_then(|t| loaded.iter().position(|id| *id == Some(t.id)))
+        {
+            let marker = Rect::from_min_size(rect.min, vec2(MARKER_WIDTH, rect.height()));
+            let colour = p.deck_accent(DeckId::ALL[deck]);
+            ui.painter().rect_filled(marker, 0.0, colour);
+        }
+        let colour = if fields.missing { p.text_dim } else { p.text };
+        let length = if fields.missing {
+            "missing"
+        } else {
+            &fields.length
+        };
+        let texts = [
+            if fields.cues { "•" } else { "" },
+            &fields.title,
+            &fields.artist,
+            &fields.remix,
+            length,
+            &fields.bpm,
+            &fields.key,
+        ];
+        for (&(x, width), text) in cells.iter().zip(texts) {
+            cell(ui, rect, x, width, RichText::new(text).color(colour));
+        }
+    }
+}
+
+/// The list's cells as `(x, width)`: the cue dot, then one per [`COLUMNS`] entry, across
+/// `total` points from `left`. The headers and the rows both place their cells with this.
+fn columns(left: f32, total: f32) -> [(f32, f32); 7] {
     let fixed = CUE_WIDTH + LENGTH_WIDTH + BPM_WIDTH + KEY_WIDTH;
     let flexible = (total - fixed).max(0.0);
     let artist = flexible * ARTIST_SHARE;
     let remix = flexible * REMIX_SHARE;
     let title = flexible - artist - remix;
-    for (at, entry) in drawn_rows(view, rows) {
-        let rect = row(ui, highlight(&p, at == view.list_cursor, focused));
-        let fields = Fields::of(entry, notation);
-        let colour = if fields.missing { p.text_dim } else { p.text };
-        let mut x = rect.min.x;
-        let mut put = |ui: &mut Ui, width: f32, text: &str| {
-            cell(ui, rect, x, width, RichText::new(text).color(colour));
-            x += width;
-        };
-        put(ui, CUE_WIDTH, if fields.cues { "•" } else { "" });
-        put(ui, title, &fields.title);
-        put(ui, artist, &fields.artist);
-        put(ui, remix, &fields.remix);
-        put(
-            ui,
-            LENGTH_WIDTH,
-            if fields.missing {
-                "missing"
-            } else {
-                &fields.length
-            },
-        );
-        put(ui, BPM_WIDTH, &fields.bpm);
-        put(ui, KEY_WIDTH, &fields.key);
-    }
+    let widths = [
+        CUE_WIDTH,
+        title,
+        artist,
+        remix,
+        LENGTH_WIDTH,
+        BPM_WIDTH,
+        KEY_WIDTH,
+    ];
+    let mut x = left;
+    widths.map(|width| {
+        let at = (x, width);
+        x += width;
+        at
+    })
 }
 
 /// A list row's cells, as text.

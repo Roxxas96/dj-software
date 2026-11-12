@@ -254,6 +254,7 @@ pub fn root_with_reads(
                 changes = browser::show(
                     ui,
                     view,
+                    frame.decks.each_ref().map(|d| d.as_ref().map(|d| d.row.id)),
                     frame.key_notation,
                     &mut screen.covers,
                     &arrangement,
