@@ -866,12 +866,21 @@ fn slicer_and_sampler_pads_send_their_actions() {
     let slice = Action::Slice(DeckId::new(0).unwrap(), slot(5));
     assert_eq!(sent, press_release(slice));
 
-    frame.control.sides[0].pad_mode = PadMode::Hardware;
-    frame.control.sides[0].hardware_mode = Some(actions::HardwarePadMode::Sampler);
-    let sampler = view(&snapshot, &frame);
-    let (mut harness, received) = sending(sampler.clone());
-    let at = pad_at(&harness, &sampler, 2);
-    press_and_release(&mut harness, at);
-    let sent: Vec<UiCommand> = received.try_iter().collect();
-    assert_eq!(sent, press_release(Action::SamplerPlay(slot(2))));
+    for hardware in [
+        actions::HardwarePadMode::Sampler,
+        actions::HardwarePadMode::Trans,
+    ] {
+        frame.control.sides[0].pad_mode = PadMode::Hardware;
+        frame.control.sides[0].hardware_mode = Some(hardware);
+        let sampler = view(&snapshot, &frame);
+        let (mut harness, received) = sending(sampler.clone());
+        let at = pad_at(&harness, &sampler, 2);
+        press_and_release(&mut harness, at);
+        let sent: Vec<UiCommand> = received.try_iter().collect();
+        assert_eq!(
+            sent,
+            press_release(Action::SamplerPlay(slot(2))),
+            "{hardware:?}"
+        );
+    }
 }
