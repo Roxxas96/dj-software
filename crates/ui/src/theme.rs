@@ -2,17 +2,30 @@
 //! values. The root stores the scheme's [`Palette`] in the context each frame
 //! ([`apply`]); every draw reads it back with [`palette`].
 
+use std::f32::consts::FRAC_PI_2;
+
 use actions::Side;
-use egui::{Color32, Context, Id, Theme};
+use egui::epaint::TextShape;
+use egui::{Color32, Context, FontId, Id, Rect, Role, Sense, Stroke, Theme, Ui, WidgetInfo, pos2};
 use engine::DeckId;
 
 use crate::view::ColourScheme;
+
+/// The space between neighbouring sections (the rows, the deck panels and the mixer), in
+/// points: the background shows through it, as the sections have no outline.
+pub const SECTION_GAP: f32 = 2.0;
+/// The width of the strip an [`edge_label`] is drawn in, in points.
+pub const EDGE_LABEL_WIDTH: f32 = 14.0;
+/// An edge label's text size.
+const EDGE_LABEL_FONT: f32 = 10.0;
 
 /// Every colour the window draws with.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Palette {
     pub background: Color32,
     pub panel: Color32,
+    /// Every other row of a list: a shade between [`Self::background`] and [`Self::panel`].
+    pub row_alt: Color32,
     pub text: Color32,
     pub text_dim: Color32,
     /// The left side's decks (1 and 3).
@@ -57,6 +70,7 @@ impl Palette {
     pub const DARK: Self = Self {
         background: Color32::from_rgb(0x1e, 0x1f, 0x22),
         panel: Color32::from_rgb(0x2a, 0x2b, 0x2f),
+        row_alt: Color32::from_rgb(0x24, 0x25, 0x28),
         text: Color32::from_rgb(0xd6, 0xd6, 0xd6),
         text_dim: Color32::from_rgb(0x8a, 0x8c, 0x91),
         accent_left: Color32::from_rgb(0x2f, 0xa6, 0xd9),
@@ -84,6 +98,7 @@ impl Palette {
     pub const LIGHT: Self = Self {
         background: Color32::from_rgb(0xe6, 0xe6, 0xe6),
         panel: Color32::from_rgb(0xf4, 0xf4, 0xf4),
+        row_alt: Color32::from_rgb(0xed, 0xed, 0xed),
         text: Color32::from_rgb(0x1e, 0x1f, 0x22),
         text_dim: Color32::from_rgb(0x5f, 0x61, 0x66),
         lane: Color32::from_rgb(0xd8, 0xd8, 0xd8),
@@ -204,7 +219,36 @@ pub fn apply(ctx: &Context, scheme: ColourScheme) {
         visuals.extreme_bg_color = palette.background;
         visuals.faint_bg_color = palette.panel;
         visuals.override_text_color = Some(palette.text);
+        // Sections and idle widgets have no outline: fills on the background set them apart.
+        visuals.widgets.noninteractive.bg_stroke = Stroke::NONE;
+        visuals.widgets.inactive.bg_stroke = Stroke::NONE;
     });
+}
+
+/// Draws `text` turned a quarter anticlockwise, reading upwards as VirtualDJ's section
+/// names do, centred in `strip` (a strip [`EDGE_LABEL_WIDTH`] wide at a section's edge).
+/// Screen readers get it as a label.
+pub fn edge_label(ui: &Ui, strip: Rect, text: &str) {
+    let p = palette(ui.ctx());
+    let painter = ui.painter();
+    let galley = painter.layout_no_wrap(
+        text.to_owned(),
+        FontId::proportional(EDGE_LABEL_FONT),
+        p.text_dim,
+    );
+    let size = galley.size();
+    // Turned about its top left corner: the text runs up from there, its lines to the right.
+    let at = pos2(
+        strip.center().x - size.y / 2.0,
+        strip.center().y + size.x / 2.0,
+    );
+    painter.add(TextShape::new(at, galley, p.text_dim).with_angle(-FRAC_PI_2));
+    let response = ui.interact(
+        strip,
+        ui.scope_id().with(("edge label", text)),
+        Sense::hover(),
+    );
+    response.widget_info(|| WidgetInfo::labeled(Role::Label, true, text));
 }
 
 #[cfg(test)]
@@ -220,6 +264,24 @@ mod tests {
         assert!(contrast(light.wave_high, light.lane) >= 4.5);
         // The dark scheme keeps its own.
         assert_eq!(Palette::DARK.wave_high, Color32::WHITE);
+    }
+
+    #[test]
+    fn no_strokes_on_panels_and_idle_widgets() {
+        for (scheme, theme) in [
+            (ColourScheme::Dark, Theme::Dark),
+            (ColourScheme::Light, Theme::Light),
+        ] {
+            let ctx = Context::default();
+            apply(&ctx, scheme);
+            let widgets = ctx.style_of(theme).visuals.widgets.clone();
+            assert_eq!(
+                widgets.noninteractive.bg_stroke,
+                egui::Stroke::NONE,
+                "{scheme:?}"
+            );
+            assert_eq!(widgets.inactive.bg_stroke, egui::Stroke::NONE, "{scheme:?}");
+        }
     }
 
     #[test]

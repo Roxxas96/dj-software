@@ -118,13 +118,15 @@ pub fn clamp_sizes(sizes: PanelSizes, window: Vec2, min_decks: f32) -> PanelSize
 }
 
 /// The shares `window` draws for the session's `sizes` with `sections`: the decks' share
-/// still at its default means the viewer never set it, and the layout's own applies.
+/// still at its default means the viewer never set it, and the deck row is then as tall as
+/// its contents ([`crate::deck::row_height`]), the spare height going to the browser.
 pub fn drawn_sizes(sizes: PanelSizes, sections: &Sections, window: Vec2) -> PanelSizes {
     let mut sizes = sizes;
+    let contents = crate::deck::row_height(sections);
     if sizes.decks == PanelSizes::default().decks {
-        sizes.decks = sections.decks_share;
+        sizes.decks = contents / window.y.max(1.0);
     }
-    clamp_sizes(sizes, window, crate::deck::row_height(sections))
+    clamp_sizes(sizes, window, contents)
 }
 
 /// `shares` (each at least its `mins`) shrunk together, above their minimum, until they
@@ -229,6 +231,35 @@ mod tests {
         // Sizes already within the limits are left alone.
         let fine = PanelSizes::default();
         assert_eq!(clamp_sizes(fine, vec2(1440.0, 900.0), 0.0), fine);
+    }
+
+    #[test]
+    fn default_deck_row_fits_its_contents() {
+        let window = vec2(1440.0, 900.0);
+        for layout in Layout::ALL {
+            for sections in [sections(*layout), four_deck_sections()] {
+                let drawn = drawn_sizes(PanelSizes::default(), &sections, window).decks;
+                let height = crate::deck::row_height(&sections);
+                assert!(
+                    (drawn * window.y - height).abs() <= 1.0,
+                    "{layout:?}: {} against {height}",
+                    drawn * window.y
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_saved_deck_share_still_applies() {
+        let window = vec2(1440.0, 900.0);
+        let sizes = PanelSizes {
+            decks: 0.5,
+            ..PanelSizes::default()
+        };
+        for layout in Layout::ALL {
+            let drawn = drawn_sizes(sizes, &sections(*layout), window);
+            assert!((drawn.decks * window.y - 450.0).abs() <= 1.0, "{drawn:?}");
+        }
     }
 
     #[test]

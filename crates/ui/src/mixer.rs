@@ -16,7 +16,7 @@ use crate::layout::{Sections, mixer_order};
 use crate::model::{
     ControlFrame, GHOST_EQ_HIGH, GHOST_EQ_LOW, GHOST_EQ_MID, GHOST_FADER, GHOST_FILTER, GHOST_TRIM,
 };
-use crate::theme;
+use crate::theme::{self, SECTION_GAP};
 
 /// How long a channel meter's peak marker stays at the highest peak.
 const PEAK_HOLD: Duration = Duration::from_secs(1);
@@ -236,7 +236,12 @@ pub fn strip(
     let state = frame.control.deck(deck);
     let ghosts = &frame.ghosts[deck.index()];
     let painter = ui.painter().clone();
-    painter.rect_filled(rect.shrink(2.0), CornerRadius::same(4), p.panel);
+    // Half the gap to each neighbour, and the gap above the crossfader's section.
+    let section = Rect::from_min_max(
+        rect.min + vec2(SECTION_GAP / 2.0, 0.0),
+        rect.max - vec2(SECTION_GAP / 2.0, SECTION_GAP),
+    );
+    painter.rect_filled(section, CornerRadius::ZERO, p.panel);
 
     let [high, mid, low] = eq_labels(frame.eq_mode, stems_active, frame.stem_knobs);
     let gain = ("GAIN", state.trim, ghosts[GHOST_TRIM]);
@@ -375,6 +380,8 @@ fn peak_line(painter: &egui::Painter, bar: Rect, peak: f32) {
 fn centre(ui: &mut Ui, rect: Rect, frame: &ControlFrame, master_peak: Option<[f32; 2]>) {
     let p = theme::palette(ui.ctx());
     let painter = ui.painter().clone();
+    let section = rect.shrink2(vec2(SECTION_GAP / 2.0, 0.0));
+    painter.rect_filled(section, CornerRadius::ZERO, p.panel);
     let dim = if frame.crossfader_enabled { 1.0 } else { 0.35 };
     let half = rect.width() / 2.0;
     let [cross, master] = split(rect.shrink2(vec2(10.0, 6.0)), half);

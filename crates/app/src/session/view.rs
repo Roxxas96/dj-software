@@ -354,7 +354,7 @@ mod tests {
             ViewChange::SetWaveformStyle(WaveformStyle::DeckColour),
             ViewChange::SetWaveformPalette(ui::WaveformPalette::OrangeYellowCyan),
             ViewChange::SetWaveformPosition(ui::WaveformPosition::Middle),
-            ViewChange::SetJogDisplay(ui::JogDisplay::Info),
+            ViewChange::SetJogDisplay(ui::JogDisplay::Plain),
             ViewChange::SetBeatCounter(true),
             ViewChange::SetFourDecks(true),
             ViewChange::SetOverview(false),

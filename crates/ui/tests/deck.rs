@@ -15,7 +15,7 @@ use library::TrackRow;
 use ui::cover::Covers;
 use ui::deck::{DeckPanels, DeckReads, DeckView};
 use ui::layout::sections;
-use ui::{ControlFrame, DeckInfo, JogDisplay, Layout, TimeMode, UiCommand, ViewChange};
+use ui::{ControlFrame, DeckInfo, JogDisplay, Layout, TimeMode, UiCommand, ViewChange, ViewState};
 
 /// A 5:29 track at 126 BPM on deck 1, 57.1 s in.
 fn loaded() -> (DeckSnapshot, ControlFrame) {
@@ -75,9 +75,16 @@ fn view(snapshot: &DeckSnapshot, frame: &ControlFrame) -> DeckView {
     )
 }
 
+/// [`loaded`] with the plain jog, so the BPM and the times show only in the header.
+fn loaded_plain() -> (DeckSnapshot, ControlFrame) {
+    let (snapshot, mut frame) = loaded();
+    frame.view.jog_display = JogDisplay::Plain;
+    (snapshot, frame)
+}
+
 #[test]
 fn deck_panel_shows_title_and_bpm() {
-    let (snapshot, frame) = loaded();
+    let (snapshot, frame) = loaded_plain();
     let view = view(&snapshot, &frame);
     let harness = draw(&view);
     harness.get_by_label("Just Us");
@@ -90,7 +97,7 @@ fn deck_panel_shows_title_and_bpm() {
 
 #[test]
 fn the_time_shows_its_mode() {
-    let (snapshot, mut frame) = loaded();
+    let (snapshot, mut frame) = loaded_plain();
     // The mode's time, then the other of elapsed and remaining beside it.
     for (mode, labels) in [
         (TimeMode::Remaining, ["−4:31.9", "0:57.1"]),
@@ -119,7 +126,7 @@ fn the_beat_counter_shows_when_asked() {
 
 #[test]
 fn info_jog_shows_the_bpm() {
-    let (snapshot, mut frame) = loaded();
+    let (snapshot, mut frame) = loaded_plain();
     let plain = view(&snapshot, &frame);
     assert_eq!(draw(&plain).query_all_by_label("126.00").count(), 1);
     frame.view.jog_display = JogDisplay::Info;
@@ -130,7 +137,7 @@ fn info_jog_shows_the_bpm() {
 
 #[test]
 fn clicking_the_time_cycles_it() {
-    let (snapshot, mut frame) = loaded();
+    let (snapshot, mut frame) = loaded_plain();
     frame.view.time_mode[0] = TimeMode::Elapsed;
     let mut reads = DeckReads::default();
     reads.decks[0].0 = snapshot;
@@ -318,4 +325,117 @@ fn a_coloured_hotcue_pad_is_filled_with_its_colour() {
     }
     let red = egui::Color32::from_rgb(0xff, 0, 0);
     assert_eq!(fills.iter().filter(|f| **f == red).count(), 1, "{fills:?}");
+}
+
+#[test]
+fn jog_shows_info_by_default() {
+    let (snapshot, mut frame) = loaded();
+    frame.view = ViewState::default();
+    let view = view(&snapshot, &frame);
+    // In the header and in the jog.
+    assert_eq!(draw(&view).query_all_by_label("126.00").count(), 2);
+}
+
+#[test]
+fn edge_labels_name_the_sections() {
+    let (snapshot, frame) = loaded();
+    let view = view(&snapshot, &frame);
+    let harness = draw(&view);
+    for label in ["FX", "PADS", "LOOP"] {
+        harness.get_by_label(label);
+    }
+}
+
+#[test]
+fn overview_sits_in_the_header() {
+    let (snapshot, mut frame) = loaded();
+    frame.decks[0].as_mut().unwrap().overview = Some(Arc::new(Waveform {
+        frames_per_bucket: 1024,
+        buckets: vec![[200, 200, 80, 30]; 14_169],
+    }));
+    let view = view(&snapshot, &frame);
+    let harness = draw(&view);
+    let cover = harness.get_by_label("cover").rect();
+    let overview = harness.get_by_label("overview").rect();
+    let title = harness.get_by_label("Just Us").rect();
+    // The header is the cover's height, across the panel.
+    assert!(overview.min.y >= cover.min.y && overview.max.y <= cover.max.y + 0.5);
+    assert!(overview.min.x >= cover.max.x, "{overview:?} {cover:?}");
+    // Under the title.
+    assert!(overview.min.y >= title.max.y, "{overview:?} {title:?}");
+    // The FX row starts below the header.
+    let fx = harness.get_by_label("FX 1").rect();
+    assert!(fx.min.y >= cover.max.y, "{fx:?} {cover:?}");
+}
+
+#[test]
+fn empty_decks_keep_their_height() {
+    let (snapshot, frame) = loaded();
+    let full = view(&snapshot, &frame);
+    let empty = view(&DeckSnapshot::default(), &ControlFrame::default());
+    let bottom = |view: &DeckView| {
+        let harness = draw(view);
+        ["SYNC", "OUT", "8"].map(|label| harness.get_by_label(label).rect().max.y)
+    };
+    assert_eq!(bottom(&full), bottom(&empty));
+    let sections = sections(Layout::Pro);
+    assert_eq!(
+        ui::deck::row_height(&sections),
+        ui::deck::panel_height(&sections) + ui::theme::SECTION_GAP
+    );
+}
+
+/// Every filled rect and every rect outline drawn for the two decks of `frame`.
+fn deck_rects(frame: &ControlFrame) -> Vec<egui::epaint::RectShape> {
+    let mut reads = DeckReads::default();
+    reads.decks[0].0 = loaded().0;
+    let sections = sections(Layout::Pro);
+    let mut panels = DeckPanels::default();
+    let mut covers = Covers::default();
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ui.set_min_size(egui::vec2(1440.0, 400.0));
+        panels.show_reads(ui, frame, &reads, &mut covers, &sections, &channel().0);
+    });
+    output.textures_delta.clear();
+    let mut rects = Vec::new();
+    let mut stack: Vec<egui::Shape> = output.shapes.into_iter().map(|c| c.shape).collect();
+    while let Some(shape) = stack.pop() {
+        match shape {
+            egui::Shape::Vec(inner) => stack.extend(inner),
+            egui::Shape::Rect(rect) => rects.push(rect),
+            _ => {}
+        }
+    }
+    rects
+}
+
+#[test]
+fn active_deck_has_an_accent_tab_not_a_border() {
+    let (_, frame) = loaded();
+    let rects = deck_rects(&frame);
+    let p = ui::theme::Palette::DARK;
+    let outlined: Vec<_> = rects
+        .iter()
+        .filter(|r| r.stroke.width > 0.0 && r.stroke.color.a() > 0)
+        .collect();
+    assert!(outlined.is_empty(), "{outlined:?}");
+    let left = rects.iter().map(|r| r.rect.left()).fold(f32::MAX, f32::min);
+    let right = rects
+        .iter()
+        .map(|r| r.rect.right())
+        .fold(f32::MIN, f32::max);
+    // Deck 1's tab on the left edge, deck 2's on the right, each 4 points wide.
+    let tab = |accent: egui::Color32, edge: f32, of: fn(&egui::Rect) -> f32| {
+        rects.iter().any(|r| {
+            r.fill == accent
+                && (r.rect.width() - 4.0).abs() < 0.01
+                && (of(&r.rect) - edge).abs() < 0.5
+        })
+    };
+    assert!(tab(p.accent_left, left, |r| r.left()), "no tab on deck 1");
+    assert!(
+        tab(p.accent_right, right, |r| r.right()),
+        "no tab on deck 2"
+    );
 }

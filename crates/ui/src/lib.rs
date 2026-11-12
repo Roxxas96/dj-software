@@ -183,8 +183,18 @@ pub fn root_with_reads(
         decks_moved: false,
         stopped: false,
     };
-    egui::Panel::top("top_bar")
-        .frame(egui::Frame::new().fill(p.panel).inner_margin(6))
+    let gap = egui::Margin {
+        bottom: theme::SECTION_GAP as i8,
+        ..egui::Margin::ZERO
+    };
+    let top_bar = egui::Panel::top("top_bar")
+        .frame(
+            egui::Frame::new()
+                .fill(p.panel)
+                .inner_margin(6)
+                .outer_margin(gap),
+        )
+        .show_separator_line(false)
         .show(ui, |ui| {
             topbar::show(
                 ui,
@@ -194,6 +204,7 @@ pub fn root_with_reads(
                 &mut screen.settings.open,
             )
         });
+    landmark(&top_bar.response, "top bar");
     let lanes = |ui: &mut egui::Ui, screen: &mut Screen, drags: &mut Drags| {
         let height = drags.sizes.lanes * window.y;
         let (drag, top) = row_panel(ui, "waveform_lanes", height, &p, |ui| {
@@ -228,7 +239,7 @@ pub fn root_with_reads(
         window,
     };
     let mut changes = browser::Changes::default();
-    egui::CentralPanel::default()
+    let shown = egui::CentralPanel::default()
         .frame(egui::Frame::new().fill(p.background))
         .show(ui, |ui| {
             if let Some(error) = &frame.error {
@@ -250,6 +261,7 @@ pub fn root_with_reads(
                 );
             }
         });
+    landmark(&shown.response, "browser");
     settings::show(ui.ctx(), frame, &mut screen.settings, &screen.commands);
     if let Some(dragged) = changes.sizes {
         drags.sizes = dragged;
@@ -303,8 +315,14 @@ impl Drags {
     }
 }
 
-/// A panel of `height` below whatever was added before it, with a divider under it that
-/// drags. Returns the drag and where the panel starts.
+/// Names the area of `response` for screen readers.
+fn landmark(response: &egui::Response, name: &str) {
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Group, true, name));
+}
+
+/// A panel of `height` below whatever was added before it, the last [`theme::SECTION_GAP`]
+/// of it left to the background, with a divider under it that drags. Returns the drag and
+/// where the panel starts.
 fn row_panel(
     ui: &mut egui::Ui,
     name: &str,
@@ -312,8 +330,12 @@ fn row_panel(
     p: &theme::Palette,
     add: impl FnOnce(&mut egui::Ui),
 ) -> (browser::Drag, f32) {
+    let gap = egui::Margin {
+        bottom: theme::SECTION_GAP as i8,
+        ..egui::Margin::ZERO
+    };
     let shown = egui::Panel::top(name)
-        .frame(egui::Frame::new().fill(p.background))
+        .frame(egui::Frame::new().fill(p.background).inner_margin(gap))
         .exact_size(height)
         .resizable(false)
         .show_separator_line(false)
