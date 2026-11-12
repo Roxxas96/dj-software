@@ -89,6 +89,7 @@ pub fn show(
         .collapsible(false)
         .default_size(ctx.content_rect().size() * SHARE)
         .show(ctx, |ui| {
+            theme::separators(ui);
             ui.horizontal_top(|ui| {
                 ui.vertical(|ui| {
                     ui.set_width(SIDEBAR_WIDTH);

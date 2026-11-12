@@ -598,38 +598,157 @@ pub fn panel(
             ui.set_min_size(ui.available_size());
             ui.spacing_mut().item_spacing = vec2(6.0, ROW_GAP);
             header(ui, view, cover, accent, sections.overview, commands);
+            let mirrored = Side::of(view.deck) == Side::Right;
             if sections.compact {
-                compact_row(ui, view, accent, sections.loop_controls);
+                compact_row(ui, view, accent, sections.loop_controls, mirrored);
                 return;
             }
-            let middle = middle_height(sections);
             ui.horizontal(|ui| {
-                ui.set_height(middle);
-                if sections.fx {
-                    edge_strip(ui, middle, "FX");
-                    fx(ui, view, accent, sections.fx_level, commands);
-                }
-                states(ui, view, accent);
-                // The jog and the tempo slider at the right, over CUE, PLAY and SYNC.
-                ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
-                    if sections.pitch {
-                        let width = if sections.jog {
-                            PITCH_WIDTH
-                        } else {
-                            PITCH_COMPACT_WIDTH
-                        };
-                        pitch(ui, view, accent, width, middle);
-                    }
-                    if sections.jog {
-                        jog(ui, view, accent);
-                    }
-                });
+                middle_row(ui, view, accent, sections, mirrored, commands);
             });
             ui.horizontal_top(|ui| {
-                pads_grid(ui, view, accent, sections, commands);
-                transport(ui, view);
+                bottom_row(ui, view, accent, sections, mirrored, commands);
             });
         });
+}
+
+/// What the middle and bottom rows hold, outer edge first on a left deck.
+#[derive(Debug, Clone, Copy)]
+enum Part {
+    Label(&'static str),
+    Fx,
+    States,
+    /// What the row has to spare, between the outer and the inner parts.
+    Spare,
+    Jog,
+    Pitch,
+    Pads,
+    Loop,
+    Transport,
+}
+
+/// `parts` in order on a left deck, reversed on a right one (`mirrored`): VirtualDJ
+/// mirrors the right decks, their sections' labels on the outer edge.
+fn ordered<const N: usize>(mut parts: [Option<Part>; N], mirrored: bool) -> [Option<Part>; N] {
+    if mirrored {
+        parts.reverse();
+    }
+    parts
+}
+
+/// The FX slots and the states on the outer side, the jog and the tempo slider on the
+/// inner side over CUE, PLAY and SYNC.
+fn middle_row(
+    ui: &mut Ui,
+    view: &DeckView,
+    accent: Color32,
+    sections: &Sections,
+    mirrored: bool,
+    commands: &Sender<UiCommand>,
+) {
+    let middle = middle_height(sections);
+    ui.set_height(middle);
+    let pitch_width = if sections.jog {
+        PITCH_WIDTH
+    } else {
+        PITCH_COMPACT_WIDTH
+    };
+    let parts = ordered(
+        [
+            sections.fx.then_some(Part::Label("FX")),
+            sections.fx.then_some(Part::Fx),
+            Some(Part::States),
+            Some(Part::Spare),
+            sections.jog.then_some(Part::Jog),
+            sections.pitch.then_some(Part::Pitch),
+        ],
+        mirrored,
+    );
+    let width = |part: Part| match part {
+        Part::Label(_) => EDGE_LABEL_WIDTH,
+        Part::Fx => FX_WIDTH,
+        Part::States => STATE_WIDTH,
+        Part::Jog => JOG_SIDE,
+        Part::Pitch => pitch_width,
+        _ => 0.0,
+    };
+    let spare = spare_width(ui, &parts, width);
+    for part in parts.into_iter().flatten() {
+        match part {
+            Part::Label(text) => edge_strip(ui, middle, text),
+            Part::Fx => fx(ui, view, accent, sections.fx_level, commands),
+            Part::States => states(ui, view, accent),
+            Part::Spare => ui.add_space(spare),
+            Part::Jog => jog(ui, view, accent),
+            Part::Pitch => pitch(ui, view, accent, pitch_width, middle),
+            _ => {}
+        }
+    }
+}
+
+/// The room left in `ui`'s row once each of `parts` takes its `width` and the spacing
+/// after it (none after the last).
+fn spare_width(ui: &Ui, parts: &[Option<Part>], width: impl Fn(Part) -> f32) -> f32 {
+    let spacing = ui.spacing().item_spacing.x;
+    let used: f32 = parts
+        .iter()
+        .flatten()
+        .filter(|part| !matches!(part, Part::Spare))
+        .map(|&part| width(part) + spacing)
+        .sum();
+    (ui.available_width() - used + spacing).max(0.0)
+}
+
+/// The pads and the loop on the outer side, CUE, PLAY and SYNC on the inner side, under
+/// the jog. The pads take the width the others leave.
+fn bottom_row(
+    ui: &mut Ui,
+    view: &DeckView,
+    accent: Color32,
+    sections: &Sections,
+    mirrored: bool,
+    commands: &Sender<UiCommand>,
+) {
+    let height = bottom_height();
+    let parts = ordered(
+        [
+            sections.pads.then_some(Part::Label("PADS")),
+            sections.pads.then_some(Part::Pads),
+            sections.loop_controls.then_some(Part::Label("LOOP")),
+            sections.loop_controls.then_some(Part::Loop),
+            Some(Part::Spare),
+            Some(Part::Transport),
+        ],
+        mirrored,
+    );
+    let width = |part: Part| match part {
+        Part::Label(_) => EDGE_LABEL_WIDTH,
+        Part::Loop => LOOP_WIDTH,
+        Part::Transport => TRANSPORT_WIDTH,
+        _ => 0.0,
+    };
+    // The pads count as nothing here: they take the spare room, with what is left over
+    // between them and the transport.
+    let pads_width = if sections.pads {
+        let spacing = ui.spacing().item_spacing.x;
+        (spare_width(ui, &parts, width) - spacing).max(0.0)
+    } else {
+        0.0
+    };
+    let spare = spare_width(ui, &parts, |part| match part {
+        Part::Pads => pads_width,
+        other => width(other),
+    });
+    for part in parts.into_iter().flatten() {
+        match part {
+            Part::Label(text) => edge_strip(ui, height, text),
+            Part::Pads => pads_column(ui, view, accent, pads_width, commands),
+            Part::Loop => loop_column(ui, view),
+            Part::Spare => ui.add_space(spare),
+            Part::Transport => transport(ui, view),
+            _ => {}
+        }
+    }
 }
 
 /// A strip [`EDGE_LABEL_WIDTH`] wide and `height` tall at the left of what follows in
@@ -641,7 +760,8 @@ fn edge_strip(ui: &mut Ui, height: f32, text: &str) {
 
 /// CUE, PLAY, SYNC, the three states and (when `loop_controls`) the loop's size, IN and
 /// OUT in one row, for the compact panel; narrower than they like when the row is short.
-fn compact_row(ui: &mut Ui, view: &DeckView, accent: Color32, loop_controls: bool) {
+/// On a right deck (`mirrored`) the three groups come in the other order.
+fn compact_row(ui: &mut Ui, view: &DeckView, accent: Color32, loop_controls: bool, mirrored: bool) {
     let p = theme::palette(ui.ctx());
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = PAD_GAP;
@@ -656,22 +776,36 @@ fn compact_row(ui: &mut Ui, view: &DeckView, accent: Color32, loop_controls: boo
         let room = (ui.available_width() - (boxes - 1.0) * PAD_GAP).max(0.0);
         let scale = (room / natural).min(1.0);
         let size = |width: f32| vec2(width * scale, BUTTON_HEIGHT);
-        indicator(ui, size(transport), "CUE", view.cueing.then_some(p.cue));
-        indicator(
-            ui,
-            size(transport),
-            "PLAY",
-            view.playing.then_some(p.play_lit),
+        let groups = ordered(
+            [
+                Some(Part::Transport),
+                Some(Part::States),
+                loop_controls.then_some(Part::Loop),
+            ],
+            mirrored,
         );
-        indicator(ui, size(transport), "SYNC", None);
-        indicator(ui, size(state), "VINYL", view.vinyl.then_some(accent));
-        indicator(ui, size(state), "SLIP", view.slip.then_some(accent));
-        indicator(ui, size(state), "KEYLOCK", view.keylock.then_some(accent));
-        if loop_controls {
-            let lit = view.loop_active.then_some(p.hotcue);
-            indicator(ui, size(looping), &view.loop_beats, lit);
-            indicator(ui, size(looping), "IN", lit);
-            indicator(ui, size(looping), "OUT", lit);
+        for part in groups.into_iter().flatten() {
+            match part {
+                Part::Transport => {
+                    let cue = view.cueing.then_some(p.cue);
+                    indicator(ui, size(transport), "CUE", cue);
+                    let play = view.playing.then_some(p.play_lit);
+                    indicator(ui, size(transport), "PLAY", play);
+                    indicator(ui, size(transport), "SYNC", None);
+                }
+                Part::States => {
+                    indicator(ui, size(state), "VINYL", view.vinyl.then_some(accent));
+                    indicator(ui, size(state), "SLIP", view.slip.then_some(accent));
+                    indicator(ui, size(state), "KEYLOCK", view.keylock.then_some(accent));
+                }
+                Part::Loop => {
+                    let lit = view.loop_active.then_some(p.hotcue);
+                    indicator(ui, size(looping), &view.loop_beats, lit);
+                    indicator(ui, size(looping), "IN", lit);
+                    indicator(ui, size(looping), "OUT", lit);
+                }
+                _ => {}
+            }
         }
     });
 }
@@ -965,35 +1099,6 @@ fn transport(ui: &mut Ui, view: &DeckView) {
         indicator(ui, size, "PLAY", view.playing.then_some(p.play_lit));
         indicator(ui, size, "SYNC", None);
     });
-}
-
-/// The pads and the loop, whichever the layout shows.
-fn pads_grid(
-    ui: &mut Ui,
-    view: &DeckView,
-    accent: Color32,
-    sections: &Sections,
-    commands: &Sender<UiCommand>,
-) {
-    let spacing = ui.spacing().item_spacing.x;
-    let label = EDGE_LABEL_WIDTH + spacing;
-    let loop_width = if sections.loop_controls {
-        label + LOOP_WIDTH + spacing
-    } else {
-        0.0
-    };
-    // The transport keeps its width at the right.
-    let transport = TRANSPORT_WIDTH + spacing;
-    let pads_width = (ui.available_width() - label - loop_width - transport).max(0.0);
-    let height = bottom_height();
-    if sections.pads {
-        edge_strip(ui, height, "PADS");
-        pads_column(ui, view, accent, pads_width, commands);
-    }
-    if sections.loop_controls {
-        edge_strip(ui, height, "LOOP");
-        loop_column(ui, view);
-    }
 }
 
 /// The pad mode's dropdown over the 2×4 pads; a choice asks `commands` to switch.

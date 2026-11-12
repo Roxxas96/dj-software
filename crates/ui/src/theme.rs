@@ -225,6 +225,17 @@ pub fn apply(ctx: &Context, scheme: ColourScheme) {
     });
 }
 
+/// The dim line a separator draws in the menus, the settings window and the top bar.
+pub fn separator_stroke(palette: &Palette) -> Stroke {
+    Stroke::new(1.0, palette.text_dim.gamma_multiply(0.4))
+}
+
+/// Gives `ui`'s separators back their line ([`apply`] takes it away from the panels).
+pub fn separators(ui: &mut Ui) {
+    let stroke = separator_stroke(&palette(ui.ctx()));
+    ui.visuals_mut().widgets.noninteractive.bg_stroke = stroke;
+}
+
 /// Draws `text` turned a quarter anticlockwise, reading upwards as VirtualDJ's section
 /// names do, centred in `strip` (a strip [`EDGE_LABEL_WIDTH`] wide at a section's edge).
 /// Screen readers get it as a label.

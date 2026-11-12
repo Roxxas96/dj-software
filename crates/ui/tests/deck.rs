@@ -439,3 +439,60 @@ fn active_deck_has_an_accent_tab_not_a_border() {
         "no tab on deck 2"
     );
 }
+
+#[test]
+fn the_right_deck_is_mirrored() {
+    let (snapshot, mut frame) = loaded();
+    // Deck 2 holds the track: the right side's deck.
+    frame.decks[1] = frame.decks[0].take();
+    let deck = DeckId::new(1).unwrap();
+    let view = DeckView::new(
+        deck,
+        &snapshot,
+        &ChannelSnapshot::default(),
+        &frame,
+        &SamplerSnapshot::default(),
+    );
+    let harness = draw(&view);
+    // The jog's BPM is the lower of the two.
+    let jog = harness
+        .get_all_by_label("126.00")
+        .map(|n| n.rect())
+        .max_by(|a, b| a.min.y.total_cmp(&b.min.y))
+        .unwrap();
+    let fx = harness.get_by_label("FX 1").rect();
+    assert!(
+        fx.min.x > jog.max.x,
+        "FX {fx:?} not right of the jog {jog:?}"
+    );
+    let label = harness.get_by_label("PADS").rect();
+    let pad = harness.get_by_label("8").rect();
+    assert!(
+        label.min.x > pad.max.x,
+        "PADS {label:?} not right of pad 8 {pad:?}"
+    );
+    let fx_label = harness.get_by_label("FX").rect();
+    assert!(fx_label.min.x > fx.max.x, "FX label {fx_label:?} {fx:?}");
+}
+
+#[test]
+fn the_right_decks_are_mirrored_in_four_decks() {
+    let (snapshot, frame) = loaded();
+    let sections = ui::layout::four_deck_sections();
+    for (number, mirrored) in [(1, false), (2, true), (3, false), (4, true)] {
+        let view = DeckView::new(
+            DeckId::new(number - 1).unwrap(),
+            &snapshot,
+            &ChannelSnapshot::default(),
+            &frame,
+            &SamplerSnapshot::default(),
+        );
+        let mut harness = Harness::builder()
+            .with_size([480.0, 120.0])
+            .build_ui(move |ui| ui::deck::panel(ui, &view, None, &sections, &channel().0));
+        harness.run_steps(3);
+        let cue = harness.get_by_label("CUE").rect();
+        let out = harness.get_by_label("OUT").rect();
+        assert_eq!(cue.min.x > out.max.x, mirrored, "deck {number}");
+    }
+}

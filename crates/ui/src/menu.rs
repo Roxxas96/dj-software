@@ -26,6 +26,7 @@ pub fn show(ui: &mut Ui, view: &ViewState, commands: &Sender<UiCommand>) {
 }
 
 fn menu(ui: &mut Ui, view: &ViewState, commands: &Sender<UiCommand>) {
+    theme::separators(ui);
     let send = |change: ViewChange| {
         // The session going away is the window closing: nothing to tell.
         let _ = commands.send(UiCommand::View(change));
@@ -67,6 +68,8 @@ fn menu(ui: &mut Ui, view: &ViewState, commands: &Sender<UiCommand>) {
         }
     });
     ui.menu_button("Waveform Display", |ui| {
+        // A submenu is a new popup: it starts from the window's style again.
+        theme::separators(ui);
         for (style, name) in [
             (WaveformStyle::Frequency, "Frequency"),
             (WaveformStyle::DeckColour, "Deck colour"),
