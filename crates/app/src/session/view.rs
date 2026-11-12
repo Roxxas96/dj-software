@@ -1,8 +1,8 @@
 //! The window's view state (layout, styles, panel sizes, the waveform zoom), changed by
 //! the window's commands and by the `ui.waveform_zoom_in` / `ui.waveform_zoom_out`
-//! and `ui.layout` actions, and kept in `ui-state.toml` next to `config.toml`, so the next launch starts
-//! where this one ended. `ui.waveform_beats` in `config.toml` is only the zoom before
-//! that file holds one.
+//! and `ui.layout` actions, and kept in `ui-state.toml` next to `config.toml`, so the next
+//! launch starts where this one ended. `ui.waveform_beats` in `config.toml` is only the
+//! zoom before that file holds one.
 //!
 //! The file is TOML: a `[view]` table with one key per [`ViewState`] field, enums by
 //! their ids (`layout = "pro"`). A value that cannot be read keeps its default and the

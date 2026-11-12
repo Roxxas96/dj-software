@@ -395,8 +395,9 @@ impl Scale {
 }
 
 /// One column per physical pixel, mirrored around the lane's middle, each band as tall as
-/// its loudest under it ([`styles::loudest`]) and in its colour. Columns are cut at fixed track frames and
-/// only their place moves, so a column keeps its shape as the track scrolls.
+/// its loudest under it ([`styles::loudest`]) and in its colour. Columns are cut at fixed
+/// track frames and only their place moves, so a column keeps its shape as the track
+/// scrolls.
 fn columns(
     mesh: &mut Mesh,
     rect: Rect,

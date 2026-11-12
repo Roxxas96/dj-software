@@ -79,7 +79,7 @@ pub(super) fn bars(
     let [peak, low, mid, high] = bucket;
     let [low_colour, mid_colour, high_colour] = bands;
     match style {
-        // Three layers over the same centre, the loudest band at the back; the front two
+        // Three layers over the same centre, the low band at the back; the front two
         // let it show through.
         WaveformStyle::Frequency => {
             let [low_colour, mid_colour, high_colour] = layers(bands);
