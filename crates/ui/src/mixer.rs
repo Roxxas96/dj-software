@@ -9,8 +9,9 @@ use actions::Side;
 use egui::{
     Color32, CornerRadius, Label, Pos2, Rect, RichText, Stroke, StrokeKind, Ui, pos2, vec2,
 };
-use engine::{DeckId, EngineMonitor, EqMode, StemKnobs};
+use engine::{DeckId, EqMode, StemKnobs};
 
+use crate::deck::DeckReads;
 use crate::layout::{Sections, mixer_order};
 use crate::model::{
     ControlFrame, GHOST_EQ_HIGH, GHOST_EQ_LOW, GHOST_EQ_MID, GHOST_FADER, GHOST_FILTER, GHOST_TRIM,
@@ -82,18 +83,18 @@ pub struct Mixer {
 }
 
 impl Mixer {
-    /// Draws the mixer in `rect`. Without `monitor` the meters are empty and the EQ keeps
-    /// its band names.
+    /// Draws the mixer in `rect`, its meters from `reads`. Read without a monitor, the
+    /// meters are empty and the EQ keeps its band names.
     pub fn show(
         &mut self,
         ui: &mut Ui,
         rect: Rect,
         frame: &ControlFrame,
-        monitor: Option<&EngineMonitor>,
+        reads: &DeckReads,
         sections: &Sections,
     ) {
         let now = Instant::now();
-        let peaks = monitor.map(|m| m.meters().channel_peak).unwrap_or_default();
+        let peaks = reads.meters.map(|m| m.channel_peak).unwrap_or_default();
         let strips =
             Rect::from_min_max(rect.min, pos2(rect.right(), rect.bottom() - BOTTOM_HEIGHT));
         let bottom = Rect::from_min_max(pos2(rect.left(), strips.bottom()), rect.max);
@@ -110,7 +111,7 @@ impl Mixer {
                 pos2(strips.left() + i as f32 * width, strips.top()),
                 vec2(width, strips.height()),
             );
-            let stems_active = monitor.is_some_and(|m| m.deck(deck).stems_active);
+            let stems_active = reads.decks[deck.index()].0.stems_active;
             let level = peaks[deck.index()];
             let held = self.holds[deck.index()].update(level, now);
             ui.scope_builder(egui::UiBuilder::new().max_rect(strip_rect), |ui| {
@@ -125,7 +126,7 @@ impl Mixer {
                 );
             });
         }
-        centre(ui, bottom, frame, monitor.map(|m| m.meters().master_peak));
+        centre(ui, bottom, frame, reads.meters.map(|m| m.master_peak));
     }
 }
 

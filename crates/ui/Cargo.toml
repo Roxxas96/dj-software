@@ -23,4 +23,4 @@ library = { path = "../library" }
 lofty.workspace = true
 
 [dev-dependencies]
-egui_kittest.workspace = true
+egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }

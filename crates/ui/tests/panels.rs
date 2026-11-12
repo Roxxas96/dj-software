@@ -107,7 +107,7 @@ fn sideview_shows_the_sampler() {
     frame.samples_loaded[2] = true;
     let mut harness = Harness::builder()
         .with_size([300.0, 600.0])
-        .build_ui(|ui| ui::sideview::show(ui, &frame, None));
+        .build_ui(|ui| ui::sideview::show(ui, &frame, &ui::deck::DeckReads::default()));
     harness.run_steps(3);
     for slot in 1..=8 {
         harness.get_by_label(&slot.to_string());
