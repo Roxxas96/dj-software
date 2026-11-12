@@ -224,8 +224,10 @@ The window's view is kept in `ui-state.toml` next to `config.toml`, as a `[view]
 holds the layout, colour scheme, waveform style, palette and position, jogwheel display, the beat
 counter, 4-Decks, overview, info panel and sideview switches, each deck's time mode, the
 panel sizes (`[view.sizes]`: lanes, decks, tree, info, sideview) and the waveform zoom
-(`waveform_beats`). It is saved about 2 seconds after the last change, and when the window
-closes. A value that cannot be read keeps its default, the others still load; delete the file
+(`waveform_beats`), with `version = 2`. It is saved about 2 seconds after the last change,
+and when the window closes. A file from before the info jog (without `version = 2`) always
+held `jog_display = "plain"`, chosen or not, so it switches to the info jog once; choose
+Plain again and it is kept. A value that cannot be read keeps its default, the others still load; delete the file
 to start from the defaults (the zoom then comes from `ui.waveform_beats`). The file is the
 window's own, written by the app: settings that belong in `config.toml` are in the Settings
 window.

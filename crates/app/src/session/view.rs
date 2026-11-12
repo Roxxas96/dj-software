@@ -7,6 +7,10 @@
 //! The file is TOML: a `[view]` table with one key per [`ViewState`] field, enums by
 //! their ids (`layout = "pro"`). A value that cannot be read keeps its default and the
 //! others still load; plan 9's file, a lone top-level `waveform_beats`, loads too.
+//!
+//! Every save writes `version = 2` in `[view]`. A file from before (no version, or an
+//! older one) wrote `jog_display = "plain"` whether or not it was chosen, so its jog
+//! display is ignored once and the default (the info jog) applies.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -16,6 +20,8 @@ use ui::{PanelSizes, ViewChange, ViewState};
 
 /// The file the view is kept in, next to `config.toml`.
 pub(super) const STATE_FILE: &str = "ui-state.toml";
+/// The `[view]` version this build writes. From 2 on, `jog_display` is the user's choice.
+const VERSION: i64 = 2;
 /// How long the view must stay put before it is saved, so a scroll or a drag saves once.
 const SAVE_AFTER: Duration = Duration::from_secs(2);
 
@@ -210,7 +216,11 @@ fn parse(file: &Table, defaults: ViewState) -> ViewState {
     if let Some(position) = id("waveform_position").and_then(ui::WaveformPosition::from_id) {
         state.waveform_position = position;
     }
-    if let Some(display) = id("jog_display").and_then(ui::JogDisplay::from_id) {
+    // Older files saved the plain jog without it being chosen: keep the default.
+    let version = view.get("version").and_then(Value::as_integer).unwrap_or(1);
+    if version >= VERSION
+        && let Some(display) = id("jog_display").and_then(ui::JogDisplay::from_id)
+    {
         state.jog_display = display;
     }
     flag("beat_counter", &mut state.beat_counter);
@@ -282,6 +292,7 @@ fn text(state: &ViewState) -> String {
     }
     let id = |id: &str| Value::String(id.to_owned());
     let mut view = Table::new();
+    view.insert("version".to_owned(), Value::Integer(VERSION));
     view.insert("layout".to_owned(), id(state.layout.id()));
     view.insert("colour_scheme".to_owned(), id(state.colour_scheme.id()));
     view.insert("waveform_style".to_owned(), id(state.waveform_style.id()));
@@ -468,6 +479,49 @@ mod tests {
                 TimeMode::Remaining
             ]
         );
+    }
+
+    #[test]
+    fn pre_12a_file_gets_the_info_jog() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(STATE_FILE);
+        for text in [
+            "[view]\njog_display = \"plain\"\nfour_decks = true\n",
+            "[view]\nversion = 1\njog_display = \"plain\"\nfour_decks = true\n",
+        ] {
+            std::fs::write(&path, text).unwrap();
+            let state = ViewStore::load(Some(path.clone()), defaults(), RANGE)
+                .state()
+                .clone();
+            assert_eq!(state.jog_display, ui::JogDisplay::Info, "{text}");
+            // The rest of the file still loads.
+            assert!(state.four_decks, "{text}");
+        }
+    }
+
+    #[test]
+    fn version_2_keeps_a_chosen_plain_jog() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(STATE_FILE);
+        std::fs::write(&path, "[view]\nversion = 2\njog_display = \"plain\"\n").unwrap();
+        let state = ViewStore::load(Some(path), defaults(), RANGE)
+            .state()
+            .clone();
+        assert_eq!(state.jog_display, ui::JogDisplay::Plain);
+    }
+
+    #[test]
+    fn saving_writes_version_2() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(STATE_FILE);
+        let now = Instant::now();
+        let mut store = ViewStore::load(Some(path.clone()), defaults(), RANGE);
+        store.apply(ViewChange::SetJogDisplay(ui::JogDisplay::Plain), now);
+        store.save_now();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("version = 2"), "{text}");
+        let loaded = ViewStore::load(Some(path), defaults(), RANGE);
+        assert_eq!(loaded.state().jog_display, ui::JogDisplay::Plain);
     }
 
     #[test]
