@@ -208,6 +208,7 @@ pub fn root_with_reads(
     let lanes = |ui: &mut egui::Ui, screen: &mut Screen, drags: &mut Drags| {
         let height = drags.sizes.lanes * window.y;
         let (drag, top) = row_panel(ui, "waveform_lanes", height, &p, |ui| {
+            landmark_rect(ui, ui.max_rect(), "lanes");
             screen.lanes.show(ui, frame, reads, &screen.commands)
         });
         drags.place(drag, top, |sizes, share| sizes.lanes = share);
@@ -218,6 +219,7 @@ pub fn root_with_reads(
     let height = drags.sizes.decks * window.y;
     let (drag, top) = row_panel(ui, "deck_panels", height, &p, |ui| {
         // The space between the decks is the mixer's.
+        landmark_rect(ui, ui.max_rect(), "deck row");
         let space = screen.decks.show_reads(
             ui,
             frame,
@@ -315,6 +317,14 @@ impl Drags {
         self.moved = true;
         true
     }
+}
+
+/// Names the area `rect` of `ui` for screen readers (and the tests that look for where a
+/// section is); it takes no input.
+pub(crate) fn landmark_rect(ui: &egui::Ui, rect: egui::Rect, name: &str) {
+    let id = ui.scope_id().with(("landmark", name));
+    let response = ui.interact(rect, id, egui::Sense::hover());
+    landmark(&response, name);
 }
 
 /// Names the area of `response` for screen readers.

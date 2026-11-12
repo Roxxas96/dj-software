@@ -31,33 +31,32 @@ like Ctrl-C in `play`.
 
 ## The compact look
 
-The window copies VirtualDJ's compact arrangement. Sections have no outlines: they touch,
-a thin gap of background between them, and tell themselves apart by their fills. A section
-that VirtualDJ names (FX, PADS, LOOP) carries its name turned a quarter anticlockwise
-at its edge. The panel of a deck that a controller side drives has its side's accent
-along its outer edge (the active deck's tab), and the right deck's panel is the left one
-mirrored below the header: the transport, the pitch fader and the jog sit in the same order
-counted from the mixer, and the states, FX and pads on the outside.
+The window copies VirtualDJ's compact arrangement. Sections have no outlines: they touch, a
+thin gap of background between them, and tell themselves apart by their fills. A section
+that VirtualDJ names (FX, PADS, LOOP) carries its name turned a quarter anticlockwise at its
+edge. The panel of a deck that a controller side drives has its side's accent along its
+outer edge (the active deck's tab), and the right deck's panel is the left one mirrored
+below the header: the transport, the pitch fader and the jog sit in the same order counted
+from the mixer, and the states, FX and pads on the outside.
 
-The deck row is as tall as its contents (Pro needs about 265 points), so the browser takes
-all the rest of the height. The same holds for every layout and for 4-Decks. Dragging the
-deck divider overrides that height (see
-[Dividers](#dividers-folding-and-the-sideview)).
+The deck row is as tall as its contents, so the browser takes all the rest of the height.
+The same holds for every layout and for 4-Decks. Dragging the deck divider overrides that
+height (see [Dividers](#dividers-folding-and-the-sideview)).
 
 ## What each area shows
 
 - **Top bar:** the LAYOUT menu (see [The LAYOUT menu](#the-layout-menu)), the layout's name,
   the settings gear, status and events, the master meter, CPU load, the clock, and the
   controller and audio state.
-- **Waveform lanes:** the decks both sides show, plus any other deck that is playing; in the
-  4-Decks view, all four. The LAYOUT menu picks the style: Frequency (colour follows
+- **Waveform lanes:** the decks both sides show, plus any other deck that is playing; in
+  the 4-Decks view, all four. The LAYOUT menu picks the style: Frequency (colour follows
   frequency), Deck colour, Bands (low, mid and high drawn as separate bands) or Overlaid
   (the first two lanes' decks share one lane at 55 % opacity), and puts the lanes at the Top
   or in the Middle (between the deck panels and the browser). Beat ticks are drawn, with a
   red tick on the first beat of each bar. Cue and hotcue markers and the loop band show on
   the lane; a hotcue shows its colour, and its name cut at 14 characters when it has one.
-  The playhead is fixed at the centre. Each lane blends three layers, low, mid and high,
-  one colour per band (see [Waveform colours](#waveform-colours)), so where the bands overlap
+  The playhead is fixed at the centre. Each lane blends three layers, low, mid and high, one
+  colour per band (see [Waveform colours](#waveform-colours)), so where the bands overlap
   the colours mix as they do in VirtualDJ.
 - **Zoom:** scroll (or pinch) over the waveforms, or click the `-` and `+` buttons at their
   top right. Each step is 1.25 times, between `ui.waveform_min_beats` and
@@ -90,19 +89,20 @@ deck divider overrides that height (see
   decks, GAIN over the channel fader in the middle, PFL under it, the level meters beside the
   faders (the live level, with a line marking the highest peak of the last second), and the
   crossfader at the bottom. With four decks the strips are narrower and the knobs carry
-  letters instead of names: G (gain), H, M, B (high, mid, bass) and F (filter). The EQ labels
-  follow the mode: HIGH, MID, LOW, or once
-  stems are active HIHAT, MEL/VOX, KICK (`vdj` knobs) or VOCALS, INSTRU, BASS (`raw` knobs).
+  one-letter captions instead of names: G for the gain and F for the filter, and for the
+  EQ knobs H, M and B (high, mid, bass) in the EQ mode, or the first letters of the stem
+  labels once stems are active (H, M, K for the `vdj` knobs; V, I, B for the `raw` knobs,
+  with B for BASS as for LOW). The EQ labels follow the mode: HIGH, MID, LOW, or once stems
+  are active HIHAT, MEL/VOX, KICK (`vdj` knobs) or VOCALS, INSTRU, BASS (`raw` knobs).
   Ghost markers show where a physical control is while soft takeover has not caught up with
   the value on screen (after a DECK switch, for instance).
-- **Browser:** the drives and real folders, then playlists, as a tree. A drive plugged in or
-  out shows at the next refresh, which follows library changes. Columns are Title,
+- **Browser:** the drives and real folders, then playlists, as a tree. A drive plugged in
+  or out shows at the next refresh, which follows library changes. Columns are Title,
   Artist, Remix, Length, BPM and Key, left-aligned under a header row, and the rows
   alternate in shade. A track that is loaded on a deck has a marker in that deck's accent at
-  the left of its row. "•" marks a track with saved cues, and "missing" a file
-  that is gone. An info panel shows the selected track. The own files of a folder that was
-  never scanned are added and analysed in the background, so BPM and key fill in as they
-  finish.
+  the left of its row. "•" marks a track with saved cues, and "missing" a file that is gone.
+  An info panel shows the selected track. The own files of a folder that was never scanned
+  are added and analysed in the background, so BPM and key fill in as they finish.
 - **Panels:** the dividers, the info panel and the sideview are described in
   [Dividers, folding and the sideview](#dividers-folding-and-the-sideview).
 
