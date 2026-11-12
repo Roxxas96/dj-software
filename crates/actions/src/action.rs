@@ -181,6 +181,9 @@ pub enum ActionKind {
     /// A stem pad: turns the deck's stem on or off (all on after a load). It works whatever
     /// the EQ mode, once the deck has stems; a press before then is kept.
     StemToggle(Stem),
+    /// Seeks the deck to a fraction of its track (the overview, clicked or dragged). Only
+    /// the window sends it: it has no state to take over.
+    Seek,
     /// Plays sampler slot `slot` (the sampler has as many slots as there are pads).
     SamplerPlay(HotcueSlot),
     SamplerStop(HotcueSlot),
@@ -287,8 +290,8 @@ const SAMPLER_STOP_IDS: [&str; 8] = [
 
 impl ActionKind {
     /// Every kind: each slot family (hotcues, beat jumps, rolls, slices, sampler) once per slot.
-    pub const ALL: [ActionKind; 140] = {
-        let mut all = [ActionKind::PlayPause; 140];
+    pub const ALL: [ActionKind; 141] = {
+        let mut all = [ActionKind::PlayPause; 141];
         let fixed = [
             ActionKind::PlayPause,
             ActionKind::Cue,
@@ -366,6 +369,7 @@ impl ActionKind {
             ActionKind::StemToggle(Stem::Kicks),
             ActionKind::StemToggle(Stem::Melody),
             ActionKind::StemToggle(Stem::Hats),
+            ActionKind::Seek,
         ];
         let mut i = 0;
         while i < fixed.len() {
@@ -472,6 +476,7 @@ impl ActionKind {
             ActionKind::StemToggle(Stem::Kicks) => "deck.stem_toggle_kicks",
             ActionKind::StemToggle(Stem::Melody) => "deck.stem_toggle_melody",
             ActionKind::StemToggle(Stem::Hats) => "deck.stem_toggle_hats",
+            ActionKind::Seek => "deck.seek",
             ActionKind::SamplerPlay(slot) => SAMPLER_PLAY_IDS[slot.index()],
             ActionKind::SamplerStop(slot) => SAMPLER_STOP_IDS[slot.index()],
         }
@@ -535,6 +540,7 @@ impl ActionKind {
             | ActionKind::FxToggle(_)
             | ActionKind::FxLevel
             | ActionKind::StemToggle(_)
+            | ActionKind::Seek
             | ActionKind::LoadSelected => Scope::Deck,
             ActionKind::Crossfader
             | ActionKind::MasterLevel
@@ -574,6 +580,7 @@ impl ActionKind {
                 | ActionKind::MasterLevel
                 | ActionKind::HeadphoneLevel
                 | ActionKind::HeadphoneMix
+                | ActionKind::Seek
         );
         let relative = matches!(
             self,
@@ -706,6 +713,7 @@ pub enum Action {
     FxToggle(DeckId, u8),
     FxLevel(DeckId),
     StemToggle(DeckId, Stem),
+    Seek(DeckId),
     SamplerPlay(HotcueSlot),
     SamplerStop(HotcueSlot),
 }
@@ -782,6 +790,7 @@ impl Action {
             (K::FxToggle(n), Target::Deck(d)) => Action::FxToggle(d, n),
             (K::FxLevel, Target::Deck(d)) => Action::FxLevel(d),
             (K::StemToggle(stem), Target::Deck(d)) => Action::StemToggle(d, stem),
+            (K::Seek, Target::Deck(d)) => Action::Seek(d),
             (K::SamplerPlay(slot), Target::Global) => Action::SamplerPlay(slot),
             (K::SamplerStop(slot), Target::Global) => Action::SamplerStop(slot),
             _ => return None,
@@ -867,6 +876,7 @@ impl Action {
             Action::FxToggle(_, n) => ActionKind::FxToggle(*n),
             Action::FxLevel(_) => ActionKind::FxLevel,
             Action::StemToggle(_, stem) => ActionKind::StemToggle(*stem),
+            Action::Seek(_) => ActionKind::Seek,
             Action::SamplerPlay(slot) => ActionKind::SamplerPlay(*slot),
             Action::SamplerStop(slot) => ActionKind::SamplerStop(*slot),
         }
@@ -925,7 +935,8 @@ impl Action {
             | Action::KeylockToggle(d)
             | Action::FxToggle(d, _)
             | Action::FxLevel(d)
-            | Action::StemToggle(d, _) => Target::Deck(d),
+            | Action::StemToggle(d, _)
+            | Action::Seek(d) => Target::Deck(d),
             Action::Crossfader
             | Action::MasterLevel
             | Action::HeadphoneLevel

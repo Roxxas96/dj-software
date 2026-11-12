@@ -284,6 +284,16 @@ pub fn apply(
             )
         }
 
+        // A seek is a position, not a value to take over: it records nothing in the state.
+        (Action::Seek(d), Input::Absolute(v)) if v.is_finite() => {
+            let snap = engine.deck(d);
+            if !snap.loaded || snap.duration_frames == 0 {
+                return ApplyResult::Ignored;
+            }
+            let frames = f64::from(v.clamp(0.0, 1.0)) * snap.duration_frames as f64;
+            (deck(d, DeckCommand::Seek(frames)), Update::None)
+        }
+
         // The engine drops non-finite values and clamps the rest: do the same so the state
         // stays in step with it.
         (_, Input::Absolute(v)) if v.is_finite() => {

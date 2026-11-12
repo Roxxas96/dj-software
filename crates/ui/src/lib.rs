@@ -5,6 +5,7 @@
 
 pub mod browser;
 mod command;
+pub mod controls;
 pub mod cover;
 pub mod deck;
 mod fonts;
