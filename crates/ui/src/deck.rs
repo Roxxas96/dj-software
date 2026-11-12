@@ -915,7 +915,7 @@ fn overview_strip(ui: &Ui, view: &DeckView, rect: Rect) {
     let response = ui.interact(rect, ui.scope_id().with("overview"), Sense::hover());
     response.widget_info(|| WidgetInfo::labeled(Role::Image, true, "overview"));
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, CornerRadius::ZERO, p.lane);
+    painter.rect_filled(rect, CornerRadius::ZERO, p.wave_background);
     let mut mesh = Mesh::default();
     if let Some(waveform) = view.overview.as_deref() {
         overview_columns(

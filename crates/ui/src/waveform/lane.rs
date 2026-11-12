@@ -190,7 +190,7 @@ impl Lane<'_> {
         // An overlay's number sits beside the number below it.
         let label_shift = if self.overlay { LABEL_FONT * 1.5 } else { 0.0 };
         if !self.overlay {
-            painter.rect_filled(rect, 0.0, p.lane);
+            painter.rect_filled(rect, 0.0, p.wave_background);
         }
         if let Some(scale) = self.scale(rect, painter.pixels_per_point()) {
             let m = Arc::make_mut(mesh);
@@ -316,7 +316,7 @@ impl Lane<'_> {
             .marks
             .and_then(|m| m[slot].as_ref())
             .and_then(|m| m.color);
-        p.mark(saved)
+        p.wave_mark(saved)
     }
 
     /// The numbers on the hotcue flags in sight, and the names beside them.
@@ -348,7 +348,7 @@ impl Lane<'_> {
                     Align2::LEFT_CENTER,
                     name,
                     FontId::proportional(FLAG_FONT),
-                    p.text,
+                    p.wave_text,
                 );
             }
         }
@@ -476,9 +476,10 @@ mod tests {
         ];
         for p in [Palette::DARK, Palette::LIGHT] {
             for colour in saved {
-                let flag = p.mark(colour);
-                let ratio = theme::contrast(flag_number(flag), flag);
-                assert!(ratio >= 4.5, "{colour:?} on {:?}: {ratio:.2}", p.background);
+                for flag in [p.mark(colour), p.wave_mark(colour)] {
+                    let ratio = theme::contrast(flag_number(flag), flag);
+                    assert!(ratio >= 4.5, "{colour:?} on {:?}: {ratio:.2}", p.background);
+                }
             }
         }
     }
@@ -674,6 +675,15 @@ mod tests {
         let red = Color32::from_rgb(0xff, 0, 0);
         assert_eq!(Palette::LIGHT.mark(Some(red)), red);
         assert_eq!(Palette::LIGHT.mark(None), Palette::LIGHT.hotcue);
+    }
+
+    #[test]
+    fn flags_keep_pale_colours_on_the_dark_waveform_in_both_schemes() {
+        let pale = Color32::from_rgb(0xff, 0xff, 0x80);
+        for p in [Palette::DARK, Palette::LIGHT] {
+            assert_eq!(p.wave_mark(Some(pale)), pale);
+            assert_eq!(p.wave_mark(None), p.hotcue);
+        }
     }
 
     #[test]

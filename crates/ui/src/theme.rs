@@ -36,9 +36,9 @@ pub struct Palette {
     pub bar_tick: Color32,
     /// Every other beat on a waveform.
     pub beat_tick: Color32,
-    /// Behind a waveform lane.
+    /// Behind a meter, a jog or an unlit button.
     pub lane: Color32,
-    /// The line at a lane's centre: what is being heard.
+    /// The line at a waveform lane's centre (what is being heard), and the overview's.
     pub playhead: Color32,
     /// The cue point's triangle.
     pub cue: Color32,
@@ -64,6 +64,11 @@ pub struct Palette {
     pub on_accent: Color32,
     /// The colour of a waveform's high frequencies.
     pub wave_high: Color32,
+    /// Behind the scrolling waveforms and the deck overview: dark in both schemes, as in
+    /// VirtualDJ's light skins, so every band of every waveform palette reads on it.
+    pub wave_background: Color32,
+    /// Text over a waveform (the hotcues' names).
+    pub wave_text: Color32,
 }
 
 impl Palette {
@@ -91,10 +96,13 @@ impl Palette {
         note: Color32::from_gray(0x55),
         on_accent: Color32::BLACK,
         wave_high: Color32::WHITE,
+        wave_background: Color32::from_rgb(0x12, 0x13, 0x15),
+        wave_text: Color32::from_rgb(0xd6, 0xd6, 0xd6),
     };
 
-    /// Light grey, VirtualDJ's other look. The accents, ticks and the waveforms' bass and
-    /// mids keep their hues; the highs and the error text are darker, to read on light grey.
+    /// Light grey, VirtualDJ's other look. The accents and the whole waveform area (its dark
+    /// background, ticks, playhead, bands and text) stay as in the dark scheme; the error
+    /// text is darker, to read on light grey.
     pub const LIGHT: Self = Self {
         background: Color32::from_rgb(0xe6, 0xe6, 0xe6),
         panel: Color32::from_rgb(0xf4, 0xf4, 0xf4),
@@ -102,26 +110,32 @@ impl Palette {
         text: Color32::from_rgb(0x1e, 0x1f, 0x22),
         text_dim: Color32::from_rgb(0x5f, 0x61, 0x66),
         lane: Color32::from_rgb(0xd8, 0xd8, 0xd8),
-        // Darker than the dark scheme's, to read on the light lane.
-        playhead: Color32::from_rgb(0x1e, 0x1f, 0x22),
         cue: Color32::from_rgb(0xe0, 0x8a, 0x00),
         hotcue: Color32::from_rgb(0x1f, 0xa8, 0x66),
-        loop_band: Color32::from_rgba_premultiplied(0x00, 0x40, 0x10, 0x40),
         highlight: Color32::from_rgb(0x9c, 0xc6, 0xe8),
         highlight_dim: Color32::from_rgb(0xcf, 0xd2, 0xd8),
         note: Color32::from_gray(0xa0),
         error: Color32::from_rgb(0xc4, 0x1e, 0x1e),
-        wave_high: Color32::from_rgb(0x3e, 0x4c, 0x5e),
         ..Self::DARK
     };
 
     /// A hotcue's saved colour as it shows on this palette: the colour itself, darkened when
     /// it is too pale to read on a light background, or [`Self::hotcue`] without one.
     pub fn mark(&self, colour: Option<Color32>) -> Color32 {
+        self.mark_on(colour, self.background)
+    }
+
+    /// [`Self::mark`] over a waveform: darkened only when [`Self::wave_background`] is light.
+    pub fn wave_mark(&self, colour: Option<Color32>) -> Color32 {
+        self.mark_on(colour, self.wave_background)
+    }
+
+    /// A hotcue's colour as it shows on `surface`.
+    fn mark_on(&self, colour: Option<Color32>, surface: Color32) -> Color32 {
         let Some(colour) = colour else {
             return self.hotcue;
         };
-        if luminance(self.background) > 0.5 && luminance(colour) > PALE {
+        if luminance(surface) > 0.5 && luminance(colour) > PALE {
             let dim = |c: u8| (f32::from(c) * DARKEN) as u8;
             Color32::from_rgb(dim(colour.r()), dim(colour.g()), dim(colour.b()))
         } else {
@@ -267,14 +281,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn light_text_and_highs_read_on_light_grey() {
+    fn light_text_reads_on_light_grey_and_the_waveforms_stay_dark() {
         let light = Palette::LIGHT;
         for surface in [light.panel, light.background] {
             assert!(contrast(light.error, surface) >= 4.5, "{surface:?}");
         }
-        assert!(contrast(light.wave_high, light.lane) >= 4.5);
-        // The dark scheme keeps its own.
-        assert_eq!(Palette::DARK.wave_high, Color32::WHITE);
+        // The waveform area keeps the dark scheme's colours.
+        for colour in [light.wave_high, light.playhead, light.wave_text] {
+            assert!(contrast(colour, light.wave_background) >= 4.5, "{colour:?}");
+        }
+        for colour in [light.bar_tick, light.beat_tick, light.cue, light.hotcue] {
+            assert!(contrast(colour, light.wave_background) >= 3.0, "{colour:?}");
+        }
+        assert_eq!(light.wave_background, Palette::DARK.wave_background);
     }
 
     #[test]
