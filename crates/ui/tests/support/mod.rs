@@ -1,5 +1,6 @@
 //! What the window tests share: loaded decks to draw, and a render of the whole window.
 
+use std::f64::consts::TAU;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -40,19 +41,33 @@ fn track_row(n: usize) -> TrackRow {
     }
 }
 
-/// A made-up waveform of `frames_per_bucket`: a kick every 16th bucket, hats every 4th,
-/// steady mids, and a quieter breakdown from 55 % to 65 % of the track. No randomness, so
-/// every render draws the same.
+/// A made-up waveform of `frames_per_bucket`, shaped by the 126 BPM grid: a kick on every
+/// beat, hats on every quarter beat, mids that drift over two bars, and a breakdown from
+/// 55 % to 65 % of the track with no kick and the rest halved. No randomness, so every
+/// render draws the same.
 pub fn waveform(frames_per_bucket: u32) -> Waveform {
     let count = (DURATION_FRAMES / u64::from(frames_per_bucket)) as usize;
     let breakdown = count * 55 / 100..count * 65 / 100;
     let buckets = (0..count)
         .map(|i| {
-            let low = if i.is_multiple_of(16) { 230.0 } else { 60.0 };
-            let high = if i.is_multiple_of(4) { 160.0 } else { 50.0 };
-            let mid = 100.0 + (i * 7 % 21) as f32;
-            let gain = if breakdown.contains(&i) { 0.3 } else { 1.0 };
-            let [low, mid, high] = [low, mid, high].map(|band: f32| (band * gain) as u8);
+            let beats = (i as f64 * f64::from(frames_per_bucket)) / BEAT_FRAMES;
+            // The kick falls from 230 to 40 over the first third of its beat.
+            let kick = beats.fract() * 3.0;
+            let low = if kick < 1.0 {
+                230.0 - 190.0 * kick
+            } else {
+                40.0
+            };
+            // A hat falls from 90 to 20 within an eighth of a beat.
+            let hat = (beats * 4.0).fract() * 2.0;
+            let high = if hat < 1.0 { 90.0 - 70.0 * hat } else { 20.0 };
+            let mid = 100.0 + 20.0 * (beats * TAU / 8.0).sin();
+            let (low, mid, high) = if breakdown.contains(&i) {
+                (0.0, mid * 0.5, high * 0.5)
+            } else {
+                (low, mid, high)
+            };
+            let [low, mid, high] = [low, mid, high].map(|band: f64| band.round() as u8);
             [low.max(mid).max(high), low, mid, high]
         })
         .collect();
@@ -176,6 +191,7 @@ pub fn render(frame: ControlFrame, reads: DeckReads, size: Vec2) -> image::RgbaI
     let mut harness = Harness::builder()
         .with_size(size)
         .wgpu()
+        .with_context_setup(ui::install_fonts)
         .build_ui(move |ui| {
             // The harness keeps a margin around what it draws; the window has none.
             let window = ui.ctx().content_rect();

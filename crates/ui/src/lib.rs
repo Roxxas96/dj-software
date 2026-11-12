@@ -42,6 +42,11 @@ const WINDOW_SIZE: [f32; 2] = [1440.0, 900.0];
 /// The smallest the window goes: every layout's deck panels still show all their areas.
 const MIN_WINDOW_SIZE: [f32; 2] = [1024.0, 700.0];
 
+/// Installs the fonts the window draws with: egui's, then the system's fallbacks.
+pub fn install_fonts(ctx: &egui::Context) {
+    fonts::install(ctx);
+}
+
 /// Opens the window and draws until it is closed, then sets `quit`. The window closes
 /// itself once something else sets `quit`. `monitor` holds `None` until the audio device
 /// opens. What the viewer asks for (a zoom, a layout) is sent on `commands`; the session
@@ -73,7 +78,7 @@ pub fn run(
         options,
         Box::new(|cc| {
             theme::apply(&cc.egui_ctx, ColourScheme::default());
-            fonts::install(&cc.egui_ctx);
+            install_fonts(&cc.egui_ctx);
             Ok(Box::new(app))
         }),
     );

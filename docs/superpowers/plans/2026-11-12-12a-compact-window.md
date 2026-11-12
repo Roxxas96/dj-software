@@ -222,7 +222,7 @@ docs/ui.md, README.md            the new look and the palette setting
   deterministic, with no randomness. Every 16th bucket is a kick (low 230). Hats come every
   4th bucket (high 160). Mids are steady around 110. There is a quieter breakdown from 55 %
   to 65 % of the track, with all bands × 0.3. The peak is the bands' maximum.
-- [ ] **Step 4: Run the render test** with `-- --ignored`; it passes and writes the ONGs.
+- [ ] **Step 4: Run the render test** with `-- --ignored`; it passes and writes the PNGs.
   Run `cargo test -p ui` as well; the fit tests pass with the shared fixture. CI does not
   run ignored tests, so it needs no GPU.
 - [ ] **Step 5: Check** `cargo deny check` is still clean with the new dev-features (add a
