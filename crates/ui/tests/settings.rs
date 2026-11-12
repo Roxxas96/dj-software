@@ -728,3 +728,29 @@ fn interface_lists_the_waveform_colours() {
         ))]
     );
 }
+
+#[test]
+fn the_settings_window_draws_its_divider() {
+    let frame = frame(rows());
+    let (harness, _) = open(&frame);
+    let stroke = ui::theme::separator_stroke(&ui::theme::Palette::DARK);
+    let mut stack: Vec<egui::Shape> = harness
+        .output()
+        .shapes
+        .iter()
+        .map(|c| c.shape.clone())
+        .collect();
+    let mut found = false;
+    while let Some(shape) = stack.pop() {
+        match shape {
+            egui::Shape::Vec(inner) => stack.extend(inner),
+            egui::Shape::LineSegment { points, stroke: s } => {
+                // The page list's divider: a long vertical line in the dim stroke.
+                let vertical = (points[0].x - points[1].x).abs() < 0.01;
+                found |= vertical && (points[0].y - points[1].y).abs() > 50.0 && s == stroke;
+            }
+            _ => {}
+        }
+    }
+    assert!(found, "no divider in the settings window");
+}

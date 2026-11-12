@@ -267,7 +267,8 @@ pub fn root_with_reads(
         drags.sizes = dragged;
         drags.moved = true;
     }
-    // The decks' share stays unset until its own divider moves: the layout's applies.
+    // The decks' share stays unset until its own divider moves: unset, the deck row is
+    // as tall as its contents.
     let mut kept = drags.sizes;
     if !drags.decks_moved && source.decks == PanelSizes::default().decks {
         kept.decks = source.decks;

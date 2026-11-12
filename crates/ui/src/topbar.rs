@@ -26,6 +26,7 @@ pub fn show(
 ) {
     let p = theme::palette(ui.ctx());
     ui.horizontal(|ui| {
+        theme::separators(ui);
         menu::show(ui, &frame.view, commands);
         if gear(ui).clicked() {
             *settings_open = !*settings_open;
