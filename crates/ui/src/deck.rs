@@ -510,6 +510,7 @@ impl DeckPanels {
                 .path
                 .as_deref()
                 .and_then(|path| covers.get(ui.ctx(), path));
+            crate::landmark_rect(ui, rect, &format!("deck panel {}", deck.index() + 1));
             ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| {
                 // Nothing a panel draws reaches its neighbours.
                 ui.set_clip_rect(rect.intersect(ui.clip_rect()));

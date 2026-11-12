@@ -200,12 +200,16 @@ pub fn show(
     let list = Rect::from_min_max(pos2(tree_edge, area.min.y), pos2(info_edge, area.max.y));
     let info = Rect::from_min_max(pos2(info_edge, area.min.y), pos2(side_edge, area.max.y));
     let side = Rect::from_min_max(pos2(side_edge, area.min.y), area.max);
+    crate::landmark_rect(ui, tree, "tree");
+    crate::landmark_rect(ui, list, "list");
     pane(ui, tree, |ui| tree_pane(ui, view));
     pane(ui, list, |ui| list_pane(ui, view, loaded, notation));
     if arrangement.info {
+        crate::landmark_rect(ui, info, "info panel");
         pane(ui, info, |ui| info_pane(ui, view, notation, covers));
     }
     if arrangement.sideview {
+        crate::landmark_rect(ui, side, "sideview panel");
         ui.painter().rect_filled(side, 0.0, p.panel);
         pane(ui, side, sideview);
     }

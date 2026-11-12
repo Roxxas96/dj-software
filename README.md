@@ -16,8 +16,7 @@ start (the 10 newest backups are kept):
 - Folder scans that keep cues and grids when files are moved, renamed or retagged, and
   flag missing files instead of deleting them.
 - Background analysis: three-band waveform (one colour per band, three palettes to choose
-  from), BPM and beatgrid, and musical key (Camelot,
-  standard or Open Key notation).
+  from), BPM and beatgrid, and musical key (Camelot, standard or Open Key notation).
 - Cue points and hotcues (with saved loops, colours and names) that are remembered per track,
   playlists, and beatgrid editing (shift, set downbeat, halve, double, set BPM, tap, lock).
 - Browsing and loading from the DDJ-SB3 (BROWSE knob and LOAD buttons) with `play --library`.

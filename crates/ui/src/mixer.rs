@@ -132,6 +132,7 @@ impl Mixer {
             (level, self.holds[deck.index()].update(level, now))
         };
         let p = theme::palette(ui.ctx());
+        crate::landmark_rect(ui, rect.shrink2(vec2(SECTION_GAP / 2.0, 0.0)), "mixer");
         // One panel for the whole mixer, with half the gap to each deck panel.
         ui.painter().rect_filled(
             rect.shrink2(vec2(SECTION_GAP / 2.0, 0.0)),

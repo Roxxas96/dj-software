@@ -183,7 +183,10 @@ fn every_layout_fits_the_smallest_window() {
     let window = WINDOWS[0];
     for layout in Layout::ALL {
         for four_decks in [false, true] {
-            let (frame, reads) = loaded(*layout, four_decks);
+            let (mut frame, reads) = loaded(*layout, four_decks);
+            // Every pane of the browser is shown.
+            frame.view.info_panel = true;
+            frame.view.sideview = true;
             let sections = shown_sections(&frame.view);
             let drawn = drawn_sizes(frame.view.sizes, &sections, window);
             let at = format!("{layout:?} four_decks={four_decks}");
@@ -198,7 +201,6 @@ fn every_layout_fits_the_smallest_window() {
                 });
             });
             harness.run_steps(3);
-            let top_bar = harness.get_by_label("top bar").rect();
             let browser = harness.get_by_label("browser").rect();
             // The deck row's controls end above the browser.
             let play_bottom = harness
@@ -217,15 +219,29 @@ fn every_layout_fits_the_smallest_window() {
                 })
                 .count();
             assert!(rows >= 3, "{at}: the browser shows {rows} rows");
-            let sections_rects = [top_bar, browser];
+            // Every section the window draws, by the name its area carries.
+            let mut sections_rects: Vec<(String, Rect)> = Vec::new();
+            for name in ["top bar", "lanes", "mixer", "tree", "list"] {
+                sections_rects.push((name.into(), harness.get_by_label(name).rect()));
+            }
+            for name in ["info panel", "sideview panel"] {
+                let rect = harness.get_by_label(name).rect();
+                sections_rects.push((name.into(), rect));
+            }
+            let panels: Vec<_> = harness
+                .query_all_by_label_contains("deck panel")
+                .map(|n| (n.accesskit_node().label().unwrap_or_default(), n.rect()))
+                .collect();
+            assert_eq!(panels.len(), if four_decks { 4 } else { 2 }, "{at}");
+            sections_rects.extend(panels);
             let gap = ui::theme::SECTION_GAP;
-            for (i, a) in sections_rects.iter().enumerate() {
-                for b in &sections_rects[i + 1..] {
+            for (i, (a_name, a)) in sections_rects.iter().enumerate() {
+                for (b_name, b) in &sections_rects[i + 1..] {
                     let overlap = a.intersect(*b);
                     let depth = overlap.height().min(overlap.width());
                     assert!(
                         !overlap.is_positive() || depth <= gap,
-                        "{at}: {a:?} and {b:?} overlap"
+                        "{at}: {a_name} {a:?} and {b_name} {b:?} overlap"
                     );
                 }
             }
