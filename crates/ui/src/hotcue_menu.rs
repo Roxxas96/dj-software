@@ -6,15 +6,15 @@
 //! colour go to the session as a [`LibraryStep::HotcueLabel`]; "Delete" and "Set hotcue
 //! here" press and release the hotcue actions a controller's pads send, through the
 //! [`Sink`], so the release always follows the press. Escape, Enter or a click outside
-//! closes the editor.
+//! closes the editor; it is modal, so that closing click does nothing else.
 //!
 //! The editor is kept in egui's memory: whatever draws a pad or a flag opens it
 //! ([`open`]), and the window draws it once a frame on top of everything ([`show`]).
 
 use actions::Action;
 use egui::{
-    Area, Color32, Context, CornerRadius, Frame, Id, Key, Order, Pos2, Response, Role, Sense,
-    Stroke, StrokeKind, TextEdit, Ui, WidgetInfo, vec2,
+    Area, Color32, Context, CornerRadius, Id, Key, Modal, Order, Pos2, Response, Role, Sense,
+    Stroke, StrokeKind, TextEdit, Ui, UiKind, Vec2, WidgetInfo, vec2,
 };
 use engine::{DeckId, HotcueSlot};
 
@@ -46,6 +46,9 @@ const TITLES: [&str; 8] = [
     "Hotcue 1", "Hotcue 2", "Hotcue 3", "Hotcue 4", "Hotcue 5", "Hotcue 6", "Hotcue 7", "Hotcue 8",
 ];
 
+/// The popup frame's margin around the contents (`Frame::popup`'s, as far as keeping the
+/// editor on the screen goes).
+const POPUP_MARGIN: f32 = 6.0;
 /// A swatch's side, and the name field's width.
 const SWATCH: f32 = 18.0;
 const FIELD_WIDTH: f32 = 9.0 * SWATCH + 8.0 * 4.0;
@@ -98,8 +101,11 @@ struct Editor {
     /// The name and colour last saved (or as opened).
     name: Option<String>,
     color: Option<u32>,
-    /// Opened this frame: the name field takes the keyboard.
-    fresh: bool,
+    /// The name field takes the keyboard in the next frame drawn: on opening, and after a
+    /// swatch took it.
+    focus: bool,
+    /// The editor's size when last drawn, to keep it on the screen.
+    size: Vec2,
 }
 
 fn editor_id() -> Id {
@@ -114,37 +120,44 @@ pub fn open(ctx: &Context, target: HotcueTarget, at: Pos2) {
         color: target.color,
         target,
         at,
-        fresh: true,
+        focus: true,
+        size: Vec2::ZERO,
     };
     ctx.data_mut(|d| d.insert_temp(editor_id(), editor));
 }
 
 /// Draws the open editor, if there is one, sending what it asks for through `sink`.
+///
+/// It is modal: nothing under it takes the pointer while it is open, so the press outside
+/// that closes it does nothing else (a misclick never plays a pad).
 pub fn show(ctx: &Context, sink: &mut Sink<'_>) {
     let id = editor_id();
     let Some(mut editor) = ctx.data(|d| d.get_temp::<Editor>(id)) else {
         return;
     };
     let escape = ctx.input(|i| i.key_pressed(Key::Escape));
-    let shown = Area::new(id.with("area"))
+    // Kept on the screen, from the size it had last frame.
+    let screen = ctx.content_rect();
+    let at = editor.at.min(screen.max - editor.size).max(screen.min);
+    let area = Area::new(id.with("area"))
+        .kind(UiKind::Modal)
+        .sense(Sense::hover())
         .order(Order::Foreground)
-        .fixed_pos(editor.at)
-        .constrain(true)
+        .interactable(true)
+        .fixed_pos(at)
+        .constrain(false);
+    let shown = Modal::new(id.with("modal"))
+        .area(area)
+        .backdrop_color(Color32::TRANSPARENT)
         .show(ctx, |ui| {
-            Frame::popup(ui.style())
-                .show(ui, |ui| contents(ui, &mut editor, sink))
-                .inner
+            let done = contents(ui, &mut editor, sink);
+            (done, ui.min_rect().size() + Vec2::splat(2.0 * POPUP_MARGIN))
         });
-    // The press that opened it came before it was there.
-    let outside = !editor.fresh
-        && ctx.input(|i| {
-            i.pointer.any_pressed()
-                && i.pointer
-                    .interact_pos()
-                    .is_some_and(|pos| !shown.response.rect.contains(pos))
-        });
-    editor.fresh = false;
-    let close = escape || shown.inner || outside;
+    let (done, size) = shown.inner;
+    editor.size = size;
+    let backdrop = &shown.backdrop_response;
+    let outside = backdrop.is_pointer_button_down_on() || backdrop.clicked();
+    let close = escape || done || outside;
     ctx.data_mut(|d| {
         if close {
             d.remove::<Editor>(id);
@@ -174,7 +187,7 @@ fn contents(ui: &mut Ui, editor: &mut Editor, sink: &mut Sink<'_>) -> bool {
                 .char_limit(NAME_CHARS)
                 .desired_width(FIELD_WIDTH),
         );
-        if editor.fresh {
+        if std::mem::take(&mut editor.focus) {
             field.request_focus();
         }
         if field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
@@ -185,7 +198,10 @@ fn contents(ui: &mut Ui, editor: &mut Editor, sink: &mut Sink<'_>) -> bool {
         ui.horizontal(|ui| {
             for (name, colour) in SWATCHES {
                 if swatch(ui, name, colour, editor.color == colour).clicked() {
+                    // The name as typed goes with it, and Enter still saves.
+                    editor.name = clean_name(&editor.text);
                     editor.color = colour;
+                    editor.focus = true;
                     sink.send(label(deck, track, slot, editor.name.clone(), colour));
                 }
             }

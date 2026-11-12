@@ -136,6 +136,8 @@ pub struct LibraryMode {
     /// The hotcues deleted in the latest round, as (track, slot): their colour and name
     /// are gone from the library.
     deleted_hotcues: Vec<(i64, HotcueSlot)>,
+    /// The hotcue labels whose write failed since the window last asked, as (track, slot).
+    failed_labels: Vec<(i64, HotcueSlot)>,
     last_refresh: Option<Instant>,
     /// The status lines should be redrawn now.
     dirty: bool,
@@ -157,6 +159,12 @@ impl LibraryMode {
     /// showing their colour and name.
     pub fn deleted_hotcues(&self) -> &[(i64, HotcueSlot)] {
         &self.deleted_hotcues
+    }
+
+    /// The hotcue labels whose write failed since the last call, as (track, slot), for the
+    /// window to stop showing them.
+    pub fn take_failed_labels(&mut self) -> Vec<(i64, HotcueSlot)> {
+        std::mem::take(&mut self.failed_labels)
     }
 
     /// A read-only connection to the library.
@@ -244,6 +252,7 @@ impl LibraryMode {
             refresh_wanted: false,
             changed_elsewhere: Arc::default(),
             deleted_hotcues: Vec::new(),
+            failed_labels: Vec::new(),
             last_refresh: None,
             dirty: true,
         };
@@ -736,6 +745,11 @@ impl LibraryMode {
     /// cannot overwrite a newer value.
     fn report_failed_writes(&mut self, printer: &Printer) {
         for failed in self.lib.take_failed_writes() {
+            if let WriteOp::SetHotcueLabel { track, slot, .. } = failed.op
+                && let Some(slot) = HotcueSlot::new(slot)
+            {
+                self.failed_labels.push((track, slot));
+            }
             if let Some((track, spot, value)) = memory_write(&failed.op)
                 && self.latest_memory.get(&(track, spot)) == Some(&value)
                 && self.retried_memory.insert((track, spot, value))

@@ -81,6 +81,11 @@ pub(super) fn drain(commands: &Receiver<UiCommand>, parts: &mut FrameParts, mut 
             }
         }
     }
+    if let Some((_, _, Some(library))) = control.as_mut() {
+        for (track, slot) in library.take_failed_labels() {
+            parts.forget_failed_mark(track, slot);
+        }
+    }
     if parts.import.as_mut().is_some_and(Import::poll) {
         parts.refresh_marks();
     }
@@ -669,6 +674,41 @@ mod tests {
         assert_eq!(stored.frames, 100.0);
         assert_eq!(stored.name.as_deref(), Some("Intro"));
         assert_eq!(stored.color, Some(0x00CC00));
+        drop(decks.renderer);
+    }
+
+    #[test]
+    fn a_failed_label_write_is_not_shown() {
+        let mut decks = labelled();
+        let mut parts = FrameParts::new(&Config::default());
+        parts.detail = Some(super::super::detail::DetailJobs::new(
+            decks.library.library(),
+        ));
+        let drop_mark = Some(ui::HotcueMark::new(Some(0xCC0000), Some("Drop".into())));
+        let began = Instant::now();
+        while decks.marks(&mut parts)[0] != drop_mark {
+            assert!(began.elapsed() < std::time::Duration::from_secs(10));
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        // The controller deleted the hotcue just before the window's edit reached the
+        // library: the write fails.
+        let lib = decks.library.library();
+        lib.writer()
+            .submit_wait(library::WriteOp::DeleteHotcue { track: 7, slot: 1 })
+            .unwrap();
+        let (tx, rx) = channel();
+        tx.send(label(0, 7, "Intro", 0x00CC00)).unwrap();
+        decks.drain(&rx, &mut parts);
+        assert_eq!(decks.stored(), None);
+        let (printer, _events) = Printer::capturing();
+        let later = Instant::now() + std::time::Duration::from_secs(2);
+        decks.library.poll(later, &mut decks.engine, &printer);
+        printer.finish();
+        decks.drain(&rx, &mut parts);
+        // The mark set in place is gone at once, and the library's (none) read again.
+        assert_eq!(decks.marks(&mut parts)[0], None);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert_eq!(decks.marks(&mut parts)[0], None);
         drop(decks.renderer);
     }
 }

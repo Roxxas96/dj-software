@@ -155,6 +155,15 @@ impl FrameParts {
         }
     }
 
+    /// Stops showing the colour and name of `track`'s hotcue `slot`, whose label failed to
+    /// save, and reads the decks' marks again for what the library holds.
+    pub fn forget_failed_mark(&mut self, track: i64, slot: engine::HotcueSlot) {
+        if let Some(detail) = self.detail.as_mut() {
+            detail.forget_mark(track, slot);
+            detail.refresh_marks();
+        }
+    }
+
     /// Stops showing the colour and name of the hotcues `library` deleted in its latest
     /// round. Called after every pass, published or not, so none is missed.
     pub fn forget_deleted_marks(&mut self, library: Option<&LibraryMode>) {
