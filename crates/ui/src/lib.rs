@@ -34,7 +34,7 @@ pub use model::{
 };
 pub use view::{
     ColourScheme, JogDisplay, Layout, MAX_SHARE, MIN_SHARE, PanelSizes, TimeMode, ViewState,
-    WaveformPosition, WaveformStyle,
+    WaveformPalette, WaveformPosition, WaveformStyle,
 };
 
 const TITLE: &str = "Open Jockey";

@@ -1,54 +1,53 @@
-//! The colour of a waveform bucket: bass is red-orange, mids pink, highs the palette's
-//! high colour (white on the dark scheme), and the peak sets how bright.
+//! The colours of a waveform's three bands: one per frequency band, from a palette the
+//! view picks.
 
 use egui::Color32;
 
-/// The colour of a bucket that is all low frequencies.
-pub const LOW: [f32; 3] = [255.0, 58.0, 31.0]; // #ff3a1f
-/// The colour of a bucket that is all mid frequencies.
-pub const MID: [f32; 3] = [255.0, 154.0, 213.0]; // #ff9ad5
-/// How bright the quietest bucket still is, as a share of its colour.
-pub const MIN_BRIGHTNESS: f32 = 0.35;
+use crate::theme::Palette;
+use crate::view::WaveformPalette;
 
-/// The colour of `bucket`, `[peak, low, mid, high]`: the three bands' share of their sum
-/// blends the anchors (`high` for the highs), and the peak scales the brightness, never
-/// below [`MIN_BRIGHTNESS`]. A bucket without bands is `silent`.
-pub fn colour(bucket: [u8; 4], silent: Color32, high: Color32) -> Color32 {
-    let high_anchor = [high.r(), high.g(), high.b()].map(f32::from);
-    let [peak, low, mid, high] = bucket.map(f32::from);
-    let sum = low + mid + high;
-    if sum == 0.0 {
-        return silent;
+/// The `[low, mid, high]` colours of `palette`. Blue / orange / white ends in the scheme's
+/// own high colour (white on the dark scheme, dark on the light one), so it stays visible.
+pub fn band_colours(palette: WaveformPalette, scheme: &Palette) -> [Color32; 3] {
+    let hex = |rgb: u32| Color32::from_rgb((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8);
+    match palette {
+        WaveformPalette::Rgb => [hex(0xE8322A), hex(0x38C24A), hex(0x3D8BFF)],
+        WaveformPalette::BlueOrangeWhite => [hex(0x1E64FF), hex(0xFFA21E), scheme.wave_high],
+        WaveformPalette::OrangeYellowCyan => [hex(0xFF4D1A), hex(0xFFD23D), hex(0x5EE6FF)],
     }
-    let brightness = MIN_BRIGHTNESS + (1.0 - MIN_BRIGHTNESS) * peak / 255.0;
-    let channel = |i: usize| {
-        let blended = (low * LOW[i] + mid * MID[i] + high * high_anchor[i]) / sum;
-        (blended * brightness).round().clamp(0.0, 255.0) as u8
-    };
-    Color32::from_rgb(channel(0), channel(1), channel(2))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const SILENT: Color32 = Color32::from_gray(0x80);
-
-    #[test]
-    fn colour_is_warm_for_bass_and_light_for_highs() {
-        let bass = colour([255, 255, 0, 0], SILENT, Color32::WHITE);
-        assert!(bass.r() > 200 && bass.g() < 120, "{bass:?}");
-        let highs = colour([255, 0, 0, 255], SILENT, Color32::WHITE);
-        assert!(
-            highs.r() > 230 && highs.g() > 230 && highs.b() > 230,
-            "{highs:?}"
-        );
-        assert_eq!(colour([0, 0, 0, 0], SILENT, Color32::WHITE), SILENT);
+    fn rgb(hex: u32) -> Color32 {
+        Color32::from_rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
     }
 
     #[test]
-    fn a_quiet_bucket_keeps_a_third_of_its_brightness() {
-        let quiet = colour([0, 0, 0, 255], SILENT, Color32::WHITE);
-        assert_eq!(quiet.r(), 89); // 255 * 0.35
+    fn rgb_is_the_default_and_matches_the_spec() {
+        assert_eq!(
+            band_colours(WaveformPalette::default(), &Palette::DARK),
+            [rgb(0xE8322A), rgb(0x38C24A), rgb(0x3D8BFF)]
+        );
+    }
+
+    #[test]
+    fn blue_orange_white_highs_follow_the_scheme() {
+        for scheme in [Palette::DARK, Palette::LIGHT] {
+            let [low, mid, high] = band_colours(WaveformPalette::BlueOrangeWhite, &scheme);
+            assert_eq!(low, rgb(0x1E64FF));
+            assert_eq!(mid, rgb(0xFFA21E));
+            assert_eq!(high, scheme.wave_high);
+        }
+    }
+
+    #[test]
+    fn orange_yellow_cyan_values() {
+        assert_eq!(
+            band_colours(WaveformPalette::OrangeYellowCyan, &Palette::DARK),
+            [rgb(0xFF4D1A), rgb(0xFFD23D), rgb(0x5EE6FF)]
+        );
     }
 }

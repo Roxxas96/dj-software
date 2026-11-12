@@ -3,7 +3,6 @@
 use egui::Color32;
 use engine::DeckId;
 
-use super::colour::{self, colour};
 use crate::theme::Palette;
 use crate::view::WaveformStyle;
 
@@ -21,9 +20,16 @@ pub struct Bar {
     pub to: f32,
 }
 
-/// The bars of one column for `bucket`, `[peak, low, mid, high]`, of `deck`'s waveform.
-pub fn column(style: WaveformStyle, bucket: [u8; 4], deck: DeckId, palette: &Palette) -> Vec<Bar> {
-    let (bars, count) = bars(style, bucket, deck, palette);
+/// The bars of one column for `bucket`, `[peak, low, mid, high]`, of `deck`'s waveform;
+/// `bands` are the `[low, mid, high]` colours ([`super::colour::band_colours`]).
+pub fn column(
+    style: WaveformStyle,
+    bucket: [u8; 4],
+    deck: DeckId,
+    palette: &Palette,
+    bands: [Color32; 3],
+) -> Vec<Bar> {
+    let (bars, count) = bars(style, bucket, deck, palette, bands);
     bars[..count].to_vec()
 }
 
@@ -33,6 +39,7 @@ pub(super) fn bars(
     bucket: [u8; 4],
     deck: DeckId,
     palette: &Palette,
+    bands: [Color32; 3],
 ) -> ([Bar; MAX_BARS], usize) {
     let none = Bar {
         colour: Color32::TRANSPARENT,
@@ -41,15 +48,19 @@ pub(super) fn bars(
     };
     let mut out = [none; MAX_BARS];
     let [peak, low, mid, high] = bucket;
+    let [low_colour, mid_colour, high_colour] = bands;
     match style {
+        // Three layers over the same centre, the loudest band at the back.
         WaveformStyle::Frequency => {
-            out[0] = mirrored(
-                colour(bucket, palette.text_dim, palette.wave_high),
-                0.5,
-                0.5,
-                peak,
-            );
-            (out, 1)
+            let mut count = 0;
+            for (level, colour) in [(low, low_colour), (mid, mid_colour), (high, high_colour)] {
+                if level == 0 {
+                    continue;
+                }
+                out[count] = mirrored(colour, 0.5, 0.5, level);
+                count += 1;
+            }
+            (out, count)
         }
         WaveformStyle::DeckColour => {
             out[0] = mirrored(palette.deck_accent(deck), 0.5, 0.5, peak);
@@ -63,14 +74,10 @@ pub(super) fn bars(
         WaveformStyle::Bands => {
             let third = 1.0 / 3.0;
             let mut count = 0;
-            let rgb = |anchor: [f32; 3]| {
-                let [r, g, b] = anchor.map(|c| c as u8);
-                Color32::from_rgb(r, g, b)
-            };
             for (level, anchor, centre) in [
-                (high, palette.wave_high, third / 2.0),
-                (mid, rgb(colour::MID), 0.5),
-                (low, rgb(colour::LOW), 1.0 - third / 2.0),
+                (high, high_colour, third / 2.0),
+                (mid, mid_colour, 0.5),
+                (low, low_colour, 1.0 - third / 2.0),
             ] {
                 if level == 0 {
                     continue;
@@ -96,6 +103,12 @@ fn mirrored(colour: Color32, centre: f32, half: f32, level: u8) -> Bar {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::view::WaveformPalette;
+    use crate::waveform::colour::band_colours;
+
+    fn rgb_bands() -> [Color32; 3] {
+        band_colours(WaveformPalette::Rgb, &Palette::DARK)
+    }
 
     fn deck(index: usize) -> DeckId {
         DeckId::new(index).unwrap()
@@ -104,13 +117,25 @@ mod tests {
     #[test]
     fn bands_split_the_lane_in_three() {
         let p = Palette::DARK;
-        let bass = column(WaveformStyle::Bands, [255, 255, 0, 0], deck(0), &p);
+        let bass = column(
+            WaveformStyle::Bands,
+            [255, 255, 0, 0],
+            deck(0),
+            &p,
+            rgb_bands(),
+        );
         assert!(!bass.is_empty());
         assert!(
             bass.iter().all(|b| b.from >= 0.66 && b.to <= 1.0),
             "{bass:?}"
         );
-        let highs = column(WaveformStyle::Bands, [255, 0, 0, 255], deck(0), &p);
+        let highs = column(
+            WaveformStyle::Bands,
+            [255, 0, 0, 255],
+            deck(0),
+            &p,
+            rgb_bands(),
+        );
         assert!(!highs.is_empty());
         assert!(
             highs.iter().all(|b| b.from >= 0.0 && b.to <= 0.34),
@@ -121,26 +146,95 @@ mod tests {
     #[test]
     fn deck_colour_uses_the_accent() {
         let p = Palette::DARK;
-        let bars = column(WaveformStyle::DeckColour, [200, 10, 10, 10], deck(0), &p);
+        let bars = column(
+            WaveformStyle::DeckColour,
+            [200, 10, 10, 10],
+            deck(0),
+            &p,
+            rgb_bands(),
+        );
         assert_eq!(bars.len(), 1);
         assert_eq!(bars[0].colour, p.accent_left);
-        let bars = column(WaveformStyle::DeckColour, [200, 10, 10, 10], deck(1), &p);
+        let bars = column(
+            WaveformStyle::DeckColour,
+            [200, 10, 10, 10],
+            deck(1),
+            &p,
+            rgb_bands(),
+        );
         assert_eq!(bars[0].colour, p.accent_right);
     }
 
     #[test]
-    fn frequency_matches_plan_9() {
+    fn frequency_draws_three_layers_back_to_front() {
         let p = Palette::DARK;
-        let bucket = [220, 200, 80, 30];
-        let bars = column(WaveformStyle::Frequency, bucket, deck(0), &p);
-        assert_eq!(bars[0].colour, colour(bucket, p.text_dim, p.wave_high));
-        assert!((bars[0].from + bars[0].to - 1.0).abs() < 1e-6);
+        let [low, mid, high] = rgb_bands();
+        let bars = column(
+            WaveformStyle::Frequency,
+            [255, 200, 100, 50],
+            deck(0),
+            &p,
+            rgb_bands(),
+        );
+        assert_eq!(bars.len(), 3);
+        for (bar, (colour, level)) in bars.iter().zip([
+            (low, 200.0 / 255.0),
+            (mid, 100.0 / 255.0),
+            (high, 50.0 / 255.0),
+        ]) {
+            assert_eq!(bar.colour, colour);
+            assert!((bar.from - (0.5 - 0.5 * level)).abs() < 1e-6, "{bar:?}");
+            assert!((bar.to - (0.5 + 0.5 * level)).abs() < 1e-6, "{bar:?}");
+        }
+    }
+
+    #[test]
+    fn frequency_skips_silent_bands() {
+        let p = Palette::DARK;
+        let bars = column(
+            WaveformStyle::Frequency,
+            [255, 255, 0, 80],
+            deck(0),
+            &p,
+            rgb_bands(),
+        );
+        assert_eq!(bars.len(), 2);
+        let bars = column(
+            WaveformStyle::Frequency,
+            [255, 0, 80, 0],
+            deck(0),
+            &p,
+            rgb_bands(),
+        );
+        assert_eq!(bars.len(), 1);
+        assert_eq!(bars[0].colour, rgb_bands()[1]);
+    }
+
+    #[test]
+    fn bands_use_the_palette() {
+        let p = Palette::DARK;
+        let bands = band_colours(WaveformPalette::OrangeYellowCyan, &p);
+        let bars = column(
+            WaveformStyle::Bands,
+            [255, 255, 255, 255],
+            deck(0),
+            &p,
+            bands,
+        );
+        let colours: Vec<_> = bars.iter().map(|b| b.colour).collect();
+        assert_eq!(colours, [bands[2], bands[1], bands[0]]);
     }
 
     #[test]
     fn overlaid_is_the_accent_at_reduced_alpha() {
         let p = Palette::DARK;
-        let bars = column(WaveformStyle::Overlaid, [255, 1, 1, 1], deck(0), &p);
+        let bars = column(
+            WaveformStyle::Overlaid,
+            [255, 1, 1, 1],
+            deck(0),
+            &p,
+            rgb_bands(),
+        );
         assert_eq!(bars[0].colour, p.accent_left.gamma_multiply(OVERLAY_ALPHA));
     }
 }

@@ -8,7 +8,9 @@ use egui::Ui;
 
 use crate::command::{UiCommand, ViewChange};
 use crate::theme;
-use crate::view::{ColourScheme, JogDisplay, Layout, ViewState, WaveformPosition, WaveformStyle};
+use crate::view::{
+    ColourScheme, JogDisplay, Layout, ViewState, WaveformPalette, WaveformPosition, WaveformStyle,
+};
 
 /// Why the layouts cannot be chosen while the 4-Decks view is on.
 pub(crate) const FOUR_DECKS_HINT: &str =
@@ -79,6 +81,15 @@ fn menu(ui: &mut Ui, view: &ViewState, commands: &Sender<UiCommand>) {
             );
         }
         ui.separator();
+        for palette in WaveformPalette::ALL {
+            choose(
+                ui,
+                view.waveform_palette == *palette,
+                palette_name(*palette),
+                ViewChange::SetWaveformPalette(*palette),
+            );
+        }
+        ui.separator();
         for (position, name) in [
             (WaveformPosition::Top, "Top"),
             (WaveformPosition::Middle, "Middle"),
@@ -125,5 +136,14 @@ pub(crate) fn layout_name(layout: Layout) -> &'static str {
         Layout::Essentials => "Essentials",
         Layout::Pro => "Pro",
         Layout::Performance => "Performance",
+    }
+}
+
+/// How a waveform palette is named in the menu and the settings.
+pub fn palette_name(palette: WaveformPalette) -> &'static str {
+    match palette {
+        WaveformPalette::Rgb => "Red / green / blue",
+        WaveformPalette::BlueOrangeWhite => "Blue / orange / white",
+        WaveformPalette::OrangeYellowCyan => "Orange / yellow / cyan",
     }
 }

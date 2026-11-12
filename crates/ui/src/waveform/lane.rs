@@ -10,12 +10,13 @@ use analysis::Waveform;
 use egui::{Align2, Color32, FontId, Mesh, Painter, Pos2, Rect, Shape, Ui, pos2, vec2};
 use engine::{DeckId, DeckSnapshot, EngineMonitor, Hotcue};
 
+use super::colour::band_colours;
 use super::styles::{self, MAX_BARS};
 use super::{Playhead, ZoomGesture, ticks};
 use crate::command::UiCommand;
 use crate::model::{ControlFrame, HotcueMark};
 use crate::theme::{self, Palette};
-use crate::view::WaveformStyle;
+use crate::view::{WaveformPalette, WaveformStyle};
 
 /// The beat period, in seconds, of a lane whose deck has no grid: 120 BPM.
 const DEFAULT_BEAT_SECONDS: f64 = 0.5;
@@ -122,6 +123,7 @@ impl Lanes {
                 position_frames: self.playheads[deck.index()].position(now, frame.output_latency),
                 beats: frame.view.waveform_beats,
                 style: frame.view.waveform_style,
+                palette: frame.view.waveform_palette,
                 overlay: overlaid && index == 1,
                 marks: frame.decks[deck.index()]
                     .as_ref()
@@ -173,6 +175,8 @@ pub struct Lane<'a> {
     /// How many beats the lane spans.
     pub beats: f64,
     pub style: WaveformStyle,
+    /// The colours of the low, mid and high bands.
+    pub palette: WaveformPalette,
     /// Drawn over another deck's lane in the same rect: no background of its own.
     pub overlay: bool,
     /// The hotcues' colours and names, when the library has them for the track.
@@ -237,7 +241,15 @@ impl Lane<'_> {
     fn fill(&self, mesh: &mut Mesh, rect: Rect, scale: &Scale, p: &Palette) {
         let snapshot = self.snapshot;
         if let Some(waveform) = self.waveform {
-            columns(mesh, rect, scale, waveform, (self.style, self.deck), p);
+            let bands = band_colours(self.palette, p);
+            columns(
+                mesh,
+                rect,
+                scale,
+                waveform,
+                (self.style, self.deck),
+                (p, bands),
+            );
         }
         if let (true, Some(start), Some(end)) =
             (snapshot.loop_active, snapshot.loop_in, snapshot.loop_out)
@@ -392,14 +404,14 @@ fn columns(
     scale: &Scale,
     waveform: &Waveform,
     (style, deck): (WaveformStyle, DeckId),
-    p: &Palette,
+    (p, bands): (&Palette, [Color32; 3]),
 ) {
     let per_bucket = f64::from(waveform.frames_per_bucket.max(1));
     let buckets = &waveform.buckets;
     let fpc = scale.frames_per_column;
     let first = ((scale.centre_frame - scale.half_span) / fpc).floor() as i64;
     let last = ((scale.centre_frame + scale.half_span) / fpc).ceil() as i64;
-    let per_column = if style == WaveformStyle::Bands {
+    let per_column = if matches!(style, WaveformStyle::Bands | WaveformStyle::Frequency) {
         MAX_BARS
     } else {
         1
@@ -421,7 +433,7 @@ fn columns(
         let Some(loudest) = buckets[from..to].iter().max_by_key(|b| b[0]) else {
             continue;
         };
-        let (bars, used) = styles::bars(style, *loudest, deck, p);
+        let (bars, used) = styles::bars(style, *loudest, deck, p, bands);
         for bar in &bars[..used] {
             let rect = Rect::from_min_max(
                 pos2(scale.x(start), rect.top() + rect.height() * bar.from),
@@ -511,7 +523,7 @@ mod tests {
             &scale(5000.0),
             &waveform,
             (WaveformStyle::Frequency, deck),
-            &Palette::DARK,
+            (&Palette::DARK, [Color32::RED; 3]),
         );
         let mut b = Mesh::default();
         columns(
@@ -520,7 +532,7 @@ mod tests {
             &scale(5025.0),
             &waveform,
             (WaveformStyle::Frequency, deck),
-            &Palette::DARK,
+            (&Palette::DARK, [Color32::RED; 3]),
         );
         // Moving a quarter column shifts every column a quarter point, unchanged.
         let shifted: Vec<f32> = b.vertices.iter().map(|v| v.pos.x + 0.25).collect();
@@ -540,6 +552,7 @@ mod tests {
             position_frames: 0.0,
             beats: 16.0,
             style: WaveformStyle::Frequency,
+            palette: WaveformPalette::default(),
             overlay: false,
             marks,
         }

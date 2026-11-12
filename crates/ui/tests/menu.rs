@@ -103,3 +103,31 @@ fn four_decks_and_performance_disable_what_they_ignore() {
     let (harness, _) = draw(ViewState::default());
     assert!(!disabled(&harness, "Jogwheel Display"));
 }
+
+#[test]
+fn waveform_display_lists_the_palettes() {
+    let frame = ControlFrame::default();
+    let (commands, asked) = channel();
+    let mut screen = ui::Screen {
+        commands,
+        ..ui::Screen::default()
+    };
+    let mut harness = Harness::builder()
+        .with_size([1440.0, 900.0])
+        .build_ui(|ui| ui::root(ui, &frame, None, &mut screen));
+    harness.run_steps(2);
+    harness.get_by_label("LAYOUT").click();
+    harness.run_steps(2);
+    harness.get_by_label("Waveform Display").click();
+    harness.run_steps(2);
+    harness.get_by_label("Red / green / blue");
+    harness.get_by_label("Blue / orange / white");
+    harness.get_by_label("Orange / yellow / cyan").click();
+    harness.run_steps(2);
+    assert_eq!(
+        asked.try_iter().collect::<Vec<_>>(),
+        [UiCommand::View(ViewChange::SetWaveformPalette(
+            ui::WaveformPalette::OrangeYellowCyan
+        ))]
+    );
+}
