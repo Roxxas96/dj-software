@@ -2,13 +2,18 @@
 //! double-click on a knob, a fader or a button means, as the [`Input`] a controller would
 //! send for the same control.
 //!
-//! These read the [`Response`] and the input state only; they draw nothing and send
-//! nothing. The caller allocates the widget with the sense it needs (drag for a knob,
-//! click and drag for a fader or a button) and sends what comes back as a
-//! [`UiCommand::Action`](crate::UiCommand).
+//! The gestures read the [`Response`] and the input state only; they draw nothing and
+//! send nothing. The caller allocates the widget with the sense it needs (drag for a
+//! knob, click and drag for a fader or a button) and sends what comes back as a
+//! [`UiCommand::Action`] through a [`Sink`], which remembers the buttons held down
+//! ([`HeldButtons`]).
 
-use actions::Input;
-use egui::{PointerButton, Rect, Response, Ui};
+use std::sync::mpsc::Sender;
+
+use actions::{Action, Input};
+use egui::{Id, PointerButton, Rect, Response, Ui, Vec2};
+
+use crate::UiCommand;
 
 /// Points of upward drag that turn a knob over its full travel.
 pub const KNOB_DRAG_POINTS: f32 = 150.0;
@@ -39,6 +44,32 @@ pub fn knob_input(response: &Response, value: f32, reset: f32, ui: &Ui) -> Optio
         delta += scrolled / POINTS_PER_NOTCH * WHEEL_STEP;
     }
     (delta != 0.0).then(|| Input::Absolute((value + delta).clamp(0.0, 1.0)))
+}
+
+/// How long a knob goes on from the value it last sent rather than the frame's: the
+/// session's copy lags a frame or two behind a drag or a wheel.
+const KNOB_MEMORY: f64 = 0.5;
+
+/// [`knob_input`] for a knob the frame shows at `shown`. While the knob turns (and for
+/// half a second after) it goes on from the value it last sent, so a drag does not slow
+/// down while the frame catches up. A wheel move that turns it is taken from the input,
+/// so a scroll area around it does not scroll too.
+pub fn turn_knob(response: &Response, shown: f32, reset: f32, ui: &Ui) -> Option<Input> {
+    let memory = response.id.with("knob_sent");
+    let now = ui.input(|i| i.time);
+    let value = ui
+        .ctx()
+        .data(|d| d.get_temp::<(f32, f64)>(memory))
+        .filter(|&(_, at)| response.dragged() || now - at < KNOB_MEMORY)
+        .map_or(shown, |(sent, _)| sent);
+    let input = knob_input(response, value, reset, ui)?;
+    if let Input::Absolute(v) = input {
+        ui.ctx().data_mut(|d| d.insert_temp(memory, (v, now)));
+    }
+    if response.hovered() {
+        ui.ctx().input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
+    }
+    Some(input)
 }
 
 /// The fader's value for a click or a drag at the pointer, mapped along `track` (the
@@ -79,7 +110,7 @@ pub fn fader_input(
 pub fn button_input(response: &Response) -> Option<Input> {
     let down = response.ctx.input(|i| i.pointer.primary_down());
     let pressing = response.is_pointer_button_down_on() && down;
-    let held_id = response.id.with("button_held");
+    let held_id = button_held(response.id);
     let held = response
         .ctx
         .data(|d| d.get_temp::<bool>(held_id))
@@ -90,6 +121,120 @@ pub fn button_input(response: &Response) -> Option<Input> {
     }
     response.ctx.data_mut(|d| d.insert_temp(held_id, next));
     Some(if next { Input::Press } else { Input::Release })
+}
+
+/// Where [`button_input`] keeps whether the button `id` is held.
+fn button_held(id: Id) -> Id {
+    id.with("button_held")
+}
+
+/// The buttons held down with the mouse, by widget id, with the action each pressed.
+/// A button's release always goes to the action it pressed, even if the button has
+/// changed since (a pad whose mode changed); one that is no longer drawn is released at
+/// the end of the frame ([`sweep`](Self::sweep)), so no action stays held. A button
+/// released that way does nothing more until its press ends, even if it is drawn again.
+#[derive(Debug, Default)]
+pub struct HeldButtons {
+    held: Vec<Held>,
+    /// Buttons released by a sweep whose press has not ended yet.
+    swept: Vec<Id>,
+}
+
+#[derive(Debug)]
+struct Held {
+    id: Id,
+    action: Action,
+    /// Drawn since the last sweep.
+    drawn: bool,
+}
+
+impl HeldButtons {
+    /// The command for the button of `response`, which presses `action`, if its press
+    /// began or ended this frame: `Press` to `action`, or `Release` to the action it
+    /// pressed.
+    pub fn button(&mut self, response: &Response, action: Action) -> Option<UiCommand> {
+        let place = self.held.iter().position(|h| h.id == response.id);
+        if let Some(i) = place {
+            self.held[i].drawn = true;
+        }
+        match button_input(response)? {
+            Input::Press => {
+                let held = Held {
+                    id: response.id,
+                    action,
+                    drawn: true,
+                };
+                match place {
+                    Some(i) => self.held[i] = held,
+                    None => self.held.push(held),
+                }
+                Some(UiCommand::Action(action, Input::Press))
+            }
+            input => {
+                if let Some(i) = self.swept.iter().position(|&id| id == response.id) {
+                    // Its release was sent when it went.
+                    self.swept.swap_remove(i);
+                    return None;
+                }
+                let pressed = place.map_or(action, |i| self.held.swap_remove(i).action);
+                Some(UiCommand::Action(pressed, input))
+            }
+        }
+    }
+
+    /// Ends the frame: releases every held button that was not drawn in it, sending the
+    /// release to `commands`. Once the pointer is up, the buttons released that way are
+    /// forgotten, so the next press on one counts.
+    pub fn sweep(&mut self, ctx: &egui::Context, commands: &Sender<UiCommand>) {
+        if !self.swept.is_empty() && !ctx.input(|i| i.pointer.primary_down()) {
+            for id in self.swept.drain(..) {
+                ctx.data_mut(|d| d.remove::<bool>(button_held(id)));
+            }
+        }
+        let swept = &mut self.swept;
+        self.held.retain_mut(|held| {
+            if std::mem::take(&mut held.drawn) {
+                return true;
+            }
+            let _ = commands.send(UiCommand::Action(held.action, Input::Release));
+            if !swept.contains(&held.id) {
+                swept.push(held.id);
+            }
+            false
+        });
+    }
+}
+
+/// Where the window's controls send: the session's commands, and the buttons held.
+#[derive(Debug)]
+pub struct Sink<'a> {
+    pub commands: &'a Sender<UiCommand>,
+    pub held: &'a mut HeldButtons,
+}
+
+impl<'a> Sink<'a> {
+    pub fn new(commands: &'a Sender<UiCommand>, held: &'a mut HeldButtons) -> Self {
+        Self { commands, held }
+    }
+
+    /// Sends `command` to the session; a window closing has no one to send to.
+    pub fn send(&self, command: UiCommand) {
+        let _ = self.commands.send(command);
+    }
+
+    /// Sends `input` for `action`, when there is one.
+    pub fn act(&self, action: Action, input: Option<Input>) {
+        if let Some(input) = input {
+            self.send(UiCommand::Action(action, input));
+        }
+    }
+
+    /// Sends the press or release of the button of `response`, which presses `action`.
+    pub fn button(&mut self, response: &Response, action: Action) {
+        if let Some(command) = self.held.button(response, action) {
+            self.send(command);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -278,5 +423,136 @@ mod tests {
         release(&harness);
         harness.run_steps(3);
         assert_eq!(harness.state().inputs, [Input::Press, Input::Release]);
+    }
+
+    /// A button that presses the action in the state, drawn while `drawn`, its commands
+    /// sent to `sent` and its held buttons swept at the end of each frame.
+    struct Pressing {
+        action: Action,
+        drawn: bool,
+        held: HeldButtons,
+        commands: Sender<UiCommand>,
+    }
+
+    fn pressing() -> (
+        Harness<'static, Pressing>,
+        std::sync::mpsc::Receiver<UiCommand>,
+    ) {
+        let (commands, sent) = std::sync::mpsc::channel();
+        let state = Pressing {
+            action: Action::Cue(engine::DeckId::new(0).unwrap()),
+            drawn: true,
+            held: HeldButtons::default(),
+            commands,
+        };
+        let mut harness = Harness::new_ui_state(
+            |ui, state: &mut Pressing| {
+                if state.drawn {
+                    let rect = Rect::from_center_size(CENTRE, vec2(40.0, 40.0));
+                    let response =
+                        ui.interact(rect, Id::NULL.with("held button"), Sense::click_and_drag());
+                    let mut sink = Sink::new(&state.commands, &mut state.held);
+                    sink.button(&response, state.action);
+                }
+                state.held.sweep(ui.ctx(), &state.commands);
+            },
+            state,
+        );
+        harness.run_steps(2);
+        (harness, sent)
+    }
+
+    #[test]
+    fn a_release_goes_to_the_action_pressed() {
+        let (mut harness, sent) = pressing();
+        let deck = engine::DeckId::new(0).unwrap();
+        harness.event(Event::PointerMoved(CENTRE));
+        harness.run_steps(1);
+        press(&harness, Modifiers::NONE);
+        harness.run_steps(2);
+        harness.state_mut().action = Action::PlayPause(deck);
+        harness.run_steps(2);
+        release(&harness);
+        harness.run_steps(2);
+        let got: Vec<UiCommand> = sent.try_iter().collect();
+        assert_eq!(
+            got,
+            [
+                UiCommand::Action(Action::Cue(deck), Input::Press),
+                UiCommand::Action(Action::Cue(deck), Input::Release),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_held_button_no_longer_drawn_is_released() {
+        let (mut harness, sent) = pressing();
+        let deck = engine::DeckId::new(0).unwrap();
+        harness.event(Event::PointerMoved(CENTRE));
+        harness.run_steps(1);
+        press(&harness, Modifiers::NONE);
+        harness.run_steps(2);
+        harness.state_mut().drawn = false;
+        harness.run_steps(1);
+        let cue = Action::Cue(deck);
+        let got: Vec<UiCommand> = sent.try_iter().collect();
+        assert_eq!(
+            got,
+            [
+                UiCommand::Action(cue, Input::Press),
+                UiCommand::Action(cue, Input::Release)
+            ]
+        );
+        // Drawn again and let go: nothing more, the release was sent.
+        harness.state_mut().drawn = true;
+        harness.run_steps(1);
+        release(&harness);
+        harness.run_steps(2);
+        assert_eq!(sent.try_iter().count(), 0);
+        // The next press counts.
+        press(&harness, Modifiers::NONE);
+        harness.run_steps(2);
+        assert_eq!(
+            sent.try_iter().collect::<Vec<_>>(),
+            [UiCommand::Action(cue, Input::Press)]
+        );
+    }
+
+    #[test]
+    fn a_wheel_that_turns_a_knob_does_not_scroll() {
+        // A knob at the top of a tall scroll area; the wheel moves over it.
+        let seen = (0.5_f32, 0.0_f32);
+        let mut harness = Harness::builder().with_size([200.0, 200.0]).build_ui_state(
+            |ui, (value, offset): &mut (f32, f32)| {
+                let shown = egui::ScrollArea::vertical().show(ui, |ui| {
+                    let (rect, _) = ui.allocate_exact_size(vec2(40.0, 40.0), Sense::hover());
+                    let response = ui.interact(
+                        rect,
+                        Id::NULL.with("scrolled knob"),
+                        Sense::click_and_drag(),
+                    );
+                    if let Some(Input::Absolute(v)) = turn_knob(&response, *value, 0.5, ui) {
+                        *value = v;
+                    }
+                    ui.allocate_space(vec2(40.0, 2000.0));
+                });
+                *offset = shown.state.clamped_offset().y;
+            },
+            seen,
+        );
+        harness.run_steps(2);
+        harness.event(Event::PointerMoved(pos2(28.0, 28.0)));
+        harness.run_steps(1);
+        harness.event(Event::MouseWheel {
+            unit: MouseWheelUnit::Line,
+            delta: vec2(0.0, -1.0),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Unknown,
+            modifiers: Modifiers::NONE,
+        });
+        harness.run_steps(10);
+        let (value, offset) = *harness.state();
+        assert!((value - 0.48).abs() < 0.005, "the knob is at {value}");
+        assert_eq!(offset, 0.0, "the area scrolled");
     }
 }

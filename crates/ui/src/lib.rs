@@ -30,8 +30,8 @@ use engine::EngineMonitor;
 pub use command::{ExportStep, ImportStep, Resolution, UiCommand, ViewChange};
 pub use model::{
     ControlFrame, DeckInfo, EVENT_SHOWN, EVENTS_KEPT, ExportChoice, ExportSummary, ExportView,
-    GHOSTS, HotcueMark, ImportSummary, ImportView, PlaylistLabel, Published, SettingRow,
-    StickLabel, TrackLabel,
+    GHOSTS, GLOBAL_GHOSTS, HotcueMark, ImportSummary, ImportView, PlaylistLabel, Published,
+    SettingRow, StickLabel, TrackLabel,
 };
 pub use view::{
     ColourScheme, JogDisplay, Layout, MAX_SHARE, MIN_SHARE, PanelSizes, TimeMode, ViewState,
@@ -119,6 +119,8 @@ pub struct Screen {
     pub covers: cover::Covers,
     pub mixer: mixer::Mixer,
     pub settings: settings::SettingsWindow,
+    /// The buttons held down with the mouse.
+    pub held: controls::HeldButtons,
     /// The shares a divider was dragged to, drawn until the session's copy catches up.
     pub sizes: Option<Dragged>,
     /// Where what the viewer asks for goes: the session.
@@ -134,6 +136,7 @@ impl Default for Screen {
             covers: cover::Covers::default(),
             mixer: mixer::Mixer::default(),
             settings: settings::SettingsWindow::default(),
+            held: controls::HeldButtons::default(),
             sizes: None,
             commands: channel().0,
         }
@@ -221,15 +224,14 @@ pub fn root_with_reads(
     let (drag, top) = row_panel(ui, "deck_panels", height, &p, |ui| {
         // The space between the decks is the mixer's.
         landmark_rect(ui, ui.max_rect(), "deck row");
-        let space = screen.decks.show_reads(
-            ui,
-            frame,
-            reads,
-            &mut screen.covers,
-            &sections,
-            &screen.commands,
-        );
-        screen.mixer.show(ui, space, frame, reads, &sections);
+        let mut sink = controls::Sink::new(&screen.commands, &mut screen.held);
+        let space =
+            screen
+                .decks
+                .show_reads(ui, frame, reads, &mut screen.covers, &sections, &mut sink);
+        screen
+            .mixer
+            .show(ui, space, frame, reads, &sections, &mut sink);
     });
     drags.decks_moved = drags.place(drag, top, |sizes, share| sizes.decks = share);
     if middle {
@@ -267,6 +269,8 @@ pub fn root_with_reads(
         });
     landmark(&shown.response, "browser");
     settings::show(ui.ctx(), frame, &mut screen.settings, &screen.commands);
+    // A button held down that this frame did not draw lets go of its action.
+    screen.held.sweep(ui.ctx(), &screen.commands);
     if let Some(dragged) = changes.sizes {
         drags.sizes = dragged;
         drags.moved = true;

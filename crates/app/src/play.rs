@@ -712,6 +712,8 @@ pub(crate) struct Pass<'a> {
     pub controller: Option<&'a str>,
     /// Per deck and ghost target, where the physical control waits to pick the value up.
     pub ghosts: [[Option<f32>; ui::GHOSTS]; 4],
+    /// The same for the targets of no deck, in [`ui::GLOBAL_GHOSTS`] order.
+    pub global_ghosts: [Option<f32>; ui::GLOBAL_GHOSTS],
 }
 
 /// The soft-takeover targets the window shows a pickup marker for, in [`ui::GHOSTS`] order.
@@ -725,9 +727,23 @@ const GHOST_KINDS: [ActionKind; ui::GHOSTS] = [
     ActionKind::Tempo,
 ];
 
+/// The soft-takeover targets of no deck the window shows a pickup marker for, in
+/// [`ui::GLOBAL_GHOSTS`] order.
+const GLOBAL_GHOST_KINDS: [ActionKind; ui::GLOBAL_GHOSTS] = [
+    ActionKind::Crossfader,
+    ActionKind::MasterLevel,
+    ActionKind::HeadphoneLevel,
+    ActionKind::HeadphoneMix,
+];
+
 /// Where each deck's controls wait to pick their value up.
 fn ghosts(runtime: &Runtime) -> [[Option<f32>; ui::GHOSTS]; 4] {
     DeckId::ALL.map(|deck| GHOST_KINDS.map(|kind| runtime.pickup((kind, Some(deck)))))
+}
+
+/// Where the controls of no deck wait to pick their value up.
+fn global_ghosts(runtime: &Runtime) -> [Option<f32>; ui::GLOBAL_GHOSTS] {
+    GLOBAL_GHOST_KINDS.map(|kind| runtime.pickup((kind, None)))
 }
 
 /// The body of [`control_loop`], for `play` and the window: applies the controller's
@@ -910,6 +926,7 @@ pub(crate) fn run_controller(
             library: library.as_ref(),
             controller: connection.port_names().map(|(input, _)| input),
             ghosts: ghosts(&runtime),
+            global_ghosts: global_ghosts(&runtime),
         });
     }
     if let Some(library) = library {
@@ -933,6 +950,45 @@ fn receive_batch(rx: &Receiver<TimedMidi>, batch: &mut Vec<TimedMidi>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_headphone_level_shows_where_its_knob_waits() {
+        const MAP: &str = r#"
+[controller]
+name = "Test"
+port = "Test"
+
+[[input]]
+midi = { cc = 20, channel = 1 }
+action = "master.headphone_level"
+"#;
+        struct Null;
+        impl controller::MidiOut for Null {
+            fn send(&mut self, _: controller::MidiMessage) {}
+        }
+        let knob = |value| TimedMidi {
+            micros: 0,
+            message: controller::MidiMessage::ControlChange {
+                channel: 0,
+                controller: 20,
+                value,
+            },
+        };
+        let (mut engine, _renderer) = engine::engine(engine::EngineConfig {
+            sample_rate: 44_100,
+            max_block_frames: 64,
+        });
+        let mapping = controller::mapping::parse_mapping("test.toml", MAP).unwrap();
+        let mut runtime = Runtime::new(mapping);
+        runtime.attach(&mut engine, &mut Null);
+        runtime.handle_batch(&[knob(100)], &mut engine);
+        assert_eq!(global_ghosts(&runtime), [None; ui::GLOBAL_GHOSTS]);
+        // The window turns it; the knob must come back to it.
+        runtime.control_state_mut().headphone_level = 0.2;
+        runtime.handle_batch(&[knob(90)], &mut engine);
+        let at = 90.0 / 127.0;
+        assert_eq!(global_ghosts(&runtime), [None, None, Some(at), None]);
+    }
 
     #[test]
     fn a_library_that_cannot_be_read_fails_only_the_track_pads() {

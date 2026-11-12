@@ -3,16 +3,18 @@
 use std::path::PathBuf;
 use std::sync::mpsc::channel;
 
+use actions::{Action, Input};
 use egui::epaint::{CircleShape, Shape};
 use egui::{Rect, Vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use engine::DeckSnapshot;
+use engine::{ChannelSnapshot, DeckId, DeckSnapshot, SamplerSnapshot};
 use library::TrackRow;
+use ui::controls::{HeldButtons, Sink};
 use ui::cover::Covers;
-use ui::deck::{DeckPanels, DeckReads};
+use ui::deck::{DeckPanels, DeckReads, DeckView};
 use ui::layout::four_deck_sections;
-use ui::{ControlFrame, DeckInfo};
+use ui::{ControlFrame, DeckInfo, UiCommand};
 
 fn four_decks() -> ControlFrame {
     let mut frame = ControlFrame::default();
@@ -91,7 +93,14 @@ fn four_deck_panels_follow_their_decks() {
     let mut harness = Harness::builder()
         .with_size([1440.0, 400.0])
         .build_ui(move |ui| {
-            panels.show_reads(ui, &frame, &reads, &mut covers, &sections, &channel().0);
+            panels.show_reads(
+                ui,
+                &frame,
+                &reads,
+                &mut covers,
+                &sections,
+                &mut Sink::new(&channel().0, &mut HeldButtons::default()),
+            );
         });
     harness.run_steps(3);
     harness.get_by_label("One");
@@ -129,8 +138,9 @@ fn four_deck_knobs_have_letter_captions_and_grow() {
         .into_iter()
         .filter(|c| c.fill == p.background && c.stroke.color == p.text_dim)
         .collect();
-    // Five knobs on each of the four strips.
-    assert_eq!(knobs.len(), 20, "{knobs:?}");
+    // Five knobs on each of the four strips, then the headphone level and mix.
+    assert_eq!(knobs.len(), 22, "{knobs:?}");
+    let knobs = &knobs[..20];
     let radius = knobs[0].radius;
     assert!(radius >= 9.0, "the knobs' radius is {radius}");
     for letter in ["G", "H", "M", "B", "F"] {
@@ -150,5 +160,61 @@ fn four_deck_knobs_have_letter_captions_and_grow() {
     }
     for word in ["GAIN", "HIGH", "MID", "LOW", "FILTER"] {
         assert!(harness.query_by_label(word).is_none(), "{word}");
+    }
+}
+
+#[test]
+fn the_compact_panels_buttons_send_their_actions() {
+    // Deck 4: a right deck, mirrored.
+    let deck = DeckId::new(3).unwrap();
+    // A loop size no tag or pad shows.
+    let snapshot = DeckSnapshot {
+        loop_beats: 0.5,
+        ..DeckSnapshot::default()
+    };
+    let view = DeckView::new(
+        deck,
+        &snapshot,
+        &ChannelSnapshot::default(),
+        &four_decks(),
+        &SamplerSnapshot::default(),
+    );
+    let (commands, received) = channel();
+    let sections = four_deck_sections();
+    let mut held = HeldButtons::default();
+    let mut harness = Harness::builder()
+        .with_size([480.0, 120.0])
+        .build_ui(move |ui| {
+            let mut sink = Sink::new(&commands, &mut held);
+            ui::deck::panel(ui, &view, None, &sections, &mut sink);
+        });
+    harness.run_steps(3);
+    for (label, action) in [
+        ("CUE", Action::Cue(deck)),
+        ("KEYLOCK", Action::KeylockToggle(deck)),
+        ("1/2", Action::AutoLoop(deck)),
+        ("OUT", Action::LoopOut(deck)),
+    ] {
+        let at = harness.get_by_label(label).rect().center();
+        harness.event(egui::Event::PointerMoved(at));
+        harness.run_steps(1);
+        for pressed in [true, false] {
+            harness.event(egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            });
+            harness.run_steps(2);
+        }
+        let sent: Vec<UiCommand> = received.try_iter().collect();
+        assert_eq!(
+            sent,
+            [
+                UiCommand::Action(action, Input::Press),
+                UiCommand::Action(action, Input::Release)
+            ],
+            "{label}"
+        );
     }
 }

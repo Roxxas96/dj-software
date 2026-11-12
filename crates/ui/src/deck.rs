@@ -3,14 +3,13 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::mpsc::Sender;
 use std::time::Instant;
 
 use actions::{Action, ControlState, HardwarePadMode, Input, PadMode, Side, SideControl};
 use analysis::{Key, KeyNotation, Waveform};
 use egui::{
-    Align, Color32, CornerRadius, Label, Layout, Margin, Mesh, Rect, RichText, Role, Sense, Shape,
-    Stroke, StrokeKind, TextureHandle, Ui, UiBuilder, Vec2, WidgetInfo, pos2, vec2,
+    Align, Color32, CornerRadius, Id, Label, Layout, Margin, Mesh, Rect, RichText, Role, Sense,
+    Shape, Stroke, StrokeKind, TextureHandle, Ui, UiBuilder, Vec2, WidgetInfo, pos2, vec2,
 };
 use engine::{
     ChannelSnapshot, DeckId, DeckSnapshot, EffectKind, EngineMonitor, Grid, Hotcue, Meters,
@@ -18,6 +17,7 @@ use engine::{
 };
 
 use crate::command::{UiCommand, ViewChange};
+use crate::controls::{Sink, fader_input};
 use crate::cover::{self, Covers};
 use crate::layout::{Sections, deck_slots};
 use crate::mixer;
@@ -64,6 +64,15 @@ const FX_LEVEL_HEIGHT: f32 = 6.0;
 const FX_CAPTION_HEIGHT: f32 = 14.0;
 /// The pad mode dropdown's width.
 const PAD_MODE_WIDTH: f32 = 120.0;
+/// The arrows either side of the pad mode's dropdown.
+const PAD_ARROW_WIDTH: f32 = 16.0;
+/// An FX slot's arrow, which opens its list of effects, and the gap before it.
+const FX_ARROW: f32 = 18.0;
+const FX_ARROW_GAP: f32 = 2.0;
+/// Each FX slot's name, for screen readers: a static table, so no frame formats it.
+const FX_NAMES: [&str; 3] = ["FX 1", "FX 2", "FX 3"];
+/// Where a double-click puts the tempo slider: the original tempo.
+const PITCH_RESET: f32 = 0.5;
 /// The pad modes the dropdown offers: only the app's own. The SB3 switches its hardware
 /// modes itself and the host cannot set them, so the hardware entry hands the pads back to
 /// whichever the controller last chose.
@@ -471,7 +480,7 @@ impl DeckPanels {
         reads: &DeckReads,
         covers: &mut Covers,
         sections: &Sections,
-        commands: &Sender<UiCommand>,
+        sink: &mut Sink<'_>,
     ) -> Rect {
         let now = Instant::now();
         let (area, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
@@ -522,7 +531,7 @@ impl DeckPanels {
             ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| {
                 // Nothing a panel draws reaches its neighbours.
                 ui.set_clip_rect(rect.intersect(ui.clip_rect()));
-                panel(ui, &view, cover.as_ref(), sections, commands);
+                panel(ui, &view, cover.as_ref(), sections, sink);
             });
             // The decks the controller plays have a tab in their side's accent on the outer
             // edge (with two decks, both panels).
@@ -590,13 +599,13 @@ fn bottom_height() -> f32 {
 }
 
 /// Draws `view` filling `ui`, with `cover` (the plain tile without one), showing the
-/// `sections` the layout has. A click on the time asks `commands` to cycle it.
+/// `sections` the layout has. A click on the time asks `sink` to cycle it.
 pub fn panel(
     ui: &mut Ui,
     view: &DeckView,
     cover: Option<&TextureHandle>,
     sections: &Sections,
-    commands: &Sender<UiCommand>,
+    sink: &mut Sink<'_>,
 ) {
     let p = theme::palette(ui.ctx());
     let accent = p.deck_accent(view.deck);
@@ -606,17 +615,17 @@ pub fn panel(
         .show(ui, |ui| {
             ui.set_min_size(ui.available_size());
             ui.spacing_mut().item_spacing = vec2(6.0, ROW_GAP);
-            header(ui, view, cover, accent, sections.overview, commands);
+            header(ui, view, cover, accent, sections.overview, sink);
             let mirrored = Side::of(view.deck) == Side::Right;
             if sections.compact {
-                compact_row(ui, view, accent, sections.loop_controls, mirrored);
+                compact_row(ui, view, accent, sections.loop_controls, mirrored, sink);
                 return;
             }
             ui.horizontal(|ui| {
-                middle_row(ui, view, accent, sections, mirrored, commands);
+                middle_row(ui, view, accent, sections, mirrored, sink);
             });
             ui.horizontal_top(|ui| {
-                bottom_row(ui, view, accent, sections, mirrored, commands);
+                bottom_row(ui, view, accent, sections, mirrored, sink);
             });
         });
 }
@@ -653,7 +662,7 @@ fn middle_row(
     accent: Color32,
     sections: &Sections,
     mirrored: bool,
-    commands: &Sender<UiCommand>,
+    sink: &mut Sink<'_>,
 ) {
     let middle = middle_height(sections);
     ui.set_height(middle);
@@ -685,11 +694,11 @@ fn middle_row(
     for part in parts.into_iter().flatten() {
         match part {
             Part::Label(text) => edge_strip(ui, middle, text),
-            Part::Fx => fx(ui, view, accent, sections.fx_level, commands),
-            Part::States => states(ui, view, accent),
+            Part::Fx => fx(ui, view, accent, sections.fx_level, sink),
+            Part::States => states(ui, view, accent, sink),
             Part::Spare => ui.add_space(spare),
             Part::Jog => jog(ui, view, accent),
-            Part::Pitch => pitch(ui, view, accent, pitch_width, middle),
+            Part::Pitch => pitch(ui, view, accent, (pitch_width, middle), sink),
             _ => {}
         }
     }
@@ -716,7 +725,7 @@ fn bottom_row(
     accent: Color32,
     sections: &Sections,
     mirrored: bool,
-    commands: &Sender<UiCommand>,
+    sink: &mut Sink<'_>,
 ) {
     let height = bottom_height();
     let parts = ordered(
@@ -751,10 +760,10 @@ fn bottom_row(
     for part in parts.into_iter().flatten() {
         match part {
             Part::Label(text) => edge_strip(ui, height, text),
-            Part::Pads => pads_column(ui, view, accent, pads_width, commands),
-            Part::Loop => loop_column(ui, view),
+            Part::Pads => pads_column(ui, view, accent, pads_width, sink),
+            Part::Loop => loop_column(ui, view, sink),
             Part::Spare => ui.add_space(spare),
-            Part::Transport => transport(ui, view),
+            Part::Transport => transport(ui, view, sink),
             _ => {}
         }
     }
@@ -769,9 +778,18 @@ fn edge_strip(ui: &mut Ui, height: f32, text: &str) {
 
 /// CUE, PLAY, SYNC, the three states and (when `loop_controls`) the loop's size, IN and
 /// OUT in one row, for the compact panel; narrower than they like when the row is short.
-/// On a right deck (`mirrored`) the three groups come in the other order.
-fn compact_row(ui: &mut Ui, view: &DeckView, accent: Color32, loop_controls: bool, mirrored: bool) {
+/// On a right deck (`mirrored`) the three groups come in the other order. The mouse
+/// presses them through `sink`.
+fn compact_row(
+    ui: &mut Ui,
+    view: &DeckView,
+    accent: Color32,
+    loop_controls: bool,
+    mirrored: bool,
+    sink: &mut Sink<'_>,
+) {
     let p = theme::palette(ui.ctx());
+    let deck = view.deck;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = PAD_GAP;
         let transport = TRANSPORT_WIDTH / 1.5;
@@ -797,21 +815,23 @@ fn compact_row(ui: &mut Ui, view: &DeckView, accent: Color32, loop_controls: boo
             match part {
                 Part::Transport => {
                     let cue = view.cueing.then_some(p.cue);
-                    indicator(ui, size(transport), "CUE", cue);
+                    button(ui, sink, size(transport), "CUE", cue, Action::Cue(deck));
                     let play = view.playing.then_some(p.play_lit);
-                    indicator(ui, size(transport), "PLAY", play);
-                    indicator(ui, size(transport), "SYNC", None);
+                    let play_pause = Action::PlayPause(deck);
+                    button(ui, sink, size(transport), "PLAY", play, play_pause);
+                    button(ui, sink, size(transport), "SYNC", None, Action::Sync(deck));
                 }
                 Part::States => {
-                    indicator(ui, size(state), "VINYL", view.vinyl.then_some(accent));
-                    indicator(ui, size(state), "SLIP", view.slip.then_some(accent));
-                    indicator(ui, size(state), "KEYLOCK", view.keylock.then_some(accent));
+                    for (text, on, action) in state_buttons(view) {
+                        button(ui, sink, size(state), text, on.then_some(accent), action);
+                    }
                 }
                 Part::Loop => {
                     let lit = view.loop_active.then_some(p.hotcue);
-                    indicator(ui, size(looping), &view.loop_beats, lit);
-                    indicator(ui, size(looping), "IN", lit);
-                    indicator(ui, size(looping), "OUT", lit);
+                    let beats = &view.loop_beats;
+                    button(ui, sink, size(looping), beats, lit, Action::AutoLoop(deck));
+                    button(ui, sink, size(looping), "IN", lit, Action::LoopIn(deck));
+                    button(ui, sink, size(looping), "OUT", lit, Action::LoopOut(deck));
                 }
                 _ => {}
             }
@@ -827,7 +847,7 @@ fn header(
     cover: Option<&TextureHandle>,
     accent: Color32,
     overview: bool,
-    commands: &Sender<UiCommand>,
+    sink: &mut Sink<'_>,
 ) {
     let p = theme::palette(ui.ctx());
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), COVER_SIDE), Sense::hover());
@@ -902,7 +922,7 @@ fn header(
                 ui.label(RichText::new(other).color(p.text_dim));
                 let time = ui.add(Label::new(time).selectable(false).sense(Sense::click()));
                 if time.clicked() {
-                    let _ = commands.send(UiCommand::View(ViewChange::CycleTime(view.deck)));
+                    sink.send(UiCommand::View(ViewChange::CycleTime(view.deck)));
                 }
             });
         }
@@ -963,31 +983,42 @@ fn overview_columns(mesh: &mut Mesh, rect: Rect, waveform: &Waveform, bands: [Co
     }
 }
 
-/// The three FX slots, each lit while on, over the effect level (when `level`). Each
-/// slot's effect is a dropdown that asks `commands` to change it.
-fn fx(ui: &mut Ui, view: &DeckView, accent: Color32, level: bool, commands: &Sender<UiCommand>) {
+/// The three FX slots, each lit while on, over the effect level (when `level`). A slot's
+/// effect turns it on and off; its arrow is a dropdown that changes the effect. The mouse
+/// plays them and the level through `sink`.
+fn fx(ui: &mut Ui, view: &DeckView, accent: Color32, level: bool, sink: &mut Sink<'_>) {
     let p = theme::palette(ui.ctx());
+    let deck = view.deck;
     ui.vertical(|ui| {
         ui.set_width(FX_WIDTH);
         for (slot, &(current, on)) in view.fx.iter().enumerate() {
-            let size = vec2(FX_WIDTH, SLOT_HEIGHT);
             let lit = on.then_some(accent);
-            let id = ("fx slot", view.deck, slot);
-            let name = format!("FX {}", slot + 1);
-            dropdown(ui, &name, id, size, effect_label(current), lit, |ui| {
-                for kind in EffectKind::ALL {
-                    let chosen = ui.selectable_label(kind == current, effect_label(kind));
-                    if chosen.clicked() && kind != current {
-                        let deck = view.deck;
-                        let _ = commands.send(UiCommand::FxSlot { deck, slot, kind });
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = FX_ARROW_GAP;
+                let toggle = vec2(FX_WIDTH - FX_ARROW - FX_ARROW_GAP, SLOT_HEIGHT);
+                let action = Action::FxToggle(deck, slot as u8);
+                button(ui, sink, toggle, effect_label(current), lit, action);
+                let id = ("fx slot", deck, slot);
+                let size = vec2(FX_ARROW, SLOT_HEIGHT);
+                dropdown(ui, FX_NAMES[slot], id, size, "", lit, |ui| {
+                    for kind in EffectKind::ALL {
+                        let chosen = ui.selectable_label(kind == current, effect_label(kind));
+                        if chosen.clicked() && kind != current {
+                            sink.send(UiCommand::FxSlot { deck, slot, kind });
+                        }
                     }
-                }
+                });
             });
         }
         if !level {
             return;
         }
         let (rect, _) = ui.allocate_exact_size(vec2(FX_WIDTH, FX_LEVEL_HEIGHT), Sense::hover());
+        let action = Action::FxLevel(deck);
+        // A little above and below the thin bar takes a click too.
+        let grab = rect.expand2(vec2(0.0, ROW_GAP / 2.0));
+        let response = ui.interact(grab, control_id(action), Sense::click_and_drag());
+        sink.act(action, fader_input(&response, rect, false, None));
         let painter = ui.painter();
         painter.rect_filled(rect, CornerRadius::ZERO, p.lane);
         let level = rect.width() * view.fx_level.clamp(0.0, 1.0);
@@ -1053,21 +1084,36 @@ fn jog_info(ui: &mut Ui, view: &DeckView, rect: Rect) {
     });
 }
 
-/// The tempo slider (faster toward the bottom, as on the SB3) with the pitch in percent.
-/// `height` is the middle row's.
-fn pitch(ui: &mut Ui, view: &DeckView, accent: Color32, width: f32, height: f32) {
+/// The tempo slider (faster toward the bottom, as on the SB3) with the pitch in percent,
+/// `width` by `height` (the middle row's). The mouse sets it through `sink`, and a
+/// double-click puts it back to the original tempo.
+fn pitch(
+    ui: &mut Ui,
+    view: &DeckView,
+    accent: Color32,
+    (width, height): (f32, f32),
+    sink: &Sink<'_>,
+) {
     let p = theme::palette(ui.ctx());
     let (column, _) = ui.allocate_exact_size(vec2(width, height), Sense::hover());
     let layout = Layout::top_down(Align::Center);
     ui.scope_builder(UiBuilder::new().max_rect(column).layout(layout), |ui| {
         let track_height = height - PITCH_LABEL_HEIGHT;
         let (rect, _) = ui.allocate_exact_size(vec2(width, track_height), Sense::hover());
-        let painter = ui.painter();
         let x = rect.center().x;
         let track = Rect::from_x_y_ranges(
             x - PITCH_TRACK / 2.0..=x + PITCH_TRACK / 2.0,
             rect.top() + PITCH_HANDLE.y / 2.0..=rect.bottom() - PITCH_HANDLE.y / 2.0,
         );
+        let action = Action::Tempo(view.deck);
+        let response = ui.interact(rect, control_id(action), Sense::click_and_drag());
+        // The slider's 0 is at the top: the other way round from a fader.
+        let input = match fader_input(&response, track, true, Some(PITCH_RESET)) {
+            Some(Input::Absolute(v)) => Some(Input::Absolute(1.0 - v)),
+            other => other,
+        };
+        sink.act(action, input);
+        let painter = ui.painter();
         painter.rect_filled(track, CornerRadius::ZERO, p.lane);
         let centre_mark =
             Rect::from_center_size(pos2(x, track.center().y), vec2(PITCH_HANDLE.x * 0.6, 1.0));
@@ -1089,50 +1135,71 @@ fn pitch(ui: &mut Ui, view: &DeckView, accent: Color32, width: f32, height: f32)
     });
 }
 
-/// VINYL, SLIP and KEYLOCK, each lit while on.
-fn states(ui: &mut Ui, view: &DeckView, accent: Color32) {
+/// VINYL, SLIP and KEYLOCK: each one's text, whether it is on and what it toggles.
+fn state_buttons(view: &DeckView) -> [(&'static str, bool, Action); 3] {
+    let deck = view.deck;
+    [
+        ("VINYL", view.vinyl, Action::VinylToggle(deck)),
+        ("SLIP", view.slip, Action::SlipToggle(deck)),
+        ("KEYLOCK", view.keylock, Action::KeylockToggle(deck)),
+    ]
+}
+
+/// VINYL, SLIP and KEYLOCK, each lit while on; the mouse toggles them through `sink`.
+fn states(ui: &mut Ui, view: &DeckView, accent: Color32, sink: &mut Sink<'_>) {
     ui.vertical(|ui| {
         let size = vec2(STATE_WIDTH, SLOT_HEIGHT);
-        indicator(ui, size, "VINYL", view.vinyl.then_some(accent));
-        indicator(ui, size, "SLIP", view.slip.then_some(accent));
-        indicator(ui, size, "KEYLOCK", view.keylock.then_some(accent));
+        for (text, on, action) in state_buttons(view) {
+            button(ui, sink, size, text, on.then_some(accent), action);
+        }
     });
 }
 
-/// CUE (lit while previewing), PLAY (lit while playing) and SYNC (one-shot: never lit).
-fn transport(ui: &mut Ui, view: &DeckView) {
+/// CUE (lit while previewing), PLAY (lit while playing) and SYNC (one-shot: never lit);
+/// the mouse presses them through `sink`.
+fn transport(ui: &mut Ui, view: &DeckView, sink: &mut Sink<'_>) {
     let p = theme::palette(ui.ctx());
+    let deck = view.deck;
     ui.vertical(|ui| {
         // Each in line with the pad mode and the two rows of pads beside it.
         let size = vec2(TRANSPORT_WIDTH, BUTTON_HEIGHT);
-        indicator(ui, size, "CUE", view.cueing.then_some(p.cue));
-        indicator(ui, size, "PLAY", view.playing.then_some(p.play_lit));
-        indicator(ui, size, "SYNC", None);
+        let cue = view.cueing.then_some(p.cue);
+        button(ui, sink, size, "CUE", cue, Action::Cue(deck));
+        let play = view.playing.then_some(p.play_lit);
+        button(ui, sink, size, "PLAY", play, Action::PlayPause(deck));
+        button(ui, sink, size, "SYNC", None, Action::Sync(deck));
     });
 }
 
-/// The pad mode's dropdown over the 2×4 pads; a choice asks `commands` to switch.
+/// The pad mode's dropdown over the 2×4 pads; a choice asks `sink` to switch.
 fn pads_column(
     ui: &mut Ui,
     view: &DeckView,
     accent: Color32,
     pads_width: f32,
-    commands: &Sender<UiCommand>,
+    sink: &mut Sink<'_>,
 ) {
     ui.vertical(|ui| {
         ui.set_width(pads_width);
         let p = theme::palette(ui.ctx());
-        let size = vec2(PAD_MODE_WIDTH.min(pads_width), BUTTON_HEIGHT);
+        let arrows = 2.0 * (PAD_ARROW_WIDTH + PAD_GAP);
+        let size = vec2(PAD_MODE_WIDTH.min(pads_width - arrows), BUTTON_HEIGHT);
         let id = ("pad mode", view.deck);
         let text = RichText::new(view.pad_mode).color(accent);
-        dropdown_text(ui, "pad mode", id, size, text, p.lane, |ui| {
-            for (mode, label) in PAD_MODES {
-                let chosen = ui.selectable_label(mode == view.pad_mode_choice, label);
-                if chosen.clicked() && mode != view.pad_mode_choice {
-                    let action = Action::PadMode(Side::of(view.deck), mode);
-                    let _ = commands.send(UiCommand::Action(action, Input::Press));
+        let side = Side::of(view.deck);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = PAD_GAP;
+            pad_mode_arrow(ui, view, -1, sink);
+            dropdown_text(ui, "pad mode", id, size, text, p.lane, |ui| {
+                for (mode, label) in PAD_MODES {
+                    let chosen = ui.selectable_label(mode == view.pad_mode_choice, label);
+                    if chosen.clicked() && mode != view.pad_mode_choice {
+                        let action = Action::PadMode(side, mode);
+                        sink.send(UiCommand::Action(action, Input::Press));
+                    }
                 }
-            }
+            });
+            pad_mode_arrow(ui, view, 1, sink);
         });
         let pad = vec2((pads_width - PAD_GAP * 3.0) / 4.0, BUTTON_HEIGHT);
         for row in view.pads.chunks(4) {
@@ -1147,22 +1214,65 @@ fn pads_column(
     });
 }
 
-/// The loop: its size over IN and OUT, beside the two rows of pads.
-fn loop_column(ui: &mut Ui, view: &DeckView) {
+/// The loop: < and > (halve and double it) in line with the pad mode, then its size (an
+/// auto loop of that size) over IN and OUT, beside the two rows of pads. The mouse presses
+/// them through `sink`.
+fn loop_column(ui: &mut Ui, view: &DeckView, sink: &mut Sink<'_>) {
     let p = theme::palette(ui.ctx());
+    let deck = view.deck;
     ui.vertical(|ui| {
         let size = vec2(LOOP_WIDTH, BUTTON_HEIGHT);
+        let half = vec2((LOOP_WIDTH - PAD_GAP) / 2.0, BUTTON_HEIGHT);
         let looping = view.loop_active.then_some(p.hotcue);
-        // In line with the pads' rows, under the pad mode.
-        ui.add_space(BUTTON_HEIGHT);
-        indicator(ui, size, &view.loop_beats, looping);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = PAD_GAP;
-            let half = vec2((LOOP_WIDTH - PAD_GAP) / 2.0, BUTTON_HEIGHT);
-            indicator(ui, half, "IN", looping);
-            indicator(ui, half, "OUT", looping);
+            button(ui, sink, half, "<", None, Action::LoopHalve(deck));
+            button(ui, sink, half, ">", None, Action::LoopDouble(deck));
+        });
+        let beats = &view.loop_beats;
+        button(ui, sink, size, beats, looping, Action::AutoLoop(deck));
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = PAD_GAP;
+            button(ui, sink, half, "IN", looping, Action::LoopIn(deck));
+            button(ui, sink, half, "OUT", looping, Action::LoopOut(deck));
         });
     });
+}
+
+/// The pad mode `step` (−1 or 1) along [`PAD_MODES`] from `view`'s, wrapping round.
+fn stepped_pad_mode(view: &DeckView, step: isize) -> PadMode {
+    let count = PAD_MODES.len() as isize;
+    let at = PAD_MODES
+        .iter()
+        .position(|&(mode, _)| mode == view.pad_mode_choice)
+        .unwrap_or(0) as isize;
+    PAD_MODES[(at + step).rem_euclid(count) as usize].0
+}
+
+/// The arrow beside the pad mode's dropdown that steps it back (`step` −1, ◀) or on (1,
+/// ▶) through the dropdown's modes; the mouse presses it through `sink`.
+fn pad_mode_arrow(ui: &mut Ui, view: &DeckView, step: isize, sink: &mut Sink<'_>) {
+    let p = theme::palette(ui.ctx());
+    let size = vec2(PAD_ARROW_WIDTH, BUTTON_HEIGHT);
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    let name = if step < 0 {
+        "previous pad mode"
+    } else {
+        "next pad mode"
+    };
+    let id = Id::NULL.with(("pad mode arrow", view.deck, step));
+    let response = ui.interact(rect, id, Sense::click_and_drag());
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, true, name));
+    let action = Action::PadMode(Side::of(view.deck), stepped_pad_mode(view, step));
+    sink.button(&response, action);
+    ui.painter()
+        .rect_filled(rect, CornerRadius::same(2), p.lane);
+    // A triangle pointing the way it steps.
+    let c = rect.center();
+    let (w, h) = (3.5 * step as f32, 4.5);
+    let points = vec![c + vec2(w, 0.0), c + vec2(-w, -h), c + vec2(-w, h)];
+    ui.painter()
+        .add(Shape::convex_polygon(points, p.text_dim, Stroke::NONE));
 }
 
 /// A dropdown named `name` of `size` drawn like an [`indicator`]: `text`, filled with
@@ -1200,6 +1310,13 @@ fn dropdown_text(
         idle.weak_bg_fill = fill;
         idle.bg_stroke = Stroke::NONE;
         ui.spacing_mut().interact_size.y = size.y;
+        if text.is_empty() {
+            // An arrow alone: no room kept for text.
+            let spacing = ui.spacing_mut();
+            spacing.button_padding.x = 0.0;
+            spacing.icon_spacing = 0.0;
+            spacing.item_spacing.x = 0.0;
+        }
         let response = egui::ComboBox::from_id_salt(id)
             .width(size.x)
             .selected_text(text.size(SMALL_FONT))
@@ -1212,8 +1329,27 @@ fn dropdown_text(
     });
 }
 
-/// A box of `size` with `text`, filled with `lit`'s colour when lit.
-fn indicator(ui: &mut Ui, size: Vec2, text: &str, lit: Option<Color32>) {
+/// The id of the deck's control that sends `action`.
+fn control_id(action: Action) -> Id {
+    Id::NULL.with(("deck", action))
+}
+
+/// An [`indicator`] that the mouse presses: it sends `action` through `sink`.
+fn button(
+    ui: &mut Ui,
+    sink: &mut Sink<'_>,
+    size: Vec2,
+    text: &str,
+    lit: Option<Color32>,
+    action: Action,
+) {
+    let rect = indicator(ui, size, text, lit);
+    let response = ui.interact(rect, control_id(action), Sense::click_and_drag());
+    sink.button(&response, action);
+}
+
+/// A box of `size` with `text`, filled with `lit`'s colour when lit; returns where it is.
+fn indicator(ui: &mut Ui, size: Vec2, text: &str, lit: Option<Color32>) -> Rect {
     let p = theme::palette(ui.ctx());
     let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
     let (fill, colour) = match lit {
@@ -1229,6 +1365,7 @@ fn indicator(ui: &mut Ui, size: Vec2, text: &str, lit: Option<Color32>) {
             .truncate();
         ui.place(rect, label);
     }
+    rect
 }
 
 #[cfg(test)]
