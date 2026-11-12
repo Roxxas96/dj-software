@@ -24,6 +24,20 @@ pub struct Bar {
     pub to: f32,
 }
 
+/// What one column shows of the `buckets` under it: the peak and each band at their
+/// highest, so a kick's bucket does not hide the mids and highs beside it. `None` when
+/// there are no buckets.
+pub fn loudest(buckets: &[[u8; 4]]) -> Option<[u8; 4]> {
+    let (first, rest) = buckets.split_first()?;
+    let mut out = *first;
+    for bucket in rest {
+        for (level, &other) in out.iter_mut().zip(bucket) {
+            *level = (*level).max(other);
+        }
+    }
+    Some(out)
+}
+
 /// The Frequency style's `[low, mid, high]` layer colours for `bands`: the low layer
 /// opaque, the mid and high ones see-through so the layers behind them show.
 pub fn layers(bands: [Color32; 3]) -> [Color32; 3] {

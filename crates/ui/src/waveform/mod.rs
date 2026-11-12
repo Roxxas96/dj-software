@@ -11,6 +11,6 @@ mod zoom;
 pub use colour::band_colours;
 pub use lane::{Lane, Lanes, lanes};
 pub use playhead::Playhead;
-pub use styles::{Bar, column, layers};
+pub use styles::{Bar, column, layers, loudest};
 pub use ticks::{Tick, ticks};
 pub use zoom::{ZOOM_STEP, ZoomGesture, zoomed};

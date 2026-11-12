@@ -24,7 +24,7 @@ use crate::mixer;
 use crate::model::{ControlFrame, GHOST_TEMPO, HotcueMark};
 use crate::theme::{self, EDGE_LABEL_WIDTH, SECTION_GAP, edge_label};
 use crate::view::{JogDisplay, TimeMode, WaveformPalette};
-use crate::waveform::{Playhead, band_colours, layers};
+use crate::waveform::{Playhead, band_colours, layers, loudest};
 
 /// The brightness below which a lit box takes white text instead of dark.
 const DARK_FILL: f32 = 0.35;
@@ -924,9 +924,9 @@ fn overview_strip(ui: &Ui, view: &DeckView, rect: Rect) {
     painter.add(Shape::mesh(mesh));
 }
 
-/// One column per point, mirrored around the middle, as tall as the loudest bucket under
-/// it and in the three layers of the lane: low, mid and high in `bands`, back to front,
-/// blended as the lane blends them ([`layers`]).
+/// One column per point, mirrored around the middle, in the three layers of the lane:
+/// low, mid and high in `bands`, back to front, each as tall as its loudest under the
+/// column ([`loudest`]) and blended as the lane blends them ([`layers`]).
 fn overview_columns(mesh: &mut Mesh, rect: Rect, waveform: &Waveform, bands: [Color32; 3]) {
     let bands = layers(bands);
     let buckets = &waveform.buckets;
@@ -939,11 +939,10 @@ fn overview_columns(mesh: &mut Mesh, rect: Rect, waveform: &Waveform, bands: [Co
     for column in 0..columns {
         let from = column * buckets.len() / columns;
         let to = ((column + 1) * buckets.len() / columns).clamp(from + 1, buckets.len());
-        let Some(loudest) = buckets[from..to].iter().max_by_key(|b| b[0]) else {
+        let Some([_, low, mid, high]) = loudest(&buckets[from..to]) else {
             continue;
         };
         let x = rect.left() + column as f32;
-        let [_, low, mid, high] = *loudest;
         for (level, colour) in [(low, bands[0]), (mid, bands[1]), (high, bands[2])] {
             if level == 0 {
                 continue;
@@ -1349,6 +1348,37 @@ mod tests {
         assert_eq!(alphas.len(), 3, "{alphas:?}");
         assert_eq!(alphas[0], 255, "{alphas:?}");
         assert!(alphas[1] < 255 && alphas[2] < 255, "{alphas:?}");
+    }
+
+    #[test]
+    fn an_overview_column_shows_every_band_peak() {
+        // Two buckets under one column: the kick's and a bright one.
+        let waveform = Waveform {
+            frames_per_bucket: 256,
+            buckets: vec![[255, 200, 10, 10], [100, 20, 150, 120]],
+        };
+        let mut mesh = Mesh::default();
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(1.0, 40.0));
+        let bands = band_colours(WaveformPalette::Rgb, &theme::Palette::DARK);
+        overview_columns(&mut mesh, rect, &waveform, bands);
+        // Each layer's half-height, from its four corners' top and bottom.
+        let reaches: Vec<f32> = mesh
+            .vertices
+            .chunks(4)
+            .map(|corners| {
+                let top = corners.iter().map(|v| v.pos.y).fold(f32::MAX, f32::min);
+                let bottom = corners.iter().map(|v| v.pos.y).fold(f32::MIN, f32::max);
+                (bottom - top) / 2.0
+            })
+            .collect();
+        let expected = [200.0, 150.0, 120.0].map(|level| 20.0 * level / 255.0);
+        assert_eq!(reaches.len(), 3, "{reaches:?}");
+        for (reach, want) in reaches.iter().zip(expected) {
+            assert!(
+                (reach - want).abs() < 1e-3,
+                "{reaches:?} against {expected:?}"
+            );
+        }
     }
 
     #[test]
