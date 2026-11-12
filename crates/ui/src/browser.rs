@@ -456,8 +456,9 @@ fn list_pane(ui: &mut Ui, view: &BrowserView, loaded: [Option<i64>; 4], notation
     }
 }
 
-/// The list's cells as `(x, width)`: the cue dot, then one per [`COLUMNS`] entry, across
-/// `total` points from `left`. The headers and the rows both place their cells with this.
+/// The list's cells as `(x, width)`: the cue dot (right of a loaded track's marker), then
+/// one per [`COLUMNS`] entry, across `total` points from `left`. The headers and the rows
+/// both place their cells with this.
 fn columns(left: f32, total: f32) -> [(f32, f32); 7] {
     let fixed = CUE_WIDTH + LENGTH_WIDTH + BPM_WIDTH + KEY_WIDTH;
     let flexible = (total - fixed).max(0.0);
@@ -474,11 +475,13 @@ fn columns(left: f32, total: f32) -> [(f32, f32); 7] {
         KEY_WIDTH,
     ];
     let mut x = left;
-    widths.map(|width| {
+    let mut cells = widths.map(|width| {
         let at = (x, width);
         x += width;
         at
-    })
+    });
+    cells[0] = (left + MARKER_WIDTH, CUE_WIDTH - MARKER_WIDTH);
+    cells
 }
 
 /// A list row's cells, as text.

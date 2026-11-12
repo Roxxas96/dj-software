@@ -318,6 +318,59 @@ fn loaded_tracks_are_marked() {
 }
 
 #[test]
+fn the_cue_dot_shows_right_of_the_loaded_marker() {
+    let view = view();
+    let loaded = [Some(1), None, None, None];
+    let marker = painted(&view, loaded)
+        .into_iter()
+        .find(|(rect, _)| (rect.width() - 3.0).abs() < 0.01 && rect.height() > 10.0)
+        .expect("the loaded track's marker")
+        .0;
+    let dot = painted_text_rects(&view, loaded)
+        .into_iter()
+        .find(|(text, rect)| text == "•" && rect.center().y >= marker.min.y)
+        .expect("the loaded track's cue dot")
+        .1;
+    assert!(dot.min.x >= marker.max.x, "{dot:?} under {marker:?}");
+}
+
+/// The texts the browser paints for `view` with `loaded`, with where each is drawn.
+fn painted_text_rects(view: &BrowserView, loaded: [Option<i64>; 4]) -> Vec<(String, egui::Rect)> {
+    let ctx = egui::Context::default();
+    let mut covers = Covers::default();
+    let mut texts = Vec::new();
+    for _ in 0..3 {
+        texts.clear();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1000.0, 300.0),
+            )),
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| {
+            ui::browser::show(
+                ui,
+                view,
+                loaded,
+                KeyNotation::default(),
+                &mut covers,
+                &Arrangement::default(),
+                |_| {},
+            );
+        });
+        output.textures_delta.clear();
+        for clipped in &output.shapes {
+            if let egui::Shape::Text(text) = &clipped.shape {
+                let rect = text.galley.rect.translate(text.pos.to_vec2());
+                texts.push((text.galley.text().to_owned(), rect));
+            }
+        }
+    }
+    texts
+}
+
+#[test]
 fn long_names_are_cut_and_left_aligned() {
     let mut view = view();
     view.list[0].track.as_mut().unwrap().title = Some("x".repeat(200));
