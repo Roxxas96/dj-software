@@ -75,6 +75,14 @@ fn tile(ui: &mut Ui, layout: Layout, selected: bool) -> bool {
     response.clicked()
 }
 
+/// The window height the sketches' proportions are taken at: the default window's.
+const SKETCH_WINDOW_HEIGHT: f32 = 900.0;
+
+/// The share of the sketch the deck band takes in `layout`.
+fn deck_band_share(layout: Layout) -> f32 {
+    crate::deck::row_height(&layout::sections(layout)) / SKETCH_WINDOW_HEIGHT
+}
+
 /// A small drawing of the window in `layout`: the lanes, the deck panels with what they
 /// show, the mixer between them, and the browser.
 fn sketch_of(ui: &Ui, area: Rect, layout: Layout) {
@@ -88,9 +96,10 @@ fn sketch_of(ui: &Ui, area: Rect, layout: Layout) {
         )
     };
     painter.rect_filled(band(0.0, LANES_SHARE), CornerRadius::ZERO, p.lane);
-    let decks = band(LANES_SHARE, sections.decks_share);
+    let decks_share = deck_band_share(layout);
+    let decks = band(LANES_SHARE, decks_share);
     painter.rect_filled(
-        band(LANES_SHARE + sections.decks_share, sections.browser_share),
+        band(LANES_SHARE + decks_share, 1.0 - LANES_SHARE - decks_share),
         CornerRadius::ZERO,
         p.background,
     );
@@ -146,6 +155,24 @@ fn sketch_of(ui: &Ui, area: Rect, layout: Layout) {
         for i in 0..3 {
             let c = pos2(strip.center().x, strip.min.y + 5.0 + i as f32 * 7.0);
             painter.circle_filled(c, 2.0, p.text_dim);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_sketch_deck_band_follows_the_window() {
+        for layout in Layout::ALL {
+            let sections = layout::sections(*layout);
+            let want = crate::deck::row_height(&sections) / SKETCH_WINDOW_HEIGHT;
+            let share = deck_band_share(*layout);
+            assert!(
+                (share - want).abs() <= 0.02,
+                "{layout:?}: {share} against {want}"
+            );
         }
     }
 }
