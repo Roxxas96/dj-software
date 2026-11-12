@@ -202,3 +202,63 @@ fn backup_now_writes_a_backup_even_right_after_another() {
     assert!(backup.exists());
     assert_eq!(count(), 2);
 }
+
+#[test]
+fn set_hotcue_label_updates_only_name_and_colour() {
+    let (_dir, lib) = open_with_track();
+    put_drop(&lib);
+    lib.writer()
+        .submit_wait(WriteOp::SetHotcueLabel {
+            track: 1,
+            slot: 4,
+            name: Some("Break".into()),
+            color: Some(0x00CC00),
+        })
+        .unwrap();
+    let relabelled = HotcuePoint {
+        color: Some(0x00CC00),
+        name: Some("Break".into()),
+        ..drop_point()
+    };
+    let reader = lib.reader().unwrap();
+    assert_eq!(reader.hotcue_points(1).unwrap()[3], Some(relabelled));
+    // No name and no colour clear both; the position and the loop stay.
+    lib.writer()
+        .submit_wait(WriteOp::SetHotcueLabel {
+            track: 1,
+            slot: 4,
+            name: None,
+            color: None,
+        })
+        .unwrap();
+    let cleared = HotcuePoint {
+        color: None,
+        name: None,
+        ..drop_point()
+    };
+    assert_eq!(reader.hotcue_points(1).unwrap()[3], Some(cleared));
+}
+
+#[test]
+fn label_on_an_empty_slot_is_refused() {
+    let (_dir, lib) = open_with_track();
+    let label = |track, slot| WriteOp::SetHotcueLabel {
+        track,
+        slot,
+        name: Some("Intro".into()),
+        color: Some(0xCC0000),
+    };
+    let error = lib.writer().submit_wait(label(1, 2)).unwrap_err();
+    assert!(
+        matches!(error, LibraryError::NoSuchHotcue { track: 1, slot: 2 }),
+        "{error:?}"
+    );
+    assert_eq!(lib.reader().unwrap().hotcue_points(1).unwrap()[1], None);
+    let error = lib.writer().submit_wait(label(1, 9)).unwrap_err();
+    assert!(
+        matches!(error, LibraryError::InvalidHotcueSlot(9)),
+        "{error:?}"
+    );
+    let error = lib.writer().submit_wait(label(5, 2)).unwrap_err();
+    assert!(matches!(error, LibraryError::NoSuchTrack(5)), "{error:?}");
+}

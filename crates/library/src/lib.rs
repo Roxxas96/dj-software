@@ -98,6 +98,8 @@ pub enum LibraryError {
     InvalidLoop(f64),
     #[error("{0} is not a hotcue slot: slots are 1 to 8")]
     InvalidHotcueSlot(u8),
+    #[error("hotcue {slot} of track {track} is not set")]
+    NoSuchHotcue { track: i64, slot: u8 },
     #[error("position {position} is out of range (the playlist has {len} entries)")]
     PositionOutOfRange { position: usize, len: usize },
     #[error("track {0}'s audio changed while it was being analyzed; analyze it again")]

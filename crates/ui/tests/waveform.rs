@@ -166,3 +166,79 @@ fn a_named_hotcue_flag_shows_its_name_beside_the_number() {
     assert!(texts.contains(&"2".to_owned()), "{texts:?}");
     assert!(texts.contains(&"Drop".to_owned()), "{texts:?}");
 }
+
+#[test]
+fn flag_right_click_opens_the_same_editor() {
+    use egui::accesskit::Role;
+    use egui::{Event, Modifiers, PointerButton, pos2};
+    use egui_kittest::kittest::Queryable;
+    use ui::controls::{HeldButtons, Sink};
+    use ui::deck::DeckReads;
+
+    // Deck 1 holds track 1 with hotcue 2, "Drop", where the playhead is.
+    let mut snapshot = DeckSnapshot {
+        loaded: true,
+        track_sample_rate: 44_100,
+        duration_frames: 1_280_000,
+        position_frames: 441_000.0,
+        load_seq: 1,
+        ..DeckSnapshot::default()
+    };
+    snapshot.hotcues[1] = Some(Hotcue::point(441_000.0));
+    let mut frame = ControlFrame::default();
+    let mut marks: [Option<ui::HotcueMark>; 8] = Default::default();
+    marks[1] = Some(ui::HotcueMark::new(Some(0xCC0000), Some("Drop".into())));
+    frame.decks[0] = Some(ui::DeckInfo {
+        load_seq: 1,
+        row: library::TrackRow {
+            id: 1,
+            title: None,
+            artist: None,
+            bpm: None,
+            key: None,
+            duration_frames: None,
+            sample_rate: None,
+            has_cues: true,
+            missing: false,
+        },
+        path: "/music/a.mp3".into(),
+        overview: None,
+        detail: None,
+        stems: None,
+        hotcue_marks: Arc::new(marks),
+    });
+    let mut reads = DeckReads::default();
+    reads.decks[0] = (snapshot, 0);
+    let (commands, _received) = std::sync::mpsc::channel();
+    let mut lanes = ui::waveform::Lanes::default();
+    let mut held = HeldButtons::default();
+    let mut harness = Harness::builder()
+        .with_size([1000.0, 200.0])
+        .with_step_dt(0.01)
+        .build_ui(move |ui| {
+            lanes.show(ui, &frame, &reads, &commands);
+            let mut sink = Sink::new(&commands, &mut held);
+            ui::hotcue_menu::show(ui.ctx(), &mut sink);
+            held.sweep(ui.ctx(), &commands);
+        });
+    harness.run_steps(3);
+    assert!(harness.query_by_role(Role::TextInput).is_none());
+    // Deck 1's lane is the top half; the flag hangs from its top at the playhead.
+    let flag = pos2(506.0, 14.0);
+    let click = |pressed| Event::PointerButton {
+        pos: flag,
+        button: PointerButton::Secondary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    harness.event(Event::PointerMoved(flag));
+    harness.run_steps(1);
+    harness.event(click(true));
+    harness.run_steps(1);
+    harness.event(click(false));
+    harness.run_steps(2);
+    let name = harness.get_by_role(Role::TextInput);
+    assert_eq!(name.value().as_deref(), Some("Drop"));
+    harness.get_by_label("No colour");
+    harness.get_by_label("Delete");
+}

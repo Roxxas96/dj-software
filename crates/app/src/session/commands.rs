@@ -2,7 +2,8 @@
 //! and the zoom to the [`ViewStore`](super::view::ViewStore), actions to the controller
 //! runtime as a MIDI input would, settings to `config.toml` and, for the live ones, to
 //! the engine, the controller runtime and the view, the import from VirtualDJ's steps to
-//! the [`Import`], and the export's to the [`Export`](super::export::Export).
+//! the [`Import`], the export's to the [`Export`](super::export::Export), and the
+//! library's steps to [`LibraryMode`].
 
 use std::sync::mpsc::Receiver;
 use std::time::Instant;
@@ -12,19 +13,25 @@ use controller::Runtime;
 use engine::{
     ChannelCommand, Command, DeckId, EffectKind, EngineController, MasterCommand, SamplerCommand,
 };
-use ui::UiCommand;
+use ui::{HotcueMark, LibraryStep, UiCommand};
 
 use super::frame::FrameParts;
 use super::import::Import;
 use super::settings::{Applied, Settings};
 use crate::config::{Config, StemsConfig, UiConfig};
+use crate::library_mode::LibraryMode;
 
-/// The controller runtime and the engine, once the control loop runs.
-pub(super) type Control<'a> = Option<(&'a mut Runtime, &'a mut EngineController)>;
+/// The controller runtime, the engine and library mode (when the loop runs one), once the
+/// control loop runs.
+pub(super) type Control<'a> = Option<(
+    &'a mut Runtime,
+    &'a mut EngineController,
+    Option<&'a mut LibraryMode>,
+)>;
 
 /// Applies every command the window sent since the last call. Before the control loop runs
-/// (`control` is `None`) actions and effect choices are dropped: there is nothing to apply
-/// them to. Settings are saved at once; their live changes reach the engine and the
+/// (`control` is `None`) actions, effect choices and library steps are dropped: there is
+/// nothing to apply them to. Settings are saved at once; their live changes reach the engine and the
 /// controller once the loop runs.
 pub(super) fn drain(commands: &Receiver<UiCommand>, parts: &mut FrameParts, mut control: Control) {
     let now = Instant::now();
@@ -37,12 +44,12 @@ pub(super) fn drain(commands: &Receiver<UiCommand>, parts: &mut FrameParts, mut 
                 parts.view.zoom(steps, None, now);
             }
             UiCommand::Action(action, input) => {
-                if let Some((runtime, engine)) = control.as_mut() {
+                if let Some((runtime, engine, _)) = control.as_mut() {
                     action_from_window(&action, input, parts, runtime, engine);
                 }
             }
             UiCommand::FxSlot { deck, slot, kind } => {
-                if let Some((_, engine)) = control.as_mut() {
+                if let Some((_, engine, _)) = control.as_mut() {
                     fx_from_window(deck, slot, kind, parts, engine);
                 }
             }
@@ -54,7 +61,7 @@ pub(super) fn drain(commands: &Receiver<UiCommand>, parts: &mut FrameParts, mut 
             }
             UiCommand::Import(step) => {
                 // Before the control loop runs, no track can be on a deck.
-                let decks_loaded = control.as_ref().is_some_and(|(_, engine)| {
+                let decks_loaded = control.as_ref().is_some_and(|(_, engine, _)| {
                     DeckId::ALL.into_iter().any(|deck| engine.deck(deck).loaded)
                 });
                 if let Some(import) = parts.import.as_mut() {
@@ -65,6 +72,11 @@ pub(super) fn drain(commands: &Receiver<UiCommand>, parts: &mut FrameParts, mut 
                 // The export only reads the library: the decks can hold tracks.
                 if let Some(export) = parts.export.as_mut() {
                     export.step(step);
+                }
+            }
+            UiCommand::Library(step) => {
+                if let Some((_, _, Some(library))) = control.as_mut() {
+                    library_step(step, parts, library);
                 }
             }
         }
@@ -86,8 +98,26 @@ pub(super) fn drain(commands: &Receiver<UiCommand>, parts: &mut FrameParts, mut 
             adopt(parts, &before, config, now);
         }
     }
-    if let Some((runtime, engine)) = control {
+    if let Some((runtime, engine, _)) = control {
         apply_live(parts, runtime.control_state_mut(), engine);
+    }
+}
+
+/// Makes the library change `step` asks for through `library`; what is refused is an
+/// event.
+fn library_step(step: LibraryStep, parts: &mut FrameParts, library: &mut LibraryMode) {
+    match step {
+        LibraryStep::HotcueLabel {
+            deck,
+            track,
+            slot,
+            name,
+            color,
+        } => match library.set_hotcue_label(deck, track, slot, name.clone(), color) {
+            // Shown at once: the write is not waited for.
+            Ok(()) => parts.show_mark(track, slot, HotcueMark::new(color, name)),
+            Err(why) => parts.event(why),
+        },
     }
 }
 
@@ -277,6 +307,9 @@ fn set_pad_sizes(state: &mut ControlState, old: &mut Config, new: &Config) {
 mod tests {
     use super::*;
     use crate::config::Config;
+    use crate::library_mode::testing;
+    use crate::play::Pass;
+    use crate::printer::Printer;
     use actions::{PadMode, Side};
     use std::sync::mpsc::channel;
 
@@ -298,7 +331,7 @@ mod tests {
         assert_eq!(runtime.state().side(Side::Left).pad_mode, PadMode::Hardware);
 
         tx.send(press).unwrap();
-        drain(&rx, &mut parts, Some((&mut runtime, &mut engine)));
+        drain(&rx, &mut parts, Some((&mut runtime, &mut engine, None)));
         assert_eq!(runtime.state().side(Side::Left).pad_mode, PadMode::BeatJump);
         assert_eq!(
             runtime.state().side(Side::Right).pad_mode,
@@ -329,7 +362,7 @@ mod tests {
         assert_eq!(parts.idle().fx_slots[0][1], EffectKind::Reverb);
 
         tx.send(choose).unwrap();
-        drain(&rx, &mut parts, Some((&mut runtime, &mut engine)));
+        drain(&rx, &mut parts, Some((&mut runtime, &mut engine, None)));
         let frame = parts.idle();
         assert_eq!(frame.fx_slots[0][1], EffectKind::Filter);
         // The other decks keep theirs.
@@ -386,7 +419,7 @@ mod tests {
         assert_eq!(row(&frame, "stems.knobs").value, "\"raw\"");
         assert!(row(&frame, "stems.kicks_hz").error.is_some());
 
-        drain(&rx, &mut parts, Some((&mut runtime, &mut engine)));
+        drain(&rx, &mut parts, Some((&mut runtime, &mut engine, None)));
         let frame = parts.idle();
         assert_eq!(frame.stem_knobs, engine::StemKnobs::Raw);
         assert!(!frame.crossfader_enabled);
@@ -416,7 +449,7 @@ mod tests {
             value: "\"DDJ-SB3\"".to_owned(),
         })
         .unwrap();
-        drain(&rx, &mut parts, Some((&mut runtime, &mut engine)));
+        drain(&rx, &mut parts, Some((&mut runtime, &mut engine, None)));
         let frame = parts.idle();
         assert_eq!(frame.fx_slots[1][2], EffectKind::Flanger);
         assert!(row(&frame, "audio.device").pending);
@@ -437,7 +470,7 @@ mod tests {
 
         // Reset: the pads and the knobs are back to their defaults.
         tx.send(UiCommand::ResetSettings).unwrap();
-        drain(&rx, &mut parts, Some((&mut runtime, &mut engine)));
+        drain(&rx, &mut parts, Some((&mut runtime, &mut engine, None)));
         let frame = parts.idle();
         assert_eq!(frame.stem_knobs, engine::StemKnobs::Vdj);
         assert_eq!(frame.fx_slots[1], Config::default().fx_slots);
@@ -495,5 +528,147 @@ mod tests {
             frame.events.back().unwrap().1,
             "settings cannot be saved: there is no configuration folder"
         );
+    }
+
+    /// Library mode with track 7 on deck 1, its hotcue 1 red and named "Drop", the load
+    /// applied by the engine.
+    struct Labelled {
+        _dir: tempfile::TempDir,
+        library: LibraryMode,
+        engine: EngineController,
+        renderer: engine::EngineRenderer,
+        runtime: Runtime,
+    }
+
+    fn labelled() -> Labelled {
+        let dir = tempfile::tempdir().unwrap();
+        let mut library = testing::start(&dir.path().join("library.sqlite3"));
+        testing::add_track_7(&library);
+        library
+            .library()
+            .writer()
+            .submit_wait(library::WriteOp::PutHotcue {
+                track: 7,
+                slot: 1,
+                point: library::HotcuePoint {
+                    frames: 100.0,
+                    loop_frames: None,
+                    color: Some(0xCC0000),
+                    name: Some("Drop".into()),
+                },
+            })
+            .unwrap();
+        let (mut engine, mut renderer) = engine::engine(engine::EngineConfig {
+            sample_rate: 44_100,
+            max_block_frames: 512,
+        });
+        let (printer, _events) = Printer::capturing();
+        testing::load_7(&mut library, 0, &mut engine, &printer);
+        printer.finish();
+        let (mut master, mut headphones) = (vec![0.0; 1024], vec![0.0; 1024]);
+        renderer.render(&mut master, &mut headphones);
+        let mapping = controller::builtin::load_mapping_from("ddj-sb3", None).unwrap();
+        Labelled {
+            _dir: dir,
+            library,
+            engine,
+            renderer,
+            runtime: Runtime::new(mapping),
+        }
+    }
+
+    impl Labelled {
+        fn drain(&mut self, rx: &Receiver<UiCommand>, parts: &mut FrameParts) {
+            let control = Some((&mut self.runtime, &mut self.engine, Some(&mut self.library)));
+            drain(rx, parts, control);
+        }
+
+        /// Deck 1's hotcue marks in the frame built now.
+        fn marks(&self, parts: &mut FrameParts) -> [Option<ui::HotcueMark>; 8] {
+            let pass = Pass {
+                state: self.runtime.state(),
+                engine: &self.engine,
+                library: Some(&self.library),
+                controller: None,
+                ghosts: [[None; ui::GHOSTS]; 4],
+                global_ghosts: [None; ui::GLOBAL_GHOSTS],
+            };
+            let frame = parts.build(&pass);
+            (*frame.decks[0].as_ref().unwrap().hotcue_marks).clone()
+        }
+
+        /// Track 7's hotcue 1 as the library holds it, once the writes queued are done.
+        fn stored(&self) -> Option<library::HotcuePoint> {
+            let lib = self.library.library();
+            lib.writer()
+                .submit_wait(library::WriteOp::Batch(Vec::new()))
+                .unwrap();
+            lib.reader().unwrap().hotcue_points(7).unwrap()[0].clone()
+        }
+    }
+
+    fn label(deck: usize, track: i64, name: &str, color: u32) -> UiCommand {
+        UiCommand::Library(ui::LibraryStep::HotcueLabel {
+            deck: DeckId::new(deck).unwrap(),
+            track,
+            slot: engine::HotcueSlot::new(1).unwrap(),
+            name: Some(name.to_owned()),
+            color: Some(color),
+        })
+    }
+
+    #[test]
+    fn hotcue_label_goes_to_the_clicked_track() {
+        let mut decks = labelled();
+        let mut parts = FrameParts::new(&Config::default());
+        let (tx, rx) = channel();
+        // Deck 1 holds track 7 now, not track 8; deck 2 holds nothing.
+        tx.send(label(0, 8, "Intro", 0x00CC00)).unwrap();
+        tx.send(label(1, 7, "Intro", 0x00CC00)).unwrap();
+        decks.drain(&rx, &mut parts);
+        let events: Vec<&str> = parts.events.iter().map(|(_, text)| text.as_str()).collect();
+        assert_eq!(
+            events,
+            [
+                "The track changed before the hotcue was saved",
+                "The track changed before the hotcue was saved",
+            ]
+        );
+        let stored = decks.stored().unwrap();
+        assert_eq!(stored.name.as_deref(), Some("Drop"));
+        assert_eq!(stored.color, Some(0xCC0000));
+        drop(decks.renderer);
+    }
+
+    #[test]
+    fn label_edit_shows_live() {
+        let mut decks = labelled();
+        let mut parts = FrameParts::new(&Config::default());
+        parts.detail = Some(super::super::detail::DetailJobs::new(
+            decks.library.library(),
+        ));
+        let drop_mark = Some(ui::HotcueMark::new(Some(0xCC0000), Some("Drop".into())));
+        let began = Instant::now();
+        while decks.marks(&mut parts)[0] != drop_mark {
+            assert!(
+                began.elapsed() < std::time::Duration::from_secs(10),
+                "the marks never came in"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let (tx, rx) = channel();
+        tx.send(label(0, 7, "Intro", 0x00CC00)).unwrap();
+        decks.drain(&rx, &mut parts);
+        assert!(parts.events.is_empty(), "{:?}", parts.events);
+        // The very next frame shows it.
+        assert_eq!(
+            decks.marks(&mut parts)[0],
+            Some(ui::HotcueMark::new(Some(0x00CC00), Some("Intro".into())))
+        );
+        let stored = decks.stored().unwrap();
+        assert_eq!(stored.frames, 100.0);
+        assert_eq!(stored.name.as_deref(), Some("Intro"));
+        assert_eq!(stored.color, Some(0x00CC00));
+        drop(decks.renderer);
     }
 }

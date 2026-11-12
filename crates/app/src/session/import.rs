@@ -467,7 +467,11 @@ mod tests {
             engine: &mut EngineController,
         ) -> ImportView {
             self.window.send(UiCommand::Import(step)).unwrap();
-            commands::drain(&self.commands, &mut self.parts, Some((runtime, engine)));
+            commands::drain(
+                &self.commands,
+                &mut self.parts,
+                Some((runtime, engine, None)),
+            );
             self.view()
         }
 

@@ -2,7 +2,7 @@
 //! waits: the session applies it on the control thread and publishes the result in the
 //! next frame.
 
-use engine::{DeckId, EffectKind};
+use engine::{DeckId, EffectKind, HotcueSlot};
 
 use crate::view::{
     ColourScheme, JogDisplay, Layout, PanelSizes, WaveformPalette, WaveformPosition, WaveformStyle,
@@ -33,6 +33,23 @@ pub enum UiCommand {
     Import(ImportStep),
     /// A step of the export to a USB stick.
     Export(ExportStep),
+    /// A change to the library, which the session makes through library mode.
+    Library(LibraryStep),
+}
+
+/// What the window asks of the library.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LibraryStep {
+    /// Names and colours (`0xRRGGBB`; `None` for the slot's default) hotcue `slot` of
+    /// `track`, the track the window saw on `deck` when its editor opened. Saved only if
+    /// `deck` still holds `track`.
+    HotcueLabel {
+        deck: DeckId,
+        track: i64,
+        slot: HotcueSlot,
+        name: Option<String>,
+        color: Option<u32>,
+    },
 }
 
 /// What the window asks of the import from VirtualDJ; the session answers with the

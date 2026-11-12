@@ -679,7 +679,7 @@ fn control_loop(
         Some(stream),
         output,
         interrupted,
-        &mut |_, _| {},
+        &mut |_, _, _| {},
         &mut |_| {},
     );
     printer.finish();
@@ -749,7 +749,8 @@ fn global_ghosts(runtime: &Runtime) -> [Option<f32>; ui::GLOBAL_GHOSTS] {
 /// The body of [`control_loop`], for `play` and the window: applies the controller's
 /// MIDI, drives its LEDs, follows it being unplugged and runs library mode until
 /// `interrupted`, then shuts library mode down. `control` runs once every pass, before
-/// `on_pass`, with the runtime and the engine (the window's commands are applied there);
+/// `on_pass`, with the runtime, the engine and library mode (the window's commands are
+/// applied there);
 /// `on_pass` sees the state after every pass.
 /// Without a `stream` (a test engine), no stream errors are read.
 #[expect(
@@ -764,7 +765,7 @@ pub(crate) fn run_controller(
     mut stream: Option<&mut OutputStream>,
     output: LoopOutput<'_>,
     interrupted: &AtomicBool,
-    control: &mut dyn FnMut(&mut Runtime, &mut EngineController),
+    control: &mut dyn FnMut(&mut Runtime, &mut EngineController, Option<&mut LibraryMode>),
     on_pass: &mut dyn FnMut(Pass<'_>),
 ) {
     let ControllerPorts {
@@ -919,7 +920,7 @@ pub(crate) fn run_controller(
             printer.event(reconnect_message(change, why));
         }
 
-        control(&mut runtime, engine);
+        control(&mut runtime, engine, library.as_mut());
         on_pass(Pass {
             state: runtime.state(),
             engine,
