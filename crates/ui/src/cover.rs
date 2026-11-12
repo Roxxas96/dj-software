@@ -150,7 +150,8 @@ pub fn decode(bytes: &[u8]) -> Option<ColorImage> {
 
 /// Draws a square tile of `side` points: `cover`, or a plain tile with a note.
 pub fn tile(ui: &mut Ui, cover: Option<&TextureHandle>, side: f32) {
-    let (rect, _) = ui.allocate_exact_size(Vec2::splat(side), Sense::hover());
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(side), Sense::hover());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Image, true, "cover"));
     match cover {
         Some(texture) => {
             egui::Image::from_texture(texture)

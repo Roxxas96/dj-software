@@ -9,8 +9,8 @@ use std::time::Instant;
 use actions::{Action, ControlState, HardwarePadMode, Input, PadMode, Side, SideControl};
 use analysis::{Key, KeyNotation, Waveform};
 use egui::{
-    Align, Color32, CornerRadius, Label, Layout, Mesh, Rect, RichText, Sense, Shape, Stroke,
-    StrokeKind, TextureHandle, Ui, UiBuilder, Vec2, pos2, vec2,
+    Align, Color32, CornerRadius, Label, Layout, Margin, Mesh, Rect, RichText, Role, Sense, Shape,
+    Stroke, StrokeKind, TextureHandle, Ui, UiBuilder, Vec2, WidgetInfo, pos2, vec2,
 };
 use engine::{
     ChannelSnapshot, DeckId, DeckSnapshot, EffectKind, EngineMonitor, Grid, Hotcue, Meters,
@@ -22,7 +22,7 @@ use crate::cover::{self, Covers};
 use crate::layout::{Sections, deck_slots};
 use crate::mixer;
 use crate::model::{ControlFrame, GHOST_TEMPO, HotcueMark};
-use crate::theme;
+use crate::theme::{self, EDGE_LABEL_WIDTH, SECTION_GAP, edge_label};
 use crate::view::{JogDisplay, TimeMode, WaveformPalette};
 use crate::waveform::{Playhead, band_colours};
 
@@ -34,15 +34,19 @@ const JOG_RPM: f64 = 100.0 / 3.0;
 const PANEL_SHARE: f32 = 0.38;
 /// The same in the 4-Decks view, where the mixer has four strips to fit.
 const FOUR_PANEL_SHARE: f32 = 0.34;
-/// The outline of a side's active deck in the 4-Decks view.
-const ACTIVE_BORDER: f32 = 2.0;
-const PANEL_MARGIN: i8 = 6;
+/// The width of the accent tab on the outer edge of a side's active deck.
+const ACCENT_TAB: f32 = 4.0;
+/// A panel's margin at its sides: room for the accent tab and a little more.
+const PANEL_MARGIN_X: i8 = 8;
+/// A panel's margin at its top and bottom.
+const PANEL_MARGIN_Y: i8 = 4;
 const COVER_SIDE: f32 = 64.0;
 /// The right of the header: BPM, key and times.
 const TIMES_WIDTH: f32 = 130.0;
 /// A line of the header's small text.
 const HEADER_LINE: f32 = 16.0;
-const OVERVIEW_HEIGHT: f32 = 32.0;
+/// The overview, under the title in the header.
+const OVERVIEW_HEIGHT: f32 = 24.0;
 /// The space between a panel's rows, and between the controls of a column.
 const ROW_GAP: f32 = 4.0;
 const FX_WIDTH: f32 = 96.0;
@@ -473,23 +477,27 @@ impl DeckPanels {
         );
         let active = Side::ALL.map(|side| frame.control.side(side).active_deck);
         let slots = deck_slots(four, active);
-        // Two decks: one panel a side. Four: two stacked, the side's first deck on top.
+        // Half the gap to the mixer on each panel's inner side; the mixer keeps the other.
+        let half_gap = SECTION_GAP / 2.0;
+        let columns = [
+            Rect::from_min_max(left.min, pos2(left.right() - half_gap, left.bottom())),
+            Rect::from_min_max(pos2(right.left() + half_gap, right.top()), right.max),
+        ];
+        // Two decks: one panel a side. Four: two stacked, the side's first deck on top,
+        // the gap between them.
         let rects: Vec<Rect> = if four {
-            [left, right]
+            columns
                 .into_iter()
                 .flat_map(|side| {
-                    let half = side.height() / 2.0;
+                    let half = (side.height() - SECTION_GAP) / 2.0;
                     [
                         Rect::from_min_size(side.min, vec2(side.width(), half)),
-                        Rect::from_min_size(
-                            pos2(side.left(), side.top() + half),
-                            vec2(side.width(), half),
-                        ),
+                        Rect::from_min_max(pos2(side.left(), side.bottom() - half), side.max),
                     ]
                 })
                 .collect()
         } else {
-            vec![left, right]
+            columns.to_vec()
         };
         for (deck, rect) in slots.into_iter().zip(rects) {
             let (mut snapshot, rendered_at) = reads.decks[deck.index()];
@@ -507,15 +515,16 @@ impl DeckPanels {
                 ui.set_clip_rect(rect.intersect(ui.clip_rect()));
                 panel(ui, &view, cover.as_ref(), sections, commands);
             });
-            // With four panels, the ones the controller plays are the ones outlined.
-            if four && active.contains(&deck) {
+            // The decks the controller plays have a tab in their side's accent on the outer
+            // edge (with two decks, both panels).
+            if active.contains(&deck) {
                 let accent = theme::palette(ui.ctx()).deck_accent(deck);
-                ui.painter().rect_stroke(
-                    rect,
-                    CornerRadius::ZERO,
-                    Stroke::new(ACTIVE_BORDER, accent),
-                    StrokeKind::Inside,
-                );
+                let x = match Side::of(deck) {
+                    Side::Left => rect.left(),
+                    Side::Right => rect.right() - ACCENT_TAB,
+                };
+                let tab = Rect::from_x_y_ranges(x..=x + ACCENT_TAB, rect.y_range());
+                ui.painter().rect_filled(tab, CornerRadius::ZERO, accent);
             }
         }
         Rect::from_min_max(
@@ -525,12 +534,10 @@ impl DeckPanels {
     }
 }
 
-/// The height a deck panel needs to show every area of `sections`.
+/// The height a deck panel needs to show every area of `sections`: the header (with the
+/// overview in it), then the middle and bottom rows, or the compact panel's one row.
 pub fn panel_height(sections: &Sections) -> f32 {
-    let mut height = 2.0 * f32::from(PANEL_MARGIN) + COVER_SIDE;
-    if sections.overview {
-        height += ROW_GAP + OVERVIEW_HEIGHT;
-    }
+    let height = 2.0 * f32::from(PANEL_MARGIN_Y) + COVER_SIDE;
     if sections.compact {
         return height + ROW_GAP + BUTTON_HEIGHT;
     }
@@ -538,10 +545,10 @@ pub fn panel_height(sections: &Sections) -> f32 {
 }
 
 /// The height the deck panels' row needs for `sections`: one panel, or two stacked in the
-/// 4-Decks view.
+/// 4-Decks view, each with the [`SECTION_GAP`] under it.
 pub fn row_height(sections: &Sections) -> f32 {
     let panels = if sections.compact { 2.0 } else { 1.0 };
-    panels * panel_height(sections)
+    panels * (panel_height(sections) + SECTION_GAP)
 }
 
 /// The middle row's height: the jog's when the layout has one, else the FX slots' (or the
@@ -567,7 +574,8 @@ fn fx_height(level: bool) -> f32 {
     }
 }
 
-/// The bottom row's height: three buttons, as tall as the pad mode over two rows of pads.
+/// The bottom row's height: three buttons, as tall as the pad mode over two rows of pads
+/// and as CUE, PLAY and SYNC.
 fn bottom_height() -> f32 {
     3.0 * BUTTON_HEIGHT + 2.0 * ROW_GAP
 }
@@ -585,14 +593,11 @@ pub fn panel(
     let accent = p.deck_accent(view.deck);
     egui::Frame::new()
         .fill(p.panel)
-        .inner_margin(PANEL_MARGIN)
+        .inner_margin(Margin::symmetric(PANEL_MARGIN_X, PANEL_MARGIN_Y))
         .show(ui, |ui| {
             ui.set_min_size(ui.available_size());
             ui.spacing_mut().item_spacing = vec2(6.0, ROW_GAP);
-            header(ui, view, cover, accent, commands);
-            if sections.overview {
-                overview(ui, view);
-            }
+            header(ui, view, cover, accent, sections.overview, commands);
             if sections.compact {
                 compact_row(ui, view, accent, sections.loop_controls);
                 return;
@@ -601,26 +606,37 @@ pub fn panel(
             ui.horizontal(|ui| {
                 ui.set_height(middle);
                 if sections.fx {
+                    edge_strip(ui, middle, "FX");
                     fx(ui, view, accent, sections.fx_level, commands);
                 }
-                if sections.jog {
-                    jog(ui, view, accent);
-                }
-                if sections.pitch {
-                    let width = if sections.jog {
-                        PITCH_WIDTH
-                    } else {
-                        PITCH_COMPACT_WIDTH
-                    };
-                    pitch(ui, view, accent, width, middle);
-                }
                 states(ui, view, accent);
+                // The jog and the tempo slider at the right, over CUE, PLAY and SYNC.
+                ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
+                    if sections.pitch {
+                        let width = if sections.jog {
+                            PITCH_WIDTH
+                        } else {
+                            PITCH_COMPACT_WIDTH
+                        };
+                        pitch(ui, view, accent, width, middle);
+                    }
+                    if sections.jog {
+                        jog(ui, view, accent);
+                    }
+                });
             });
             ui.horizontal_top(|ui| {
-                transport(ui, view);
                 pads_grid(ui, view, accent, sections, commands);
+                transport(ui, view);
             });
         });
+}
+
+/// A strip [`EDGE_LABEL_WIDTH`] wide and `height` tall at the left of what follows in
+/// `ui`, named `text` with an [`edge_label`].
+fn edge_strip(ui: &mut Ui, height: f32, text: &str) {
+    let (strip, _) = ui.allocate_exact_size(vec2(EDGE_LABEL_WIDTH, height), Sense::hover());
+    edge_label(ui, strip, text);
 }
 
 /// CUE, PLAY, SYNC, the three states and (when `loop_controls`) the loop's size, IN and
@@ -660,13 +676,14 @@ fn compact_row(ui: &mut Ui, view: &DeckView, accent: Color32, loop_controls: boo
     });
 }
 
-/// The cover, title, artist, remix and stems, then BPM, key and times on the right, all
-/// within the cover's height.
+/// The cover, the title over the artist and remix, the overview under them (when
+/// `overview`), then BPM, key, stems and times on the right, all within the cover's height.
 fn header(
     ui: &mut Ui,
     view: &DeckView,
     cover: Option<&TextureHandle>,
     accent: Color32,
+    overview: bool,
     commands: &Sender<UiCommand>,
 ) {
     let p = theme::palette(ui.ctx());
@@ -679,9 +696,18 @@ fn header(
     ui.set_clip_rect(rect.intersect(ui.clip_rect()));
     cover::tile(&mut ui, cover, COVER_SIDE);
     let text_width = (ui.available_width() - TIMES_WIDTH).max(0.0);
-    let column = vec2(text_width, COVER_SIDE);
-    ui.allocate_ui_with_layout(column, Layout::top_down(Align::Min), |ui| {
-        ui.set_min_size(column);
+    let (column, _) = ui.allocate_exact_size(vec2(text_width, COVER_SIDE), Sense::hover());
+    // The overview along the bottom of the column, the text above it.
+    let text = if overview {
+        let (text, wave) = column.split_top_bottom_at_y(column.bottom() - OVERVIEW_HEIGHT);
+        overview_strip(&ui, view, wave);
+        text
+    } else {
+        column
+    };
+    let layout = Layout::top_down(Align::Min);
+    ui.scope_builder(UiBuilder::new().max_rect(text).layout(layout), |ui| {
+        ui.set_clip_rect(text.intersect(ui.clip_rect()));
         ui.spacing_mut().item_spacing.y = 0.0;
         ui.horizontal(|ui| {
             ui.label(
@@ -692,13 +718,12 @@ fn header(
             );
             ui.add(Label::new(RichText::new(&view.title).strong().size(TITLE_FONT)).truncate());
         });
-        ui.add(Label::new(RichText::new(&view.artist).color(p.text_dim)).truncate());
-        if let Some(remix) = &view.remix {
-            ui.add(Label::new(RichText::new(remix).color(p.text_dim)).truncate());
-        }
-        if let Some(stems) = &view.stems {
-            ui.label(RichText::new(stems).color(accent).size(SMALL_FONT));
-        }
+        ui.horizontal(|ui| {
+            ui.add(Label::new(RichText::new(&view.artist).color(p.text_dim)).truncate());
+            if let Some(remix) = &view.remix {
+                ui.add(Label::new(RichText::new(remix).color(p.text_dim)).truncate());
+            }
+        });
     });
     let times = vec2(ui.available_width(), COVER_SIDE);
     ui.allocate_ui_with_layout(times, Layout::top_down(Align::Max), |ui| {
@@ -710,13 +735,16 @@ fn header(
         // Right to left: the last added is the leftmost.
         let row = Layout::right_to_left(Align::Center);
         let line = vec2(ui.available_width(), HEADER_LINE);
-        if view.key.is_some() || view.beat_counter.is_some() {
+        if view.key.is_some() || view.beat_counter.is_some() || view.stems.is_some() {
             ui.allocate_ui_with_layout(line, row, |ui| {
                 if let Some(counter) = &view.beat_counter {
                     ui.label(RichText::new(counter).color(p.text_dim));
                 }
                 if let Some(key) = &view.key {
                     ui.label(RichText::new(key).color(accent));
+                }
+                if let Some(stems) = &view.stems {
+                    ui.label(RichText::new(stems).color(accent).size(SMALL_FONT));
                 }
             });
         }
@@ -738,11 +766,11 @@ fn header(
     });
 }
 
-/// The whole track's waveform with the playhead.
-fn overview(ui: &mut Ui, view: &DeckView) {
+/// The whole track's waveform with the playhead, in `rect`.
+fn overview_strip(ui: &Ui, view: &DeckView, rect: Rect) {
     let p = theme::palette(ui.ctx());
-    let size = vec2(ui.available_width(), OVERVIEW_HEIGHT);
-    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    let response = ui.interact(rect, ui.scope_id().with("overview"), Sense::hover());
+    response.widget_info(|| WidgetInfo::labeled(Role::Image, true, "overview"));
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, CornerRadius::ZERO, p.lane);
     let mut mesh = Mesh::default();
@@ -947,16 +975,23 @@ fn pads_grid(
     sections: &Sections,
     commands: &Sender<UiCommand>,
 ) {
+    let spacing = ui.spacing().item_spacing.x;
+    let label = EDGE_LABEL_WIDTH + spacing;
     let loop_width = if sections.loop_controls {
-        LOOP_WIDTH + PAD_GAP * 2.0
+        label + LOOP_WIDTH + spacing
     } else {
         0.0
     };
-    let pads_width = (ui.available_width() - loop_width).max(0.0);
+    // The transport keeps its width at the right.
+    let transport = TRANSPORT_WIDTH + spacing;
+    let pads_width = (ui.available_width() - label - loop_width - transport).max(0.0);
+    let height = bottom_height();
     if sections.pads {
+        edge_strip(ui, height, "PADS");
         pads_column(ui, view, accent, pads_width, commands);
     }
     if sections.loop_controls {
+        edge_strip(ui, height, "LOOP");
         loop_column(ui, view);
     }
 }
@@ -997,13 +1032,14 @@ fn pads_column(
     });
 }
 
-/// The loop: its size, IN and OUT.
+/// The loop: its size over IN and OUT, beside the two rows of pads.
 fn loop_column(ui: &mut Ui, view: &DeckView) {
     let p = theme::palette(ui.ctx());
     ui.vertical(|ui| {
         let size = vec2(LOOP_WIDTH, BUTTON_HEIGHT);
-        ui.label(RichText::new("LOOP").color(p.text_dim).size(SMALL_FONT));
         let looping = view.loop_active.then_some(p.hotcue);
+        // In line with the pads' rows, under the pad mode.
+        ui.add_space(BUTTON_HEIGHT);
         indicator(ui, size, &view.loop_beats, looping);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = PAD_GAP;

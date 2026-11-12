@@ -1,5 +1,8 @@
 //! The panels fold away to a tab and the sideview shows the sampler, headless.
 
+#[allow(dead_code, reason = "only the loaded decks are used here")]
+mod support;
+
 use std::sync::mpsc::channel;
 
 use egui_kittest::Harness;
@@ -158,12 +161,42 @@ fn dragging_a_divider_sends_the_new_sizes() {
     assert!((sizes.tree - 0.30).abs() < 0.02, "{sizes:?}");
     // The decks' share was never set: it stays unset, so every layout keeps its own.
     assert_eq!(sizes.decks, PanelSizes::default().decks, "{sizes:?}");
+    // Each layout's deck row is then as tall as its own contents.
     let window = egui::vec2(1440.0, 900.0);
-    let height = |layout| {
-        let sections = ui::layout::sections(layout);
-        ui::layout::drawn_sizes(*sizes, &sections, window).decks
-    };
-    assert!(height(Layout::Starter) > height(Layout::Pro), "{sizes:?}");
+    for layout in Layout::ALL {
+        let sections = ui::layout::sections(*layout);
+        let drawn = ui::layout::drawn_sizes(*sizes, &sections, window).decks * window.y;
+        let contents = ui::deck::row_height(&sections);
+        assert!(
+            (drawn - contents).abs() <= 1.0,
+            "{layout:?}: {drawn} {contents}"
+        );
+    }
+}
+
+#[test]
+fn spare_height_goes_to_the_browser() {
+    let (frame, reads) = support::loaded(Layout::Pro, false);
+    let mut screen = ui::Screen::default();
+    let mut harness = Harness::builder()
+        .with_size([1440.0, 900.0])
+        .build_ui(|ui| ui::root_with_reads(ui, &frame, &reads, &mut screen));
+    harness.run_steps(3);
+    let top_bar = harness.get_by_label("top bar").rect();
+    let browser = harness.get_by_label("browser").rect();
+    // The window is what the harness gives the root, inside its margin.
+    let window = egui::vec2(browser.width(), browser.max.y - top_bar.min.y);
+    let sections = ui::layout::shown_sections(&frame.view);
+    let sizes = ui::layout::drawn_sizes(frame.view.sizes, &sections, window);
+    let rest =
+        window.y - top_bar.height() - sizes.lanes * window.y - ui::deck::row_height(&sections);
+    let height = browser.height();
+    assert!(
+        (height - rest).abs() <= 2.0,
+        "browser {height}, expected {rest}"
+    );
+    // More than the layout's old fixed share left it.
+    assert!(height > window.y * (1.0 - 0.22 - 0.38), "{height}");
 }
 
 #[test]

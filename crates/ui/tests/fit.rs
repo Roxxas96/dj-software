@@ -126,7 +126,7 @@ fn check(layout: Layout, four_decks: bool, wanted: &[&str]) {
 /// The header's text: the key, the beat counter, both times and the stems.
 const HEADER: [&str; 5] = ["8A", "30.4", "0:57.1", "\u{2212}4:31.9", "stems 40%"];
 /// The header's bottom below a panel's top: the margin and the cover.
-const HEADER_BOTTOM: f32 = 6.0 + 64.0;
+const HEADER_BOTTOM: f32 = 4.0 + 64.0;
 const TRANSPORT: [&str; 3] = ["CUE", "PLAY", "SYNC"];
 const LOOP: [&str; 3] = ["4", "IN", "OUT"];
 /// The hotcue pads: the fixture's second hotcue is a saved loop.

@@ -119,9 +119,9 @@ ids!(WaveformPosition { Top => "top", Middle => "middle" });
 /// What the jog wheels show.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum JogDisplay {
-    #[default]
     Plain,
-    /// The deck's time and BPM inside the jog.
+    /// The deck's time and BPM inside the jog, as VirtualDJ shows it.
+    #[default]
     Info,
 }
 ids!(JogDisplay { Plain => "plain", Info => "info" });
