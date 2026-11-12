@@ -68,7 +68,8 @@ height (see [Dividers](#dividers-folding-and-the-sideview)).
   launch; `ui.waveform_beats` is only the zoom before that file exists (delete the file to
   go back to it). A value in the file that cannot be read keeps its default, and the others
   still load.
-- **Deck panels:** cover, title, artist and remix, the overview waveform, BPM, key, the
+- **Deck panels:** cover, title, artist and remix, the overview waveform, BPM, a row under
+  it with the stems state (`stems`, or `stems 40%` while they are made), the key and the
   bar.beat counter, two times, the FX slots (each a dropdown that puts another effect in that
   deck's slot), the jog, the pitch fader with its pickup marker, VINYL, SLIP and KEYLOCK, the
   pad mode dropdown and the 8 pads (a set hotcue pad reads `<n> <name>`, or `<n> loop` for a
@@ -79,8 +80,8 @@ height (see [Dividers](#dividers-folding-and-the-sideview)).
     default), total, then elapsed. The dimmer one beside it is the elapsed time, or the
     remaining time while the brighter one shows elapsed. Each deck keeps its own choice,
     which is saved.
-  - **Beat counter:** `bar.beat` under the key, counted from 1 from the grid's first beat,
-    4 beats to a bar. Before the first beat the bars count backwards from 0. It shows only
+  - **Beat counter:** `bar.beat` beside the key, right of it on the same row, counted
+    from 1 from the grid's first beat, 4 beats to a bar. Before the first beat the bars count backwards from 0. It shows only
     when the LAYOUT menu's Beat Counter is on and the track has a grid.
   - **Jog:** the Info jogwheel display is the default: the wheel shows the BPM, the pitch and
     both the elapsed and the remaining time inside it, and its marker moves to the rim.
@@ -115,8 +116,12 @@ page choose the palette, and the choice is saved:
 | Palette | Low | Mid | High |
 |---|---|---|---|
 | Red / green / blue (default) | red | green | blue |
-| Blue / orange / white | blue | orange | white (dark scheme) or dark slate (light scheme) |
+| Blue / orange / white | blue | orange | white |
 | Orange / yellow / cyan | orange | yellow | cyan |
+
+The lanes and the deck panels' overviews stay dark in the light colour scheme too, as in
+VirtualDJ's light skins, so every palette, the beat ticks, the hotcue flags and the playhead
+read the same in both schemes.
 
 ## The LAYOUT menu
 
@@ -155,8 +160,8 @@ Pro is the default.
 The deck panels never get less height than every one of their areas needs, so the pads, the
 pad mode, CUE, PLAY, SYNC and the loop always show, and at the smallest window (1024 by 700)
 the browser still lists at least three rows. The mixer's knobs shrink to the height and
-width their strip gets. The Interface page's sketches draw each layout with the same
-proportions.
+width their strip gets. The Interface page's sketches draw each layout with the
+proportions it has in a window of the default size (1440 by 900).
 
 Until the deck divider itself is dragged, the deck panels take their contents' height;
 dragging another divider leaves that alone. Once the deck divider is dragged, its height
