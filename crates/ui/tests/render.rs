@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use egui::{Vec2, vec2};
-use ui::Layout;
+use ui::{ColourScheme, Layout};
 
 const WINDOW: Vec2 = vec2(1440.0, 900.0);
 const SMALL_WINDOW: Vec2 = vec2(1024.0, 700.0);
@@ -22,9 +22,11 @@ fn out_dir() -> PathBuf {
     dir
 }
 
-/// Renders `layout` at `size` to `<name>.png`, and checks the image is the window, drawn.
-fn render(name: &str, layout: Layout, four_decks: bool, size: Vec2) {
-    let (frame, reads) = support::loaded(layout, four_decks);
+/// Renders `layout` at `size` in `scheme` to `<name>.png`, and checks the image is the
+/// window, drawn.
+fn render(name: &str, layout: Layout, four_decks: bool, size: Vec2, scheme: ColourScheme) {
+    let (mut frame, reads) = support::loaded(layout, four_decks);
+    frame.view.colour_scheme = scheme;
     let image = support::render(frame, reads, size);
     assert_eq!(
         (image.width(), image.height()),
@@ -51,8 +53,15 @@ fn render_every_layout() {
         ("pro", Layout::Pro),
         ("performance", Layout::Performance),
     ] {
-        render(name, layout, false, WINDOW);
+        render(name, layout, false, WINDOW, ColourScheme::Dark);
     }
-    render("pro-4decks", Layout::Pro, true, WINDOW);
-    render("pro-small", Layout::Pro, false, SMALL_WINDOW);
+    render("pro-4decks", Layout::Pro, true, WINDOW, ColourScheme::Dark);
+    render(
+        "pro-small",
+        Layout::Pro,
+        false,
+        SMALL_WINDOW,
+        ColourScheme::Dark,
+    );
+    render("pro-light", Layout::Pro, false, WINDOW, ColourScheme::Light);
 }

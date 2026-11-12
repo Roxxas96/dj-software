@@ -95,7 +95,11 @@ fn sketch_of(ui: &Ui, area: Rect, layout: Layout) {
             vec2(area.width(), share * area.height() - 2.0),
         )
     };
-    painter.rect_filled(band(0.0, LANES_SHARE), CornerRadius::ZERO, p.lane);
+    painter.rect_filled(
+        band(0.0, LANES_SHARE),
+        CornerRadius::ZERO,
+        p.wave_background,
+    );
     let decks_share = deck_band_share(layout);
     let decks = band(LANES_SHARE, decks_share);
     painter.rect_filled(
