@@ -5,15 +5,17 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use actions::{Action, ControlState, HardwarePadMode, Input, PadMode, Side, SideControl};
+use actions::{
+    Action, ControlState, HardwarePadMode, Input, PadMode, Side, SideControl, pad_action,
+};
 use analysis::{Key, KeyNotation, Waveform};
 use egui::{
     Align, Color32, CornerRadius, Id, Label, Layout, Margin, Mesh, Rect, RichText, Role, Sense,
     Shape, Stroke, StrokeKind, TextureHandle, Ui, UiBuilder, Vec2, WidgetInfo, pos2, vec2,
 };
 use engine::{
-    ChannelSnapshot, DeckId, DeckSnapshot, EffectKind, EngineMonitor, Grid, Hotcue, Meters,
-    SAMPLER_SLOTS, SamplerSnapshot,
+    ChannelSnapshot, DeckId, DeckSnapshot, EffectKind, EngineMonitor, Grid, Hotcue, HotcueSlot,
+    Meters, SAMPLER_SLOTS, SamplerSnapshot,
 };
 
 use crate::command::{UiCommand, ViewChange};
@@ -166,6 +168,9 @@ pub struct DeckView {
     /// The pad mode the app switches to, [`PadMode::Hardware`] while the SB3's own mode
     /// buttons drive the pads.
     pub pad_mode_choice: PadMode,
+    /// The pads show the sampler's slots, which the SB3's SAMPLER and TRANS modes play,
+    /// rather than the deck's hotcues.
+    pub pads_play_samples: bool,
     pub pads: [PadView; 8],
     /// The stems' state ("stems", "stems 40%").
     pub stems: Option<String>,
@@ -270,6 +275,11 @@ impl DeckView {
             fx_level: channel.fx_amount,
             pad_mode: side.pad_mode_label(),
             pad_mode_choice: side.pad_mode,
+            pads_play_samples: side.pad_mode == PadMode::Hardware
+                && matches!(
+                    side.hardware_mode,
+                    Some(HardwarePadMode::Sampler | HardwarePadMode::Trans)
+                ),
             pads: pads(
                 side,
                 &frame.control,
@@ -1202,16 +1212,34 @@ fn pads_column(
             pad_mode_arrow(ui, view, 1, sink);
         });
         let pad = vec2((pads_width - PAD_GAP * 3.0) / 4.0, BUTTON_HEIGHT);
-        for row in view.pads.chunks(4) {
+        // The window's SHIFT, as it is when a pad goes down, picks the second beat jumps.
+        let shift = ui.input(|i| i.modifiers.shift);
+        for (row, pads) in view.pads.chunks(4).enumerate() {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = PAD_GAP;
-                for pad_view in row {
+                for (column, pad_view) in pads.iter().enumerate() {
                     let fill = pad_view.colour.map_or(accent, |c| p.mark(Some(c)));
-                    indicator(ui, pad, &pad_view.label, pad_view.lit.then_some(fill));
+                    let rect = indicator(ui, pad, &pad_view.label, pad_view.lit.then_some(fill));
+                    let slot = HotcueSlot::ALL[row * 4 + column];
+                    if let Some(action) = pad_press(view, side, slot, shift) {
+                        let id = ("pad", view.deck, slot);
+                        let response =
+                            ui.interact(rect, Id::NULL.with(id), Sense::click_and_drag());
+                        sink.button(&response, action);
+                    }
                 }
             });
         }
     });
+}
+
+/// What pressing pad `slot` of `view` sends: what the SB3's pad sends in the mode the pads
+/// are in ([`actions::pad_action`]), or, while the pads show the sampler, its slot.
+fn pad_press(view: &DeckView, side: Side, slot: HotcueSlot, shift: bool) -> Option<Action> {
+    if view.pads_play_samples {
+        return Some(Action::SamplerPlay(slot));
+    }
+    pad_action(view.pad_mode_choice, side, view.deck, slot, shift)
 }
 
 /// The loop: < and > (halve and double it) in line with the pad mode, then its size (an

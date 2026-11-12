@@ -9,6 +9,28 @@ pub enum Side {
     Right,
 }
 
+/// The action the performance pad `slot` of `deck` (on `side`) sends in `mode`: what a
+/// controller pad does there, for the window's pads. The hardware mode leaves the pads to
+/// the controller, so the window sends hotcues, which the pads show; SHIFT switches the
+/// beat jump pads to their second set. PAD SCRATCH has no pad on screen to press.
+pub fn pad_action(
+    mode: PadMode,
+    side: Side,
+    deck: DeckId,
+    slot: HotcueSlot,
+    shift: bool,
+) -> Option<Action> {
+    debug_assert_eq!(Side::of(deck), side, "a deck's pads are its side's");
+    Some(match mode {
+        PadMode::Hardware => Action::Hotcue(deck, slot),
+        PadMode::BeatJump if shift => Action::BeatJumpShift(deck, slot),
+        PadMode::BeatJump => Action::BeatJump(deck, slot),
+        PadMode::LoopRoll => Action::LoopRoll(deck, slot),
+        PadMode::Slicer => Action::Slice(deck, slot),
+        PadMode::PadScratch => return None,
+    })
+}
+
 impl Side {
     pub const ALL: [Side; 2] = [Side::Left, Side::Right];
 

@@ -743,3 +743,135 @@ fn fx_toggle_and_level() {
         .expect("no FxLevel");
     assert!((level - 0.75).abs() < 0.03, "got {level}");
 }
+
+/// The middle of pad `number` (1 to 8) as `view` shows it, found by its text.
+fn pad_at<S>(harness: &Harness<'_, S>, view: &DeckView, number: usize) -> Pos2 {
+    let label = view.pads[number - 1].label.as_str();
+    harness
+        .get_all_by_label(label)
+        .last()
+        .unwrap_or_else(|| panic!("no pad {number} labelled {label:?}"))
+        .rect()
+        .center()
+}
+
+fn slot(number: usize) -> engine::HotcueSlot {
+    engine::HotcueSlot::ALL[number - 1]
+}
+
+#[test]
+fn clicking_a_hotcue_pad_sends_press_and_release() {
+    for number in [1, 2] {
+        let (snapshot, mut frame) = loaded_plain();
+        let id = DeckId::new(number - 1).unwrap();
+        frame.decks.swap(0, id.index());
+        let view = DeckView::new(
+            id,
+            &snapshot,
+            &ChannelSnapshot::default(),
+            &frame,
+            &SamplerSnapshot::default(),
+        );
+        let (mut harness, received) = sending(view.clone());
+        let at = pad_at(&harness, &view, 3);
+        press_and_release(&mut harness, at);
+        let sent: Vec<UiCommand> = received.try_iter().collect();
+        assert_eq!(
+            sent,
+            press_release(Action::Hotcue(id, slot(3))),
+            "deck {number}"
+        );
+    }
+}
+
+#[test]
+fn loop_roll_pad_holds_while_pressed() {
+    let (snapshot, mut frame) = loaded_plain();
+    frame.control.sides[0].pad_mode = PadMode::LoopRoll;
+    let view = view(&snapshot, &frame);
+    let (mut harness, received) = sending(view.clone());
+    let at = pad_at(&harness, &view, 3);
+    let roll = Action::LoopRoll(DeckId::new(0).unwrap(), slot(3));
+    harness.event(Event::PointerMoved(at));
+    harness.run_steps(1);
+    harness.event(pointer(true, at));
+    harness.run_steps(4);
+    let sent: Vec<UiCommand> = received.try_iter().collect();
+    assert_eq!(sent, [UiCommand::Action(roll, Input::Press)]);
+    harness.event(pointer(false, at));
+    harness.run_steps(2);
+    let sent: Vec<UiCommand> = received.try_iter().collect();
+    assert_eq!(sent, [UiCommand::Action(roll, Input::Release)]);
+}
+
+#[test]
+fn a_mode_change_mid_press_releases_the_pressed_action() {
+    let (snapshot, mut frame) = loaded_plain();
+    frame.control.sides[0].pad_mode = PadMode::LoopRoll;
+    let first = view(&snapshot, &frame);
+    let (mut harness, received) = sending(first.clone());
+    let at = pad_at(&harness, &first, 3);
+    harness.event(Event::PointerMoved(at));
+    harness.run_steps(1);
+    harness.event(pointer(true, at));
+    harness.run_steps(2);
+    frame.control.sides[0].pad_mode = PadMode::Slicer;
+    harness.state_mut().view = view(&snapshot, &frame);
+    harness.run_steps(2);
+    harness.event(pointer(false, at));
+    harness.run_steps(2);
+    let sent: Vec<UiCommand> = received.try_iter().collect();
+    let roll = Action::LoopRoll(DeckId::new(0).unwrap(), slot(3));
+    assert_eq!(sent, press_release(roll));
+}
+
+#[test]
+fn shift_click_in_beat_jump_mode_sends_beat_jump_shift() {
+    let (snapshot, mut frame) = loaded_plain();
+    frame.control.sides[0].pad_mode = PadMode::BeatJump;
+    let view = view(&snapshot, &frame);
+    let (mut harness, received) = sending(view.clone());
+    let at = pad_at(&harness, &view, 3);
+    harness.event(Event::PointerMoved(at));
+    harness.run_steps(1);
+    harness.event(Event::ModifiersChanged(Modifiers::SHIFT));
+    harness.event(Event::PointerButton {
+        pos: at,
+        button: PointerButton::Primary,
+        pressed: true,
+        modifiers: Modifiers::SHIFT,
+    });
+    harness.run_steps(2);
+    // The key coming up before the mouse does not change what was pressed.
+    harness.event(Event::ModifiersChanged(Modifiers::NONE));
+    harness.event(pointer(false, at));
+    harness.run_steps(2);
+    let id = DeckId::new(0).unwrap();
+    let sent: Vec<UiCommand> = received.try_iter().collect();
+    assert_eq!(sent, press_release(Action::BeatJumpShift(id, slot(3))));
+    press_and_release(&mut harness, at);
+    let sent: Vec<UiCommand> = received.try_iter().collect();
+    assert_eq!(sent, press_release(Action::BeatJump(id, slot(3))));
+}
+
+#[test]
+fn slicer_and_sampler_pads_send_their_actions() {
+    let (snapshot, mut frame) = loaded_plain();
+    frame.control.sides[0].pad_mode = PadMode::Slicer;
+    let slicer = view(&snapshot, &frame);
+    let (mut harness, received) = sending(slicer.clone());
+    let at = pad_at(&harness, &slicer, 5);
+    press_and_release(&mut harness, at);
+    let sent: Vec<UiCommand> = received.try_iter().collect();
+    let slice = Action::Slice(DeckId::new(0).unwrap(), slot(5));
+    assert_eq!(sent, press_release(slice));
+
+    frame.control.sides[0].pad_mode = PadMode::Hardware;
+    frame.control.sides[0].hardware_mode = Some(actions::HardwarePadMode::Sampler);
+    let sampler = view(&snapshot, &frame);
+    let (mut harness, received) = sending(sampler.clone());
+    let at = pad_at(&harness, &sampler, 2);
+    press_and_release(&mut harness, at);
+    let sent: Vec<UiCommand> = received.try_iter().collect();
+    assert_eq!(sent, press_release(Action::SamplerPlay(slot(2))));
+}
