@@ -148,6 +148,17 @@ pub fn root(
     monitor: Option<&EngineMonitor>,
     screen: &mut Screen,
 ) {
+    root_with_reads(ui, frame, &deck::DeckReads::read(monitor), screen);
+}
+
+/// [`root`] from what was already read from the engine: the whole window, every part
+/// drawing from `reads`.
+pub fn root_with_reads(
+    ui: &mut egui::Ui,
+    frame: &ControlFrame,
+    reads: &deck::DeckReads,
+    screen: &mut Screen,
+) {
     theme::apply(ui.ctx(), frame.view.colour_scheme);
     let p = theme::palette(ui.ctx());
     let window = ui.max_rect().size();
@@ -173,7 +184,7 @@ pub fn root(
             topbar::show(
                 ui,
                 frame,
-                monitor,
+                reads,
                 &screen.commands,
                 &mut screen.settings.open,
             )
@@ -181,7 +192,7 @@ pub fn root(
     let lanes = |ui: &mut egui::Ui, screen: &mut Screen, drags: &mut Drags| {
         let height = drags.sizes.lanes * window.y;
         let (drag, top) = row_panel(ui, "waveform_lanes", height, &p, |ui| {
-            screen.lanes.show(ui, frame, monitor, &screen.commands)
+            screen.lanes.show(ui, frame, reads, &screen.commands)
         });
         drags.place(drag, top, |sizes, share| sizes.lanes = share);
     };
@@ -191,15 +202,15 @@ pub fn root(
     let height = drags.sizes.decks * window.y;
     let (drag, top) = row_panel(ui, "deck_panels", height, &p, |ui| {
         // The space between the decks is the mixer's.
-        let space = screen.decks.show(
+        let space = screen.decks.show_reads(
             ui,
             frame,
-            monitor,
+            reads,
             &mut screen.covers,
             &sections,
             &screen.commands,
         );
-        screen.mixer.show(ui, space, frame, monitor, &sections);
+        screen.mixer.show(ui, space, frame, reads, &sections);
     });
     drags.decks_moved = drags.place(drag, top, |sizes, share| sizes.decks = share);
     if middle {
@@ -230,7 +241,7 @@ pub fn root(
                     frame.key_notation,
                     &mut screen.covers,
                     &arrangement,
-                    |ui| sideview::show(ui, frame, monitor),
+                    |ui| sideview::show(ui, frame, reads),
                 );
             }
         });

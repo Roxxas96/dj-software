@@ -8,12 +8,13 @@ use std::time::Instant;
 use actions::Side;
 use analysis::Waveform;
 use egui::{Align2, Color32, FontId, Mesh, Painter, Pos2, Rect, Shape, Ui, pos2, vec2};
-use engine::{DeckId, DeckSnapshot, EngineMonitor, Hotcue};
+use engine::{DeckId, DeckSnapshot, Hotcue};
 
 use super::colour::band_colours;
 use super::styles::{self, MAX_BARS};
 use super::{Playhead, ZoomGesture, ticks};
 use crate::command::UiCommand;
+use crate::deck::DeckReads;
 use crate::model::{ControlFrame, HotcueMark};
 use crate::theme::{self, Palette};
 use crate::view::{WaveformPalette, WaveformStyle};
@@ -72,23 +73,21 @@ pub struct Lanes {
 }
 
 impl Lanes {
-    /// Draws the lanes in the space `ui` has left, sharing its height equally. Without
-    /// `monitor` every deck is empty. A scroll or pinch over the lanes, or the zoom
+    /// Draws the lanes in the space `ui` has left, sharing its height equally, the decks
+    /// as `reads` has them. A scroll or pinch over the lanes, or the zoom
     /// buttons, send zoom steps on `commands` (positive zooms in) for the session to apply.
     pub fn show(
         &mut self,
         ui: &mut Ui,
         frame: &ControlFrame,
-        monitor: Option<&EngineMonitor>,
+        reads: &DeckReads,
         commands: &Sender<UiCommand>,
     ) {
         let now = Instant::now();
-        let read =
-            DeckId::ALL.map(|id| monitor.map(|m| m.deck_rendered_at(id)).unwrap_or_default());
-        for (head, (snapshot, rendered_at)) in self.playheads.iter_mut().zip(&read) {
+        for (head, (snapshot, rendered_at)) in self.playheads.iter_mut().zip(&reads.decks) {
             head.observe(snapshot, *rendered_at);
         }
-        let snapshots = read.map(|(snapshot, _)| snapshot);
+        let snapshots = reads.decks.each_ref().map(|(snapshot, _)| snapshot);
         // The 4-Decks view shows every deck, playing or not.
         let shown = if frame.view.four_decks {
             DeckId::ALL.to_vec()

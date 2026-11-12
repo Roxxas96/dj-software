@@ -1,9 +1,10 @@
 //! The sideview: the sampler bank beside the browser, 8 slots in a 2x4 grid. Display only.
 
 use egui::{CornerRadius, Label, Rect, RichText, Ui, pos2, vec2};
-use engine::{EngineMonitor, SAMPLER_SLOTS, SamplerSnapshot};
+use engine::{SAMPLER_SLOTS, SamplerSnapshot};
 
 use crate::ControlFrame;
+use crate::deck::DeckReads;
 use crate::theme;
 
 const COLUMNS: usize = 2;
@@ -11,10 +12,10 @@ const GAP: f32 = 6.0;
 const HEIGHT: f32 = 56.0;
 
 /// Draws the sampler slots into `ui`'s width: lit when a sample is loaded, brighter while
-/// it plays. `monitor` is `None` until the audio device opens.
-pub fn show(ui: &mut Ui, frame: &ControlFrame, monitor: Option<&EngineMonitor>) {
+/// it plays, as `reads` has the sampler.
+pub fn show(ui: &mut Ui, frame: &ControlFrame, reads: &DeckReads) {
     let p = theme::palette(ui.ctx());
-    let playing = monitor.map(EngineMonitor::sampler).unwrap_or_default();
+    let playing = &reads.sampler;
     ui.label(RichText::new("SAMPLER").color(p.text_dim));
     ui.add_space(GAP);
     let area = ui.available_rect_before_wrap();
@@ -25,7 +26,7 @@ pub fn show(ui: &mut Ui, frame: &ControlFrame, monitor: Option<&EngineMonitor>) 
             area.min.y + (slot / COLUMNS) as f32 * (HEIGHT + GAP),
         );
         let cell = Rect::from_min_size(at, vec2(width, HEIGHT));
-        let (fill, text) = colours(&p, frame.samples_loaded[slot], &playing, slot);
+        let (fill, text) = colours(&p, frame.samples_loaded[slot], playing, slot);
         ui.painter().rect_filled(cell, CornerRadius::same(3), fill);
         ui.put(
             cell,

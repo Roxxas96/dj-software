@@ -13,8 +13,8 @@ use egui::{
     StrokeKind, TextureHandle, Ui, UiBuilder, Vec2, pos2, vec2,
 };
 use engine::{
-    ChannelSnapshot, DeckId, DeckSnapshot, EffectKind, EngineMonitor, Grid, Hotcue, SAMPLER_SLOTS,
-    SamplerSnapshot,
+    ChannelSnapshot, DeckId, DeckSnapshot, EffectKind, EngineMonitor, Grid, Hotcue, Meters,
+    SAMPLER_SLOTS, SamplerSnapshot,
 };
 
 use crate::command::{UiCommand, ViewChange};
@@ -412,17 +412,22 @@ fn jump_text(beats: f64) -> String {
     format!("{sign}{}", beats_text(beats.abs()))
 }
 
-/// What the engine reports for every deck, as the panels read it. Without a monitor every
-/// deck is empty.
+/// What the engine reports, as the window reads it once a frame: every deck, the meters
+/// and the load. Without a monitor every deck is empty and the meters are silent.
 #[derive(Debug, Default)]
 pub struct DeckReads {
     /// Each deck's snapshot and the time its block began rendering (0: unknown).
     pub decks: [(DeckSnapshot, u64); 4],
     pub channels: [ChannelSnapshot; 4],
     pub sampler: SamplerSnapshot,
+    /// The last block's peaks; `None` until the audio device opens.
+    pub meters: Option<Meters>,
+    /// The last block's DSP load; `None` until the audio device opens.
+    pub dsp_load: Option<f32>,
 }
 
 impl DeckReads {
+    /// Reads everything the window shows from `monitor`; `None` reads as empty.
     pub fn read(monitor: Option<&EngineMonitor>) -> Self {
         let Some(m) = monitor else {
             return Self::default();
@@ -431,6 +436,8 @@ impl DeckReads {
             decks: DeckId::ALL.map(|id| m.deck_rendered_at(id)),
             channels: DeckId::ALL.map(|id| m.channel(id)),
             sampler: m.sampler(),
+            meters: Some(m.meters()),
+            dsp_load: Some(m.dsp_load()),
         }
     }
 }

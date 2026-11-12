@@ -2,19 +2,23 @@
 //! the smallest window and the default one, with loaded decks whose headers show a key,
 //! the beat counter, a remix and the stems.
 
-use std::path::PathBuf;
+#[allow(
+    dead_code,
+    reason = "the rows are drawn here, without the window's render"
+)]
+mod support;
+
 use std::sync::mpsc::channel;
 
 use egui::{Rect, Vec2, pos2, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{By, NodeT, Queryable};
-use engine::{DeckSnapshot, Grid};
-use library::TrackRow;
+use support::loaded;
 use ui::cover::Covers;
 use ui::deck::{DeckPanels, DeckReads};
 use ui::layout::{drawn_sizes, shown_sections};
 use ui::mixer::Mixer;
-use ui::{ControlFrame, DeckInfo, Layout};
+use ui::{ControlFrame, Layout};
 
 const WINDOWS: [Vec2; 2] = [vec2(1024.0, 700.0), vec2(1440.0, 900.0)];
 /// The deck panels' share of the row's width (two decks, then four).
@@ -22,52 +26,6 @@ const PANEL_SHARE: f32 = 0.38;
 const FOUR_PANEL_SHARE: f32 = 0.34;
 /// The harness's margin around what it draws.
 const MARGIN: f32 = 8.0;
-
-fn info(deck: usize) -> DeckInfo {
-    DeckInfo {
-        load_seq: 1,
-        row: TrackRow {
-            id: deck as i64 + 1,
-            title: Some(format!("Track Number {} (Extended Mix)", deck + 1)),
-            artist: Some("Someone".into()),
-            bpm: Some(126.0),
-            key: Some(21),
-            duration_frames: Some(14_508_900),
-            sample_rate: Some(44_100),
-            has_cues: true,
-            missing: false,
-        },
-        path: PathBuf::from(format!("/music/track-{deck}.mp3")),
-        overview: None,
-        detail: None,
-        stems: Some("stems 40%".into()),
-        hotcue_marks: Default::default(),
-    }
-}
-
-/// Every deck loaded and playing, with a grid so the beat counter shows.
-fn loaded(layout: Layout, four_decks: bool) -> (ControlFrame, DeckReads) {
-    let mut frame = ControlFrame::default();
-    frame.view.layout = layout;
-    frame.view.four_decks = four_decks;
-    frame.view.beat_counter = true;
-    let mut reads = DeckReads::default();
-    for deck in 0..4 {
-        frame.decks[deck] = Some(info(deck));
-        reads.decks[deck].0 = DeckSnapshot {
-            loaded: true,
-            playing: true,
-            position_frames: 2_518_110.0,
-            duration_frames: 14_508_900,
-            track_sample_rate: 44_100,
-            tempo_ratio: 1.0,
-            grid: Grid::from_bpm(126.0, 0.0, 44_100),
-            load_seq: 1,
-            ..DeckSnapshot::default()
-        };
-    }
-    (frame, reads)
-}
 
 /// Draws the deck panels' row as the window sizes it for `window`; returns the harness
 /// and the row's size.
@@ -83,7 +41,7 @@ fn draw_row(frame: ControlFrame, reads: DeckReads, window: Vec2) -> (Harness<'st
         .with_size(row + Vec2::splat(2.0 * MARGIN))
         .build_ui(move |ui| {
             let space = panels.show_reads(ui, &frame, &reads, &mut covers, &sections, &channel().0);
-            mixer.show(ui, space, &frame, None, &sections);
+            mixer.show(ui, space, &frame, &reads, &sections);
         });
     harness.run_steps(3);
     (harness, row)
@@ -171,7 +129,8 @@ const HEADER: [&str; 5] = ["8A", "30.4", "0:57.1", "\u{2212}4:31.9", "stems 40%"
 const HEADER_BOTTOM: f32 = 6.0 + 64.0;
 const TRANSPORT: [&str; 3] = ["CUE", "PLAY", "SYNC"];
 const LOOP: [&str; 3] = ["4", "IN", "OUT"];
-const PADS: [&str; 9] = ["pad mode", "1", "2", "3", "4", "5", "6", "7", "8"];
+/// The hotcue pads: the fixture's second hotcue is a saved loop.
+const PADS: [&str; 9] = ["pad mode", "1", "2 loop", "3", "4", "5", "6", "7", "8"];
 
 #[test]
 fn starter_fits() {

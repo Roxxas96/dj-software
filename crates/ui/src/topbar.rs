@@ -5,9 +5,9 @@ use std::sync::mpsc::Sender;
 use std::time::Instant;
 
 use egui::{CornerRadius, Rect, RichText, Sense, Ui, Vec2, pos2};
-use engine::EngineMonitor;
 
 use crate::command::UiCommand;
+use crate::deck::DeckReads;
 use crate::menu;
 use crate::model::ControlFrame;
 use crate::theme;
@@ -20,7 +20,7 @@ const METER_HOT: f32 = 0.95;
 pub fn show(
     ui: &mut Ui,
     frame: &ControlFrame,
-    monitor: Option<&EngineMonitor>,
+    reads: &DeckReads,
     commands: &Sender<UiCommand>,
     settings_open: &mut bool,
 ) {
@@ -45,9 +45,9 @@ pub fn show(
             ui.separator();
             ui.label(clock_text());
             ui.separator();
-            ui.label(cpu_text(monitor.map(EngineMonitor::dsp_load)));
+            ui.label(cpu_text(reads.dsp_load));
             ui.separator();
-            let peaks = monitor.map_or([0.0; 2], |m| m.meters().master_peak);
+            let peaks = reads.meters.map_or([0.0; 2], |m| m.master_peak);
             master_meter(ui, peaks);
             ui.separator();
             let status = match &frame.error {
