@@ -31,6 +31,25 @@ pub fn pad_action(
     })
 }
 
+/// What pressing a pad of the window sends: [`pad_action`], except that while the pads
+/// show the sampler (the hardware modes SAMPLER and TRANS, where the SB3's pads play
+/// samples) it is the sampler slot's play.
+pub fn window_pad_action(
+    mode: PadMode,
+    hardware_mode: Option<HardwarePadMode>,
+    side: Side,
+    deck: DeckId,
+    slot: HotcueSlot,
+    shift: bool,
+) -> Option<Action> {
+    match (mode, hardware_mode) {
+        (PadMode::Hardware, Some(HardwarePadMode::Sampler | HardwarePadMode::Trans)) => {
+            Some(Action::SamplerPlay(slot))
+        }
+        _ => pad_action(mode, side, deck, slot, shift),
+    }
+}
+
 impl Side {
     pub const ALL: [Side; 2] = [Side::Left, Side::Right];
 
