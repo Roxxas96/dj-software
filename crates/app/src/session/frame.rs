@@ -147,6 +147,14 @@ impl FrameParts {
         }
     }
 
+    /// Shows `mark` as the colour and name of `track`'s hotcue `slot` on the decks holding
+    /// it, from the next frame on.
+    pub fn show_mark(&mut self, track: i64, slot: engine::HotcueSlot, mark: ui::HotcueMark) {
+        if let Some(detail) = self.detail.as_mut() {
+            detail.set_mark(track, slot, mark);
+        }
+    }
+
     /// Stops showing the colour and name of the hotcues `library` deleted in its latest
     /// round. Called after every pass, published or not, so none is missed.
     pub fn forget_deleted_marks(&mut self, library: Option<&LibraryMode>) {

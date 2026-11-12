@@ -318,8 +318,11 @@ fn run_session(
     let mut last_publish: Option<Instant> = None;
     // The control hook and `on_pass` take turns on the control thread.
     let parts = RefCell::new(parts);
-    let mut control = |runtime: &mut Runtime, engine: &mut EngineController| {
-        commands::drain(commands, &mut parts.borrow_mut(), Some((runtime, engine)));
+    let mut control = |runtime: &mut Runtime,
+                       engine: &mut EngineController,
+                       library: Option<&mut LibraryMode>| {
+        let control = Some((runtime, engine, library));
+        commands::drain(commands, &mut parts.borrow_mut(), control);
     };
     let mut on_pass = |pass: Pass<'_>| {
         let mut parts = parts.borrow_mut();

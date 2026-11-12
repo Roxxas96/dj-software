@@ -101,6 +101,13 @@ impl Slots {
         }
     }
 
+    /// Shows `mark` for `deck`'s hotcue `slot`.
+    fn set_mark(&mut self, deck: usize, slot: HotcueSlot, mark: HotcueMark) {
+        if let Some(held) = self.0[deck].as_mut() {
+            Arc::make_mut(&mut held.marks)[slot.index()] = Some(mark);
+        }
+    }
+
     /// The hotcue marks of `deck`'s load `load_seq`; none until they are read.
     fn marks(&self, deck: usize, load_seq: u64) -> Arc<Marks> {
         match &self.0[deck] {
@@ -272,6 +279,17 @@ impl DetailJobs {
         for deck in 0..self.tracks.len() {
             if self.tracks[deck] == track {
                 self.slots.forget_mark(deck, slot);
+            }
+        }
+    }
+
+    /// Shows `mark` as the colour and name of `track`'s hotcue `slot` on every deck
+    /// holding it, for after the window saved them: at once, without reading the library
+    /// again (the write may not be done yet).
+    pub fn set_mark(&mut self, track: i64, slot: HotcueSlot, mark: HotcueMark) {
+        for deck in 0..self.tracks.len() {
+            if self.tracks[deck] == track {
+                self.slots.set_mark(deck, slot, mark.clone());
             }
         }
     }

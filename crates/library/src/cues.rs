@@ -116,6 +116,25 @@ pub(crate) fn put_hotcue(
     Ok(())
 }
 
+/// Sets the name and colour of the set hotcue `slot` of `track` inside `tx`.
+pub(crate) fn set_hotcue_label(
+    tx: &Transaction<'_>,
+    track: i64,
+    slot: u8,
+    name: Option<&str>,
+    color: Option<u32>,
+) -> Result<(), LibraryError> {
+    check_hotcue(tx, track, slot)?;
+    let changed = tx.execute(
+        "UPDATE hotcues SET name = ?3, color = ?4 WHERE track_id = ?1 AND slot = ?2",
+        rusqlite::params![track, slot, name, color],
+    )?;
+    if changed == 0 {
+        return Err(LibraryError::NoSuchHotcue { track, slot });
+    }
+    Ok(())
+}
+
 /// Removes hotcue `slot` of `track` inside `tx`.
 pub(crate) fn delete_hotcue(
     tx: &Transaction<'_>,

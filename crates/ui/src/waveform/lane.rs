@@ -8,13 +8,14 @@ use std::time::Instant;
 use actions::Side;
 use analysis::Waveform;
 use egui::{Align2, Color32, FontId, Mesh, Painter, Pos2, Rect, Shape, Ui, pos2, vec2};
-use engine::{DeckId, DeckSnapshot, Hotcue};
+use engine::{DeckId, DeckSnapshot, Hotcue, HotcueSlot};
 
 use super::colour::band_colours;
 use super::styles::{self, MAX_BARS};
 use super::{Playhead, ZoomGesture, ticks};
 use crate::command::UiCommand;
 use crate::deck::DeckReads;
+use crate::hotcue_menu::{self, HotcueTarget};
 use crate::model::{ControlFrame, HotcueMark};
 use crate::theme::{self, Palette};
 use crate::view::{WaveformPalette, WaveformStyle};
@@ -97,7 +98,13 @@ impl Lanes {
                 snapshots.each_ref().map(|s| s.playing),
             )
         };
-        let (area, _) = ui.allocate_exact_size(ui.available_size(), egui::Sense::hover());
+        let (area, response) = ui.allocate_exact_size(ui.available_size(), egui::Sense::click());
+        // A right-click on a hotcue flag opens its editor.
+        let right_click = response
+            .secondary_clicked()
+            .then(|| response.interact_pointer_pos())
+            .flatten();
+        let mut flag = None;
         // Overlaid, the first two decks share the first lane.
         let overlaid = frame.view.waveform_style == WaveformStyle::Overlaid && shown.len() >= 2;
         let rows = shown.len() - usize::from(overlaid);
@@ -111,10 +118,10 @@ impl Lanes {
             );
             let snapshot = &snapshots[deck.index()];
             // Until the engine plays the track the frame names, its waveform is not heard.
-            let waveform = frame.decks[deck.index()]
+            let info = frame.decks[deck.index()]
                 .as_ref()
-                .filter(|info| snapshot.loaded && info.load_seq == snapshot.load_seq)
-                .and_then(|info| info.detail.as_ref().or(info.overview.as_ref()));
+                .filter(|info| snapshot.loaded && info.load_seq == snapshot.load_seq);
+            let waveform = info.and_then(|info| info.detail.as_ref().or(info.overview.as_ref()));
             let lane = Lane {
                 deck,
                 snapshot,
@@ -124,12 +131,20 @@ impl Lanes {
                 style: frame.view.waveform_style,
                 palette: frame.view.waveform_palette,
                 overlay: overlaid && index == 1,
-                marks: frame.decks[deck.index()]
-                    .as_ref()
-                    .filter(|info| snapshot.loaded && info.load_seq == snapshot.load_seq)
-                    .map(|info| &*info.hotcue_marks),
+                marks: info.map(|info| &*info.hotcue_marks),
             };
             lane.draw(&ui.painter_at(rect), rect, &mut self.meshes[deck.index()]);
+            // An overlay is drawn over the lane below: its flags are on top.
+            if let Some(pos) = right_click.filter(|&pos| rect.contains(pos))
+                && let Some(slot) = lane.flag_at(rect, pos)
+            {
+                let mark = lane.marks.and_then(|marks| marks[slot.index()].as_ref());
+                let track = info.map(|info| info.row.id);
+                flag = Some((HotcueTarget::new(deck, slot, track, true, mark), pos));
+            }
+        }
+        if let Some((target, pos)) = flag {
+            hotcue_menu::open(ui.ctx(), target, pos);
         }
         let mut steps = 0;
         if ui.rect_contains_pointer(area) {
@@ -208,6 +223,18 @@ impl Lane<'_> {
             FontId::proportional(LABEL_FONT),
             p.deck_accent(self.deck),
         );
+    }
+
+    /// The hotcue whose flag is at `pos` in the lane drawn in `rect`; of flags drawn over
+    /// each other, the one on top.
+    pub fn flag_at(&self, rect: Rect, pos: Pos2) -> Option<HotcueSlot> {
+        let scale = self.scale(rect, 1.0)?;
+        HotcueSlot::ALL.into_iter().rev().find(|slot| {
+            self.snapshot.hotcues[slot.index()].is_some_and(|hotcue| {
+                let x = scale.x(hotcue.frames);
+                Rect::from_min_size(pos2(x, rect.top()), vec2(FLAG_SIZE, FLAG_SIZE)).contains(pos)
+            })
+        })
     }
 
     /// How track frames map onto the lane, or `None` for an empty deck.

@@ -21,6 +21,7 @@ use engine::{
 use crate::command::{UiCommand, ViewChange};
 use crate::controls::{Sink, fader_input};
 use crate::cover::{self, Covers};
+use crate::hotcue_menu::{self, HotcueTarget};
 use crate::layout::{Sections, deck_slots};
 use crate::mixer;
 use crate::model::{ControlFrame, GHOST_TEMPO, HotcueMark};
@@ -179,6 +180,10 @@ pub struct DeckView {
     pub overview: Option<Arc<Waveform>>,
     /// The colours the overview draws its bands in.
     pub waveform_palette: WaveformPalette,
+    /// The library track the deck plays, for the hotcue editor.
+    pub track: Option<i64>,
+    /// The hotcues' colours and names, when the library has them.
+    pub hotcue_marks: Option<Arc<[Option<HotcueMark>; 8]>>,
 }
 
 impl DeckView {
@@ -288,6 +293,8 @@ impl DeckView {
             path: info.map(|i| i.path.clone()),
             overview: info.and_then(|i| i.overview.clone()),
             waveform_palette: frame.view.waveform_palette,
+            track: info.map(|i| i.row.id),
+            hotcue_marks: info.map(|i| Arc::clone(&i.hotcue_marks)),
         }
     }
 }
@@ -1229,11 +1236,30 @@ fn pads_column(
                         let response =
                             ui.interact(rect, Id::NULL.with(id), Sense::click_and_drag());
                         sink.button(&response, action);
+                        // A hotcue pad's right-click opens its editor.
+                        if matches!(action, Action::Hotcue(..)) && response.secondary_clicked() {
+                            open_hotcue_menu(ui, view, slot, pad_view.lit, rect);
+                        }
                     }
                 }
             });
         }
     });
+}
+
+/// Opens the hotcue editor on `view`'s hotcue `slot` (`set` when it holds one), where the
+/// pointer is, else under the pad at `rect`.
+fn open_hotcue_menu(ui: &Ui, view: &DeckView, slot: HotcueSlot, set: bool, rect: Rect) {
+    let mark = view
+        .hotcue_marks
+        .as_ref()
+        .and_then(|marks| marks[slot.index()].as_ref());
+    let target = HotcueTarget::new(view.deck, slot, view.track, set, mark);
+    let at = ui
+        .ctx()
+        .pointer_interact_pos()
+        .unwrap_or(rect.left_bottom());
+    hotcue_menu::open(ui.ctx(), target, at);
 }
 
 /// The loop: < and > (halve and double it) in line with the pad mode, then its size (an

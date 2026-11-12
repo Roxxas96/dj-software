@@ -752,6 +752,7 @@ impl LibraryMode {
             WriteOp::SetCue { track, .. }
             | WriteOp::SetHotcue { track, .. }
             | WriteOp::DeleteHotcue { track, .. }
+            | WriteOp::SetHotcueLabel { track, .. }
             | WriteOp::EditGrid { track, .. } => Some(*track),
             WriteOp::StoreAnalysis(a) => Some(a.track_id),
             _ => None,
@@ -1005,6 +1006,34 @@ impl LibraryMode {
         }
     }
 
+    /// Saves `name` and `color` (`0xRRGGBB`) as the label of hotcue `slot` of `track`,
+    /// which the window saw on `deck`. Refused, saying why, when `deck` no longer holds
+    /// `track`. The write does not wait: a failure is reported with the other failed
+    /// writes.
+    pub fn set_hotcue_label(
+        &mut self,
+        deck: DeckId,
+        track: i64,
+        slot: HotcueSlot,
+        name: Option<String>,
+        color: Option<u32>,
+    ) -> Result<(), String> {
+        let current = self.decks[deck.index()].as_ref().map(|t| t.row.id);
+        if current != Some(track) {
+            return Err("The track changed before the hotcue was saved".to_owned());
+        }
+        let op = WriteOp::SetHotcueLabel {
+            track,
+            slot: slot.number(),
+            name,
+            color,
+        };
+        let what = write_text(&op);
+        self.writer
+            .submit(op)
+            .map_err(|e| format!("warning: could not {what}: {}", safe(e)))
+    }
+
     /// What the browser shows, once read.
     pub fn browser(&self) -> Option<&BrowserView> {
         self.browser.as_ref()
@@ -1145,6 +1174,7 @@ fn write_text(op: &WriteOp) -> String {
         WriteOp::SetCue { .. } => "save the cue point".to_owned(),
         WriteOp::SetHotcue { slot, .. } => format!("save hotcue {slot}"),
         WriteOp::DeleteHotcue { slot, .. } => format!("delete hotcue {slot}"),
+        WriteOp::SetHotcueLabel { slot, .. } => format!("name hotcue {slot}"),
         WriteOp::EditGrid { .. } => "save the beatgrid".to_owned(),
         WriteOp::StoreAnalysis(_) => "save the analysis".to_owned(),
         _ => "save a library change".to_owned(),

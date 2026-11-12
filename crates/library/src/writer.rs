@@ -102,6 +102,16 @@ pub enum WriteOp {
         slot: u8,
         point: crate::HotcuePoint,
     },
+    /// Sets the name and colour (`0xRRGGBB`) of hotcue `slot` (1 to 8) of track `track`,
+    /// keeping its position and loop length; `None` clears either. Fails with
+    /// [`LibraryError::NoSuchHotcue`] when the slot is empty, and like
+    /// [`WriteOp::SetHotcue`] for a bad slot or an unknown track, changing nothing.
+    SetHotcueLabel {
+        track: i64,
+        slot: u8,
+        name: Option<String>,
+        color: Option<u32>,
+    },
     /// Removes hotcue `slot` (1 to 8) of track `track`; an empty slot is fine. Fails like
     /// [`WriteOp::SetHotcue`] for a bad slot or an unknown track, changing nothing.
     DeleteHotcue { track: i64, slot: u8 },
@@ -528,6 +538,15 @@ fn apply(tx: &Transaction<'_>, op: &WriteOp) -> Result<WriteOutcome, LibraryErro
         }
         WriteOp::PutHotcue { track, slot, point } => {
             cues::put_hotcue(tx, *track, *slot, point)?;
+            Ok(WriteOutcome::Done)
+        }
+        WriteOp::SetHotcueLabel {
+            track,
+            slot,
+            name,
+            color,
+        } => {
+            cues::set_hotcue_label(tx, *track, *slot, name.as_deref(), *color)?;
             Ok(WriteOutcome::Done)
         }
         WriteOp::DeleteHotcue { track, slot } => {

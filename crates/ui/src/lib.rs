@@ -9,6 +9,7 @@ pub mod controls;
 pub mod cover;
 pub mod deck;
 mod fonts;
+pub mod hotcue_menu;
 pub mod layout;
 mod menu;
 pub mod mixer;
@@ -27,7 +28,7 @@ use std::sync::mpsc::{Sender, channel};
 use anyhow::anyhow;
 use engine::EngineMonitor;
 
-pub use command::{ExportStep, ImportStep, Resolution, UiCommand, ViewChange};
+pub use command::{ExportStep, ImportStep, LibraryStep, Resolution, UiCommand, ViewChange};
 pub use model::{
     ControlFrame, DeckInfo, EVENT_SHOWN, EVENTS_KEPT, ExportChoice, ExportSummary, ExportView,
     GHOSTS, GLOBAL_GHOSTS, HotcueMark, ImportSummary, ImportView, PlaylistLabel, Published,
@@ -269,6 +270,10 @@ pub fn root_with_reads(
         });
     landmark(&shown.response, "browser");
     settings::show(ui.ctx(), frame, &mut screen.settings, &screen.commands);
+    hotcue_menu::show(
+        ui.ctx(),
+        &mut controls::Sink::new(&screen.commands, &mut screen.held),
+    );
     // A button held down that this frame did not draw lets go of its action.
     screen.held.sweep(ui.ctx(), &screen.commands);
     if let Some(dragged) = changes.sizes {

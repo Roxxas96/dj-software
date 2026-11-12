@@ -7,7 +7,8 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use actions::{Action, Input, PadMode, Side};
 use analysis::Waveform;
 
-use egui::{Event, Modifiers, PointerButton, Pos2, vec2};
+use egui::accesskit::Role;
+use egui::{Event, Key, Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use egui_kittest::kittest::{AccessKitNode, NodeT};
@@ -17,7 +18,10 @@ use ui::controls::{HeldButtons, Sink};
 use ui::cover::Covers;
 use ui::deck::{DeckPanels, DeckReads, DeckView};
 use ui::layout::sections;
-use ui::{ControlFrame, DeckInfo, JogDisplay, Layout, TimeMode, UiCommand, ViewChange, ViewState};
+use ui::{
+    ControlFrame, DeckInfo, JogDisplay, Layout, LibraryStep, TimeMode, UiCommand, ViewChange,
+    ViewState,
+};
 
 /// A 5:29 track at 126 BPM on deck 1, 57.1 s in.
 fn loaded() -> (DeckSnapshot, ControlFrame) {
@@ -883,4 +887,186 @@ fn slicer_and_sampler_pads_send_their_actions() {
             "{hardware:?}"
         );
     }
+}
+
+/// [`sending`] with the hotcue editor drawn after the panel, as the window draws it.
+fn editing(view: DeckView) -> (Harness<'static, Sending>, Receiver<UiCommand>) {
+    let (commands, received) = channel();
+    let sections = sections(Layout::Pro);
+    let state = Sending {
+        view,
+        drawn: true,
+        held: HeldButtons::default(),
+        commands,
+    };
+    let mut harness = Harness::builder()
+        .with_size([560.0, 340.0])
+        .with_step_dt(0.01)
+        .build_ui_state(
+            move |ui, state: &mut Sending| {
+                let mut sink = Sink::new(&state.commands, &mut state.held);
+                ui::deck::panel(ui, &state.view, None, &sections, &mut sink);
+                ui::hotcue_menu::show(ui.ctx(), &mut sink);
+                state.held.sweep(ui.ctx(), &state.commands);
+            },
+            state,
+        );
+    harness.run_steps(3);
+    (harness, received)
+}
+
+fn secondary(pressed: bool, at: Pos2) -> Event {
+    Event::PointerButton {
+        pos: at,
+        button: PointerButton::Secondary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    }
+}
+
+/// Right-clicks at `at`.
+fn right_click<S>(harness: &mut Harness<'_, S>, at: Pos2) {
+    harness.event(Event::PointerMoved(at));
+    harness.run_steps(1);
+    harness.event(secondary(true, at));
+    harness.run_steps(1);
+    harness.event(secondary(false, at));
+    harness.run_steps(2);
+}
+
+/// Deck 1 with hotcue 3 set, red and named "Drop".
+fn with_drop() -> DeckView {
+    let (mut snapshot, mut frame) = loaded_plain();
+    snapshot.hotcues[2] = Some(engine::Hotcue::point(1000.0));
+    Arc::make_mut(&mut frame.decks[0].as_mut().unwrap().hotcue_marks)[2] =
+        Some(ui::HotcueMark::new(Some(0xCC0000), Some("Drop".into())));
+    view(&snapshot, &frame)
+}
+
+fn label_step(name: Option<&str>, color: Option<u32>) -> UiCommand {
+    UiCommand::Library(LibraryStep::HotcueLabel {
+        deck: DeckId::new(0).unwrap(),
+        track: 1,
+        slot: slot(3),
+        name: name.map(str::to_owned),
+        color,
+    })
+}
+
+#[test]
+fn right_click_on_a_set_pad_opens_the_editor() {
+    let view = with_drop();
+    let (mut harness, received) = editing(view.clone());
+    assert!(harness.query_by_role(Role::TextInput).is_none());
+    let at = pad_at(&harness, &view, 3);
+    right_click(&mut harness, at);
+    let name = harness.get_by_role(Role::TextInput);
+    assert_eq!(name.value().as_deref(), Some("Drop"));
+    assert_eq!(ui::hotcue_menu::SWATCHES.len(), 9);
+    for (label, _) in ui::hotcue_menu::SWATCHES {
+        harness.get_by_label(label);
+    }
+    harness.get_by_label("No colour");
+    harness.get_by_label("Delete");
+    assert!(harness.query_by_label("Set hotcue here").is_none());
+    assert_eq!(
+        received.try_iter().count(),
+        0,
+        "a right-click sends nothing"
+    );
+
+    // A swatch saves its colour at once and leaves the editor open.
+    let (green, colour) = ui::hotcue_menu::SWATCHES[4];
+    press_label(&mut harness, green);
+    let sent: Vec<UiCommand> = received.try_iter().collect();
+    assert_eq!(sent, [label_step(Some("Drop"), colour)]);
+    harness.get_by_role(Role::TextInput);
+
+    // Enter saves the name, trimmed, with the colour chosen, and closes the editor.
+    harness.get_by_role(Role::TextInput).focus();
+    harness.run_steps(1);
+    harness.key_combination_modifiers(Modifiers::COMMAND, &[Key::A]);
+    harness.run_steps(1);
+    harness
+        .get_by_role(Role::TextInput)
+        .type_text("  Big drop  ");
+    harness.run_steps(1);
+    harness.key_press(Key::Enter);
+    harness.run_steps(2);
+    let sent: Vec<UiCommand> = received.try_iter().collect();
+    assert_eq!(sent, [label_step(Some("Big drop"), colour)]);
+    assert!(harness.query_by_role(Role::TextInput).is_none());
+
+    // "No colour" goes back to the slot's default; Delete presses and releases delete.
+    right_click(&mut harness, at);
+    press_label(&mut harness, "No colour");
+    press_label(&mut harness, "Delete");
+    let sent: Vec<UiCommand> = received.try_iter().collect();
+    let delete = Action::HotcueDelete(DeckId::new(0).unwrap(), slot(3));
+    let mut expected = vec![label_step(Some("Drop"), None)];
+    expected.extend(press_release(delete));
+    assert_eq!(sent, expected);
+    assert!(
+        harness.query_by_label("Delete").is_none(),
+        "Delete closes it"
+    );
+}
+
+#[test]
+fn right_click_on_an_empty_pad_offers_set_here_only() {
+    let view = with_drop();
+    let (mut harness, received) = editing(view.clone());
+    let at = pad_at(&harness, &view, 5);
+    right_click(&mut harness, at);
+    harness.get_by_label("Set hotcue here");
+    assert!(harness.query_by_role(Role::TextInput).is_none());
+    assert!(harness.query_by_label("Delete").is_none());
+    assert!(harness.query_by_label("No colour").is_none());
+    press_label(&mut harness, "Set hotcue here");
+    let sent: Vec<UiCommand> = received.try_iter().collect();
+    assert_eq!(
+        sent,
+        press_release(Action::Hotcue(DeckId::new(0).unwrap(), slot(5)))
+    );
+    assert!(harness.query_by_label("Set hotcue here").is_none());
+}
+
+#[test]
+fn the_hotcue_editor_closes_on_escape_and_a_click_outside() {
+    let view = with_drop();
+    let (mut harness, received) = editing(view.clone());
+    let at = pad_at(&harness, &view, 3);
+    right_click(&mut harness, at);
+    harness.key_press(Key::Escape);
+    harness.run_steps(2);
+    assert!(
+        harness.query_by_label("Delete").is_none(),
+        "Escape closes it"
+    );
+    right_click(&mut harness, at);
+    harness.get_by_label("Delete");
+    let outside = harness.get_by_label("Just Us").rect().center();
+    harness.event(Event::PointerMoved(outside));
+    harness.run_steps(1);
+    harness.event(pointer(true, outside));
+    harness.run_steps(1);
+    harness.event(pointer(false, outside));
+    harness.run_steps(2);
+    assert!(
+        harness.query_by_label("Delete").is_none(),
+        "a click outside closes it"
+    );
+    assert_eq!(received.try_iter().count(), 0, "closing saves nothing");
+}
+
+#[test]
+fn a_right_click_on_a_pad_in_another_mode_opens_nothing() {
+    let (snapshot, mut frame) = loaded_plain();
+    frame.control.sides[0].pad_mode = PadMode::LoopRoll;
+    let view = view(&snapshot, &frame);
+    let (mut harness, _received) = editing(view.clone());
+    let at = pad_at(&harness, &view, 3);
+    right_click(&mut harness, at);
+    assert!(harness.query_by_label("Set hotcue here").is_none());
+    assert!(harness.query_by_label("Delete").is_none());
 }
