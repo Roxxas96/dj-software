@@ -10,7 +10,9 @@ mod request;
 mod state;
 mod sync;
 
-pub use action::{Action, ActionKind, Input, InputKind, Scope, Side, Target, ValueTarget};
+pub use action::{
+    Action, ActionKind, Input, InputKind, Scope, Side, Target, ValueTarget, pad_action,
+};
 pub use apply::{ApplyResult, GRID_SHIFT_FINE_MILLIS, GRID_SHIFT_MILLIS, apply};
 pub use request::{AppRequest, BrowserRequest, GridEditRequest};
 pub use state::{
