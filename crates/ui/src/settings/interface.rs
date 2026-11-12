@@ -6,9 +6,9 @@ use egui::{Align2, CornerRadius, FontId, Rect, Sense, Stroke, StrokeKind, Ui, Ve
 
 use crate::command::{UiCommand, ViewChange};
 use crate::layout::{self, LANES_SHARE};
-use crate::menu::{FOUR_DECKS_HINT, layout_name};
+use crate::menu::{FOUR_DECKS_HINT, layout_name, palette_name};
 use crate::theme;
-use crate::view::{Layout, ViewState};
+use crate::view::{Layout, ViewState, WaveformPalette};
 
 const TILE: Vec2 = Vec2::new(170.0, 130.0);
 /// The room under a tile's sketch for its name.
@@ -28,6 +28,19 @@ pub fn show(ui: &mut Ui, view: &ViewState, commands: &Sender<UiCommand>) {
                 }
             }
         });
+    });
+    ui.add_space(12.0);
+    ui.horizontal(|ui| {
+        ui.label("Waveform colours");
+        for palette in WaveformPalette::ALL {
+            let selected = view.waveform_palette == *palette;
+            if ui
+                .selectable_label(selected, palette_name(*palette))
+                .clicked()
+            {
+                let _ = commands.send(UiCommand::View(ViewChange::SetWaveformPalette(*palette)));
+            }
+        }
     });
 }
 

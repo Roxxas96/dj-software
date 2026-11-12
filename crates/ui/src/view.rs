@@ -90,6 +90,23 @@ ids!(WaveformStyle {
     Overlaid => "overlaid",
 });
 
+/// The three colours a waveform draws its low, mid and high bands in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WaveformPalette {
+    /// Red, green, blue.
+    #[default]
+    Rgb,
+    /// Blue, orange and the scheme's white.
+    BlueOrangeWhite,
+    /// Orange, yellow, cyan.
+    OrangeYellowCyan,
+}
+ids!(WaveformPalette {
+    Rgb => "rgb",
+    BlueOrangeWhite => "blue_orange_white",
+    OrangeYellowCyan => "orange_yellow_cyan",
+});
+
 /// Where the waveform lanes sit: above the decks or between them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum WaveformPosition {
@@ -189,6 +206,7 @@ pub struct ViewState {
     pub layout: Layout,
     pub colour_scheme: ColourScheme,
     pub waveform_style: WaveformStyle,
+    pub waveform_palette: WaveformPalette,
     pub waveform_position: WaveformPosition,
     pub jog_display: JogDisplay,
     pub beat_counter: bool,
@@ -212,6 +230,7 @@ impl Default for ViewState {
             layout: Layout::default(),
             colour_scheme: ColourScheme::default(),
             waveform_style: WaveformStyle::default(),
+            waveform_palette: WaveformPalette::default(),
             waveform_position: WaveformPosition::default(),
             jog_display: JogDisplay::default(),
             beat_counter: false,
@@ -247,6 +266,7 @@ impl ViewState {
             ViewChange::SetLayout(layout) => self.layout = layout,
             ViewChange::SetColourScheme(scheme) => self.colour_scheme = scheme,
             ViewChange::SetWaveformStyle(style) => self.waveform_style = style,
+            ViewChange::SetWaveformPalette(palette) => self.waveform_palette = palette,
             ViewChange::SetWaveformPosition(position) => self.waveform_position = position,
             ViewChange::SetJogDisplay(display) => self.jog_display = display,
             ViewChange::SetBeatCounter(on) => self.beat_counter = on,
@@ -296,6 +316,15 @@ mod tests {
         for mode in TimeMode::ALL {
             assert_eq!(TimeMode::from_id(mode.id()), Some(*mode));
         }
+    }
+
+    #[test]
+    fn waveform_palette_ids_round_trip() {
+        for palette in WaveformPalette::ALL {
+            assert_eq!(WaveformPalette::from_id(palette.id()), Some(*palette));
+        }
+        assert_eq!(WaveformPalette::ALL.len(), 3);
+        assert_eq!(WaveformPalette::from_id("neon"), None);
     }
 
     #[test]

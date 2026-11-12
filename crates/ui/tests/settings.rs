@@ -709,3 +709,22 @@ fn the_export_shows_progress_then_the_result() {
         [UiCommand::Export(ExportStep::Close)]
     );
 }
+
+#[test]
+fn interface_lists_the_waveform_colours() {
+    let frame = frame(rows());
+    let (mut harness, asked) = open(&frame);
+    harness.get_by_label("Interface").click();
+    harness.run_steps(3);
+    harness.get_by_label("Waveform colours");
+    harness.get_by_label("Red / green / blue");
+    harness.get_by_label("Blue / orange / white");
+    harness.get_by_label("Orange / yellow / cyan").click();
+    harness.run_steps(3);
+    assert_eq!(
+        asked.try_iter().collect::<Vec<_>>(),
+        [UiCommand::View(ViewChange::SetWaveformPalette(
+            ui::WaveformPalette::OrangeYellowCyan
+        ))]
+    );
+}

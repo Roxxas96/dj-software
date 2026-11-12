@@ -4,7 +4,9 @@
 
 use engine::{DeckId, EffectKind};
 
-use crate::view::{ColourScheme, JogDisplay, Layout, PanelSizes, WaveformPosition, WaveformStyle};
+use crate::view::{
+    ColourScheme, JogDisplay, Layout, PanelSizes, WaveformPalette, WaveformPosition, WaveformStyle,
+};
 
 /// A request from the window to the session.
 #[derive(Debug, Clone, PartialEq)]
@@ -86,6 +88,7 @@ pub enum ViewChange {
     SetLayout(Layout),
     SetColourScheme(ColourScheme),
     SetWaveformStyle(WaveformStyle),
+    SetWaveformPalette(WaveformPalette),
     SetWaveformPosition(WaveformPosition),
     SetJogDisplay(JogDisplay),
     SetBeatCounter(bool),

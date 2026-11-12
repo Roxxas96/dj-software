@@ -204,6 +204,9 @@ fn parse(file: &Table, defaults: ViewState) -> ViewState {
     if let Some(style) = id("waveform_style").and_then(ui::WaveformStyle::from_id) {
         state.waveform_style = style;
     }
+    if let Some(palette) = id("waveform_palette").and_then(ui::WaveformPalette::from_id) {
+        state.waveform_palette = palette;
+    }
     if let Some(position) = id("waveform_position").and_then(ui::WaveformPosition::from_id) {
         state.waveform_position = position;
     }
@@ -283,6 +286,10 @@ fn text(state: &ViewState) -> String {
     view.insert("colour_scheme".to_owned(), id(state.colour_scheme.id()));
     view.insert("waveform_style".to_owned(), id(state.waveform_style.id()));
     view.insert(
+        "waveform_palette".to_owned(),
+        id(state.waveform_palette.id()),
+    );
+    view.insert(
         "waveform_position".to_owned(),
         id(state.waveform_position.id()),
     );
@@ -345,6 +352,7 @@ mod tests {
             ViewChange::SetLayout(Layout::Performance),
             ViewChange::SetColourScheme(ColourScheme::Light),
             ViewChange::SetWaveformStyle(WaveformStyle::DeckColour),
+            ViewChange::SetWaveformPalette(ui::WaveformPalette::OrangeYellowCyan),
             ViewChange::SetWaveformPosition(ui::WaveformPosition::Middle),
             ViewChange::SetJogDisplay(ui::JogDisplay::Info),
             ViewChange::SetBeatCounter(true),
@@ -373,6 +381,29 @@ mod tests {
         drop(store);
         let loaded = ViewStore::load(Some(path), defaults(), RANGE);
         assert_eq!(*loaded.state(), saved);
+    }
+
+    #[test]
+    fn waveform_palette_is_saved_and_restored() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(STATE_FILE);
+        let now = Instant::now();
+        let mut store = ViewStore::load(Some(path.clone()), defaults(), RANGE);
+        store.apply(
+            ViewChange::SetWaveformPalette(ui::WaveformPalette::OrangeYellowCyan),
+            now,
+        );
+        store.save_now();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("waveform_palette = \"orange_yellow_cyan\""),
+            "{text}"
+        );
+        let loaded = ViewStore::load(Some(path), defaults(), RANGE);
+        assert_eq!(
+            loaded.state().waveform_palette,
+            ui::WaveformPalette::OrangeYellowCyan
+        );
     }
 
     #[test]

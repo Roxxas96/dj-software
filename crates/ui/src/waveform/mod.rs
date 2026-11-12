@@ -8,7 +8,7 @@ mod styles;
 mod ticks;
 mod zoom;
 
-pub use colour::colour;
+pub use colour::band_colours;
 pub use lane::{Lane, Lanes, lanes};
 pub use playhead::Playhead;
 pub use styles::{Bar, column};

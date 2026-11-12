@@ -26,6 +26,7 @@ fn draw_styled(snapshot: DeckSnapshot, waveform: &Waveform, style: WaveformStyle
                 position_frames: 441_000.0,
                 beats: 16.0,
                 style,
+                palette: ui::WaveformPalette::default(),
                 overlay,
                 marks: None,
             };
@@ -149,6 +150,7 @@ fn a_named_hotcue_flag_shows_its_name_beside_the_number() {
             position_frames: 441_000.0,
             beats: 16.0,
             style: WaveformStyle::Frequency,
+            palette: ui::WaveformPalette::default(),
             overlay: false,
             marks: Some(&marks),
         };

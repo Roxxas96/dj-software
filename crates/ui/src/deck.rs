@@ -23,8 +23,8 @@ use crate::layout::{Sections, deck_slots};
 use crate::mixer;
 use crate::model::{ControlFrame, GHOST_TEMPO, HotcueMark};
 use crate::theme;
-use crate::view::{JogDisplay, TimeMode};
-use crate::waveform::{Playhead, colour};
+use crate::view::{JogDisplay, TimeMode, WaveformPalette};
+use crate::waveform::{Playhead, band_colours};
 
 /// The brightness below which a lit box takes white text instead of dark.
 const DARK_FILL: f32 = 0.35;
@@ -151,6 +151,8 @@ pub struct DeckView {
     /// The track's file, for its cover.
     pub path: Option<PathBuf>,
     pub overview: Option<Arc<Waveform>>,
+    /// The colours the overview draws its bands in.
+    pub waveform_palette: WaveformPalette,
 }
 
 impl DeckView {
@@ -258,6 +260,7 @@ impl DeckView {
             stems: info.and_then(|i| i.stems.clone()),
             path: info.map(|i| i.path.clone()),
             overview: info.and_then(|i| i.overview.clone()),
+            waveform_palette: frame.view.waveform_palette,
         }
     }
 }
@@ -751,7 +754,12 @@ fn overview(ui: &mut Ui, view: &DeckView) {
     painter.rect_filled(rect, CornerRadius::ZERO, p.lane);
     let mut mesh = Mesh::default();
     if let Some(waveform) = view.overview.as_deref() {
-        overview_columns(&mut mesh, rect, waveform, p.text_dim, p.wave_high);
+        overview_columns(
+            &mut mesh,
+            rect,
+            waveform,
+            band_colours(view.waveform_palette, &p),
+        );
     }
     if let Some(progress) = view.progress {
         let x = rect.left() + rect.width() * progress.clamp(0.0, 1.0);
@@ -762,14 +770,8 @@ fn overview(ui: &mut Ui, view: &DeckView) {
 }
 
 /// One column per point, mirrored around the middle, as tall as the loudest bucket under
-/// it and in its colour.
-fn overview_columns(
-    mesh: &mut Mesh,
-    rect: Rect,
-    waveform: &Waveform,
-    silent: Color32,
-    high: Color32,
-) {
+/// it and in the three layers of the lane: low, mid and high in `bands`, back to front.
+fn overview_columns(mesh: &mut Mesh, rect: Rect, waveform: &Waveform, bands: [Color32; 3]) {
     let buckets = &waveform.buckets;
     let columns = rect.width().floor().max(0.0) as usize;
     if buckets.is_empty() || columns == 0 {
@@ -783,10 +785,16 @@ fn overview_columns(
         let Some(loudest) = buckets[from..to].iter().max_by_key(|b| b[0]) else {
             continue;
         };
-        let reach = half_height * f32::from(loudest[0]) / 255.0;
         let x = rect.left() + column as f32;
-        let bar = Rect::from_min_max(pos2(x, middle - reach), pos2(x + 1.0, middle + reach));
-        mesh.add_colored_rect(bar, colour(*loudest, silent, high));
+        let [_, low, mid, high] = *loudest;
+        for (level, colour) in [(low, bands[0]), (mid, bands[1]), (high, bands[2])] {
+            if level == 0 {
+                continue;
+            }
+            let reach = half_height * f32::from(level) / 255.0;
+            let bar = Rect::from_min_max(pos2(x, middle - reach), pos2(x + 1.0, middle + reach));
+            mesh.add_colored_rect(bar, colour);
+        }
     }
 }
 
