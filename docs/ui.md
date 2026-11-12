@@ -82,8 +82,8 @@ height (see [Dividers](#dividers-folding-and-the-sideview)).
   - **Beat counter:** `bar.beat` under the key, counted from 1 from the grid's first beat,
     4 beats to a bar. Before the first beat the bars count backwards from 0. It shows only
     when the LAYOUT menu's Beat Counter is on and the track has a grid.
-  - **Jog:** the Info jogwheel display is the default: the wheel shows the BPM, the pitch and both the
-    elapsed and the remaining time inside it, and its marker moves to the rim.
+  - **Jog:** the Info jogwheel display is the default: the wheel shows the BPM, the pitch and
+    both the elapsed and the remaining time inside it, and its marker moves to the rim.
 - **Mixer:** one strip per deck, compact and in VirtualDJ's order: the master level on top,
   each channel's knobs (the three EQ knobs and FILTER) outside, in the columns next to the
   decks, GAIN over the channel fader in the middle, PFL under it, the level meters beside the
