@@ -242,6 +242,14 @@ letter; an export now keeps VirtualDJ's letter. A re-export then no longer asked
 track was listed twice. Not verified: CDJ (not exported), another computer or Windows, Serato
 DJ Pro's saved loops.
 
+### Hands-on check (plan 12a: compact window)
+
+Owner, 2026-11-12 (macOS, the SB3). Partway through, the owner compared full-window renders
+with VirtualDJ's Pro layout and asked for three changes, all made: blended waveform layers,
+each deck's gain above its fader, and single-letter captions with bigger knobs in the 4-deck
+mixer. In the app with real tracks the compact window, the mixer, the browser, the waveform
+palettes and the other layouts were approved ("It's really cool. I am happy with these").
+
 ## The SB3's own pad routines
 
 In FX FADE, PAD SCRATCH and TRANS (SHIFT + SAMPLER) the SB3 runs routines of its own on
