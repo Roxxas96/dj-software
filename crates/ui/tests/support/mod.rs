@@ -2,12 +2,12 @@
 
 use std::f64::consts::TAU;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use analysis::Waveform;
 use egui::Vec2;
 use egui_kittest::Harness;
-use engine::{DeckSnapshot, Grid, Hotcue};
+use engine::{DeckSnapshot, Grid, Hotcue, TrackBuffer};
 use library::{BrowserView, Focus, ListRow, TrackRow, TreeKind, TreeRow};
 use ui::deck::DeckReads;
 use ui::{ControlFrame, DeckInfo, HotcueMark, Layout};
@@ -41,40 +41,112 @@ fn track_row(n: usize) -> TrackRow {
     }
 }
 
-/// A made-up waveform of `frames_per_bucket`, shaped by the 126 BPM grid: a kick on every
-/// beat, hats on every quarter beat, mids that drift over two bars, and a breakdown from
-/// 55 % to 65 % of the track with no kick and the rest halved. No randomness, so every
-/// render draws the same.
-pub fn waveform(frames_per_bucket: u32) -> Waveform {
+/// The synthesized loop: eight bars at [`BPM`], a whole number of buckets at both
+/// resolutions.
+const LOOP_FRAMES: usize = 32 * BEAT_FRAMES as usize;
+/// The kick: a 55 Hz sine that dies away over 120 ms.
+const KICK_HZ: f64 = 55.0;
+const KICK_SECS: f64 = 0.12;
+/// A closed hat: 40 ms of noise.
+const HAT_SECS: f64 = 0.04;
+/// The mid layer's two detuned tones, a saw and a square, changing every two bars.
+const MID_HZ: [f64; 4] = [440.0, 523.25, 587.33, 493.88];
+const DETUNE: f64 = 1.5;
+
+/// A fixed-seed noise source, so every render draws the same.
+struct Noise(u64);
+
+impl Noise {
+    /// The next sample, from -1 to 1.
+    fn next(&mut self) -> f64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (self.0 >> 40) as f64 / f64::from(1u32 << 23) - 1.0
+    }
+}
+
+/// `blocks` loops of synthesized stereo audio: a kick on every beat (unless `kick` says
+/// no for that loop), closed hats on every quarter beat and two detuned mid tones.
+fn audio(kick: &[bool]) -> Vec<f32> {
+    let rate = f64::from(SAMPLE_RATE);
+    let mut noise = Noise(0x5EED);
+    let mut previous = 0.0;
+    let mut out = Vec::with_capacity(2 * LOOP_FRAMES * kick.len());
+    for (block, &kicks) in kick.iter().enumerate() {
+        for frame in 0..LOOP_FRAMES {
+            let t = (block * LOOP_FRAMES + frame) as f64 / rate;
+            let beats = frame as f64 / BEAT_FRAMES;
+            let since_beat = beats.fract() * BEAT_FRAMES / rate;
+            let kick = if kicks && since_beat < KICK_SECS {
+                0.9 * (TAU * KICK_HZ * since_beat).sin() * (-since_beat / 0.04).exp()
+            } else {
+                0.0
+            };
+            // White noise, its lows taken off by a first difference.
+            let white = noise.next();
+            let bright = white - previous;
+            previous = white;
+            let since_hat = (beats * 4.0).fract() * BEAT_FRAMES / 4.0 / rate;
+            let hat = if since_hat < HAT_SECS {
+                0.4 * bright * (-since_hat / 0.015).exp()
+            } else {
+                0.0
+            };
+            let hz = MID_HZ[(beats / 8.0) as usize % MID_HZ.len()];
+            let saw = 2.0 * (t * hz).fract() - 1.0;
+            let square = if (t * (hz + DETUNE)).fract() < 0.5 {
+                1.0
+            } else {
+                -1.0
+            };
+            // Off-beat stabs over a quieter pad.
+            let stab = if (beats + 0.5).fract() < 0.25 {
+                1.0
+            } else {
+                0.6
+            };
+            let mid = 0.22 * stab * (saw + 0.6 * square);
+            let sample = (kick + hat + mid) as f32;
+            out.extend_from_slice(&[sample, sample]);
+        }
+    }
+    out
+}
+
+/// The waveform of `frames_per_bucket` the analyser draws from a made-up 126 BPM track: a
+/// kick on every beat, hats on every quarter beat, mids that change every two bars, and a
+/// breakdown from 55 % to 65 % of the track with no kick. Three loops are analysed (with
+/// the kick, without, with) and the track tiled from the last two, so the analyser's
+/// filters have settled and both parts share one level.
+fn waveform(frames_per_bucket: u32) -> Waveform {
+    let track = TrackBuffer::new(SAMPLE_RATE, audio(&[true, false, true])).expect("the audio");
+    let analysed = analysis::waveform(&track, frames_per_bucket);
+    let per_loop = LOOP_FRAMES / frames_per_bucket as usize;
     let count = (DURATION_FRAMES / u64::from(frames_per_bucket)) as usize;
     let breakdown = count * 55 / 100..count * 65 / 100;
     let buckets = (0..count)
         .map(|i| {
-            let beats = (i as f64 * f64::from(frames_per_bucket)) / BEAT_FRAMES;
-            // The kick falls from 230 to 40 over the first third of its beat.
-            let kick = beats.fract() * 3.0;
-            let low = if kick < 1.0 {
-                230.0 - 190.0 * kick
-            } else {
-                40.0
-            };
-            // A hat falls from 90 to 20 within an eighth of a beat.
-            let hat = (beats * 4.0).fract() * 2.0;
-            let high = if hat < 1.0 { 90.0 - 70.0 * hat } else { 20.0 };
-            let mid = 100.0 + 20.0 * (beats * TAU / 8.0).sin();
-            let (low, mid, high) = if breakdown.contains(&i) {
-                (0.0, mid * 0.5, high * 0.5)
-            } else {
-                (low, mid, high)
-            };
-            let [low, mid, high] = [low, mid, high].map(|band: f64| band.round() as u8);
-            [low.max(mid).max(high), low, mid, high]
+            let block = if breakdown.contains(&i) { 1 } else { 2 };
+            analysed.buckets[block * per_loop + i % per_loop]
         })
         .collect();
     Waveform {
         frames_per_bucket,
         buckets,
     }
+}
+
+/// The track's overview and detail waveforms, analysed once for every test of a binary.
+fn waveforms() -> &'static (Arc<Waveform>, Arc<Waveform>) {
+    static WAVEFORMS: OnceLock<(Arc<Waveform>, Arc<Waveform>)> = OnceLock::new();
+    WAVEFORMS.get_or_init(|| {
+        (
+            Arc::new(waveform(OVERVIEW_FRAMES_PER_BUCKET)),
+            Arc::new(waveform(DETAIL_FRAMES_PER_BUCKET)),
+        )
+    })
 }
 
 /// Deck `deck`'s track, with its waveforms and the colours of hotcues 1 to 3.
@@ -163,12 +235,11 @@ pub fn loaded(layout: Layout, four_decks: bool) -> (ControlFrame, DeckReads) {
     frame.view.four_decks = four_decks;
     frame.view.beat_counter = true;
     frame.browser = Some(browser());
-    let overview = Arc::new(waveform(OVERVIEW_FRAMES_PER_BUCKET));
-    let detail = Arc::new(waveform(DETAIL_FRAMES_PER_BUCKET));
+    let (overview, detail) = waveforms();
     let mut reads = DeckReads::default();
     let decks = if four_decks { 4 } else { 2 };
     for deck in 0..decks {
-        frame.decks[deck] = Some(info(deck, &overview, &detail));
+        frame.decks[deck] = Some(info(deck, overview, detail));
         reads.decks[deck].0 = DeckSnapshot {
             loaded: true,
             playing: true,

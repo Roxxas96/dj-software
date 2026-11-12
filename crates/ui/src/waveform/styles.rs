@@ -8,6 +8,10 @@ use crate::view::WaveformStyle;
 
 /// How opaque a deck's waveform is when two share a lane.
 pub const OVERLAY_ALPHA: f32 = 0.55;
+/// How opaque the Frequency style's mid layer is over the low one.
+pub const MID_ALPHA: f32 = 0.75;
+/// How opaque the Frequency style's high layer is over the other two.
+pub const HIGH_ALPHA: f32 = 0.65;
 /// The most bars a column has: one per band.
 pub const MAX_BARS: usize = 3;
 
@@ -18,6 +22,17 @@ pub struct Bar {
     pub colour: Color32,
     pub from: f32,
     pub to: f32,
+}
+
+/// The Frequency style's `[low, mid, high]` layer colours for `bands`: the low layer
+/// opaque, the mid and high ones see-through so the layers behind them show.
+pub fn layers(bands: [Color32; 3]) -> [Color32; 3] {
+    let [low, mid, high] = bands;
+    [
+        low,
+        mid.gamma_multiply(MID_ALPHA),
+        high.gamma_multiply(HIGH_ALPHA),
+    ]
 }
 
 /// The bars of one column for `bucket`, `[peak, low, mid, high]`, of `deck`'s waveform;
@@ -50,8 +65,10 @@ pub(super) fn bars(
     let [peak, low, mid, high] = bucket;
     let [low_colour, mid_colour, high_colour] = bands;
     match style {
-        // Three layers over the same centre, the loudest band at the back.
+        // Three layers over the same centre, the loudest band at the back; the front two
+        // let it show through.
         WaveformStyle::Frequency => {
+            let [low_colour, mid_colour, high_colour] = layers(bands);
             let mut count = 0;
             for (level, colour) in [(low, low_colour), (mid, mid_colour), (high, high_colour)] {
                 if level == 0 {
@@ -168,7 +185,7 @@ mod tests {
     #[test]
     fn frequency_draws_three_layers_back_to_front() {
         let p = Palette::DARK;
-        let [low, mid, high] = rgb_bands();
+        let [low, mid, high] = layers(rgb_bands());
         let bars = column(
             WaveformStyle::Frequency,
             [255, 200, 100, 50],
@@ -186,6 +203,31 @@ mod tests {
             assert!((bar.from - (0.5 - 0.5 * level)).abs() < 1e-6, "{bar:?}");
             assert!((bar.to - (0.5 + 0.5 * level)).abs() < 1e-6, "{bar:?}");
         }
+    }
+
+    #[test]
+    fn frequency_layers_blend() {
+        // Low is opaque; mid and high let the layers behind them show through.
+        let p = Palette::DARK;
+        let bars = column(
+            WaveformStyle::Frequency,
+            [255, 200, 100, 50],
+            deck(0),
+            &p,
+            rgb_bands(),
+        );
+        let alphas: Vec<u8> = bars.iter().map(|b| b.colour.a()).collect();
+        assert_eq!(alphas[0], 255, "{bars:?}");
+        assert!(alphas[1] < 255 && alphas[2] < 255, "{bars:?}");
+        // A silent mid leaves the high its own alpha.
+        let bars = column(
+            WaveformStyle::Frequency,
+            [255, 200, 0, 50],
+            deck(0),
+            &p,
+            rgb_bands(),
+        );
+        assert_eq!(bars[1].colour.a(), alphas[2], "{bars:?}");
     }
 
     #[test]
@@ -207,7 +249,7 @@ mod tests {
             rgb_bands(),
         );
         assert_eq!(bars.len(), 1);
-        assert_eq!(bars[0].colour, rgb_bands()[1]);
+        assert_eq!(bars[0].colour, layers(rgb_bands())[1]);
     }
 
     #[test]

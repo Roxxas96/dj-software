@@ -48,6 +48,11 @@ const PFL_WIDTH: f32 = 40.0;
 const HEADER_GAP: f32 = 4.0;
 const CAPTION_FONT: f32 = 10.0;
 const CAPTION_HEIGHT: f32 = 10.0;
+/// The width of a four-deck knob's one-letter caption, and the gap to its knob.
+const LETTER_WIDTH: f32 = 10.0;
+const LETTER_GAP: f32 = 2.0;
+/// Between two knobs of a four-deck strip, whose captions sit beside them.
+const STRIP_KNOB_GAP: f32 = 2.0;
 const FADER_WIDTH: f32 = 14.0;
 const METER_WIDTH: f32 = 8.0;
 /// A knob's travel, either side of straight up, in radians.
@@ -61,6 +66,15 @@ pub fn eq_labels(eq_mode: EqMode, stems_active: bool, knobs: StemKnobs) -> [&'st
         (EqMode::Stems, true, StemKnobs::Vdj) => ["HIHAT", "MEL/VOX", "KICK"],
         (EqMode::Stems, true, StemKnobs::Raw) => ["VOCALS", "INSTRU", "BASS"],
         _ => ["HIGH", "MID", "LOW"],
+    }
+}
+
+/// A knob's one-letter caption in the four-deck mixer: the first letter of its `label`,
+/// but B (bass) for the low band.
+pub fn knob_letter(label: &'static str) -> &'static str {
+    match label {
+        "LOW" => "B",
+        _ => label.get(..1).unwrap_or(label),
     }
 }
 
@@ -259,16 +273,16 @@ fn caption(ui: &mut Ui, rect: Rect, text: &str, colour: Color32) {
     );
 }
 
-/// One side's part of the two-deck mixer: the left side's knobs are left of its fader,
-/// the right side's right of it.
+/// One side's part of the two-deck mixer: the gain sits over the fader; the left side's
+/// other knobs are left of its fader, the right side's right of it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SideLayout {
-    /// The knobs' centres, top to bottom: the gain, the EQ's three (when shown) and the
-    /// filter.
+    /// The knobs' centres: the gain, over the fader, then the outer column's top to
+    /// bottom: the EQ's three (when shown) and the filter.
     pub knobs: Vec<Pos2>,
     /// Each knob's caption, under it.
     pub captions: Vec<Rect>,
-    /// The fader's travel.
+    /// The fader's travel, under the gain.
     pub fader: Rect,
     /// The side's bar of the centre meter, when the mixer has meters.
     pub meter: Option<Rect>,
@@ -279,8 +293,8 @@ pub struct SideLayout {
 }
 
 /// Where the parts of the two-deck mixer go, as in VirtualDJ: the faders in the middle
-/// with the meter between them, the knobs outside them, the master level on top and the
-/// crossfader at the bottom.
+/// with the meter between them and the gains over them, the other knobs outside them, the
+/// master level on top and the crossfader at the bottom.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MixerLayout {
     /// The left side, then the right.
@@ -317,8 +331,9 @@ fn centre_parts(rect: Rect, top: Rect, bottom: Rect) -> (Rect, Rect) {
     (master, crossfader)
 }
 
-/// Lays out the two-deck mixer in `rect`: five knobs a side with the `eq`, two without,
-/// and the centre meter when there are `meters`. The faders keep their place either way.
+/// Lays out the two-deck mixer in `rect`: each side's gain over its fader, and outside it
+/// the EQ's three knobs and the filter with the `eq` (the filter alone without); the
+/// centre meter when there are `meters`. The faders keep their place either way.
 pub fn mixer_layout(rect: Rect, eq: bool, meters: bool) -> MixerLayout {
     let (top, body, bottom) = rows(rect);
     let (master, crossfader) = centre_parts(rect, top, bottom);
@@ -326,18 +341,28 @@ pub fn mixer_layout(rect: Rect, eq: bool, meters: bool) -> MixerLayout {
     // The middle band holds the faders, the meter between them and the headphone buttons.
     let band = rect.width() * MIDDLE_SHARE / 2.0;
     let offset = band * FADER_OFFSET;
-    // The headphone buttons sit at the body's bottom, the faders and the meter above them.
-    let pfl_y = egui::Rangef::new(body.bottom() - PFL_HEIGHT, body.bottom());
-    let travel = (body.top() + 6.0)..=(pfl_y.min - 8.0);
     let pfl_width = PFL_WIDTH.min(2.0 * (band - offset));
-    let knob_count = if eq { 5 } else { 2 };
-    let step = (body.height() / knob_count as f32).min(KNOB_STEP);
+    // The outer column holds the EQ's three knobs (when shown) and the filter; the gain
+    // sits over the fader, as in VirtualDJ.
+    let column_count = if eq { 4 } else { 1 };
+    // The knobs keep their size without the EQ, so the gain and the faders keep their place.
+    let step = (body.height() / 4.0).min(KNOB_STEP);
     // Each side's knobs have the width from the body's edge to the middle band.
     let column_width = centre - band - 4.0 - body.left();
     let knob_radius = KNOB_RADIUS
         .min((step - CAPTION_HEIGHT - 4.0) / 2.0)
         .min(column_width / 2.0)
+        .min(band - offset)
         .max(0.0);
+    // The headphone buttons sit at the body's bottom, the faders and the meter between
+    // them and the gain knobs.
+    let pfl_y = egui::Rangef::new(body.bottom() - PFL_HEIGHT, body.bottom());
+    let gain_y = body.top() + knob_radius;
+    let gain_caption_y = egui::Rangef::new(
+        gain_y + knob_radius + 2.0,
+        gain_y + knob_radius + 2.0 + CAPTION_HEIGHT,
+    );
+    let travel = (gain_caption_y.max + 4.0)..=(pfl_y.min - 8.0);
     let side = |sign: f32| {
         let x = centre + sign * offset;
         let fader = Rect::from_x_y_ranges(
@@ -359,17 +384,23 @@ pub fn mixer_layout(rect: Rect, eq: bool, meters: bool) -> MixerLayout {
         };
         let column = egui::Rangef::new(edge.min(outer), edge.max(outer));
         let header = Rect::from_x_y_ranges(column, top.y_range());
-        let knobs: Vec<Pos2> = (0..knob_count)
-            .map(|i| pos2(column.center(), body.top() + i as f32 * step + knob_radius))
+        let gain = pos2(x, gain_y);
+        let knobs: Vec<Pos2> = std::iter::once(gain)
+            .chain(
+                (0..column_count)
+                    .map(|i| pos2(column.center(), body.top() + i as f32 * step + knob_radius)),
+            )
             .collect();
-        let captions = knobs
-            .iter()
-            .map(|k| {
+        // The gain's caption keeps to its half of the middle band.
+        let gain_caption =
+            Rect::from_x_y_ranges(x - (band - offset)..=x + (band - offset), gain_caption_y);
+        let captions = std::iter::once(gain_caption)
+            .chain(knobs[1..].iter().map(|k| {
                 Rect::from_min_size(
                     pos2(column.min, k.y + knob_radius + 2.0),
                     vec2(column.span(), CAPTION_HEIGHT),
                 )
-            })
+            }))
             .collect();
         SideLayout {
             knobs,
@@ -404,7 +435,7 @@ pub struct StripLayout {
     /// The knobs' centres, top to bottom.
     pub knobs: Vec<Pos2>,
     pub knob_radius: f32,
-    /// Each knob's caption, under it.
+    /// Each knob's one-letter caption, beside it on the strip's outer (left) side.
     pub captions: Vec<Rect>,
     /// The fader's travel.
     pub fader: Rect,
@@ -413,7 +444,7 @@ pub struct StripLayout {
 }
 
 /// Lays out a strip of `knobs` knobs in `rect`, the knobs as large as the strip's height
-/// and width let them be (at most [`KNOB_RADIUS`]).
+/// and width let them be (at most [`KNOB_RADIUS`]), each with its letter beside it.
 pub fn strip_layout(rect: Rect, knobs: usize, meter: bool) -> StripLayout {
     let inner = rect.shrink2(vec2(6.0, 4.0));
     let header = Rect::from_min_size(inner.min, vec2(inner.width(), HEADER_HEIGHT));
@@ -429,25 +460,28 @@ pub fn strip_layout(rect: Rect, knobs: usize, meter: bool) -> StripLayout {
             travel,
         )
     });
-    // The knobs share the height under the header; each has its caption under it.
+    // The knobs share the height under the header; each has its letter beside it, so a
+    // knob takes its step's whole height. Letter and knob are centred in the column.
     let column = egui::Rangef::new(inner.left(), fader.left() - 4.0);
     let top = header.bottom() + 6.0;
     let room = (inner.bottom() - top).max(0.0);
     let step = (room / knobs.max(1) as f32).min(KNOB_STEP);
+    let lettered = LETTER_WIDTH + LETTER_GAP;
     let knob_radius = KNOB_RADIUS
-        .min((step - CAPTION_HEIGHT - 4.0) / 2.0)
-        .min(column.span() / 2.0)
+        .min((step - STRIP_KNOB_GAP) / 2.0)
+        .min((column.span() - lettered) / 2.0)
         .max(0.0);
-    let x = column.center();
+    let x = column.center() + lettered / 2.0;
     let knobs: Vec<Pos2> = (0..knobs)
         .map(|i| pos2(x, top + i as f32 * step + knob_radius))
         .collect();
     let captions = knobs
         .iter()
         .map(|centre| {
-            Rect::from_min_size(
-                pos2(column.min, centre.y + knob_radius + 2.0),
-                vec2(column.span(), CAPTION_HEIGHT),
+            let right = centre.x - knob_radius - LETTER_GAP;
+            Rect::from_x_y_ranges(
+                right - LETTER_WIDTH..=right,
+                centre.y - CAPTION_HEIGHT / 2.0..=centre.y + CAPTION_HEIGHT / 2.0,
             )
         })
         .collect();
@@ -500,7 +534,7 @@ pub fn strip(
     for (i, &(name, value, ghost)) in all[..count].iter().enumerate() {
         let centre = layout.knobs[i];
         knob(&painter, centre, layout.knob_radius, value, ghost, accent);
-        caption(ui, layout.captions[i], name, p.text_dim);
+        caption(ui, layout.captions[i], knob_letter(name), p.text_dim);
     }
     fader(
         &painter,
@@ -661,6 +695,18 @@ mod tests {
     }
 
     #[test]
+    fn four_deck_letters_follow_the_labels() {
+        use EqMode::{Eq, Stems};
+        use StemKnobs::{Raw, Vdj};
+        let letters = |mode, knobs| eq_labels(mode, true, knobs).map(knob_letter);
+        assert_eq!(letters(Eq, Vdj), ["H", "M", "B"]);
+        assert_eq!(letters(Stems, Vdj), ["H", "M", "K"]);
+        assert_eq!(letters(Stems, Raw), ["V", "I", "B"]);
+        assert_eq!(knob_letter("GAIN"), "G");
+        assert_eq!(knob_letter("FILTER"), "F");
+    }
+
+    #[test]
     fn a_ghost_marks_where_the_control_must_go() {
         let at = |v: f32| pos2(10.0, 100.0 - v * 100.0);
         assert_eq!(ghost_marker(Some(0.2), at), Some(pos2(10.0, 80.0)));
@@ -670,8 +716,14 @@ mod tests {
 
     #[test]
     fn a_four_deck_strip_keeps_its_knobs_inside() {
-        // 4-Decks at 1024 wide and 700 or 900 high, and at 1440 wide.
-        let sizes = [(82.0, 224.0), (82.0, 290.0), (115.0, 250.0)];
+        // 4-Decks at 1024 and 1440 wide in the compact window, and taller strips.
+        let sizes = [
+            (82.0, 154.0),
+            (115.0, 152.0),
+            (82.0, 224.0),
+            (82.0, 290.0),
+            (115.0, 250.0),
+        ];
         for (width, height) in sizes {
             for knobs in [2, 5] {
                 let rect = Rect::from_min_size(pos2(10.0, 20.0), vec2(width, height));
@@ -689,9 +741,11 @@ mod tests {
                     assert!(circle.top() >= layout.pfl.bottom(), "{at}");
                     assert!(circle.right() < layout.fader.left(), "{at}");
                     assert!(caption.right() < layout.fader.left(), "{at}");
-                    assert!(caption.top() >= circle.bottom(), "{at}");
+                    // The letter is level with its knob, on its left.
+                    assert!(caption.y_range().contains(centre.y), "{at}");
+                    assert!(caption.right() <= circle.left(), "{at}");
                     if let Some(next) = layout.knobs.get(i + 1) {
-                        assert!(caption.bottom() <= next.y - r, "{at}");
+                        assert!(circle.bottom() <= next.y - r, "{at}");
                     }
                 }
                 assert!(rect.contains_rect(layout.fader));
@@ -729,17 +783,28 @@ mod tests {
             let [left, right] = &layout.sides;
             assert_eq!(left.knobs.len(), if eq { 5 } else { 2 });
             assert_eq!(right.knobs.len(), left.knobs.len());
-            assert!(left.knobs.iter().all(|k| k.x < left.fader.min.x));
-            assert!(right.knobs.iter().all(|k| k.x > right.fader.max.x));
+            // The EQ and the filter; the gain sits over the fader.
+            assert!(left.knobs[1..].iter().all(|k| k.x < left.fader.min.x));
+            assert!(right.knobs[1..].iter().all(|k| k.x > right.fader.max.x));
+            // The outer column keeps them top to bottom.
+            for column in [&left.knobs[1..], &right.knobs[1..]] {
+                assert!(column.windows(2).all(|w| w[0].y < w[1].y), "{column:?}");
+            }
         }
     }
 
     #[test]
-    fn gain_is_on_top() {
-        let (_, layout) = mixer();
-        for side in &layout.sides {
-            let gain = side.knobs[0].y;
-            assert!(side.knobs[1..].iter().all(|k| k.y > gain));
+    fn gain_sits_above_its_fader() {
+        for eq in [true, false] {
+            let (rect, _) = mixer();
+            let layout = mixer_layout(rect, eq, true);
+            for side in &layout.sides {
+                let gain = side.knobs[0];
+                let r = layout.knob_radius;
+                assert!(side.fader.x_range().contains(gain.x), "{side:?}");
+                assert!(gain.y + r < side.fader.min.y, "{side:?}");
+                assert!(side.captions[0].bottom() <= side.fader.min.y, "{side:?}");
+            }
         }
     }
 
@@ -825,7 +890,8 @@ mod tests {
                             !caption.intersects(side.fader) && !caption.intersects(side.pfl),
                             "{at}"
                         );
-                        if let Some(next) = side.knobs.get(i + 1) {
+                        // The gain stands alone over the fader; the others share a column.
+                        if let Some(next) = side.knobs.get(i + 1).filter(|_| i > 0) {
                             assert!(caption.bottom() <= next.y - r, "{at}");
                         }
                     }

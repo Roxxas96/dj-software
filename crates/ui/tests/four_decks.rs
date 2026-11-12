@@ -3,6 +3,8 @@
 use std::path::PathBuf;
 use std::sync::mpsc::channel;
 
+use egui::epaint::{CircleShape, Shape};
+use egui::{Rect, Vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use engine::DeckSnapshot;
@@ -99,4 +101,54 @@ fn four_deck_panels_follow_their_decks() {
     let (one, three) = (top("One"), top("Three"));
     assert!(one.top() < three.top(), "{one:?} {three:?}");
     assert!(one.left() < 720.0 && three.left() < 720.0);
+}
+
+/// Every circle `shapes` draw, nested ones included.
+fn circles(shapes: impl IntoIterator<Item = Shape>, out: &mut Vec<CircleShape>) {
+    for shape in shapes {
+        match shape {
+            Shape::Circle(circle) => out.push(circle),
+            Shape::Vec(inner) => circles(inner, out),
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn four_deck_knobs_have_letter_captions_and_grow() {
+    let frame = four_decks();
+    let harness = draw(&frame);
+    let p = ui::theme::palette(&harness.ctx);
+    // A knob is a disc of the background with a dim rim.
+    let mut drawn = Vec::new();
+    circles(
+        harness.output().shapes.iter().map(|c| c.shape.clone()),
+        &mut drawn,
+    );
+    let knobs: Vec<CircleShape> = drawn
+        .into_iter()
+        .filter(|c| c.fill == p.background && c.stroke.color == p.text_dim)
+        .collect();
+    // Five knobs on each of the four strips.
+    assert_eq!(knobs.len(), 20, "{knobs:?}");
+    let radius = knobs[0].radius;
+    assert!(radius >= 9.0, "the knobs' radius is {radius}");
+    for letter in ["G", "H", "M", "B", "F"] {
+        let captions: Vec<_> = harness.get_all_by_label(letter).map(|n| n.rect()).collect();
+        assert_eq!(captions.len(), 4, "{letter}: {captions:?}");
+        for caption in captions {
+            // Beside a knob: level with it, left or right of its rim.
+            let beside = knobs.iter().any(|k| {
+                let circle = Rect::from_center_size(k.center, Vec2::splat(2.0 * k.radius));
+                let level = caption.y_range().intersects(circle.y_range());
+                let aside = caption.right() <= circle.left() + 0.5
+                    || caption.left() >= circle.right() - 0.5;
+                level && aside && (caption.center().x - k.center.x).abs() < 3.0 * k.radius
+            });
+            assert!(beside, "{letter} at {caption:?} is not beside a knob");
+        }
+    }
+    for word in ["GAIN", "HIGH", "MID", "LOW", "FILTER"] {
+        assert!(harness.query_by_label(word).is_none(), "{word}");
+    }
 }
