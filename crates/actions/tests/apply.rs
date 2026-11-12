@@ -197,6 +197,7 @@ fn ids_round_trip_for_every_action() {
         "deck.stem_toggle_kicks",
         "deck.stem_toggle_melody",
         "deck.stem_toggle_hats",
+        "deck.seek",
         "sampler.play_1",
         "sampler.play_2",
         "sampler.play_3",
@@ -253,7 +254,7 @@ fn ids_round_trip_for_every_action() {
         .into_iter()
         .filter(|k| k.takes_release())
         .collect();
-    assert_eq!(ActionKind::ALL.len(), 140);
+    assert_eq!(ActionKind::ALL.len(), 141);
     let hotcue = |n| ActionKind::Hotcue(HotcueSlot::new(n).unwrap());
     let hotcue_delete = |n| ActionKind::HotcueDelete(HotcueSlot::new(n).unwrap());
     let mut expected_release = vec![
@@ -1762,4 +1763,53 @@ fn ui_layout_counts_presses() {
     assert_eq!(rig.state.layout_steps, 2);
     assert_eq!(rig.apply(layout, Input::Release), ApplyResult::Ignored);
     assert_eq!(rig.state.layout_steps, 2);
+}
+
+#[test]
+fn seek_kind_round_trips() {
+    let kind = ActionKind::from_id("deck.seek").expect("deck.seek parses");
+    assert_eq!(kind.id(), "deck.seek");
+    assert!(kind.accepts(InputKind::Absolute));
+    assert!(!kind.accepts(InputKind::Button));
+    assert_eq!(
+        deck_action(kind, 1),
+        Action::Seek(d(1)),
+        "a deck target builds the action"
+    );
+}
+
+#[test]
+fn seek_sends_the_fraction_of_the_track() {
+    let (mut c, mut r) = engine(EngineConfig {
+        sample_rate: SR,
+        max_block_frames: BLOCK,
+    });
+    let mut state = ControlState::default();
+    let seek = Action::Seek(d(0));
+    // Nothing loaded: nothing is sent.
+    assert_eq!(
+        apply(&seek, Input::Absolute(0.25), 0, &mut state, &mut c),
+        ApplyResult::Ignored
+    );
+
+    let track = Arc::new(TrackBuffer::new(SR, vec![0.5; 1_000_000 * 2]).unwrap());
+    c.send(engine::Command::Deck(
+        d(0),
+        engine::DeckCommand::Load {
+            track,
+            memory: engine::TrackMemory::default(),
+        },
+    ))
+    .unwrap();
+    let mut m = vec![0.0; 2];
+    let mut h = vec![0.0; 2];
+    r.render(&mut m, &mut h);
+    assert_eq!(c.deck(d(0)).duration_frames, 1_000_000);
+
+    assert_eq!(
+        apply(&seek, Input::Absolute(0.25), 0, &mut state, &mut c),
+        ApplyResult::Sent(1)
+    );
+    r.render(&mut m, &mut h);
+    assert!((c.deck(d(0)).position_frames - 250_000.0).abs() < 2.0);
 }
