@@ -1,5 +1,5 @@
 //! What each of VirtualDJ's four layouts shows: which controls the deck panels and the
-//! mixer draw, and how the height is shared between the decks and the browser.
+//! mixer draw; the deck row is as tall as its contents and the browser takes the rest.
 
 use engine::DeckId;
 
@@ -34,15 +34,11 @@ pub struct Sections {
     /// The deck panels are squeezed to fit two on a side (the 4-Decks view): no tempo
     /// slider, and the transport, the states and the loop share one row.
     pub compact: bool,
-    /// The browser's share of the window's height.
-    pub browser_share: f32,
-    /// The deck panels' and mixer's share of the window's height.
-    pub decks_share: f32,
 }
 
 /// The sections `layout` shows.
 pub fn sections(layout: Layout) -> Sections {
-    let all = |decks_share: f32| Sections {
+    let all = Sections {
         fx: true,
         fx_level: true,
         pads: true,
@@ -53,8 +49,6 @@ pub fn sections(layout: Layout) -> Sections {
         mixer_eq: true,
         mixer_meters: true,
         compact: false,
-        browser_share: 1.0 - LANES_SHARE - decks_share,
-        decks_share,
     };
     match layout {
         Layout::Starter => Sections {
@@ -62,17 +56,14 @@ pub fn sections(layout: Layout) -> Sections {
             fx_level: false,
             pads: false,
             mixer_meters: false,
-            ..all(0.42)
+            ..all
         },
         Layout::Essentials => Sections {
             fx_level: false,
-            ..all(0.40)
+            ..all
         },
-        Layout::Pro => all(0.38),
-        Layout::Performance => Sections {
-            jog: false,
-            ..all(0.26)
-        },
+        Layout::Pro => all,
+        Layout::Performance => Sections { jog: false, ..all },
     }
 }
 
@@ -157,7 +148,6 @@ pub fn shown_sections(view: &ViewState) -> Sections {
 /// The sections of the 4-Decks view, whatever the layout: compact panels with the
 /// overview, the loop, the EQ and the meters.
 pub fn four_deck_sections() -> Sections {
-    let decks_share = 0.40;
     Sections {
         fx: false,
         fx_level: false,
@@ -169,8 +159,6 @@ pub fn four_deck_sections() -> Sections {
         mixer_eq: true,
         mixer_meters: true,
         compact: true,
-        browser_share: 1.0 - LANES_SHARE - decks_share,
-        decks_share,
     }
 }
 
@@ -294,10 +282,5 @@ mod tests {
                 && pro.mixer_eq
                 && pro.mixer_meters
         );
-        assert!(performance.decks_share < pro.decks_share);
-        for layout in Layout::ALL {
-            let s = sections(*layout);
-            assert!((s.decks_share + s.browser_share + LANES_SHARE - 1.0).abs() < 1e-6);
-        }
     }
 }

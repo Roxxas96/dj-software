@@ -278,6 +278,18 @@ mod tests {
     }
 
     #[test]
+    fn light_scheme_keeps_section_shades() {
+        let light = Palette::LIGHT;
+        let (panel, background) = (luminance(light.panel), luminance(light.background));
+        assert!(
+            (panel - background) * 255.0 >= 8.0,
+            "{panel} against {background}"
+        );
+        let alt = luminance(light.row_alt);
+        assert!(alt > background && alt < panel, "{alt}");
+    }
+
+    #[test]
     fn no_strokes_on_panels_and_idle_widgets() {
         for (scheme, theme) in [
             (ColourScheme::Dark, Theme::Dark),

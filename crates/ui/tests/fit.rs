@@ -174,3 +174,61 @@ fn four_decks_fit() {
         check(*layout, true, &[&TRANSPORT[..], &LOOP[..]].concat());
     }
 }
+
+/// The whole window at the smallest size, every layout with two and with four decks: the
+/// deck row is as tall as its contents, the browser lists at least three rows, and the
+/// sections only touch (they overlap by no more than the gap between them).
+#[test]
+fn every_layout_fits_the_smallest_window() {
+    let window = WINDOWS[0];
+    for layout in Layout::ALL {
+        for four_decks in [false, true] {
+            let (frame, reads) = loaded(*layout, four_decks);
+            let sections = shown_sections(&frame.view);
+            let drawn = drawn_sizes(frame.view.sizes, &sections, window);
+            let at = format!("{layout:?} four_decks={four_decks}");
+            let height = ui::deck::row_height(&sections);
+            assert!(drawn.decks * window.y >= height - 1.0, "{at}: deck row");
+            let mut screen = ui::Screen::default();
+            let mut harness = Harness::builder().with_size(window).build_ui(move |ui| {
+                let area = ui.ctx().content_rect();
+                ui.scope_builder(egui::UiBuilder::new().max_rect(area), |ui| {
+                    ui.set_clip_rect(area);
+                    ui::root_with_reads(ui, &frame, &reads, &mut screen);
+                });
+            });
+            harness.run_steps(3);
+            let top_bar = harness.get_by_label("top bar").rect();
+            let browser = harness.get_by_label("browser").rect();
+            // The deck row's controls end above the browser.
+            let play_bottom = harness
+                .get_all_by_label("PLAY")
+                .map(|n| n.rect().max.y)
+                .fold(0.0, f32::max);
+            assert!(
+                play_bottom <= browser.min.y,
+                "{at}: PLAY {play_bottom} under the browser {browser:?}"
+            );
+            let rows = harness
+                .query_all_by_label_contains("Track Number")
+                .filter(|n| {
+                    let r = n.rect();
+                    r.min.y >= browser.min.y && r.max.y <= window.y
+                })
+                .count();
+            assert!(rows >= 3, "{at}: the browser shows {rows} rows");
+            let sections_rects = [top_bar, browser];
+            let gap = ui::theme::SECTION_GAP;
+            for (i, a) in sections_rects.iter().enumerate() {
+                for b in &sections_rects[i + 1..] {
+                    let overlap = a.intersect(*b);
+                    let depth = overlap.height().min(overlap.width());
+                    assert!(
+                        !overlap.is_positive() || depth <= gap,
+                        "{at}: {a:?} and {b:?} overlap"
+                    );
+                }
+            }
+        }
+    }
+}
