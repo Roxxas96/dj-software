@@ -1719,6 +1719,12 @@ fn the_overview_shows_the_landing_point() {
     let head_x = head.iter().map(|p| p.x).sum::<f32>() / head.len() as f32;
     assert!(mark_x < head_x, "{mark_x} {head_x}");
 
+    // The held roll's span is shaded in the overview, in the loop colour.
+    snapshot.roll_span = Some((2_518_110.0, 2_518_110.0 + 441_000.0));
+    let span = view(&snapshot, &frame).roll_span.expect("a span");
+    assert!((span.0 - 2_518_110.0 / 14_508_900.0).abs() < 1e-4);
+    assert!((span.1 - 2_959_110.0 / 14_508_900.0).abs() < 1e-4);
+
     snapshot.ghost_frames = None;
     assert_eq!(view(&snapshot, &frame).landing, None);
     assert!(overview_marks(&snapshot, &frame).0.is_empty());

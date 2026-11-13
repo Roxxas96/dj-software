@@ -688,6 +688,7 @@ impl Deck {
             keylock: self.keylock,
             ghost_frames: self.ghost_frames(),
             roll_active: self.roll.is_some(),
+            roll_span: self.roll.map(|r| (r.start, r.end)),
             backspinning: self.backspin.is_some(),
             slicer_block_beat: self.slicer_block_beat(),
             load_seq: self.load_seq,
@@ -948,6 +949,21 @@ mod tests {
         let _ = deck.apply(DeckCommand::LoopExit);
         assert!(!deck.loop_active);
         assert_eq!(deck.loop_beats, looping::DEFAULT_LOOP_BEATS);
+    }
+
+    #[test]
+    fn a_held_roll_publishes_its_span() {
+        let track = ramp_track(400_000);
+        let grid = Grid::from_bpm(180.0, 0.0, SR);
+        let period = grid.unwrap().beat_period_frames;
+        let mut deck = deck_at(&track, grid, 20_000.0);
+        assert_eq!(deck.snapshot().roll_span, None);
+        let _ = deck.apply(DeckCommand::RollPress { beats: 1.0 });
+        let (start, end) = deck.snapshot().roll_span.expect("a span while held");
+        assert!((end - start - period).abs() < 1e-6, "{start} {end}");
+        assert!(start <= 20_000.0 && 20_000.0 < end);
+        let _ = deck.apply(DeckCommand::RollRelease { beats: 1.0 });
+        assert_eq!(deck.snapshot().roll_span, None);
     }
 
     #[test]

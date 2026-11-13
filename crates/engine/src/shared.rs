@@ -38,6 +38,8 @@ pub struct DeckSnapshot {
     pub ghost_frames: Option<f64>,
     /// A loop roll or slice is held and the playhead wraps in its roll loop.
     pub roll_active: bool,
+    /// While a loop roll or slice is held, its loop's start and end in track frames.
+    pub roll_span: Option<(f64, f64)>,
     /// A backspin is running.
     pub backspinning: bool,
     /// The first beat, counted from the grid's first beat, of the 8-beat block the slicer
@@ -79,6 +81,7 @@ impl Default for DeckSnapshot {
             keylock: false,
             ghost_frames: None,
             roll_active: false,
+            roll_span: None,
             backspinning: false,
             slicer_block_beat: None,
             load_seq: 0,
@@ -249,6 +252,8 @@ struct DeckShared {
     keylock: AtomicBool,
     ghost_frames: AtomicU64,
     roll_active: AtomicBool,
+    roll_start: AtomicU64,
+    roll_end: AtomicU64,
     backspinning: AtomicBool,
     slicer_block_beat: AtomicU64,
     load_seq: AtomicU64,
@@ -342,6 +347,9 @@ impl DeckShared {
         self.ghost_frames
             .store(opt_bits(s.ghost_frames), Ordering::Relaxed);
         self.roll_active.store(s.roll_active, Ordering::Relaxed);
+        let (start, end) = s.roll_span.unzip();
+        self.roll_start.store(opt_bits(start), Ordering::Relaxed);
+        self.roll_end.store(opt_bits(end), Ordering::Relaxed);
         self.backspinning.store(s.backspinning, Ordering::Relaxed);
         self.slicer_block_beat
             .store(opt_bits(s.slicer_block_beat), Ordering::Relaxed);
@@ -415,6 +423,8 @@ impl DeckShared {
             keylock: self.keylock.load(Ordering::Relaxed),
             ghost_frames: bits_opt(self.ghost_frames.load(Ordering::Relaxed)),
             roll_active: self.roll_active.load(Ordering::Relaxed),
+            roll_span: bits_opt(self.roll_start.load(Ordering::Relaxed))
+                .zip(bits_opt(self.roll_end.load(Ordering::Relaxed))),
             backspinning: self.backspinning.load(Ordering::Relaxed),
             slicer_block_beat: bits_opt(self.slicer_block_beat.load(Ordering::Relaxed)),
             load_seq: self.load_seq.load(Ordering::Relaxed),
