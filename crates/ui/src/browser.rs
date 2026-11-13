@@ -14,7 +14,10 @@ use analysis::KeyNotation;
 use egui::{
     Align, Button, Color32, CornerRadius, CursorIcon, DragAndDrop, Id, Key, Label, Layout,
     Modifiers, PointerButton, Pos2, Rect, Response, RichText, Sense, Stroke, StrokeKind, TextEdit,
-    Ui, UiBuilder, Vec2, pos2, vec2,
+    Ui, UiBuilder, Vec2, pos2,
+    text::{CCursor, CCursorRange},
+    text_edit::TextEditState,
+    vec2,
 };
 use engine::DeckId;
 use library::{BrowserEdit, BrowserView, Focus, ListRow, TrackSortKey, TreeKind, TreeRow};
@@ -92,6 +95,10 @@ pub struct Changes {
     pub unfold: Option<ViewChange>,
     /// What the clicks, double-clicks, menus and wheel asked of the library, in order.
     pub library: Vec<LibraryStep>,
+    /// A Delete key was pressed while the browser had the keyboard: the pane to delete
+    /// from (the tracks of the list, or the playlist of the tree). The window opens its
+    /// confirmation; nothing is deleted here.
+    pub delete_requested: Option<Focus>,
 }
 
 /// What the browser knows of the decks.
@@ -110,8 +117,13 @@ pub struct Decks {
 /// playlist and those rows' positions in it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrackDrag {
+    /// The tracks dragged; with `whole_list`, only the row the drag started on (what a
+    /// deck loads).
     pub tracks: Vec<i64>,
     pub from_playlist: Option<(i64, Vec<usize>)>,
+    /// The whole list is dragged ([`BrowserView::all_selected`]): the library resolves
+    /// its tracks when the drop is made, so a 50,000-row list builds no id set here.
+    pub whole_list: bool,
 }
 
 /// The tracks dropped on `response` this frame, if any. While tracks are dragged over it,
@@ -225,6 +237,18 @@ pub fn selected_rows(ctx: &egui::Context) -> Vec<usize> {
         .unwrap_or_default()
 }
 
+/// What a drag that starts on row `at` carries: the whole list when it is all selected
+/// (just the row's track along, which is what a deck loads), else the rows picked or `at`.
+fn dragged(view: &BrowserView, selection: &Selection, at: usize) -> Option<TrackDrag> {
+    if view.all_selected {
+        let mut drag = track_drag(view, &[at])?;
+        drag.from_playlist = None;
+        drag.whole_list = true;
+        return Some(drag);
+    }
+    track_drag(view, &selection.acting_on(at))
+}
+
 /// What dragging `rows` of `view` carries; `None` when none of them is a library track.
 fn track_drag(view: &BrowserView, rows: &[usize]) -> Option<TrackDrag> {
     // In a playlist every row has its position; the check keeps tracks and positions
@@ -248,6 +272,7 @@ fn track_drag(view: &BrowserView, rows: &[usize]) -> Option<TrackDrag> {
     Some(TrackDrag {
         tracks,
         from_playlist,
+        whole_list: false,
     })
 }
 
@@ -425,6 +450,122 @@ const SEARCH_WIDTH: f32 = 200.0;
 /// The width of a deck marker at a loaded track's row, in points.
 const MARKER_WIDTH: f32 = 3.0;
 
+/// Whether the pointer last pressed inside the browser's tree or list (the browser then
+/// has the keyboard), kept from frame to frame. A press anywhere else hands it back.
+fn owner_id() -> Id {
+    Id::NULL.with("open-jockey-browser-keyboard")
+}
+
+/// The keys the browser takes in one frame, read (and taken from egui) once. Empty unless
+/// the browser has the keyboard and no text field wants it.
+#[derive(Debug, Default)]
+struct Keys {
+    up: bool,
+    down: bool,
+    page_up: bool,
+    page_down: bool,
+    home: bool,
+    end: bool,
+    left: bool,
+    right: bool,
+    tab: bool,
+    enter: bool,
+    select_all: bool,
+    delete: bool,
+    /// Letters and digits typed, for the search box.
+    text: String,
+}
+
+impl Keys {
+    /// Updates who has the keyboard from this frame's press, then takes the keys if the
+    /// browser has it. `inside` tells whether a point is in the tree or the list.
+    fn read(ui: &Ui, inside: impl Fn(Pos2) -> bool) -> Self {
+        let ctx = ui.ctx();
+        if let Some(at) = ui.input(|i| i.pointer.any_pressed().then(|| i.pointer.interact_pos())) {
+            let owned = at.is_some_and(inside);
+            ctx.data_mut(|d| d.insert_temp(owner_id(), owned));
+        }
+        let owned = ctx.data(|d| d.get_temp(owner_id())).unwrap_or(false);
+        // A text field (the search box, a dialog's name) keeps its keys, and so does a
+        // dialog's button or a menu.
+        if !owned || ctx.text_edit_focused() || playlist_dialog::is_open(ctx) {
+            return Self::default();
+        }
+        if egui::Popup::is_any_open(ctx) {
+            return Self::default();
+        }
+        // The browser draws no widget that takes the keyboard focus; whatever has it (Tab
+        // gave it to a button elsewhere) lets go, so Enter is the browser's.
+        ctx.memory_mut(|m| {
+            if let Some(id) = m.focused() {
+                m.surrender_focus(id);
+            }
+        });
+        ui.input_mut(|i| {
+            let mut key = |modifiers, key| i.consume_key(modifiers, key);
+            let tab = key(Modifiers::NONE, Key::Tab) | key(Modifiers::SHIFT, Key::Tab);
+            let delete = key(Modifiers::NONE, Key::Delete)
+                | key(Modifiers::NONE, Key::Backspace)
+                | key(Modifiers::COMMAND, Key::Backspace);
+            Self {
+                up: key(Modifiers::NONE, Key::ArrowUp),
+                down: key(Modifiers::NONE, Key::ArrowDown),
+                page_up: key(Modifiers::NONE, Key::PageUp),
+                page_down: key(Modifiers::NONE, Key::PageDown),
+                home: key(Modifiers::NONE, Key::Home),
+                end: key(Modifiers::NONE, Key::End),
+                left: key(Modifiers::NONE, Key::ArrowLeft),
+                right: key(Modifiers::NONE, Key::ArrowRight),
+                tab,
+                enter: key(Modifiers::NONE, Key::Enter),
+                select_all: key(Modifiers::COMMAND, Key::A),
+                delete,
+                text: Self::typed(i),
+            }
+        })
+    }
+
+    /// The letters and digits typed with no Ctrl, Alt or Cmd held (Shift types capitals),
+    /// taken out of the frame's events so that the search box does not see them twice.
+    fn typed(input: &mut egui::InputState) -> String {
+        if input.modifiers.ctrl || input.modifiers.alt || input.modifiers.command {
+            return String::new();
+        }
+        let mut typed = String::new();
+        input.events.retain(|event| match event {
+            egui::Event::Text(text) if text.chars().all(char::is_alphanumeric) => {
+                typed.push_str(text);
+                false
+            }
+            _ => true,
+        });
+        typed
+    }
+
+    /// Where the cursor of a pane of `count` rows moves to from `cursor`, `rows` fitting
+    /// in the pane; `None` when it stays.
+    fn cursor(&self, cursor: usize, count: usize, rows: usize) -> Option<usize> {
+        let last = count.checked_sub(1)?;
+        let page = rows.max(1);
+        let to = if self.home {
+            0
+        } else if self.end {
+            last
+        } else if self.page_up {
+            cursor.saturating_sub(page)
+        } else if self.page_down {
+            cursor.saturating_add(page).min(last)
+        } else if self.up {
+            cursor.saturating_sub(1)
+        } else if self.down {
+            cursor.saturating_add(1).min(last)
+        } else {
+            return None;
+        };
+        (to != cursor).then_some(to)
+    }
+}
+
 /// Draws the browser into all of `ui`'s space, with `sideview` drawn in the sideview's
 /// column when `arrangement` shows it, and `decks` as they are.
 pub fn show(
@@ -502,9 +643,20 @@ pub fn show(
     let side = Rect::from_min_max(pos2(side_edge, area.min.y), area.max);
     crate::landmark_rect(ui, tree, "tree");
     crate::landmark_rect(ui, list, "list");
+    let keys = Keys::read(ui, |at| tree.contains(at) || list.contains(at));
+    changes.delete_requested = keys.delete.then_some(view.focus);
     let steps = &mut changes.library;
-    pane(ui, tree, |ui| tree_pane(ui, view, steps));
-    pane(ui, list, |ui| list_pane(ui, view, decks, notation, steps));
+    if keys.tab {
+        // The other pane takes the focus, its cursor where it was.
+        steps.push(LibraryStep::Browse(match view.focus {
+            Focus::Tree => BrowserEdit::SelectRow(view.list_cursor),
+            Focus::List => BrowserEdit::SelectTree(view.tree_cursor),
+        }));
+    }
+    pane(ui, tree, |ui| tree_pane(ui, view, &keys, steps));
+    pane(ui, list, |ui| {
+        list_pane(ui, view, decks, notation, &keys, steps);
+    });
     playlist_dialog::show(ui.ctx(), steps);
     if arrangement.info {
         crate::landmark_rect(ui, info, "info panel");
@@ -584,9 +736,12 @@ fn cell(ui: &mut Ui, row: Rect, x: f32, width: f32, text: RichText) {
     });
 }
 
-fn tree_pane(ui: &mut Ui, view: &BrowserView, steps: &mut Vec<LibraryStep>) {
+fn tree_pane(ui: &mut Ui, view: &BrowserView, keys: &Keys, steps: &mut Vec<LibraryStep>) {
     let rows = rows_fitting(ui.available_height());
     let count = view.tree.len();
+    if view.focus == Focus::Tree {
+        tree_keys(view, keys, rows, steps);
+    }
     let follow = visible_window(view.tree_cursor, count, rows);
     let seen = (view.tree_cursor, 0, count);
     let (window, _) = scroll(ui, "tree_scroll", seen, 0..count, count, follow);
@@ -600,7 +755,7 @@ fn tree_pane(ui: &mut Ui, view: &BrowserView, steps: &mut Vec<LibraryStep>) {
         .skip(window.start)
     {
         let rect = row(ui, highlight(&p, at == view.tree_cursor, focused));
-        let response = ui.interact(rect, Id::NULL.with(("browser tree", at)), Sense::click());
+        let response = ui.interact(rect, Id::NULL.with(("browser tree", at)), Sense::CLICK);
         let arrow = tree_row(ui, rect, entry);
         // Drives and folders have no menu.
         if entry.kind == TreeKind::Playlists || entry.playlist.is_some() {
@@ -610,17 +765,24 @@ fn tree_pane(ui: &mut Ui, view: &BrowserView, steps: &mut Vec<LibraryStep>) {
         // back on it overshot a move, and do nothing.
         let own = |playlist| {
             DragAndDrop::payload::<TrackDrag>(ui.ctx()).is_some_and(|drag| {
-                drag.from_playlist
-                    .as_ref()
-                    .is_some_and(|(id, _)| *id == playlist)
+                let whole = drag.whole_list && view.playlist == Some(playlist);
+                whole
+                    || drag
+                        .from_playlist
+                        .as_ref()
+                        .is_some_and(|(id, _)| *id == playlist)
             })
         };
         if let Some(playlist) = entry.playlist.filter(|&id| !own(id))
             && let Some(drag) = track_drop(ui, &response, rect, p.text_dim)
         {
-            steps.push(LibraryStep::AddToPlaylist {
-                playlist,
-                tracks: drag.tracks.clone(),
+            steps.push(if drag.whole_list {
+                LibraryStep::AddListToPlaylist { playlist }
+            } else {
+                LibraryStep::AddToPlaylist {
+                    playlist,
+                    tracks: drag.tracks.clone(),
+                }
             });
         }
         let opens = matches!(entry.kind, TreeKind::Drive | TreeKind::Folder);
@@ -628,13 +790,37 @@ fn tree_pane(ui: &mut Ui, view: &BrowserView, steps: &mut Vec<LibraryStep>) {
         // node that cannot (the Playlists node) leaves them to the row.
         let arrow_clicked = arrow.filter(|_| opens).is_some_and(|arrow| {
             let id = Id::NULL.with(("browser tree arrow", at));
-            ui.interact(arrow, id, Sense::click()).clicked()
+            ui.interact(arrow, id, Sense::CLICK).clicked()
         });
         if (arrow_clicked || response.double_clicked()) && opens {
             steps.push(LibraryStep::Browse(BrowserEdit::ToggleTreeAt(at)));
         } else if response.clicked() {
             steps.push(LibraryStep::Browse(BrowserEdit::SelectTree(at)));
         }
+    }
+}
+
+/// The search box's id.
+fn search_id() -> Id {
+    Id::NULL.with("open-jockey-browser-search")
+}
+
+/// What the keys do in the tree: move the highlight, and open or close the highlighted
+/// drive or folder.
+fn tree_keys(view: &BrowserView, keys: &Keys, rows: usize, steps: &mut Vec<LibraryStep>) {
+    let at = view.tree_cursor;
+    if let Some(to) = keys.cursor(at, view.tree.len(), rows) {
+        steps.push(LibraryStep::Browse(BrowserEdit::SelectTree(to)));
+    }
+    let Some(entry) = view.tree.get(at) else {
+        return;
+    };
+    let opens = matches!(entry.kind, TreeKind::Drive | TreeKind::Folder);
+    let toggle = (keys.left && entry.expanded) || (keys.right && !entry.expanded);
+    if opens && (toggle || keys.enter && !keys.left && !keys.right) {
+        steps.push(LibraryStep::Browse(BrowserEdit::ToggleTreeAt(at)));
+    } else if keys.enter && !opens {
+        steps.push(LibraryStep::Browse(BrowserEdit::SelectTree(at)));
     }
 }
 
@@ -857,6 +1043,7 @@ fn list_pane(
     view: &BrowserView,
     decks: Decks,
     notation: KeyNotation,
+    keys: &Keys,
     steps: &mut Vec<LibraryStep>,
 ) {
     let loaded = decks.loaded;
@@ -870,8 +1057,12 @@ fn list_pane(
     } else {
         "files"
     };
-    let count = format!("{} {files}", view.list_count);
-    let count_width = 70.0;
+    let count = if view.all_selected {
+        format!("{} selected", view.list_count)
+    } else {
+        format!("{} {files}", view.list_count)
+    };
+    let count_width = 90.0;
     let search_width = SEARCH_WIDTH.min(header.width() * 0.35);
     let search_x = header.max.x - count_width - 6.0 - search_width;
     cell(
@@ -883,9 +1074,22 @@ fn list_pane(
     );
     let mut query = Query::take(ui.ctx(), view);
     let search = Rect::from_min_size(pos2(search_x, header.min.y), vec2(search_width, ROW_HEIGHT));
+    // Letters typed with the list in hand start a search: the box takes the focus, with
+    // the text at its end.
+    let typed = !keys.text.is_empty();
+    if typed {
+        query.text.push_str(&keys.text);
+        steps.push(query.search());
+        let end = CCursorRange::one(CCursor::new(query.text.chars().count()));
+        let mut state = TextEditState::load(ui.ctx(), search_id()).unwrap_or_default();
+        state.cursor.set_char_range(Some(end));
+        state.store(ui.ctx(), search_id());
+        ui.memory_mut(|m| m.request_focus(search_id()));
+    }
     let field = ui.put(
         search,
         TextEdit::singleline(&mut query.text)
+            .id(search_id())
             .hint_text("Search")
             .background_color(p.row_alt)
             .margin(vec2(4.0, 1.0))
@@ -913,7 +1117,7 @@ fn list_pane(
         let Some(key) = SORT_KEYS[at] else { continue };
         let rect = Rect::from_min_size(pos2(x, head.min.y), vec2(width, head.height()));
         let id = Id::NULL.with(("browser header", at));
-        let response = ui.interact(rect, id, Sense::click());
+        let response = ui.interact(rect, id, Sense::CLICK);
         if response.hovered() {
             ui.output_mut(|o| o.cursor_icon = CursorIcon::PointingHand);
         }
@@ -936,6 +1140,9 @@ fn list_pane(
         steps.push(LibraryStep::Browse(BrowserEdit::ShowPage { offset }));
     }
     let mut selection = Selection::take(ui.ctx(), view);
+    if view.focus == Focus::List {
+        list_keys(ui, view, decks, keys, rows, steps);
+    }
     // Rows dragged within the playlist shown move in it; a search or a sort shows rows
     // out of their playlist order, so there they do not.
     let reorder = DragAndDrop::payload::<TrackDrag>(ui.ctx())
@@ -948,11 +1155,11 @@ fn list_pane(
     for at in window {
         let entry = &view.list[at - view.list_offset];
         let alt = (at % 2 == 1).then_some(p.row_alt);
-        let picked = at == view.list_cursor || selection.rows.contains(&at);
+        let picked = view.all_selected || at == view.list_cursor || selection.rows.contains(&at);
         let fill = highlight(&p, picked, focused).or(alt);
         let rect = row(ui, fill);
         let id = Id::NULL.with(("browser row", at));
-        let response = ui.interact(rect, id, Sense::click_and_drag());
+        let response = ui.interact(rect, id, Sense::CLICK | Sense::DRAG);
         let track = entry.track.as_ref().map(|t| t.id);
         // The first click of a double-click selected the row already.
         if response.clicked() && !response.double_clicked() {
@@ -966,7 +1173,7 @@ fn list_pane(
         }
         // Past egui's drag threshold only: a click stays a click.
         if response.drag_started_by(PointerButton::Primary)
-            && let Some(drag) = track_drag(view, &selection.acting_on(at))
+            && let Some(drag) = dragged(view, &selection, at)
         {
             DragAndDrop::set_payload(ui.ctx(), drag);
         }
@@ -1026,6 +1233,34 @@ fn list_pane(
     selection.put(ui.ctx());
 }
 
+/// What the keys do in the list: move the cursor, load the highlighted track as a
+/// double-click does, select every row.
+fn list_keys(
+    ui: &Ui,
+    view: &BrowserView,
+    decks: Decks,
+    keys: &Keys,
+    rows: usize,
+    steps: &mut Vec<LibraryStep>,
+) {
+    if let Some(to) = keys.cursor(view.list_cursor, view.list_count, rows) {
+        steps.push(LibraryStep::Browse(BrowserEdit::SelectRow(to)));
+    }
+    if keys.select_all {
+        steps.push(LibraryStep::Browse(BrowserEdit::SelectAll));
+    }
+    if keys.enter {
+        let row = view
+            .list_cursor
+            .checked_sub(view.list_offset)
+            .and_then(|at| view.list.get(at))
+            .and_then(|entry| entry.track.as_ref());
+        if let Some(track) = row.or(view.track.as_ref()) {
+            load_on_free_deck(ui, decks, track.id, steps);
+        }
+    }
+}
+
 /// The menu of a library track's row `at`: load it on a deck, add it (or the rows picked,
 /// when it is one of them) to a playlist, or take them out of the playlist shown.
 fn track_menu(
@@ -1059,9 +1294,12 @@ fn track_menu(
         // egui draws the submenu's ▸.
         ui.menu_button("Add to playlist", |ui| {
             for (playlist, label) in playlists {
-                if ui.button(label.as_str()).clicked()
-                    && let Some(drag) = track_drag(view, &selection.acting_on(at))
-                {
+                if !ui.button(label.as_str()).clicked() {
+                    continue;
+                }
+                if view.all_selected {
+                    steps.push(LibraryStep::AddListToPlaylist { playlist });
+                } else if let Some(drag) = track_drag(view, &selection.acting_on(at)) {
                     steps.push(LibraryStep::AddToPlaylist {
                         playlist,
                         tracks: drag.tracks,
@@ -1070,7 +1308,8 @@ fn track_menu(
             }
         });
     }
-    let Some(playlist) = view.playlist else {
+    // Taking a whole list out of its playlist is not offered: it names no positions.
+    let Some(playlist) = view.playlist.filter(|_| !view.all_selected) else {
         return;
     };
     if ui.button("Remove from playlist").clicked()
@@ -1243,6 +1482,7 @@ mod tests {
             list: vec![row; 200],
             list_offset: offset,
             list_count: 5000,
+            all_selected: false,
             list_cursor: cursor,
             search: None,
             sort: None,

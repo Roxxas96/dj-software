@@ -74,6 +74,7 @@ fn view() -> BrowserView {
         ],
         list_offset: 0,
         list_count: 2,
+        all_selected: false,
         list_cursor: 0,
         search: None,
         sort: None,
@@ -513,6 +514,8 @@ struct Clicking {
     decks: Decks,
     covers: Covers,
     steps: Vec<LibraryStep>,
+    /// The panes a Delete key asked to delete from.
+    deletes: Vec<Focus>,
 }
 
 /// `count` library tracks titled "Song N" by their row in the whole list, the page at
@@ -539,15 +542,25 @@ fn numbered(offset: usize, count: usize, total: usize) -> BrowserView {
 /// Draws `view` without its info panel (which repeats the cursor's title), collecting
 /// the library steps. Short steps, so two clicks in a row make a double-click.
 fn clicking(view: BrowserView, decks: Decks) -> Harness<'static, Clicking> {
+    let arrangement = Arrangement {
+        info: false,
+        ..Arrangement::default()
+    };
+    clicking_in(view, decks, arrangement)
+}
+
+/// [`clicking`] with the browser arranged as `arrangement`.
+fn clicking_in(
+    view: BrowserView,
+    decks: Decks,
+    arrangement: Arrangement,
+) -> Harness<'static, Clicking> {
     let state = Clicking {
         view,
         decks,
         covers: Covers::default(),
         steps: Vec::new(),
-    };
-    let arrangement = Arrangement {
-        info: false,
-        ..Arrangement::default()
+        deletes: Vec::new(),
     };
     let mut harness = Harness::builder()
         .with_size([1000.0, 300.0])
@@ -564,6 +577,7 @@ fn clicking(view: BrowserView, decks: Decks) -> Harness<'static, Clicking> {
                     |_| {},
                 );
                 state.steps.extend(changes.library);
+                state.deletes.extend(changes.delete_requested);
             },
             state,
         );
@@ -1446,4 +1460,315 @@ fn the_press_that_closes_a_dialog_reaches_nothing_under_it() {
     harness.run_steps(3);
     assert!(harness.query_by_label("Delete playlist").is_none());
     assert_eq!(harness.state().steps, []);
+}
+
+// The library from the keyboard.
+
+/// `view` with a tree of `rows` folders, the cursor on `cursor`, and `focus` on a pane.
+fn with_tree(mut view: BrowserView, rows: usize, cursor: usize, focus: Focus) -> BrowserView {
+    view.tree = (0..rows)
+        .map(|i| tree_row(&format!("Folder {i}"), 0, TreeKind::Folder))
+        .collect();
+    view.tree_cursor = cursor;
+    view.focus = focus;
+    view
+}
+
+/// Clicks the row labelled `label`, which hands the browser the keyboard.
+fn click_row(harness: &mut Harness<'_, Clicking>, label: &str) {
+    let at = at_label(harness, label);
+    click(harness, at);
+    harness.run_steps(2);
+}
+
+/// A harness that was clicked and whose steps were cleared: only the keys count.
+fn owning(view: BrowserView, decks: Decks) -> Harness<'static, Clicking> {
+    let mut harness = clicking(view, decks);
+    click_row(&mut harness, "Song 0");
+    harness.state_mut().steps.clear();
+    harness
+}
+
+fn press(harness: &mut Harness<'_, Clicking>, key: Key) {
+    harness.key_press(key);
+    harness.run_steps(2);
+}
+
+#[test]
+fn arrows_move_the_cursor_in_the_focused_pane() {
+    let mut view = numbered(0, 40, 40);
+    view.list_cursor = 5;
+    let mut harness = owning(view, Decks::default());
+    press(&mut harness, Key::ArrowDown);
+    press(&mut harness, Key::ArrowUp);
+    press(&mut harness, Key::Home);
+    press(&mut harness, Key::End);
+    assert_eq!(
+        harness.state().steps,
+        [
+            browse(BrowserEdit::SelectRow(6)),
+            browse(BrowserEdit::SelectRow(4)),
+            browse(BrowserEdit::SelectRow(0)),
+            browse(BrowserEdit::SelectRow(39)),
+        ]
+    );
+
+    // A page is the rows that fit, more than one and fewer than the list.
+    let mut harness = owning(numbered(0, 40, 40), Decks::default());
+    press(&mut harness, Key::PageDown);
+    let Some(LibraryStep::Browse(BrowserEdit::SelectRow(page))) = harness.state().steps.first()
+    else {
+        panic!("{:?}", harness.state().steps);
+    };
+    assert!((2..40).contains(page), "{page}");
+
+    // The same keys in the tree move the tree's cursor, and stop at its ends.
+    let view = with_tree(numbered(0, 40, 40), 6, 2, Focus::Tree);
+    let mut harness = owning(view, Decks::default());
+    press(&mut harness, Key::ArrowDown);
+    press(&mut harness, Key::ArrowUp);
+    press(&mut harness, Key::Home);
+    press(&mut harness, Key::End);
+    assert_eq!(
+        harness.state().steps,
+        [
+            browse(BrowserEdit::SelectTree(3)),
+            browse(BrowserEdit::SelectTree(1)),
+            browse(BrowserEdit::SelectTree(0)),
+            browse(BrowserEdit::SelectTree(5)),
+        ]
+    );
+    let view = with_tree(numbered(0, 40, 40), 6, 0, Focus::Tree);
+    let mut harness = owning(view, Decks::default());
+    press(&mut harness, Key::ArrowUp);
+    assert_eq!(harness.state().steps, []);
+}
+
+#[test]
+fn left_and_right_close_and_open_a_folder() {
+    let mut view = with_tree(numbered(0, 40, 40), 4, 1, Focus::Tree);
+    view.tree[1].expanded = true;
+    let mut harness = owning(view.clone(), Decks::default());
+    // Open already: Right does nothing, Left closes it.
+    press(&mut harness, Key::ArrowRight);
+    press(&mut harness, Key::ArrowLeft);
+    view.tree[1].expanded = false;
+    let mut closed = owning(view, Decks::default());
+    press(&mut closed, Key::ArrowLeft);
+    press(&mut closed, Key::ArrowRight);
+    press(&mut closed, Key::Enter);
+    let toggle = browse(BrowserEdit::ToggleTreeAt(1));
+    assert_eq!(harness.state().steps, std::slice::from_ref(&toggle));
+    // Enter opens the entry, as Right does.
+    assert_eq!(closed.state().steps, [toggle.clone(), toggle]);
+}
+
+#[test]
+fn enter_in_the_tree_selects_a_playlist() {
+    let view = with_playlists(numbered(0, 20, 20));
+    let at = view.tree.len() - 1;
+    let mut view = view;
+    view.tree_cursor = at;
+    view.focus = Focus::Tree;
+    let mut harness = owning(view, Decks::default());
+    press(&mut harness, Key::Enter);
+    assert_eq!(harness.state().steps, [browse(BrowserEdit::SelectTree(at))]);
+}
+
+#[test]
+fn tab_switches_panes() {
+    let mut view = with_tree(numbered(0, 20, 20), 4, 2, Focus::List);
+    view.list_cursor = 3;
+    let mut harness = owning(view.clone(), Decks::default());
+    press(&mut harness, Key::Tab);
+    assert_eq!(harness.state().steps, [browse(BrowserEdit::SelectTree(2))]);
+    // egui's own Tab (to the next widget) does not take the keyboard from the browser.
+    press(&mut harness, Key::Enter);
+    assert_eq!(loads(&harness.state().steps), [&load(1, 1003)]);
+
+    view.focus = Focus::Tree;
+    let mut harness = owning(view, Decks::default());
+    press(&mut harness, Key::Tab);
+    assert_eq!(harness.state().steps, [browse(BrowserEdit::SelectRow(3))]);
+}
+
+#[test]
+fn enter_loads_the_highlighted_track() {
+    let mut view = numbered(0, 20, 20);
+    view.list_cursor = 4;
+    let decks = Decks {
+        playing: [true, false, false, false],
+        ..Decks::default()
+    };
+    let mut harness = owning(view.clone(), decks);
+    press(&mut harness, Key::Enter);
+    // The first deck not playing, as a double-click picks it.
+    assert_eq!(harness.state().steps, [load(2, 1004)]);
+
+    // 12b's rule: with every shown deck playing nothing loads.
+    let decks = Decks {
+        playing: [true, true, false, false],
+        ..Decks::default()
+    };
+    let mut harness = owning(view, decks);
+    press(&mut harness, Key::Enter);
+    assert_eq!(harness.state().steps, []);
+    assert!(ui::browser::notice(&harness.ctx).is_some());
+}
+
+#[test]
+fn cmd_a_selects_the_whole_list() {
+    let mut harness = owning(numbered(0, 20, 5000), Decks::default());
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    harness.run_steps(2);
+    assert_eq!(harness.state().steps, [browse(BrowserEdit::SelectAll)]);
+    assert!(
+        !painted_text(&harness.state().view)
+            .iter()
+            .any(|t| t.contains("selected"))
+    );
+    // The library answers with the flag and the count shows it: no id set was built.
+    harness.state_mut().view.all_selected = true;
+    harness.run_steps(2);
+    assert!(
+        painted_text(&harness.state().view)
+            .iter()
+            .any(|t| t == "5000 selected")
+    );
+    // A pick, which is what the library clears the flag on, brings the file count back.
+    harness.state_mut().view.all_selected = false;
+    harness.run_steps(2);
+    assert!(
+        painted_text(&harness.state().view)
+            .iter()
+            .any(|t| t == "5000 files")
+    );
+}
+
+#[test]
+fn typing_goes_to_the_search_box() {
+    let mut harness = owning(numbered(0, 20, 20), Decks::default());
+    harness.event(Event::Text("d".into()));
+    harness.run_steps(2);
+    assert_eq!(harness.state().steps, [search_step(Some("d"), 1)]);
+    // The box has the focus now: the next letter goes in it, once.
+    harness.event(Event::Text("e".into()));
+    harness.run_steps(2);
+    assert_eq!(harness.state().steps[1], search_step(Some("de"), 2));
+    assert_eq!(harness.state().steps.len(), 2);
+
+    // Digits too.
+    let mut harness = owning(numbered(0, 20, 20), Decks::default());
+    harness.event(Event::Text("7".into()));
+    harness.run_steps(2);
+    assert_eq!(harness.state().steps, [search_step(Some("7"), 1)]);
+    // Space and punctuation stay with the keys.
+    let mut other = owning(numbered(0, 20, 20), Decks::default());
+    other.event(Event::Text(" ".into()));
+    other.event(Event::Text("-".into()));
+    other.run_steps(2);
+    assert_eq!(other.state().steps, []);
+}
+
+#[test]
+fn delete_asks_for_the_focused_pane() {
+    let mut harness = owning(numbered(0, 20, 20), Decks::default());
+    press(&mut harness, Key::Delete);
+    press(&mut harness, Key::Backspace);
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::Backspace);
+    harness.run_steps(2);
+    assert_eq!(harness.state().deletes, [Focus::List; 3]);
+    let view = with_tree(numbered(0, 20, 20), 4, 1, Focus::Tree);
+    let mut harness = owning(view, Decks::default());
+    press(&mut harness, Key::Delete);
+    assert_eq!(harness.state().deletes, [Focus::Tree]);
+    assert_eq!(harness.state().steps, []);
+}
+
+#[test]
+fn delete_in_the_search_box_edits_text() {
+    let mut harness = clicking(numbered(0, 20, 20), Decks::default());
+    type_in_search(&mut harness, "deep");
+    press(&mut harness, Key::Backspace);
+    press(&mut harness, Key::Delete);
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::Backspace);
+    harness.run_steps(2);
+    // No confirmation asked for; the keys edited the text (and Cmd+A, ArrowDown and Enter
+    // stayed in the box too).
+    assert!(harness.state().deletes.is_empty());
+    let last = harness.state().steps.last().cloned();
+    assert!(
+        matches!(&last, Some(LibraryStep::Browse(BrowserEdit::Search { text, .. }))
+            if text.as_deref().is_none_or(|t| t.len() < 4)),
+        "{last:?}"
+    );
+    press(&mut harness, Key::ArrowDown);
+    press(&mut harness, Key::Enter);
+    assert!(
+        harness
+            .state()
+            .steps
+            .iter()
+            .all(|s| matches!(s, LibraryStep::Browse(BrowserEdit::Search { .. })))
+    );
+}
+
+#[test]
+fn keys_do_nothing_until_the_browser_is_clicked() {
+    let mut harness = clicking(numbered(0, 20, 20), Decks::default());
+    let keys = |harness: &mut Harness<'_, Clicking>| {
+        for key in [Key::ArrowDown, Key::End, Key::Enter, Key::Tab, Key::Delete] {
+            press(harness, key);
+        }
+        harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        harness.event(Event::Text("x".into()));
+        harness.run_steps(2);
+    };
+    keys(&mut harness);
+    assert_eq!(harness.state().steps, []);
+    assert!(harness.state().deletes.is_empty());
+
+    // A click in the browser gives it the keyboard.
+    click_row(&mut harness, "Song 0");
+    harness.state_mut().steps.clear();
+    press(&mut harness, Key::ArrowDown);
+    assert_eq!(harness.state().steps, [browse(BrowserEdit::SelectRow(1))]);
+
+    // A click elsewhere (the info panel here) hands it back.
+    let mut harness = clicking_in(
+        numbered(0, 20, 20),
+        Decks::default(),
+        Arrangement::default(),
+    );
+    click_row(&mut harness, "Song 1");
+    harness.state_mut().steps.clear();
+    // Inside the info panel, right of the list.
+    click(&mut harness, pos2(960.0, 120.0));
+    harness.run_steps(2);
+    harness.state_mut().steps.clear();
+    keys(&mut harness);
+    assert_eq!(harness.state().steps, []);
+}
+
+#[test]
+fn the_focused_pane_looks_focused() {
+    let p = theme::Palette::default();
+    let fills = |view: &BrowserView| -> Vec<egui::Color32> {
+        painted(view, [None; 4])
+            .into_iter()
+            .filter(|(rect, _)| rect.height() > 10.0 && rect.height() < 30.0)
+            .map(|(_, fill)| fill)
+            .collect()
+    };
+    let mut view = with_tree(numbered(0, 20, 20), 4, 1, Focus::List);
+    let list = fills(&view);
+    assert!(list.contains(&p.highlight), "the list's cursor is bright");
+    assert!(list.contains(&p.highlight_dim), "the tree's cursor is dim");
+    let bright = |fills: &[egui::Color32], colour| fills.iter().filter(|c| **c == colour).count();
+    assert_eq!(bright(&list, p.highlight), 1);
+    view.focus = Focus::Tree;
+    let tree = fills(&view);
+    assert_eq!(bright(&tree, p.highlight), 1);
+    assert_eq!(bright(&tree, p.highlight_dim), 1);
+    assert_ne!(list, tree);
 }

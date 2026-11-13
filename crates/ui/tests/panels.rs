@@ -38,6 +38,7 @@ fn browser() -> BrowserView {
         }],
         list_offset: 0,
         list_count: 1,
+        all_selected: false,
         list_cursor: 0,
         search: None,
         sort: None,

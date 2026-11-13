@@ -37,6 +37,11 @@ fn dialog_id() -> Id {
     Id::NULL.with("open-jockey-playlist-dialog")
 }
 
+/// Whether a dialog is open: the browser's keys leave it the keyboard.
+pub(crate) fn is_open(ctx: &Context) -> bool {
+    ctx.data(|d| d.get_temp::<Open>(dialog_id()).is_some())
+}
+
 /// Opens `dialog`, replacing any open one.
 pub fn open(ctx: &Context, dialog: Dialog) {
     let text = match &dialog {

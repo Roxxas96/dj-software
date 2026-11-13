@@ -51,6 +51,12 @@ pub enum Job {
     },
     /// Write a playlist edit from the window, then reread the browser to show it.
     EditPlaylist(WriteOp),
+    /// Append every track of the browser's list to `playlist` (a whole-list selection);
+    /// the tracks are read here, when the job runs, then written as
+    /// [`Job::EditPlaylist`] does.
+    AddListToPlaylist {
+        playlist: i64,
+    },
     /// Make the playlist `name` (trimmed, not empty) unless a playlist has that name,
     /// reread the browser, and highlight the new playlist's tree row.
     CreatePlaylist(String),
@@ -196,6 +202,16 @@ fn run(
     }
 
     for job in jobs {
+        let job = match job {
+            Job::AddListToPlaylist { playlist } => match browser.list_track_ids() {
+                Ok(tracks) => Job::EditPlaylist(super::playlist_edits::append(playlist, &tracks)),
+                Err(e) => {
+                    say(format!("warning: library browser: {}", safe(e)));
+                    continue;
+                }
+            },
+            job => job,
+        };
         match job {
             Job::Browse(req) => match browser.apply(req) {
                 Ok(view) => {
@@ -216,6 +232,7 @@ fn run(
                     let _ = events.send(Event::Browser(browser.view()));
                 }
             },
+            Job::AddListToPlaylist { .. } => {}
             Job::EditPlaylist(op) => {
                 // Waited for, so the reread sees it.
                 match lib.writer().submit_wait(op) {
@@ -898,6 +915,47 @@ mod tests {
             _ => None,
         });
         assert_eq!(loaded.row.id, fine);
+    }
+
+    #[test]
+    fn a_whole_list_selection_is_added_to_a_playlist_by_the_worker() {
+        let s = setup(&["a.wav", "b.wav"]);
+        let ids = ids(&s.lib);
+        let writer = s.lib.writer();
+        for (name, tracks) in [("Src", ids.clone()), ("Dst", Vec::new())] {
+            writer
+                .submit_wait(WriteOp::CreatePlaylistWith {
+                    name: name.into(),
+                    tracks,
+                })
+                .unwrap();
+        }
+        let (tx, events) = channel();
+        let (jobs, _worker) =
+            spawn_with(Arc::clone(&s.lib), tx, decode::decode_file, Vec::new).unwrap();
+        let view = |events: &Receiver<Event>| {
+            wait_for(events, |e| match e {
+                Event::Browser(v) => Some(v),
+                _ => None,
+            })
+        };
+        view(&events);
+        let reader = s.lib.reader().unwrap();
+        let playlists = reader.playlists().unwrap();
+        let id = |name: &str| playlists.iter().find(|p| p.name == name).unwrap().id;
+        // The Playlists node, then Src and Dst.
+        jobs.send(Job::Edit(BrowserEdit::SelectTree(1))).unwrap();
+        assert_eq!(view(&events).path, "Playlists \u{25b8} Src");
+        jobs.send(Job::Edit(BrowserEdit::SelectAll)).unwrap();
+        assert!(view(&events).all_selected);
+        jobs.send(Job::AddListToPlaylist {
+            playlist: id("Dst"),
+        })
+        .unwrap();
+        // The browser is read again once the write is done, and the selection with it.
+        assert!(!view(&events).all_selected);
+        let added = reader.playlist_tracks(id("Dst"), 0, 100).unwrap();
+        assert_eq!(added.iter().map(|t| t.id).collect::<Vec<_>>(), ids);
     }
 
     #[test]
