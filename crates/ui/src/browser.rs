@@ -460,10 +460,11 @@ fn owner_id() -> Id {
 /// the browser has the keyboard and no text field wants it.
 #[derive(Debug, Default)]
 struct Keys {
-    up: bool,
-    down: bool,
-    page_up: bool,
-    page_down: bool,
+    /// Presses of each this frame (key repeats can come several to a frame).
+    up: usize,
+    down: usize,
+    page_up: usize,
+    page_down: usize,
     home: bool,
     end: bool,
     left: bool,
@@ -482,7 +483,10 @@ impl Keys {
     fn read(ui: &Ui, inside: impl Fn(Pos2) -> bool) -> Self {
         let ctx = ui.ctx();
         if let Some(at) = ui.input(|i| i.pointer.any_pressed().then(|| i.pointer.interact_pos())) {
-            let owned = at.is_some_and(inside);
+            // A press that reached another layer (a window, a modal over the list) is not
+            // the browser's.
+            let ours = at.is_some_and(|at| ctx.layer_id_at(at) == Some(ui.layer_id()));
+            let owned = ours && at.is_some_and(inside);
             ctx.data_mut(|d| d.insert_temp(owner_id(), owned));
         }
         let owned = ctx.data(|d| d.get_temp(owner_id())).unwrap_or(false);
@@ -507,18 +511,25 @@ impl Keys {
             let delete = key(Modifiers::NONE, Key::Delete)
                 | key(Modifiers::NONE, Key::Backspace)
                 | key(Modifiers::COMMAND, Key::Backspace);
+            let home = key(Modifiers::NONE, Key::Home);
+            let end = key(Modifiers::NONE, Key::End);
+            let left = key(Modifiers::NONE, Key::ArrowLeft);
+            let right = key(Modifiers::NONE, Key::ArrowRight);
+            let enter = key(Modifiers::NONE, Key::Enter);
+            let select_all = key(Modifiers::COMMAND, Key::A);
+            let mut count = |key| i.count_and_consume_key(Modifiers::NONE, key);
             Self {
-                up: key(Modifiers::NONE, Key::ArrowUp),
-                down: key(Modifiers::NONE, Key::ArrowDown),
-                page_up: key(Modifiers::NONE, Key::PageUp),
-                page_down: key(Modifiers::NONE, Key::PageDown),
-                home: key(Modifiers::NONE, Key::Home),
-                end: key(Modifiers::NONE, Key::End),
-                left: key(Modifiers::NONE, Key::ArrowLeft),
-                right: key(Modifiers::NONE, Key::ArrowRight),
+                up: count(Key::ArrowUp),
+                down: count(Key::ArrowDown),
+                page_up: count(Key::PageUp),
+                page_down: count(Key::PageDown),
+                home,
+                end,
+                left,
+                right,
                 tab,
-                enter: key(Modifiers::NONE, Key::Enter),
-                select_all: key(Modifiers::COMMAND, Key::A),
+                enter,
+                select_all,
                 delete,
                 text: Self::typed(i),
             }
@@ -551,16 +562,11 @@ impl Keys {
             0
         } else if self.end {
             last
-        } else if self.page_up {
-            cursor.saturating_sub(page)
-        } else if self.page_down {
-            cursor.saturating_add(page).min(last)
-        } else if self.up {
-            cursor.saturating_sub(1)
-        } else if self.down {
-            cursor.saturating_add(1).min(last)
         } else {
-            return None;
+            // Each press of each key counts, repeats within a frame too.
+            let down = self.down + self.page_down * page;
+            let up = self.up + self.page_up * page;
+            cursor.saturating_add(down).saturating_sub(up).min(last)
         };
         (to != cursor).then_some(to)
     }
@@ -646,6 +652,10 @@ pub fn show(
     let keys = Keys::read(ui, |at| tree.contains(at) || list.contains(at));
     changes.delete_requested = keys.delete.then_some(view.focus);
     let steps = &mut changes.library;
+    if keys.select_all {
+        // From either pane: the list is what is selected.
+        steps.push(LibraryStep::Browse(BrowserEdit::SelectAll));
+    }
     if keys.tab {
         // The other pane takes the focus, its cursor where it was.
         steps.push(LibraryStep::Browse(match view.focus {
@@ -777,7 +787,10 @@ fn tree_pane(ui: &mut Ui, view: &BrowserView, keys: &Keys, steps: &mut Vec<Libra
             && let Some(drag) = track_drop(ui, &response, rect, p.text_dim)
         {
             steps.push(if drag.whole_list {
-                LibraryStep::AddListToPlaylist { playlist }
+                LibraryStep::AddListToPlaylist {
+                    playlist,
+                    list: view.identity(),
+                }
             } else {
                 LibraryStep::AddToPlaylist {
                     playlist,
@@ -1164,7 +1177,9 @@ fn list_pane(
         // The first click of a double-click selected the row already.
         if response.clicked() && !response.double_clicked() {
             let modifiers = ui.input(|i| i.modifiers);
-            if selection.click(at, modifiers, view.list_cursor) {
+            // A click picks something else than the whole list, whichever way it picks.
+            let follow = selection.click(at, modifiers, view.list_cursor);
+            if follow || view.all_selected {
                 steps.push(LibraryStep::Browse(BrowserEdit::SelectRow(at)));
             }
         }
@@ -1246,9 +1261,6 @@ fn list_keys(
     if let Some(to) = keys.cursor(view.list_cursor, view.list_count, rows) {
         steps.push(LibraryStep::Browse(BrowserEdit::SelectRow(to)));
     }
-    if keys.select_all {
-        steps.push(LibraryStep::Browse(BrowserEdit::SelectAll));
-    }
     if keys.enter {
         let row = view
             .list_cursor
@@ -1294,11 +1306,18 @@ fn track_menu(
         // egui draws the submenu's ▸.
         ui.menu_button("Add to playlist", |ui| {
             for (playlist, label) in playlists {
+                // The list's own playlist is no target for the whole of it.
+                if view.all_selected && view.playlist == Some(playlist) {
+                    continue;
+                }
                 if !ui.button(label.as_str()).clicked() {
                     continue;
                 }
                 if view.all_selected {
-                    steps.push(LibraryStep::AddListToPlaylist { playlist });
+                    steps.push(LibraryStep::AddListToPlaylist {
+                        playlist,
+                        list: view.identity(),
+                    });
                 } else if let Some(drag) = track_drag(view, &selection.acting_on(at)) {
                     steps.push(LibraryStep::AddToPlaylist {
                         playlist,

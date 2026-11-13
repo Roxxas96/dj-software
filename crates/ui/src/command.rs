@@ -51,7 +51,14 @@ pub enum LibraryStep {
     /// Appends every track of the browser's list to `playlist`, in list order, in one write.
     /// The library resolves the tracks when it makes the write: the window sends no ids for
     /// a list it selected whole ([`BrowserEdit::SelectAll`]).
-    AddListToPlaylist { playlist: i64 },
+    ///
+    /// `list` is the list the window selected whole; the session adds nothing, with an
+    /// event, unless the browser still shows it with every row selected, or when `playlist`
+    /// is that list's own playlist.
+    AddListToPlaylist {
+        playlist: i64,
+        list: library::ListIdentity,
+    },
     /// Moves the entries `from` of `playlist`, each a position (from 0) and the track the
     /// window saw there, together, in playlist order, to the gap before position `to`
     /// (`0..=len`, counted before the move: `len` is the end), in one write. Nothing moves

@@ -52,10 +52,13 @@ pub enum Job {
     /// Write a playlist edit from the window, then reread the browser to show it.
     EditPlaylist(WriteOp),
     /// Append every track of the browser's list to `playlist` (a whole-list selection);
-    /// the tracks are read here, when the job runs, then written as
-    /// [`Job::EditPlaylist`] does.
+    /// refused with an event unless the browser still shows `list` with every row selected
+    /// and `playlist` is not its own. The tracks are read here, when the job runs, then
+    /// written as [`Job::EditPlaylist`] does.
     AddListToPlaylist {
         playlist: i64,
+        /// The list the window selected whole.
+        list: library::ListIdentity,
     },
     /// Make the playlist `name` (trimmed, not empty) unless a playlist has that name,
     /// reread the browser, and highlight the new playlist's tree row.
@@ -203,13 +206,27 @@ fn run(
 
     for job in jobs {
         let job = match job {
-            Job::AddListToPlaylist { playlist } => match browser.list_track_ids() {
-                Ok(tracks) => Job::EditPlaylist(super::playlist_edits::append(playlist, &tracks)),
-                Err(e) => {
-                    say(format!("warning: library browser: {}", safe(e)));
+            Job::AddListToPlaylist { playlist, list } => {
+                // The selection was of `list`: a search, a sort or another tree row since
+                // then means it is gone.
+                if browser.identity() != list || !browser.all_selected() {
+                    say("The list changed: nothing was added".to_owned());
                     continue;
                 }
-            },
+                if list.playlist == Some(playlist) {
+                    say("A playlist cannot be added to itself".to_owned());
+                    continue;
+                }
+                match browser.list_track_ids() {
+                    Ok(tracks) => {
+                        Job::EditPlaylist(super::playlist_edits::append(playlist, &tracks))
+                    }
+                    Err(e) => {
+                        say(format!("warning: library browser: {}", safe(e)));
+                        continue;
+                    }
+                }
+            }
             job => job,
         };
         match job {
@@ -947,11 +964,58 @@ mod tests {
         jobs.send(Job::Edit(BrowserEdit::SelectTree(1))).unwrap();
         assert_eq!(view(&events).path, "Playlists \u{25b8} Src");
         jobs.send(Job::Edit(BrowserEdit::SelectAll)).unwrap();
-        assert!(view(&events).all_selected);
-        jobs.send(Job::AddListToPlaylist {
-            playlist: id("Dst"),
-        })
+        let selected = view(&events);
+        assert!(selected.all_selected);
+        let list = selected.identity();
+        let add = |to: &str, list| {
+            jobs.send(Job::AddListToPlaylist {
+                playlist: id(to),
+                list,
+            })
+            .unwrap();
+        };
+
+        // The playlist's own list: refused with an event.
+        add("Src", list);
+        assert_eq!(
+            wait_for(&events, message),
+            "A playlist cannot be added to itself"
+        );
+
+        // Another list since the selection: nothing is added, with an event.
+        jobs.send(Job::Edit(BrowserEdit::Search {
+            text: Some("a".into()),
+            seq: 1,
+        }))
         .unwrap();
+        view(&events);
+        add("Dst", list);
+        assert_eq!(
+            wait_for(&events, message),
+            "The list changed: nothing was added"
+        );
+        // The same list with its pick gone is another list too.
+        jobs.send(Job::Edit(BrowserEdit::Search { text: None, seq: 2 }))
+            .unwrap();
+        view(&events);
+        jobs.send(Job::Edit(BrowserEdit::SelectRow(1))).unwrap();
+        let picked = view(&events).identity();
+        add("Dst", picked);
+        assert_eq!(
+            wait_for(&events, message),
+            "The list changed: nothing was added"
+        );
+        assert!(
+            reader
+                .playlist_tracks(id("Dst"), 0, 100)
+                .unwrap()
+                .is_empty()
+        );
+
+        // Selected again, the list it was selected on: added.
+        jobs.send(Job::Edit(BrowserEdit::SelectAll)).unwrap();
+        let again = view(&events);
+        add("Dst", again.identity());
         // The browser is read again once the write is done, and the selection with it.
         assert!(!view(&events).all_selected);
         let added = reader.playlist_tracks(id("Dst"), 0, 100).unwrap();

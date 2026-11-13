@@ -364,14 +364,19 @@ impl LibraryMode {
         self.try_send_job(Job::EditPlaylist(playlist_edits::append(playlist, tracks)))
     }
 
-    /// Appends every track of the browser's list to `playlist`, in one write, the tracks
-    /// read when the worker gets to it; the browser is read again once it is done.
+    /// Appends every track of the browser's list `list` to `playlist`, in one write, the
+    /// tracks read when the worker gets to it, and only if the browser still shows `list`
+    /// with every row selected and `playlist` is not that list's own; the browser is read again once it is done.
     ///
     /// # Errors
     ///
     /// As [`LibraryMode::add_to_playlist`].
-    pub fn add_list_to_playlist(&self, playlist: i64) -> Result<(), String> {
-        self.try_send_job(Job::AddListToPlaylist { playlist })
+    pub fn add_list_to_playlist(
+        &self,
+        playlist: i64,
+        list: library::ListIdentity,
+    ) -> Result<(), String> {
+        self.try_send_job(Job::AddListToPlaylist { playlist, list })
     }
 
     /// Moves the entries `from` of `playlist` (each a position from 0 and the track seen
