@@ -33,7 +33,7 @@ pub fn pad_action(
 
 /// What pressing a pad of the window sends: [`pad_action`], except that while the pads
 /// show the sampler (the hardware modes SAMPLER and TRANS, where the SB3's pads play
-/// samples) it is the sampler slot's play.
+/// samples) it is the sampler slot's play, or its stop with SHIFT.
 pub fn window_pad_action(
     mode: PadMode,
     hardware_mode: Option<HardwarePadMode>,
@@ -44,7 +44,11 @@ pub fn window_pad_action(
 ) -> Option<Action> {
     match (mode, hardware_mode) {
         (PadMode::Hardware, Some(HardwarePadMode::Sampler | HardwarePadMode::Trans)) => {
-            Some(Action::SamplerPlay(slot))
+            Some(if shift {
+                Action::SamplerStop(slot)
+            } else {
+                Action::SamplerPlay(slot)
+            })
         }
         _ => pad_action(mode, side, deck, slot, shift),
     }
