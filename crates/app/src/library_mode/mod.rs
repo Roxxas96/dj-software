@@ -398,6 +398,51 @@ impl LibraryMode {
         )))
     }
 
+    /// Makes a playlist called `name` and highlights it in the browser.
+    ///
+    /// # Errors
+    ///
+    /// Why it is refused: the name is empty, or a playlist already has it (the same
+    /// letters, case included, as the console's `playlist create`); or the worker stopped.
+    pub fn create_playlist(&self, name: &str) -> Result<(), String> {
+        let name = self.checked_name(name, None)?;
+        self.try_send_job(Job::CreatePlaylist(name))
+    }
+
+    /// Renames `playlist` to `name`; the browser is read again once it is done.
+    ///
+    /// # Errors
+    ///
+    /// As [`LibraryMode::create_playlist`]. Renaming a playlist to its own name is no clash.
+    pub fn rename_playlist(&self, playlist: i64, name: &str) -> Result<(), String> {
+        let id = playlist;
+        let name = self.checked_name(name, Some(id))?;
+        self.try_send_job(Job::EditPlaylist(WriteOp::RenamePlaylist { id, name }))
+    }
+
+    /// Deletes `playlist`, not its tracks; the browser is read again once it is done.
+    ///
+    /// # Errors
+    ///
+    /// As [`LibraryMode::add_to_playlist`].
+    pub fn delete_playlist(&self, playlist: i64) -> Result<(), String> {
+        self.try_send_job(Job::EditPlaylist(WriteOp::DeletePlaylist(playlist)))
+    }
+
+    /// `name` trimmed, if it is not empty and no playlist but `own` has it.
+    fn checked_name(&self, name: &str, own: Option<i64>) -> Result<String, String> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("A playlist needs a name".to_owned());
+        }
+        let reader = self.lib.reader().map_err(safe)?;
+        let taken = reader.playlists().map_err(safe)?;
+        if taken.iter().any(|p| p.name == name && Some(p.id) != own) {
+            return Err(format!("There is already a playlist called {name}"));
+        }
+        Ok(name.to_owned())
+    }
+
     /// Performs a request from a controller action.
     pub fn handle_request(
         &mut self,

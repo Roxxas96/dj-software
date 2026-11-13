@@ -22,6 +22,7 @@ use library::{BrowserEdit, BrowserView, Focus, ListRow, TrackSortKey, TreeKind, 
 use crate::cover::{self, Covers};
 use crate::deck::{key_text, split_remix};
 use crate::layout::clamp_sizes;
+use crate::playlist_dialog::{self, Dialog};
 use crate::theme::{self, Palette};
 use crate::view::PanelSizes;
 use crate::{LibraryStep, ViewChange};
@@ -504,6 +505,7 @@ pub fn show(
     let steps = &mut changes.library;
     pane(ui, tree, |ui| tree_pane(ui, view, steps));
     pane(ui, list, |ui| list_pane(ui, view, decks, notation, steps));
+    playlist_dialog::show(ui.ctx(), steps);
     if arrangement.info {
         crate::landmark_rect(ui, info, "info panel");
         pane(ui, info, |ui| info_pane(ui, view, notation, covers));
@@ -600,6 +602,10 @@ fn tree_pane(ui: &mut Ui, view: &BrowserView, steps: &mut Vec<LibraryStep>) {
         let rect = row(ui, highlight(&p, at == view.tree_cursor, focused));
         let response = ui.interact(rect, Id::NULL.with(("browser tree", at)), Sense::click());
         let arrow = tree_row(ui, rect, entry);
+        // Drives and folders have no menu.
+        if entry.kind == TreeKind::Playlists || entry.playlist.is_some() {
+            response.context_menu(|ui| tree_menu(ui, entry));
+        }
         // Tracks dropped on a playlist go at its end; rows of that same playlist dropped
         // back on it overshot a move, and do nothing.
         let own = |playlist| {
@@ -628,6 +634,27 @@ fn tree_pane(ui: &mut Ui, view: &BrowserView, steps: &mut Vec<LibraryStep>) {
             steps.push(LibraryStep::Browse(BrowserEdit::ToggleTreeAt(at)));
         } else if response.clicked() {
             steps.push(LibraryStep::Browse(BrowserEdit::SelectTree(at)));
+        }
+    }
+}
+
+/// The menu of a tree row: "New playlist…" on the Playlists node, "Rename…" and "Delete…"
+/// on a playlist; each opens its dialog, and Delete asks first.
+fn tree_menu(ui: &mut Ui, entry: &TreeRow) {
+    let ctx = ui.ctx().clone();
+    if entry.kind == TreeKind::Playlists {
+        if ui.button("New playlist\u{2026}").clicked() {
+            playlist_dialog::open(&ctx, Dialog::New);
+        }
+    } else if let Some(playlist) = entry.playlist {
+        let name = || entry.label.clone();
+        if ui.button("Rename\u{2026}").clicked() {
+            let name = name();
+            playlist_dialog::open(&ctx, Dialog::Rename { playlist, name });
+        }
+        if ui.button("Delete\u{2026}").clicked() {
+            let name = name();
+            playlist_dialog::open(&ctx, Dialog::Delete { playlist, name });
         }
     }
 }

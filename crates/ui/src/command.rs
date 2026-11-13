@@ -64,6 +64,13 @@ pub enum LibraryStep {
         playlist: i64,
         positions: Vec<(usize, i64)>,
     },
+    /// Makes a playlist called `name` and highlights it in the browser's tree. Refused,
+    /// with an event, if the name is empty or a playlist already has it.
+    CreatePlaylist { name: String },
+    /// Renames `playlist` to `name`, refused as [`LibraryStep::CreatePlaylist`] is.
+    RenamePlaylist { playlist: i64, name: String },
+    /// Deletes `playlist`; its tracks stay in the library. The window asks first.
+    DeletePlaylist { playlist: i64 },
     /// Names and colours (`0xRRGGBB`; `None` for the slot's default) hotcue `slot` of
     /// `track`, the track the window saw on `deck` when its editor opened. Saved only if
     /// `deck` still holds `track`.
