@@ -2,6 +2,7 @@
 
 use egui::Color32;
 use engine::DeckId;
+use engine::mixer::{eq_gain, trim_gain};
 
 use crate::theme::Palette;
 use crate::view::WaveformStyle;
@@ -14,6 +15,45 @@ pub const MID_ALPHA: f32 = 0.75;
 pub const HIGH_ALPHA: f32 = 0.65;
 /// The most bars a column has: one per band.
 pub const MAX_BARS: usize = 3;
+
+/// How much each band of a deck's waveform is scaled by: its EQ (or stem) knob times the
+/// gain, as the engine applies them, so a killed band disappears and a boosted one grows.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BandScale {
+    pub low: f32,
+    pub mid: f32,
+    pub high: f32,
+}
+
+impl BandScale {
+    /// Every band as recorded.
+    pub const UNITY: BandScale = BandScale {
+        low: 1.0,
+        mid: 1.0,
+        high: 1.0,
+    };
+
+    /// The scale of the largest band, which a one-colour style scales its peak by.
+    pub fn loudest(self) -> f32 {
+        self.low.max(self.mid).max(self.high)
+    }
+
+    /// `level` scaled by `factor`, kept inside the lane (255).
+    pub fn apply(level: u8, factor: f32) -> u8 {
+        (f32::from(level) * factor).round().clamp(0.0, 255.0) as u8
+    }
+}
+
+/// The scale of a deck's bands from its knobs, each 0 to 1: the `trim` gain times each EQ
+/// (or stem) position, `eq_high` the top knob, `eq_low` the bottom one.
+pub fn band_scale(trim: f32, eq_high: f32, eq_mid: f32, eq_low: f32) -> BandScale {
+    let gain = trim_gain(trim);
+    BandScale {
+        low: eq_gain(eq_low) * gain,
+        mid: eq_gain(eq_mid) * gain,
+        high: eq_gain(eq_high) * gain,
+    }
+}
 
 /// One coloured bar of a column, `from` and `to` as fractions of the lane's height: 0 is
 /// the top, 1 the bottom.
@@ -50,15 +90,17 @@ pub fn layers(bands: [Color32; 3]) -> [Color32; 3] {
 }
 
 /// The bars of one column for `bucket`, `[peak, low, mid, high]`, of `deck`'s waveform;
-/// `bands` are the `[low, mid, high]` colours ([`super::colour::band_colours`]).
+/// `bands` are the `[low, mid, high]` colours ([`super::colour::band_colours`]) and `scale`
+/// the deck's knobs ([`band_scale`]); a bar is `scale` times as tall, up to the lane's.
 pub fn column(
     style: WaveformStyle,
     bucket: [u8; 4],
     deck: DeckId,
     palette: &Palette,
     bands: [Color32; 3],
+    scale: BandScale,
 ) -> Vec<Bar> {
-    let (bars, count) = bars(style, bucket, deck, palette, bands);
+    let (bars, count) = bars(style, bucket, deck, palette, bands, scale);
     bars[..count].to_vec()
 }
 
@@ -69,6 +111,7 @@ pub(super) fn bars(
     deck: DeckId,
     palette: &Palette,
     bands: [Color32; 3],
+    scale: BandScale,
 ) -> ([Bar; MAX_BARS], usize) {
     let none = Bar {
         colour: Color32::TRANSPARENT,
@@ -77,6 +120,10 @@ pub(super) fn bars(
     };
     let mut out = [none; MAX_BARS];
     let [peak, low, mid, high] = bucket;
+    let low = BandScale::apply(low, scale.low);
+    let mid = BandScale::apply(mid, scale.mid);
+    let high = BandScale::apply(high, scale.high);
+    let peak = BandScale::apply(peak, scale.loudest());
     let [low_colour, mid_colour, high_colour] = bands;
     match style {
         // Three layers over the same centre, the low band at the back; the front two
@@ -154,6 +201,7 @@ mod tests {
             deck(0),
             &p,
             rgb_bands(),
+            BandScale::UNITY,
         );
         assert!(!bass.is_empty());
         assert!(
@@ -166,6 +214,7 @@ mod tests {
             deck(0),
             &p,
             rgb_bands(),
+            BandScale::UNITY,
         );
         assert!(!highs.is_empty());
         assert!(
@@ -183,6 +232,7 @@ mod tests {
             deck(0),
             &p,
             rgb_bands(),
+            BandScale::UNITY,
         );
         assert_eq!(bars.len(), 1);
         assert_eq!(bars[0].colour, p.accent_left);
@@ -192,6 +242,7 @@ mod tests {
             deck(1),
             &p,
             rgb_bands(),
+            BandScale::UNITY,
         );
         assert_eq!(bars[0].colour, p.accent_right);
     }
@@ -206,6 +257,7 @@ mod tests {
             deck(0),
             &p,
             rgb_bands(),
+            BandScale::UNITY,
         );
         assert_eq!(bars.len(), 3);
         for (bar, (colour, level)) in bars.iter().zip([
@@ -229,6 +281,7 @@ mod tests {
             deck(0),
             &p,
             rgb_bands(),
+            BandScale::UNITY,
         );
         let alphas: Vec<u8> = bars.iter().map(|b| b.colour.a()).collect();
         assert_eq!(alphas[0], 255, "{bars:?}");
@@ -240,6 +293,7 @@ mod tests {
             deck(0),
             &p,
             rgb_bands(),
+            BandScale::UNITY,
         );
         assert_eq!(bars[1].colour.a(), alphas[2], "{bars:?}");
     }
@@ -253,6 +307,7 @@ mod tests {
             deck(0),
             &p,
             rgb_bands(),
+            BandScale::UNITY,
         );
         assert_eq!(bars.len(), 2);
         let bars = column(
@@ -261,6 +316,7 @@ mod tests {
             deck(0),
             &p,
             rgb_bands(),
+            BandScale::UNITY,
         );
         assert_eq!(bars.len(), 1);
         assert_eq!(bars[0].colour, layers(rgb_bands())[1]);
@@ -276,6 +332,7 @@ mod tests {
             deck(0),
             &p,
             bands,
+            BandScale::UNITY,
         );
         let colours: Vec<_> = bars.iter().map(|b| b.colour).collect();
         assert_eq!(colours, [bands[2], bands[1], bands[0]]);
@@ -290,7 +347,104 @@ mod tests {
             deck(0),
             &p,
             rgb_bands(),
+            BandScale::UNITY,
         );
         assert_eq!(bars[0].colour, p.accent_left.gamma_multiply(OVERLAY_ALPHA));
+    }
+
+    /// The knob position where `trim_gain` is a half (about -6 dB).
+    const HALF_GAIN_KNOB: f32 = 0.5 - 6.0206 / 24.0;
+
+    fn reach(bars: &[Bar]) -> Vec<f32> {
+        bars.iter().map(|b| b.to - b.from).collect()
+    }
+
+    #[test]
+    fn a_killed_band_disappears() {
+        let p = Palette::DARK;
+        let scale = band_scale(0.5, 0.5, 0.0, 0.5);
+        let bars = column(
+            WaveformStyle::Frequency,
+            [255, 200, 200, 200],
+            deck(0),
+            &p,
+            rgb_bands(),
+            scale,
+        );
+        // Low and high stay; the mid is gone.
+        assert_eq!(bars.len(), 2, "{bars:?}");
+        let bars = column(
+            WaveformStyle::Bands,
+            [255, 200, 200, 200],
+            deck(0),
+            &p,
+            rgb_bands(),
+            scale,
+        );
+        assert_eq!(bars.len(), 2, "{bars:?}");
+    }
+
+    #[test]
+    fn gain_scales_every_band() {
+        let p = Palette::DARK;
+        let half = band_scale(HALF_GAIN_KNOB, 0.5, 0.5, 0.5);
+        for style in [WaveformStyle::Frequency, WaveformStyle::Bands] {
+            let full = column(
+                style,
+                [200, 200, 200, 200],
+                deck(0),
+                &p,
+                rgb_bands(),
+                BandScale::UNITY,
+            );
+            let halved = column(style, [200, 200, 200, 200], deck(0), &p, rgb_bands(), half);
+            assert_eq!(full.len(), halved.len());
+            for (f, h) in reach(&full).iter().zip(reach(&halved)) {
+                assert!((h - f / 2.0).abs() < 0.01, "{style:?} {f} {h}");
+            }
+        }
+    }
+
+    #[test]
+    fn boosted_bands_stay_inside_the_lane() {
+        let p = Palette::DARK;
+        let boost = band_scale(1.0, 1.0, 1.0, 1.0);
+        for style in [
+            WaveformStyle::Frequency,
+            WaveformStyle::DeckColour,
+            WaveformStyle::Bands,
+            WaveformStyle::Overlaid,
+        ] {
+            let bars = column(style, [255, 255, 255, 255], deck(0), &p, rgb_bands(), boost);
+            assert!(!bars.is_empty());
+            for bar in bars {
+                assert!(bar.from >= 0.0 && bar.to <= 1.0, "{style:?} {bar:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_one_colour_style_follows_its_loudest_band() {
+        let p = Palette::DARK;
+        let all_down = band_scale(0.5, 0.0, 0.0, 0.0);
+        let bars = column(
+            WaveformStyle::DeckColour,
+            [255, 200, 200, 200],
+            deck(0),
+            &p,
+            rgb_bands(),
+            all_down,
+        );
+        assert!(bars.is_empty() || reach(&bars)[0] == 0.0, "{bars:?}");
+        let bass_only = band_scale(0.5, 0.0, 0.0, 0.5);
+        let bars = column(
+            WaveformStyle::Overlaid,
+            [255, 200, 200, 200],
+            deck(0),
+            &p,
+            rgb_bands(),
+            bass_only,
+        );
+        assert!((reach(&bars)[0] - 1.0).abs() < 1e-6, "{bars:?}");
     }
 }

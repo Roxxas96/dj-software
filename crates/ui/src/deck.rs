@@ -29,7 +29,7 @@ use crate::mixer;
 use crate::model::{ControlFrame, GHOST_FX_LEVEL, GHOST_TEMPO, HotcueMark};
 use crate::theme::{self, ButtonLook, EDGE_LABEL_WIDTH, SECTION_GAP, edge_label};
 use crate::view::{JogDisplay, TimeMode, WaveformPalette};
-use crate::waveform::{Playhead, band_colours, layers, loudest};
+use crate::waveform::{BandScale, Playhead, band_colours, band_scale, layers, loudest};
 
 /// What each deck's panel is called for screen readers, by deck index.
 const PANEL_NAMES: [&str; 4] = [
@@ -188,6 +188,8 @@ pub struct DeckView {
     pub overview: Option<Arc<Waveform>>,
     /// The colours the overview draws its bands in.
     pub waveform_palette: WaveformPalette,
+    /// How much the deck's knobs scale each band of the overview.
+    pub band_scale: BandScale,
     /// The library track the deck plays, for the hotcue editor.
     pub track: Option<i64>,
     /// The hotcues' colours and names, when the library has them.
@@ -303,6 +305,10 @@ impl DeckView {
             path: info.map(|i| i.path.clone()),
             overview: info.and_then(|i| i.overview.clone()),
             waveform_palette: frame.view.waveform_palette,
+            band_scale: {
+                let c = frame.control.deck(id);
+                band_scale(c.trim, c.eq_high, c.eq_mid, c.eq_low)
+            },
             track: info.map(|i| i.row.id),
             hotcue_marks: info.map(|i| Arc::clone(&i.hotcue_marks)),
         }
@@ -994,6 +1000,7 @@ fn overview_strip(ui: &Ui, view: &DeckView, rect: Rect, sink: &mut Sink<'_>) {
             rect,
             waveform,
             band_colours(view.waveform_palette, &p),
+            view.band_scale,
         );
     }
     if let Some(progress) = view.progress {
@@ -1006,8 +1013,15 @@ fn overview_strip(ui: &Ui, view: &DeckView, rect: Rect, sink: &mut Sink<'_>) {
 
 /// One column per point, mirrored around the middle, in the three layers of the lane:
 /// low, mid and high in `bands`, back to front, each as tall as its loudest under the
-/// column ([`loudest`]) and blended as the lane blends them ([`layers`]).
-fn overview_columns(mesh: &mut Mesh, rect: Rect, waveform: &Waveform, bands: [Color32; 3]) {
+/// column ([`loudest`]) and blended as the lane blends them ([`layers`]), each scaled by
+/// its knob ([`BandScale`]).
+fn overview_columns(
+    mesh: &mut Mesh,
+    rect: Rect,
+    waveform: &Waveform,
+    bands: [Color32; 3],
+    knobs: BandScale,
+) {
     let bands = layers(bands);
     let buckets = &waveform.buckets;
     let columns = rect.width().floor().max(0.0) as usize;
@@ -1023,7 +1037,12 @@ fn overview_columns(mesh: &mut Mesh, rect: Rect, waveform: &Waveform, bands: [Co
             continue;
         };
         let x = rect.left() + column as f32;
-        for (level, colour) in [(low, bands[0]), (mid, bands[1]), (high, bands[2])] {
+        for (level, colour, factor) in [
+            (low, bands[0], knobs.low),
+            (mid, bands[1], knobs.mid),
+            (high, bands[2], knobs.high),
+        ] {
+            let level = BandScale::apply(level, factor);
             if level == 0 {
                 continue;
             }
@@ -1650,7 +1669,7 @@ mod tests {
         let mut mesh = Mesh::default();
         let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(1.0, 40.0));
         let bands = band_colours(WaveformPalette::Rgb, &theme::Palette::DARK);
-        overview_columns(&mut mesh, rect, &waveform, bands);
+        overview_columns(&mut mesh, rect, &waveform, bands, BandScale::UNITY);
         // Four corners a layer.
         let alphas: Vec<u8> = mesh
             .vertices
@@ -1673,7 +1692,7 @@ mod tests {
         let mut mesh = Mesh::default();
         let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(1.0, 40.0));
         let bands = band_colours(WaveformPalette::Rgb, &theme::Palette::DARK);
-        overview_columns(&mut mesh, rect, &waveform, bands);
+        overview_columns(&mut mesh, rect, &waveform, bands, BandScale::UNITY);
         // Each layer's half-height, from its four corners' top and bottom.
         let reaches: Vec<f32> = mesh
             .vertices

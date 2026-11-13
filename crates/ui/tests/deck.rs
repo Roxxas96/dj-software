@@ -1615,3 +1615,45 @@ fn a_drag_at_the_jog_hub_turns_nothing() {
         .any(|c| matches!(c, UiCommand::Action(Action::JogScratch(_), _)));
     assert!(!scratched);
 }
+
+#[test]
+fn the_overview_follows_the_knobs() {
+    let low =
+        ui::waveform::band_colours(ui::WaveformPalette::default(), &ui::theme::Palette::DARK)[0];
+    let low_vertices = |knob: f32| {
+        let (snapshot, mut frame) = loaded_plain();
+        frame.decks[0].as_mut().unwrap().overview = Some(Arc::new(Waveform {
+            frames_per_bucket: 256,
+            buckets: vec![[255, 200, 200, 200]; 4000],
+        }));
+        frame.control.deck_mut(DeckId::new(0).unwrap()).eq_low = knob;
+        let view = view(&snapshot, &frame);
+        let sections = sections(Layout::Pro);
+        let ctx = egui::Context::default();
+        let (commands, _received) = channel();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui::deck::panel(
+                ui,
+                &view,
+                None,
+                &sections,
+                &mut Sink::new(&commands, &mut HeldButtons::default()),
+            )
+        });
+        output.textures_delta.clear();
+        let mut count = 0;
+        let mut stack: Vec<egui::Shape> = output.shapes.into_iter().map(|c| c.shape).collect();
+        while let Some(shape) = stack.pop() {
+            match shape {
+                egui::Shape::Vec(inner) => stack.extend(inner),
+                egui::Shape::Mesh(mesh) => {
+                    count += mesh.vertices.iter().filter(|v| v.color == low).count();
+                }
+                _ => {}
+            }
+        }
+        count
+    };
+    assert!(low_vertices(0.5) > 0);
+    assert_eq!(low_vertices(0.0), 0);
+}
