@@ -43,6 +43,10 @@ pub enum BrowserEdit {
     /// Puts the list cursor on row `0..` of the whole list (the last row past the end),
     /// loading its page, and focuses the list.
     SelectRow(usize),
+    /// Loads the page of the list around row `offset` (the last row past the end), as the
+    /// wheel scrolling past the loaded rows asks; the cursor, its track (what LOAD loads)
+    /// and the focus stay.
+    ShowPage { offset: usize },
     /// Opens or closes the drive or folder at tree row `0..`; the highlight stays on its
     /// entry, or moves to the folder when the folder closes over it.
     ToggleTreeAt(usize),
@@ -139,6 +143,8 @@ struct List {
     /// The list position of `rows[0]`.
     offset: usize,
     rows: Vec<ListRow>,
+    /// The row at the cursor, kept while the loaded page is elsewhere.
+    selected: Option<ListRow>,
 }
 
 impl List {
@@ -181,21 +187,36 @@ impl List {
     /// error the list is unchanged.
     fn seek(&mut self, reader: &Reader, index: usize) -> Result<(), LibraryError> {
         let to = index.min(self.count.saturating_sub(1));
+        self.show(reader, to)?;
+        self.cursor = to;
+        self.selected = self.row(to).cloned();
+        Ok(())
+    }
+
+    /// Loads the page around `index` (or the last row) unless it is loaded; the cursor
+    /// stays. On an error the list is unchanged.
+    fn show(&mut self, reader: &Reader, index: usize) -> Result<(), LibraryError> {
+        let to = index.min(self.count.saturating_sub(1));
         if !self.covers(to) && self.count > 0 {
             let offset = to.saturating_sub(BROWSER_PAGE_ROWS / 2);
             self.rows = page(reader, &self.items, offset)?;
             self.offset = offset;
         }
-        self.cursor = to;
         Ok(())
     }
 
-    fn selected(&self) -> Option<&ListRow> {
-        if self.covers(self.cursor) {
-            self.rows.get(self.cursor - self.offset)
+    /// Row `index`, if its page is loaded.
+    fn row(&self, index: usize) -> Option<&ListRow> {
+        if self.covers(index) {
+            self.rows.get(index - self.offset)
         } else {
             None
         }
+    }
+
+    /// The row at the cursor, wherever the loaded page is.
+    fn selected(&self) -> Option<&ListRow> {
+        self.selected.as_ref()
     }
 }
 
@@ -323,6 +344,7 @@ impl Browser {
                 self.list.seek(&self.reader, at)?;
                 self.focus = Focus::List;
             }
+            BrowserEdit::ShowPage { offset } => self.list.show(&self.reader, offset)?,
             BrowserEdit::ToggleTreeAt(at) if at < self.tree.len() => self.toggle_at(at)?,
             BrowserEdit::ToggleTreeAt(_) => {}
             BrowserEdit::Search { text, seq } => {

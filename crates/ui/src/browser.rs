@@ -767,8 +767,8 @@ struct Scroll {
 /// The rows a pane shows, `follow` long, when the wheel over it scrolls within `page`
 /// (the rows the view holds, of `count`). Where it follows the cursor, it draws `follow`;
 /// once the wheel has turned, the rows it scrolled to, until the view moves its cursor out
-/// of them. A scroll past the page returns the row beyond it for the session to load, once
-/// per view.
+/// of them. A scroll past the page returns the row beyond it, whose page the session is to
+/// load, once per view.
 fn scroll(
     ui: &Ui,
     name: &str,
@@ -782,11 +782,13 @@ fn scroll(
     let mut state: Scroll = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_default();
     let last_start = page.end.saturating_sub(rows).max(page.start);
     if state.seen != seen {
-        // A move that keeps the cursor in sight leaves the rows where the wheel put them.
-        let (cursor, ..) = seen;
+        // A move that keeps the cursor in sight leaves the rows where the wheel put them,
+        // and so does a new page around the same cursor (one the wheel asked for).
+        let (cursor, _, count) = seen;
+        let same_cursor = (state.seen.0, state.seen.2) == (cursor, count);
         state.start = state
             .start
-            .filter(|&start| (start..start + rows).contains(&cursor))
+            .filter(|&start| same_cursor || (start..start + rows).contains(&cursor))
             .map(|start| start.clamp(page.start, last_start));
         state.seen = seen;
         state.asked = false;
@@ -929,8 +931,9 @@ fn list_pane(
     let seen = (view.list_cursor, view.list_offset, view.list_count);
     let follow = page_window(view, rows);
     let (window, ask) = scroll(ui, "list_scroll", seen, page, view.list_count, follow);
-    if let Some(at) = ask {
-        steps.push(LibraryStep::Browse(BrowserEdit::SelectRow(at)));
+    // The session loads that row's page; the cursor (what LOAD loads) stays.
+    if let Some(offset) = ask {
+        steps.push(LibraryStep::Browse(BrowserEdit::ShowPage { offset }));
     }
     let mut selection = Selection::take(ui.ctx(), view);
     // Rows dragged within the playlist shown move in it; a search or a sort shows rows

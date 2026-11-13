@@ -779,13 +779,38 @@ fn wheel_scrolls_the_list() {
     wheel(&mut harness, at, 30.0);
     assert!(harness.query_by_label("Song 0").is_some());
 
-    // Past the loaded page it asks the session for the next row, once.
+    // Past the loaded page it asks the session for the next page, once, without moving
+    // the cursor (the LOAD target).
     let mut harness = clicking(numbered(0, 200, 1000), Decks::default());
     let at = at_label(&harness, "Song 2");
     for _ in 0..10 {
         wheel(&mut harness, at, -30.0);
     }
-    assert_eq!(harness.state().steps, [browse(BrowserEdit::SelectRow(200))]);
+    assert_eq!(
+        harness.state().steps,
+        [browse(BrowserEdit::ShowPage { offset: 200 })]
+    );
+    let shown_before: Vec<usize> = (150..200)
+        .filter(|i| harness.query_by_label(&format!("Song {i}")).is_some())
+        .collect();
+    assert!(!shown_before.is_empty());
+    // The page arrives with the cursor where it was: the rows stay where the wheel put
+    // them (not back on the cursor or the page's start), and the wheel goes on from there.
+    let mut next = numbered(100, 200, 1000);
+    next.list_cursor = 0;
+    harness.state_mut().view = next;
+    harness.run_steps(2);
+    let shown: Vec<usize> = (100..300)
+        .filter(|i| harness.query_by_label(&format!("Song {i}")).is_some())
+        .collect();
+    // (The wheel's last smoothed points may still move it on by a row.)
+    let moved = shown[0].checked_sub(shown_before[0]);
+    assert!(moved.is_some_and(|m| m <= 1), "{shown:?} {shown_before:?}");
+    wheel(&mut harness, at, -3.0);
+    let further: Vec<usize> = (100..300)
+        .filter(|i| harness.query_by_label(&format!("Song {i}")).is_some())
+        .collect();
+    assert!(further[0] > shown[0], "{further:?}");
 
     // The tree scrolls too, and asks nothing.
     let mut view = numbered(0, 20, 20);

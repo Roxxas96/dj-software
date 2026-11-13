@@ -709,6 +709,43 @@ fn sorting_by_title_puts_untitled_tracks_by_file_name() {
 }
 
 #[test]
+fn showing_another_page_keeps_the_cursor() {
+    let (_dir, lib) = open();
+    let tracks: Vec<(String, String)> = (0..1000)
+        .map(|i| (format!("/m/{i:04}.flac"), format!("Song {i:04}")))
+        .collect();
+    let ids = add_tracks(&lib, &tracks);
+    create_playlist(&lib, "Big", &[]);
+    let playlist = lib.reader().unwrap().playlists().unwrap()[0].id;
+    lib.writer()
+        .submit_wait(WriteOp::Batch(
+            ids.iter()
+                .map(|&track| WriteOp::AddToPlaylist {
+                    playlist,
+                    track,
+                    at: None,
+                })
+                .collect(),
+        ))
+        .unwrap();
+    let mut b = browser(&lib, Vec::new());
+    scroll(&mut b, 1);
+    let before = b.edit(BrowserEdit::SelectRow(5)).unwrap();
+    // The wheel past the page asks for row 600's page: the cursor, the LOAD target and
+    // the focus stay.
+    let view = b.edit(BrowserEdit::ShowPage { offset: 600 }).unwrap();
+    assert!((view.list_offset..view.list_offset + view.list.len()).contains(&600));
+    assert_eq!(view.list_cursor, 5);
+    assert_eq!(view.focus, before.focus);
+    assert_eq!(view.track.map(|t| t.id), Some(ids[5]));
+    assert_eq!(b.selected_track().map(|t| t.id), Some(ids[5]));
+    // A step of the knob moves from the cursor, back on its page.
+    let view = scroll(&mut b, 1);
+    assert_eq!(view.list_cursor, 6);
+    assert!((view.list_offset..view.list_offset + view.list.len()).contains(&6));
+}
+
+#[test]
 fn a_failed_search_keeps_the_list_and_takes_its_seq() {
     let s = searchable();
     let mut b = browser(&s.lib, Vec::new());
