@@ -57,7 +57,7 @@ knob is turned; the soft takeover waits until the knob reaches the value on scre
 | Crossfader, pitch slider | As a channel fader; a double-click or a right-click (on macOS, Ctrl-click too) resets them (the crossfader to the centre, the pitch slider to 0 %) |
 | Master level | A bar: click or drag; a press on the level's edge takes it where it is; a double-click or a right-click (on macOS, Ctrl-click too) resets it to 0.8, its default |
 | Auto-loop size button | Click to set a loop of that many beats |
-| Buttons (PLAY, CUE, SYNC, PFL, LOOP IN and OUT, the loop arrows, VINYL, SLIP, KEYLOCK, the pad-mode arrows) | Click (a trackpad tap too); a button that the controller holds (CUE, a loop roll) is held while the mouse button is down, and let go if the window loses focus |
+| Buttons (PLAY, CUE, SYNC, PFL, LOOP IN and OUT, the loop arrows, VINYL, SLIP, KEYLOCK, the pad-mode arrows) | Click (a trackpad tap too); a button that the controller holds (CUE, a loop roll) is held while the mouse button is down, and let go if the window loses focus. A button (and a pad) lights up a little under the pointer and looks pressed (a brighter or darker fill, drawn in by a point) while the mouse holds it |
 | Pads | Click to play; Shift-click for the shifted action (beat jump shift; in the SAMPLER and TRANS modes, stop the sample); right-click a hotcue pad (on macOS, Ctrl-click too) to name and colour it |
 | Hotcue flags on a waveform | Right-click (on macOS, Ctrl-click too) to open the same editor |
 | Jog | Drag round it: on a playing deck it nudges (bends the pitch, as the jog's ring does); on a paused deck it scrubs (clockwise goes forward) |

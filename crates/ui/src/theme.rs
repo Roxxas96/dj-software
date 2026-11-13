@@ -166,6 +166,61 @@ pub(crate) fn luminance(colour: Color32) -> f32 {
         / 255.0
 }
 
+/// How far a button held down with the mouse moves its fill towards white (a dark fill)
+/// or black (a light one).
+pub const PRESSED_TINT: f32 = 0.3;
+/// The same for a button under the pointer: a subtle highlight.
+pub const HOVER_TINT: f32 = 0.1;
+/// How far a held button's fill draws in from its edges, in points.
+pub const PRESSED_INSET: f32 = 1.0;
+
+/// How a button the mouse can press looks: idle, under the pointer, or held down.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ButtonLook {
+    Idle,
+    Hovered,
+    Pressed,
+}
+
+impl ButtonLook {
+    /// The look of the button of `response`, from its own state, so it follows the mouse
+    /// at once: pressed while the primary button is held down on it.
+    pub fn of(response: &egui::Response) -> Self {
+        let held = response.is_pointer_button_down_on()
+            && response.ctx.input(|i| i.pointer.primary_down());
+        if held {
+            Self::Pressed
+        } else if response.hovered() {
+            Self::Hovered
+        } else {
+            Self::Idle
+        }
+    }
+
+    /// `fill` in this look: lighter on a dark fill, darker on a light one.
+    pub fn fill(self, fill: Color32) -> Color32 {
+        let amount = match self {
+            Self::Idle => return fill,
+            Self::Hovered => HOVER_TINT,
+            Self::Pressed => PRESSED_TINT,
+        };
+        let towards = if luminance(fill) < 0.5 {
+            Color32::WHITE
+        } else {
+            Color32::BLACK
+        };
+        fill.lerp_to_gamma(towards, amount)
+    }
+
+    /// Where the fill of a button at `rect` goes in this look: inset while pressed.
+    pub fn rect(self, rect: Rect) -> Rect {
+        match self {
+            Self::Pressed => rect.shrink(PRESSED_INSET),
+            _ => rect,
+        }
+    }
+}
+
 /// The WCAG contrast ratio of `a` on `b`.
 pub(crate) fn contrast(a: Color32, b: Color32) -> f32 {
     let luminance = |c: Color32| {
