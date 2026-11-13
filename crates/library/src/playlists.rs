@@ -652,6 +652,18 @@ pub(crate) fn apply(tx: &Transaction<'_>, op: &WriteOp) -> Result<WriteOutcome, 
             renumber_playlists(tx, &ids)?;
             Ok(WriteOutcome::Done)
         }
+        WriteOp::ExpectNoPlaylistNamed { name, except } => {
+            let taken: bool = tx.query_row(
+                "SELECT EXISTS (SELECT 1 FROM playlists WHERE name = ?1 AND id IS NOT ?2)",
+                (name, except),
+                |r| r.get(0),
+            )?;
+            if taken {
+                Err(LibraryError::PlaylistNameTaken(name.clone()))
+            } else {
+                Ok(WriteOutcome::Done)
+            }
+        }
         op => {
             let mut edits = EntryEdits::default();
             if !edits.take(tx, op)? {

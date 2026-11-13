@@ -51,8 +51,8 @@ pub enum Job {
     },
     /// Write a playlist edit from the window, then reread the browser to show it.
     EditPlaylist(WriteOp),
-    /// Make the playlist `name` (already checked), reread the browser, and highlight the
-    /// new playlist's tree row.
+    /// Make the playlist `name` (trimmed, not empty) unless a playlist has that name,
+    /// reread the browser, and highlight the new playlist's tree row.
     CreatePlaylist(String),
     Grid {
         deck: DeckId,
@@ -149,6 +149,11 @@ fn spawn_with(
     Ok((tx, handle))
 }
 
+/// The event for a playlist name another playlist has.
+fn name_taken(name: &str) -> String {
+    format!("There is already a playlist called {name}")
+}
+
 fn deck_number(deck: DeckId) -> usize {
     deck.index() + 1
 }
@@ -218,6 +223,7 @@ fn run(
                     Err(library::LibraryError::PlaylistChanged(_)) => {
                         say(PLAYLIST_CHANGED.to_owned());
                     }
+                    Err(library::LibraryError::PlaylistNameTaken(name)) => say(name_taken(&name)),
                     Err(e) => say(format!(
                         "warning: could not change the playlist: {}",
                         safe(e)
@@ -231,10 +237,21 @@ fn run(
                 }
             }
             Job::CreatePlaylist(name) => {
-                let created = lib.writer().submit_wait(WriteOp::CreatePlaylist { name });
+                // Checked in the write's transaction: no other create slips in between.
+                let created = lib.writer().submit_wait(WriteOp::Batch(vec![
+                    WriteOp::ExpectNoPlaylistNamed {
+                        name: name.clone(),
+                        except: None,
+                    },
+                    WriteOp::CreatePlaylist { name },
+                ]));
                 let id = match created {
                     Ok(library::WriteOutcome::Created { id }) => Some(id),
                     Ok(_) => None,
+                    Err(library::LibraryError::PlaylistNameTaken(name)) => {
+                        say(name_taken(&name));
+                        None
+                    }
                     Err(e) => {
                         say(format!(
                             "warning: could not create the playlist: {}",

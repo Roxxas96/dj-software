@@ -169,9 +169,15 @@ pub enum WriteOp {
         playlist: i64,
         entries: Vec<(usize, i64)>,
     },
-    /// Applies several ops in one transaction: all of them or none. Its playlist entry
-    /// edits are made in memory and each playlist is written once, from its first entry
-    /// that changed.
+    /// Checks that no playlist but `except` is called `name` (the same letters, case
+    /// included), changing nothing; fails with [`LibraryError::PlaylistNameTaken`]
+    /// otherwise. Put first in a [`WriteOp::Batch`] with a create or a rename, it checks
+    /// the name in the same transaction as the write.
+    ExpectNoPlaylistNamed { name: String, except: Option<i64> },
+    /// Applies several ops in one transaction: all of them or none. Reports the outcome of
+    /// the last op that reports something ([`WriteOutcome::Done`] when none does). Its
+    /// playlist entry edits are made in memory and each playlist is written once, from its
+    /// first entry that changed.
     Batch(Vec<WriteOp>),
     /// Runs raw statements in one transaction. Meant for tests and maintenance; regular
     /// code uses the typed ops.
@@ -635,8 +641,10 @@ fn apply(tx: &Transaction<'_>, op: &WriteOp) -> Result<WriteOutcome, LibraryErro
         | WriteOp::AddToPlaylist { .. }
         | WriteOp::RemoveFromPlaylist { .. }
         | WriteOp::MoveInPlaylist { .. }
-        | WriteOp::ExpectPlaylistEntries { .. } => crate::playlists::apply(tx, op),
+        | WriteOp::ExpectPlaylistEntries { .. }
+        | WriteOp::ExpectNoPlaylistNamed { .. } => crate::playlists::apply(tx, op),
         WriteOp::Batch(ops) => {
+            let mut outcome = WriteOutcome::Done;
             let mut edits = crate::playlists::EntryEdits::default();
             for op in ops {
                 if edits.take(tx, op)? {
@@ -644,10 +652,13 @@ fn apply(tx: &Transaction<'_>, op: &WriteOp) -> Result<WriteOutcome, LibraryErro
                 }
                 // Any other op sees the entries edited so far.
                 edits.write(tx)?;
-                apply(tx, op)?;
+                match apply(tx, op)? {
+                    WriteOutcome::Done => {}
+                    done => outcome = done,
+                }
             }
             edits.write(tx)?;
-            Ok(WriteOutcome::Done)
+            Ok(outcome)
         }
         WriteOp::Raw(statements) => run_raw(tx, statements),
         #[cfg(feature = "test-hooks")]

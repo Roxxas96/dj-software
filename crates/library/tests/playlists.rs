@@ -955,3 +955,68 @@ fn a_batch_of_edits_matches_the_edits_one_by_one() {
     );
     assert_eq!(order(&lib, p), [t[3], t[2], t[0], t[4]]);
 }
+
+/// The window's create and rename check the name in the same transaction as the write.
+#[test]
+fn a_name_check_guards_create_and_rename() {
+    let (_d, lib) = open();
+    let peak = create(&lib, "Peak");
+    let warm = create(&lib, "Warm");
+    let taken = |except| WriteOp::ExpectNoPlaylistNamed {
+        name: "Peak".into(),
+        except,
+    };
+    let err = lib
+        .writer()
+        .submit_wait(WriteOp::Batch(vec![
+            taken(None),
+            WriteOp::CreatePlaylist {
+                name: "Peak".into(),
+            },
+        ]))
+        .unwrap_err();
+    assert!(
+        matches!(&err, LibraryError::PlaylistNameTaken(name) if name == "Peak"),
+        "{err:?}"
+    );
+    let err = lib
+        .writer()
+        .submit_wait(WriteOp::Batch(vec![
+            taken(Some(warm)),
+            WriteOp::RenamePlaylist {
+                id: warm,
+                name: "Peak".into(),
+            },
+        ]))
+        .unwrap_err();
+    assert!(matches!(err, LibraryError::PlaylistNameTaken(_)), "{err:?}");
+    assert_eq!(playlists(&lib).len(), 2);
+    assert_eq!(playlists(&lib)[1].name, "Warm");
+    // Its own name is no clash; case counts; a batch reports the playlist it creates.
+    submit(
+        &lib,
+        WriteOp::Batch(vec![
+            taken(Some(peak)),
+            WriteOp::RenamePlaylist {
+                id: peak,
+                name: "Peak".into(),
+            },
+        ]),
+    );
+    let outcome = lib
+        .writer()
+        .submit_wait(WriteOp::Batch(vec![
+            WriteOp::ExpectNoPlaylistNamed {
+                name: "peak".into(),
+                except: None,
+            },
+            WriteOp::CreatePlaylist {
+                name: "peak".into(),
+            },
+        ]))
+        .unwrap();
+    let WriteOutcome::Created { id } = outcome else {
+        panic!("unexpected outcome {outcome:?}");
+    };
+    assert_eq!(playlists(&lib)[2].id, id);
+}
