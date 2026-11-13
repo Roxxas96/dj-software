@@ -14,7 +14,7 @@ use library::{BrowserView, TrackRow};
 use crate::view::ViewState;
 
 /// The soft-takeover targets of a deck that can show a pickup value.
-pub const GHOSTS: usize = 7;
+pub const GHOSTS: usize = 8;
 // Each target's place in `ControlFrame::ghosts`.
 pub(crate) const GHOST_TRIM: usize = 0;
 pub(crate) const GHOST_EQ_HIGH: usize = 1;
@@ -23,7 +23,8 @@ pub(crate) const GHOST_EQ_LOW: usize = 3;
 pub(crate) const GHOST_FILTER: usize = 4;
 pub(crate) const GHOST_FADER: usize = 5;
 pub(crate) const GHOST_TEMPO: usize = 6;
-const _: () = assert!(GHOSTS > GHOST_TEMPO);
+pub(crate) const GHOST_FX_LEVEL: usize = 7;
+const _: () = assert!(GHOSTS > GHOST_FX_LEVEL);
 /// The soft-takeover targets of no deck that can show a pickup value.
 pub const GLOBAL_GHOSTS: usize = 4;
 // Each target's place in `ControlFrame::global_ghosts`.
