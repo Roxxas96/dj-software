@@ -102,7 +102,7 @@ impl Lanes {
         let (area, response) =
             ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
         // A right-click on a hotcue flag opens its editor (on macOS, Ctrl + click too).
-        let right_click = context_press(&response, ui)
+        let right_click = context_press(&response)
             .opened
             .then(|| response.interact_pointer_pos())
             .flatten();

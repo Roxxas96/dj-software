@@ -1336,7 +1336,7 @@ fn pads_column(
                         let response =
                             ui.interact(rect, Id::NULL.with(id), Sense::click_and_drag());
                         let hotcue = matches!(action, Action::Hotcue(..));
-                        let press = context_press(&response, ui);
+                        let press = context_press(&response);
                         // On macOS Ctrl + click is a right-click: it presses no hotcue.
                         if hotcue && press.right_click {
                             sink.release(&response, action);

@@ -293,6 +293,63 @@ fn double_click_resets_the_gain_to_unity() {
     assert_eq!(last_value(&received, Action::Trim(deck(1))), Some(0.5));
 }
 
+/// Right-clicks at `at`: the secondary button down for a frame, then up.
+fn right_click(harness: &mut Harness<'_>, at: Pos2) {
+    harness.event(Event::PointerMoved(at));
+    harness.run_steps(1);
+    for pressed in [true, false] {
+        harness.event(Event::PointerButton {
+            pos: at,
+            button: PointerButton::Secondary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        });
+        harness.run_steps(1);
+    }
+    harness.run_steps(1);
+}
+
+#[test]
+fn right_click_resets_the_left_high_knob() {
+    let mut frame = ControlFrame::default();
+    frame.control.decks[0].eq_high = 0.9;
+    let (mut harness, received) = sending(frame);
+    let high = mixer_layout(MIXER, true, true).sides[0].knobs[1];
+    right_click(&mut harness, high);
+    let sent: Vec<UiCommand> = received.try_iter().collect();
+    assert_eq!(
+        sent,
+        [UiCommand::Action(
+            Action::EqHigh(deck(1)),
+            Input::Absolute(0.5)
+        )]
+    );
+}
+
+#[test]
+fn right_click_on_a_channel_fader_sends_nothing() {
+    let mut frame = ControlFrame::default();
+    frame.control.decks[1].fader = 0.3;
+    let (mut harness, received) = sending(frame);
+    let fader = mixer_layout(MIXER, true, true).sides[1].fader;
+    right_click(&mut harness, fader.center());
+    let sent: Vec<UiCommand> = received.try_iter().collect();
+    assert_eq!(sent, []);
+}
+
+#[test]
+fn right_click_resets_the_crossfader_and_the_master_level() {
+    let mut frame = ControlFrame::default();
+    frame.control.crossfader = 0.9;
+    frame.control.master_level = 0.2;
+    let (mut harness, received) = sending(frame);
+    let layout = mixer_layout(MIXER, true, true);
+    right_click(&mut harness, layout.crossfader.center());
+    assert_eq!(last_value(&received, Action::Crossfader), Some(0.5));
+    right_click(&mut harness, layout.top.master_bar.center());
+    assert_eq!(last_value(&received, Action::MasterLevel), Some(0.8));
+}
+
 #[test]
 fn dragging_a_channel_fader_sends_absolute() {
     let (mut harness, received) = sending(ControlFrame::default());

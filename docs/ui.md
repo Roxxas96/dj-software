@@ -52,10 +52,10 @@ knob is turned; the soft takeover waits until the knob reaches the value on scre
 
 | Control | Gesture |
 |---|---|
-| Knobs (gain, EQ, filter, HEADPHONE level, MIX) | Drag up or down; hold Shift for a fine move (a quarter of the speed); scroll over it; double-click to reset: gain, EQ and filter to centre, HEADPHONE to 0.8, MIX to 0.0 (cue only) |
-| Channel faders | Click the track to jump there, or drag; a press on the handle takes it where it is (no jump); no double-click reset |
-| Crossfader, pitch slider | As a channel fader; double-click resets them (the crossfader to the centre, the pitch slider to 0 %) |
-| Master level | A bar: click or drag; a press on the level's edge takes it where it is; double-click resets it to 0.8, its default |
+| Knobs (gain, EQ, filter, HEADPHONE level, MIX) | Drag up or down; hold Shift for a fine move (a quarter of the speed); scroll over it; double-click or right-click (on macOS, Ctrl-click too) to reset: gain, EQ and filter to centre, HEADPHONE to 0.8, MIX to 0.0 (cue only) |
+| Channel faders | Click the track to jump there, or drag; a press on the handle takes it where it is (no jump); no reset: a double-click or a right-click does nothing more |
+| Crossfader, pitch slider | As a channel fader; a double-click or a right-click (on macOS, Ctrl-click too) resets them (the crossfader to the centre, the pitch slider to 0 %) |
+| Master level | A bar: click or drag; a press on the level's edge takes it where it is; a double-click or a right-click (on macOS, Ctrl-click too) resets it to 0.8, its default |
 | Auto-loop size button | Click to set a loop of that many beats |
 | Buttons (PLAY, CUE, SYNC, PFL, LOOP IN and OUT, the loop arrows, VINYL, SLIP, KEYLOCK, the pad-mode arrows) | Click (a trackpad tap too); a button that the controller holds (CUE, a loop roll) is held while the mouse button is down, and let go if the window loses focus |
 | Pads | Click to play; Shift-click for the shifted action (beat jump shift; in the SAMPLER and TRANS modes, stop the sample); right-click a hotcue pad (on macOS, Ctrl-click too) to name and colour it |
@@ -64,7 +64,7 @@ knob is turned; the soft takeover waits until the knob reaches the value on scre
 | Waveform lane | Drag sideways to scratch, playing or not; scroll or pinch to zoom |
 | Overview waveform | Click to seek, or drag; a press held still seeks once |
 | Time under the BPM | Click to cycle remaining, total and elapsed |
-| FX slots | Click a slot's name to toggle that effect on or off; its arrow opens the effect list; the FX level bar takes a click or drag, and shows a pickup marker like the other levels |
+| FX slots | Click a slot's name to toggle that effect on or off; its arrow opens the effect list; the FX level bar takes a click or drag (no reset: a right-click does nothing), and shows a pickup marker like the other levels |
 | Pad mode | Pick from the dropdown, or step through the modes with the ◀ ▶ arrows beside it (they wrap round) |
 | Browser tree | Click to select; the arrow, or a double-click, opens a drive or folder; right-click a playlist for Rename and Delete, and the Playlists node for New playlist |
 | Browser list | Click to select; Shift-click for a range, Cmd/Ctrl-click to add or remove a row; double-click loads on the first free deck; right-click for the track menu; scroll to look through the list (the selection, and so what LOAD loads, stays) |
