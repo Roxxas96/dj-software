@@ -34,6 +34,7 @@ fn browser() -> BrowserView {
             path: "/music/just-us.mp3".into(),
             track: Some(track),
             file_name: "just-us.mp3".into(),
+            position: None,
         }],
         list_offset: 0,
         list_count: 1,
@@ -41,6 +42,7 @@ fn browser() -> BrowserView {
         search: None,
         sort: None,
         seq: 0,
+        playlist: None,
     }
 }
 

@@ -46,6 +46,22 @@ pub enum LibraryStep {
     /// Loads library track `track` on `deck`, as the console's `load` does. Refused while
     /// `deck` plays.
     Load { deck: DeckId, track: i64 },
+    /// Appends library tracks `tracks` to `playlist`, in their order, in one write.
+    AddToPlaylist { playlist: i64, tracks: Vec<i64> },
+    /// Moves the entries at positions `from` (from 0) of `playlist` together, in playlist
+    /// order, to the gap before position `to` (`0..=len`, counted before the move: `len`
+    /// is the end), in one write.
+    MoveInPlaylist {
+        playlist: i64,
+        from: Vec<usize>,
+        to: usize,
+    },
+    /// Removes the entries at `positions` (from 0) of `playlist`, in one write; the tracks
+    /// stay in the library.
+    RemoveFromPlaylist {
+        playlist: i64,
+        positions: Vec<usize>,
+    },
     /// Names and colours (`0xRRGGBB`; `None` for the slot's default) hotcue `slot` of
     /// `track`, the track the window saw on `deck` when its editor opened. Saved only if
     /// `deck` still holds `track`.

@@ -9,6 +9,7 @@
 //! written with the non-blocking `Writer::submit`.
 
 mod memory_sync;
+mod playlist_edits;
 mod stem_jobs;
 mod worker;
 
@@ -350,6 +351,40 @@ impl LibraryMode {
     /// Why the change cannot be asked for (the worker stopped).
     pub fn browse(&mut self, edit: BrowserEdit) -> Result<(), String> {
         self.try_send_job(Job::Edit(edit))
+    }
+
+    /// Appends library tracks `tracks` to `playlist`, in one write; the browser is read
+    /// again once it is done.
+    ///
+    /// # Errors
+    ///
+    /// Why the write cannot be asked for (the worker stopped). A failed write is
+    /// reported as an event.
+    pub fn add_to_playlist(&self, playlist: i64, tracks: &[i64]) -> Result<(), String> {
+        self.try_send_job(Job::EditPlaylist(playlist_edits::append(playlist, tracks)))
+    }
+
+    /// Moves the entries at positions `from` (from 0) of `playlist` together, in playlist
+    /// order, to the gap before position `to` (counted before the move), in one write.
+    ///
+    /// # Errors
+    ///
+    /// As [`LibraryMode::add_to_playlist`].
+    pub fn move_in_playlist(&self, playlist: i64, from: &[usize], to: usize) -> Result<(), String> {
+        self.try_send_job(Job::EditPlaylist(playlist_edits::move_to(
+            playlist, from, to,
+        )))
+    }
+
+    /// Removes the entries at `positions` (from 0) of `playlist`, in one write.
+    ///
+    /// # Errors
+    ///
+    /// As [`LibraryMode::add_to_playlist`].
+    pub fn remove_from_playlist(&self, playlist: i64, positions: &[usize]) -> Result<(), String> {
+        self.try_send_job(Job::EditPlaylist(playlist_edits::remove(
+            playlist, positions,
+        )))
     }
 
     /// Performs a request from a controller action.
@@ -1434,6 +1469,7 @@ mod tests {
             search: None,
             sort: None,
             seq: 0,
+            playlist: None,
         }
     }
 

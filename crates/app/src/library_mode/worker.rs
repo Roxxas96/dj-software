@@ -14,7 +14,7 @@ use std::thread::JoinHandle;
 use engine::{DeckId, Hotcue, TrackBuffer, TrackMemory};
 use library::{
     Beatgrid, Browser, BrowserEdit, BrowserRequest, BrowserView, Drive, GridEdit, Library,
-    PendingTrack, Reader, TrackRow,
+    PendingTrack, Reader, TrackRow, WriteOp,
 };
 
 use super::memory_sync::engine_grid;
@@ -45,6 +45,8 @@ pub enum Job {
         /// Drop the load if the deck plays once the track is decoded (the window's loads).
         refuse_if_playing: bool,
     },
+    /// Write a playlist edit from the window, then reread the browser to show it.
+    EditPlaylist(WriteOp),
     Grid {
         deck: DeckId,
         track: i64,
@@ -202,6 +204,21 @@ fn run(
                     let _ = events.send(Event::Browser(browser.view()));
                 }
             },
+            Job::EditPlaylist(op) => {
+                // Waited for, so the reread sees it.
+                if let Err(e) = lib.writer().submit_wait(op) {
+                    say(format!(
+                        "warning: could not change the playlist: {}",
+                        safe(e)
+                    ));
+                }
+                match browser.refresh() {
+                    Ok(view) => {
+                        let _ = events.send(Event::Browser(view));
+                    }
+                    Err(e) => say(format!("warning: library browser: {}", safe(e))),
+                }
+            }
             Job::Refresh {
                 decks,
                 find_new_tracks,

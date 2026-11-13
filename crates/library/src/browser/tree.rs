@@ -33,6 +33,8 @@ pub struct TreeRow {
     pub expanded: bool,
     /// Why an open folder shows no children, such as "cannot read".
     pub note: Option<&'static str>,
+    /// The library id of a playlist's row; `None` for every other row.
+    pub playlist: Option<i64>,
 }
 
 /// What a tree row's list shows.
@@ -195,7 +197,10 @@ impl Tree {
             .unwrap_or(self.nodes.len() - 1);
         let end = self.subtree_end(at);
         let rows = playlists.iter().map(|p| Node {
-            row: row(p.name.clone(), 1, TreeKind::Playlist),
+            row: TreeRow {
+                playlist: Some(p.id),
+                ..row(p.name.clone(), 1, TreeKind::Playlist)
+            },
             target: Target::Playlist {
                 id: p.id,
                 len: usize::try_from(p.track_count).unwrap_or(usize::MAX),
@@ -226,6 +231,7 @@ fn row(label: String, depth: u8, kind: TreeKind) -> TreeRow {
         kind,
         expanded: false,
         note: None,
+        playlist: None,
     }
 }
 

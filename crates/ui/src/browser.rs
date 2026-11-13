@@ -4,14 +4,17 @@
 //! dividers between the panes drag, and the info panel and the sideview fold away to a
 //! small tab on the right edge.
 
+use std::collections::BTreeSet;
 use std::ops::Range;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
 
 use analysis::KeyNotation;
 use egui::{
-    Align, Button, Color32, CornerRadius, CursorIcon, Id, Key, Label, Layout, Pos2, Rect, RichText,
-    Sense, Stroke, TextEdit, Ui, UiBuilder, Vec2, pos2, vec2,
+    Align, Button, Color32, CornerRadius, CursorIcon, DragAndDrop, Id, Key, Label, Layout,
+    Modifiers, PointerButton, Pos2, Rect, Response, RichText, Sense, Stroke, StrokeKind, TextEdit,
+    Ui, UiBuilder, Vec2, pos2, vec2,
 };
 use engine::DeckId;
 use library::{BrowserEdit, BrowserView, Focus, ListRow, TrackSortKey, TreeKind, TreeRow};
@@ -99,6 +102,149 @@ pub struct Decks {
     pub playing: [bool; 4],
     /// The window shows four decks, not two.
     pub four: bool,
+}
+
+/// What a drag from the list carries: the library tracks of the rows dragged, in list
+/// order (rows the library does not have are left out), and, from a playlist, the
+/// playlist and those rows' positions in it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackDrag {
+    pub tracks: Vec<i64>,
+    pub from_playlist: Option<(i64, Vec<usize>)>,
+}
+
+/// The tracks dropped on `response` this frame, if any. While tracks are dragged over it,
+/// a line in `colour` frames `rect`: where they would land.
+pub(crate) fn track_drop(
+    ui: &Ui,
+    response: &Response,
+    rect: Rect,
+    colour: Color32,
+) -> Option<Arc<TrackDrag>> {
+    response.dnd_hover_payload::<TrackDrag>()?;
+    ui.painter().rect_stroke(
+        rect.shrink(1.0),
+        CornerRadius::same(2),
+        Stroke::new(2.0, colour),
+        StrokeKind::Inside,
+    );
+    response.dnd_release_payload::<TrackDrag>()
+}
+
+/// The list rows picked with the mouse, kept from frame to frame: Cmd/Ctrl-click toggles
+/// a row, Shift-click picks the rows from the anchor, a plain click picks one row.
+#[derive(Debug, Clone, Default)]
+struct Selection {
+    /// Absolute rows of the list.
+    rows: BTreeSet<usize>,
+    /// Where a Shift-click picks from.
+    anchor: Option<usize>,
+    /// The list the rows are of: its tree row, query `seq`, length and playlist. Any change
+    /// is a new list, which starts with nothing picked.
+    list: (usize, u64, usize, Option<i64>),
+    /// The session's list cursor last seen: when it moves to a row not picked (the BROWSE
+    /// knob turned), the pick is dropped.
+    cursor: usize,
+}
+
+impl Selection {
+    fn id() -> Id {
+        Id::NULL.with("open-jockey-browser-selection")
+    }
+
+    /// The pick, emptied if `view` shows another list or its cursor left the pick.
+    fn take(ctx: &egui::Context, view: &BrowserView) -> Self {
+        let mut selection: Self = ctx
+            .data_mut(|d| d.remove_temp(Self::id()))
+            .unwrap_or_default();
+        let list = (view.tree_cursor, view.seq, view.list_count, view.playlist);
+        if selection.list != list {
+            selection.list = list;
+            selection.clear();
+        }
+        if selection.cursor != view.list_cursor {
+            selection.cursor = view.list_cursor;
+            if !selection.rows.contains(&view.list_cursor) {
+                selection.clear();
+            }
+        }
+        selection
+    }
+
+    fn put(self, ctx: &egui::Context) {
+        ctx.data_mut(|d| d.insert_temp(Self::id(), self));
+    }
+
+    fn clear(&mut self) {
+        self.rows.clear();
+        self.anchor = None;
+    }
+
+    /// A click on row `at` with `modifiers` held, the session's cursor on `cursor`.
+    /// Returns whether the cursor should follow: not when the click took the row out.
+    fn click(&mut self, at: usize, modifiers: Modifiers, cursor: usize) -> bool {
+        if modifiers.shift {
+            let anchor = *self.anchor.get_or_insert(cursor);
+            self.rows = (anchor.min(at)..=anchor.max(at)).collect();
+            true
+        } else if modifiers.command {
+            if self.rows.is_empty() {
+                // The highlighted row counts as picked until something else is.
+                self.rows.insert(cursor);
+            }
+            let added = self.rows.insert(at);
+            if added {
+                self.anchor = Some(at);
+            } else {
+                self.rows.remove(&at);
+            }
+            added
+        } else {
+            self.rows = BTreeSet::from([at]);
+            self.anchor = Some(at);
+            true
+        }
+    }
+
+    /// The rows a drag or a menu on row `at` acts on: the pick when `at` is in it, else
+    /// `at` alone.
+    fn acting_on(&self, at: usize) -> Vec<usize> {
+        if self.rows.contains(&at) {
+            self.rows.iter().copied().collect()
+        } else {
+            vec![at]
+        }
+    }
+}
+
+/// The list rows picked with the mouse (Cmd/Ctrl-click, Shift-click), in list order.
+pub fn selected_rows(ctx: &egui::Context) -> Vec<usize> {
+    ctx.data(|d| d.get_temp::<Selection>(Selection::id()))
+        .map(|s| s.rows.into_iter().collect())
+        .unwrap_or_default()
+}
+
+/// What dragging `rows` of `view` carries; `None` when none of them is a library track.
+fn track_drag(view: &BrowserView, rows: &[usize]) -> Option<TrackDrag> {
+    let entries: Vec<&ListRow> = rows
+        .iter()
+        .filter_map(|&at| view.list.get(at.checked_sub(view.list_offset)?))
+        .filter(|entry| entry.track.is_some())
+        .collect();
+    if entries.is_empty() {
+        return None;
+    }
+    let tracks = entries
+        .iter()
+        .filter_map(|e| e.track.as_ref().map(|t| t.id))
+        .collect();
+    let from_playlist = view
+        .playlist
+        .map(|id| (id, entries.iter().filter_map(|e| e.position).collect()));
+    Some(TrackDrag {
+        tracks,
+        from_playlist,
+    })
 }
 
 /// The window's own event when a double-click finds every deck shown playing.
@@ -441,6 +587,15 @@ fn tree_pane(ui: &mut Ui, view: &BrowserView, steps: &mut Vec<LibraryStep>) {
         let rect = row(ui, highlight(&p, at == view.tree_cursor, focused));
         let response = ui.interact(rect, Id::NULL.with(("browser tree", at)), Sense::click());
         let arrow = tree_row(ui, rect, entry);
+        // Tracks dropped on a playlist go at its end.
+        if let Some(playlist) = entry.playlist
+            && let Some(drag) = track_drop(ui, &response, rect, p.text_dim)
+        {
+            steps.push(LibraryStep::AddToPlaylist {
+                playlist,
+                tracks: drag.tracks.clone(),
+            });
+        }
         let opens = matches!(entry.kind, TreeKind::Drive | TreeKind::Folder);
         // Drawn over the row, the arrow of a node that opens takes its own clicks; a
         // node that cannot (the Playlists node) leaves them to the row.
@@ -729,27 +884,53 @@ fn list_pane(
     if let Some(at) = ask {
         steps.push(LibraryStep::Browse(BrowserEdit::SelectRow(at)));
     }
+    let mut selection = Selection::take(ui.ctx(), view);
+    // Rows dragged within the playlist shown move in it; a search or a sort shows rows
+    // out of their playlist order, so there they do not.
+    let reorder = DragAndDrop::payload::<TrackDrag>(ui.ctx())
+        .and_then(|drag| drag.from_playlist.clone())
+        .filter(|(id, _)| Some(*id) == view.playlist)
+        .filter(|_| view.search.is_none() && view.sort.is_none());
+    let pointer = ui.input(|i| i.pointer.latest_pos());
+    // Where the rows dragged would land: before row `.0`, at height `.1`.
+    let mut gap = None;
     for at in window {
         let entry = &view.list[at - view.list_offset];
         let alt = (at % 2 == 1).then_some(p.row_alt);
-        let fill = highlight(&p, at == view.list_cursor, focused).or(alt);
+        let picked = at == view.list_cursor || selection.rows.contains(&at);
+        let fill = highlight(&p, picked, focused).or(alt);
         let rect = row(ui, fill);
-        let response = ui.interact(rect, Id::NULL.with(("browser row", at)), Sense::click());
+        let id = Id::NULL.with(("browser row", at));
+        let response = ui.interact(rect, id, Sense::click_and_drag());
         let track = entry.track.as_ref().map(|t| t.id);
         // The first click of a double-click selected the row already.
         if response.clicked() && !response.double_clicked() {
-            steps.push(LibraryStep::Browse(BrowserEdit::SelectRow(at)));
+            let modifiers = ui.input(|i| i.modifiers);
+            if selection.click(at, modifiers, view.list_cursor) {
+                steps.push(LibraryStep::Browse(BrowserEdit::SelectRow(at)));
+            }
         }
         if let (true, Some(track)) = (response.double_clicked(), track) {
             load_on_free_deck(ui, decks, track, steps);
         }
-        if let Some(track) = track {
+        // Past egui's drag threshold only: a click stays a click.
+        if response.drag_started_by(PointerButton::Primary)
+            && let Some(drag) = track_drag(view, &selection.acting_on(at))
+        {
+            DragAndDrop::set_payload(ui.ctx(), drag);
+        }
+        if reorder.is_some()
+            && let Some(pos) = pointer.filter(|pos| rect.contains(*pos))
+        {
+            gap = Some(if pos.y < rect.center().y {
+                (at, rect.min.y)
+            } else {
+                (at + 1, rect.max.y)
+            });
+        }
+        if track.is_some() {
             response.context_menu(|ui| {
-                for (deck, label) in DeckId::ALL.iter().zip(LOAD_ON).take(shown_decks(decks)) {
-                    if ui.button(label).clicked() {
-                        steps.push(LibraryStep::Load { deck: *deck, track });
-                    }
-                }
+                track_menu(ui, view, decks, &mut selection, at, steps);
             });
         }
         let fields = Fields::of(entry, notation);
@@ -780,6 +961,78 @@ fn list_pane(
         for (&(x, width), text) in cells.iter().zip(texts) {
             cell(ui, rect, x, width, RichText::new(text).color(colour));
         }
+    }
+    if let (Some((playlist, from)), Some((to, y))) = (reorder, gap) {
+        let line = [pos2(cells[0].0, y), pos2(ui.max_rect().max.x, y)];
+        ui.painter().line_segment(line, Stroke::new(2.0, p.text));
+        let released = ui.input(|i| i.pointer.any_released());
+        if released && DragAndDrop::take_payload::<TrackDrag>(ui.ctx()).is_some() {
+            steps.push(LibraryStep::MoveInPlaylist { playlist, from, to });
+            // The rows picked are elsewhere now.
+            selection.clear();
+        }
+    }
+    selection.put(ui.ctx());
+}
+
+/// The menu of a library track's row `at`: load it on a deck, add it (or the rows picked,
+/// when it is one of them) to a playlist, or take them out of the playlist shown.
+fn track_menu(
+    ui: &mut Ui,
+    view: &BrowserView,
+    decks: Decks,
+    selection: &mut Selection,
+    at: usize,
+    steps: &mut Vec<LibraryStep>,
+) {
+    let Some(track) = view
+        .list
+        .get(at - view.list_offset)
+        .and_then(|e| e.track.as_ref())
+    else {
+        return;
+    };
+    for (deck, label) in DeckId::ALL.iter().zip(LOAD_ON).take(shown_decks(decks)) {
+        if ui.button(label).clicked() {
+            steps.push(LibraryStep::Load {
+                deck: *deck,
+                track: track.id,
+            });
+        }
+    }
+    let playlists = view
+        .tree
+        .iter()
+        .filter_map(|r| Some((r.playlist?, &r.label)));
+    if playlists.clone().next().is_some() {
+        // egui draws the submenu's ▸.
+        ui.menu_button("Add to playlist", |ui| {
+            for (playlist, label) in playlists {
+                if ui.button(label.as_str()).clicked()
+                    && let Some(drag) = track_drag(view, &selection.acting_on(at))
+                {
+                    steps.push(LibraryStep::AddToPlaylist {
+                        playlist,
+                        tracks: drag.tracks,
+                    });
+                }
+            }
+        });
+    }
+    let Some(playlist) = view.playlist else {
+        return;
+    };
+    if ui.button("Remove from playlist").clicked()
+        && let Some(TrackDrag {
+            from_playlist: Some((_, positions)),
+            ..
+        }) = track_drag(view, &selection.acting_on(at))
+    {
+        steps.push(LibraryStep::RemoveFromPlaylist {
+            playlist,
+            positions,
+        });
+        selection.clear();
     }
 }
 
@@ -928,6 +1181,7 @@ mod tests {
             path: std::path::PathBuf::new(),
             track: None,
             file_name: String::new(),
+            position: None,
         };
         BrowserView {
             path: String::new(),
@@ -944,6 +1198,7 @@ mod tests {
             search: None,
             sort: None,
             seq: 0,
+            playlist: None,
         }
     }
 

@@ -112,6 +112,8 @@ impl Lanes {
         // Where each lane with a track is, and how many jog steps a point dragged across it
         // is worth.
         let mut scrubbable: [Option<(DeckId, Rect, f64)>; 4] = [None; 4];
+        // Where each lane is, for tracks dropped on it.
+        let mut drops: [Option<(DeckId, Rect)>; 4] = [None; 4];
         // Overlaid, the first two decks share the first lane.
         let overlaid = frame.view.waveform_style == WaveformStyle::Overlaid && shown.len() >= 2;
         let rows = shown.len() - usize::from(overlaid);
@@ -141,6 +143,7 @@ impl Lanes {
                 marks: info.map(|info| &*info.hotcue_marks),
             };
             lane.draw(&ui.painter_at(rect), rect, &mut self.meshes[deck.index()]);
+            drops[index] = Some((deck, rect));
             // The frames a point spans are the lane's zoom; a step is a jog step's worth of
             // the platter's turn.
             scrubbable[index] = lane.scale(rect, 1.0).map(|scale| {
@@ -161,6 +164,15 @@ impl Lanes {
             hotcue_menu::open(ui.ctx(), target, pos);
         }
         Self::scrub(ui, &response, &scrubbable, sink);
+        // Tracks dropped on a lane load on its deck: on an overlaid lane, the first one's.
+        let pointer = ui.input(|i| i.pointer.latest_pos());
+        if let Some(&(deck, rect)) = drops
+            .iter()
+            .flatten()
+            .find(|(_, rect)| pointer.is_some_and(|pos| rect.contains(pos)))
+        {
+            crate::deck::drop_load(ui, &response, rect, deck, sink);
+        }
         let mut steps = 0;
         if ui.rect_contains_pointer(area) {
             let (scroll, pinch) = ui.input(|i| (i.smooth_scroll_delta().y, i.zoom_delta()));

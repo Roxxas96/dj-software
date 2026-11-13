@@ -247,13 +247,14 @@ impl Reader {
         offset: usize,
         limit: usize,
     ) -> Result<Vec<(PathBuf, TrackRow)>, LibraryError> {
-        self.playlist_page(id, None, None, offset, limit)
+        let page = self.playlist_page(id, None, None, offset, limit)?;
+        Ok(page.into_iter().map(|(path, row, _)| (path, row)).collect())
     }
 
     /// A page of playlist `id`'s entries whose title or artist holds `text` (as
     /// [`TrackFilter::text`]; every entry with `None`), with each track's file, ordered by
-    /// `sort` (playlist order with `None`). Ties keep playlist order, whichever the
-    /// direction.
+    /// `sort` (playlist order with `None`), and each entry's position in the playlist.
+    /// Ties keep playlist order, whichever the direction.
     pub(crate) fn playlist_page(
         &self,
         id: i64,
@@ -261,7 +262,7 @@ impl Reader {
         sort: Option<TrackSort>,
         offset: usize,
         limit: usize,
-    ) -> Result<Vec<(PathBuf, TrackRow)>, LibraryError> {
+    ) -> Result<Vec<(PathBuf, TrackRow, usize)>, LibraryError> {
         let mut params = vec![Value::Integer(id)];
         let matching = text_condition(text, &mut params);
         let order = match sort {
@@ -272,7 +273,7 @@ impl Reader {
             }
         };
         let sql = format!(
-            "SELECT {TRACK_COLUMNS}, t.path FROM playlist_tracks pt \
+            "SELECT {TRACK_COLUMNS}, t.path, pt.position FROM playlist_tracks pt \
              JOIN tracks t ON t.id = pt.track_id \
              LEFT JOIN analysis a ON a.track_id = t.id \
              WHERE pt.playlist_id = ?{matching} ORDER BY {order} LIMIT ? OFFSET ?"
@@ -280,7 +281,11 @@ impl Reader {
         params.push(Value::Integer(to_i64(limit)));
         params.push(Value::Integer(to_i64(offset)));
         let mut stmt = self.connection().prepare_cached(&sql)?;
-        let rows = stmt.query_map(params_from_iter(&params), file_and_row)?;
+        let rows = stmt.query_map(params_from_iter(&params), |row| {
+            let (path, track) = file_and_row(row)?;
+            let position: i64 = row.get(10)?;
+            Ok((path, track, usize::try_from(position).unwrap_or(0)))
+        })?;
         Ok(rows.collect::<Result<_, _>>()?)
     }
 

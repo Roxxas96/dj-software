@@ -19,7 +19,7 @@ use engine::{
     Meters, SAMPLER_SLOTS, SamplerSnapshot,
 };
 
-use crate::command::{UiCommand, ViewChange};
+use crate::command::{LibraryStep, UiCommand, ViewChange};
 use crate::controls::{Sink, carry_steps, drag_path, fader_input};
 use crate::cover::{self, Covers};
 use crate::hotcue_menu::{self, HotcueTarget};
@@ -546,12 +546,13 @@ impl DeckPanels {
                 .path
                 .as_deref()
                 .and_then(|path| covers.get(ui.ctx(), path));
-            crate::landmark_rect(ui, rect, PANEL_NAMES[deck.index()]);
+            let area = crate::landmark_rect(ui, rect, PANEL_NAMES[deck.index()]);
             ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| {
                 // Nothing a panel draws reaches its neighbours.
                 ui.set_clip_rect(rect.intersect(ui.clip_rect()));
                 panel(ui, &view, cover.as_ref(), sections, sink);
             });
+            drop_load(ui, &area, rect, deck, sink);
             // The decks the controller plays have a tab in their side's accent on the outer
             // edge (with two decks, both panels).
             if active.contains(&deck) {
@@ -568,6 +569,22 @@ impl DeckPanels {
             pos2(left.right(), area.top()),
             pos2(right.left(), area.bottom()),
         )
+    }
+}
+
+/// Loads on `deck` the first of the tracks dropped on `response` (a deck panel or its lane,
+/// at `rect`); the session refuses it while the deck plays.
+pub(crate) fn drop_load(
+    ui: &Ui,
+    response: &egui::Response,
+    rect: Rect,
+    deck: DeckId,
+    sink: &mut Sink<'_>,
+) {
+    let accent = theme::palette(ui.ctx()).deck_accent(deck);
+    let dropped = crate::browser::track_drop(ui, response, rect, accent);
+    if let Some(&track) = dropped.as_ref().and_then(|drag| drag.tracks.first()) {
+        sink.send(UiCommand::Library(LibraryStep::Load { deck, track }));
     }
 }
 
