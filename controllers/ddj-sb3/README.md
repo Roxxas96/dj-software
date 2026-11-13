@@ -250,6 +250,16 @@ each deck's gain above its fader, and single-letter captions with bigger knobs i
 mixer. In the app with real tracks the compact window, the mixer, the browser, the waveform
 palettes and the other layouts were approved ("It's really cool. I am happy with these").
 
+### Hands-on check (plan 12b: mouse control)
+
+Owner, 2026-11-13 (macOS). The window was played with the mouse: loading, mixing, pads,
+hotcues, jog and waveform, the browser and playlists. The owner asked for right-click to reset
+a knob or slider and for buttons to look pressed while held; both were added and confirmed.
+Covers showing as the plain tile is not a bug: the owner's files carry no embedded picture
+(VirtualDJ shows its own cached artwork). Asked for later (plan 12c): a waveform marker for
+where a held loop roll or slicer returns and for an active loop, stems and gain shown on the
+waveform, keyboard navigation of the library, and VirtualDJ-style covers.
+
 ## The SB3's own pad routines
 
 In FX FADE, PAD SCRATCH and TRANS (SHIFT + SAMPLER) the SB3 runs routines of its own on
