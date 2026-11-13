@@ -161,6 +161,14 @@ pub enum WriteOp {
         from: usize,
         to: usize,
     },
+    /// Checks that each `(position, track)` of `entries` holds in `playlist` (positions
+    /// from 0), changing nothing; fails with [`LibraryError::PlaylistChanged`] otherwise.
+    /// Put first in a [`WriteOp::Batch`], it keeps an edit made from an older view of the
+    /// playlist from touching other entries.
+    ExpectPlaylistEntries {
+        playlist: i64,
+        entries: Vec<(usize, i64)>,
+    },
     /// Applies several ops in one transaction: all of them or none.
     Batch(Vec<WriteOp>),
     /// Runs raw statements in one transaction. Meant for tests and maintenance; regular
@@ -624,7 +632,8 @@ fn apply(tx: &Transaction<'_>, op: &WriteOp) -> Result<WriteOutcome, LibraryErro
         | WriteOp::MovePlaylist { .. }
         | WriteOp::AddToPlaylist { .. }
         | WriteOp::RemoveFromPlaylist { .. }
-        | WriteOp::MoveInPlaylist { .. } => crate::playlists::apply(tx, op),
+        | WriteOp::MoveInPlaylist { .. }
+        | WriteOp::ExpectPlaylistEntries { .. } => crate::playlists::apply(tx, op),
         WriteOp::Batch(ops) => {
             for op in ops {
                 apply(tx, op)?;

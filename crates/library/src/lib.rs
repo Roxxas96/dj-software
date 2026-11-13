@@ -102,6 +102,8 @@ pub enum LibraryError {
     NoSuchHotcue { track: i64, slot: u8 },
     #[error("position {position} is out of range (the playlist has {len} entries)")]
     PositionOutOfRange { position: usize, len: usize },
+    #[error("playlist {0} changed: its entries are not where they were")]
+    PlaylistChanged(i64),
     #[error("track {0}'s audio changed while it was being analyzed; analyze it again")]
     TrackChanged(i64),
     #[error("track {track_id} has a corrupt stored waveform: {source}")]

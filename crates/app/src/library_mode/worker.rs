@@ -20,6 +20,10 @@ use library::{
 use super::memory_sync::engine_grid;
 use crate::format::safe;
 
+/// The event when a playlist edit finds the entries it names moved since the window saw
+/// them: nothing is written.
+pub const PLAYLIST_CHANGED: &str = "The playlist changed; try again";
+
 /// Work for the library worker.
 #[derive(Debug)]
 pub enum Job {
@@ -206,11 +210,15 @@ fn run(
             },
             Job::EditPlaylist(op) => {
                 // Waited for, so the reread sees it.
-                if let Err(e) = lib.writer().submit_wait(op) {
-                    say(format!(
+                match lib.writer().submit_wait(op) {
+                    Ok(_) => {}
+                    Err(library::LibraryError::PlaylistChanged(_)) => {
+                        say(PLAYLIST_CHANGED.to_owned());
+                    }
+                    Err(e) => say(format!(
                         "warning: could not change the playlist: {}",
                         safe(e)
-                    ));
+                    )),
                 }
                 match browser.refresh() {
                     Ok(view) => {

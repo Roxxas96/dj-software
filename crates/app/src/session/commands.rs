@@ -972,14 +972,57 @@ mod tests {
         }
     }
 
-    /// Sends `step` from the window, then waits until `playlist` holds `expected`, for at
-    /// most 10 s; no event may come of it.
-    fn edit_playlist(decks: &mut Labelled, step: ui::LibraryStep, playlist: i64, expected: &[i64]) {
+    /// Sends `steps` from the window; no event may come of them at once.
+    fn send_steps(decks: &mut Labelled, steps: Vec<ui::LibraryStep>) {
         let mut parts = FrameParts::new(&Config::default());
         let (tx, rx) = channel();
-        tx.send(UiCommand::Library(step)).unwrap();
+        for step in steps {
+            tx.send(UiCommand::Library(step)).unwrap();
+        }
         decks.drain(&rx, &mut parts);
         assert!(parts.events.is_empty(), "{:?}", parts.events);
+    }
+
+    /// Opens `playlist` in the browser, as a click on its tree row does.
+    fn open_playlist(decks: &mut Labelled, playlist: i64) {
+        decks
+            .library
+            .changed_flag()
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        poll_until(decks, |library, _| {
+            library
+                .browser()
+                .is_some_and(|view| view.tree.iter().any(|row| row.playlist == Some(playlist)))
+        });
+        let view = decks.library.browser().unwrap();
+        let at = view
+            .tree
+            .iter()
+            .position(|row| row.playlist == Some(playlist))
+            .unwrap();
+        let select = library::BrowserEdit::SelectTree(at);
+        send_steps(decks, vec![ui::LibraryStep::Browse(select)]);
+        poll_until(decks, |library, _| {
+            library
+                .browser()
+                .is_some_and(|view| view.playlist == Some(playlist))
+        });
+    }
+
+    /// The tracks of the list the browser shows.
+    fn listed(view: &library::BrowserView) -> Vec<i64> {
+        view.list
+            .iter()
+            .filter_map(|row| row.track.as_ref().map(|t| t.id))
+            .collect()
+    }
+
+    /// With `playlist` open, sends `step` from the window, then waits until `playlist`
+    /// holds `expected` and the browser, read again, shows it, for at most 10 s each; no
+    /// event may come of it.
+    fn edit_playlist(decks: &mut Labelled, step: ui::LibraryStep, playlist: i64, expected: &[i64]) {
+        open_playlist(decks, playlist);
+        send_steps(decks, vec![step]);
         let reader = decks.library.library().reader().unwrap();
         let held = || -> Vec<i64> {
             let rows = reader.playlist_tracks(playlist, 0, 100).unwrap();
@@ -990,12 +1033,38 @@ mod tests {
             assert!(Instant::now() < deadline, "{:?} != {expected:?}", held());
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        // The browser is read again once the write is done.
         poll_until(decks, |library, _| {
-            library
-                .browser()
-                .is_some_and(|view| view.tree.iter().any(|row| row.playlist == Some(playlist)))
+            library.browser().is_some_and(|view| {
+                view.playlist == Some(playlist)
+                    && view.list_count == expected.len()
+                    && listed(view) == expected
+            })
         });
+    }
+
+    /// Sends `steps` from the window and polls until the session says `event`, for at most
+    /// 10 s; then `playlist` must still hold `kept`.
+    fn refused_edit(
+        decks: &mut Labelled,
+        steps: Vec<ui::LibraryStep>,
+        event: impl Fn(&str) -> bool,
+        playlist: i64,
+        kept: &[i64],
+    ) {
+        send_steps(decks, steps);
+        let (printer, events) = Printer::capturing();
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
+        while !events.lock().unwrap().iter().any(|e| event(e)) {
+            assert!(Instant::now() < deadline, "{:?}", events.lock().unwrap());
+            decks
+                .library
+                .poll(Instant::now(), &mut decks.engine, &printer);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        printer.finish();
+        let reader = decks.library.library().reader().unwrap();
+        let rows = reader.playlist_tracks(playlist, 0, 100).unwrap();
+        assert_eq!(rows.iter().map(|row| row.id).collect::<Vec<_>>(), kept);
     }
 
     #[test]
@@ -1046,7 +1115,7 @@ mod tests {
         let playlist = peak(&decks, &[7, 9, 7]);
         let step = ui::LibraryStep::MoveInPlaylist {
             playlist,
-            from: vec![2],
+            from: vec![(2, 7)],
             to: 0,
         };
         edit_playlist(&mut decks, step, playlist, &[7, 7, 9]);
@@ -1055,7 +1124,7 @@ mod tests {
         let playlist = peak(&decks, &[7, 8, 9, 8]);
         let step = ui::LibraryStep::MoveInPlaylist {
             playlist,
-            from: vec![2, 0],
+            from: vec![(2, 9), (0, 7)],
             to: 4,
         };
         edit_playlist(&mut decks, step, playlist, &[8, 8, 7, 9]);
@@ -1071,7 +1140,7 @@ mod tests {
         // The first and third 7, not the last.
         let step = ui::LibraryStep::RemoveFromPlaylist {
             playlist,
-            positions: vec![2, 0],
+            positions: vec![(2, 7), (0, 7)],
         };
         edit_playlist(&mut decks, step, playlist, &[9, 8, 7]);
         drop(decks.renderer);
@@ -1081,34 +1150,61 @@ mod tests {
     fn a_failed_playlist_edit_changes_nothing_and_says_so() {
         let mut decks = labelled();
         add_track(&decks, 9, "Nine");
-        let playlist = peak(&decks, &[7, 9]);
-        // Position 5 is past the end: the batch fails as a whole, removing nothing.
-        let mut parts = FrameParts::new(&Config::default());
-        let (tx, rx) = channel();
-        let step = ui::LibraryStep::RemoveFromPlaylist {
+        let playlist = peak(&decks, &[7]);
+        // Track 9 is added, then the unknown 999 fails: the batch is undone as a whole.
+        let step = ui::LibraryStep::AddToPlaylist {
             playlist,
-            positions: vec![0, 5],
+            tracks: vec![9, 999],
         };
-        tx.send(UiCommand::Library(step)).unwrap();
-        decks.drain(&rx, &mut parts);
-        let (printer, events) = Printer::capturing();
-        let deadline = Instant::now() + std::time::Duration::from_secs(10);
-        let said = |events: &[String]| {
-            events
-                .iter()
-                .any(|e| e.starts_with("warning: could not change the playlist"))
+        let said = |e: &str| e.starts_with("warning: could not change the playlist");
+        refused_edit(&mut decks, vec![step], said, playlist, &[7]);
+        drop(decks.renderer);
+    }
+
+    #[test]
+    fn a_stale_remove_writes_nothing_and_says_so() {
+        let mut decks = labelled();
+        add_track(&decks, 8, "Eight");
+        add_track(&decks, 9, "Nine");
+        let playlist = peak(&decks, &[7, 9, 8]);
+        // The window saw 9 at 1 and 8 at 2; a first removal, not yet seen, took the 7.
+        let first = ui::LibraryStep::RemoveFromPlaylist {
+            playlist,
+            positions: vec![(0, 7)],
         };
-        while !said(&events.lock().unwrap()) {
-            assert!(Instant::now() < deadline, "{:?}", events.lock().unwrap());
-            decks
-                .library
-                .poll(Instant::now(), &mut decks.engine, &printer);
-            std::thread::sleep(std::time::Duration::from_millis(2));
-        }
-        printer.finish();
-        let reader = decks.library.library().reader().unwrap();
-        let rows = reader.playlist_tracks(playlist, 0, 100).unwrap();
-        assert_eq!(rows.iter().map(|row| row.id).collect::<Vec<_>>(), [7, 9]);
+        let stale = ui::LibraryStep::RemoveFromPlaylist {
+            playlist,
+            positions: vec![(1, 9)],
+        };
+        let said = |e: &str| e == "The playlist changed; try again";
+        refused_edit(&mut decks, vec![first, stale], said, playlist, &[9, 8]);
+        drop(decks.renderer);
+    }
+
+    #[test]
+    fn a_stale_move_writes_nothing_and_says_so() {
+        let mut decks = labelled();
+        add_track(&decks, 8, "Eight");
+        add_track(&decks, 9, "Nine");
+        let playlist = peak(&decks, &[7, 9, 8]);
+        // Another process put 8 first since the window read the playlist.
+        decks
+            .library
+            .library()
+            .writer()
+            .submit_wait(library::WriteOp::MoveInPlaylist {
+                playlist,
+                from: 2,
+                to: 0,
+            })
+            .unwrap();
+        let stale = ui::LibraryStep::MoveInPlaylist {
+            playlist,
+            from: vec![(2, 8)],
+            to: 0,
+        };
+        let said = |e: &str| e == "The playlist changed; try again";
+        refused_edit(&mut decks, vec![stale], said, playlist, &[8, 7, 9]);
         drop(decks.renderer);
     }
 

@@ -1,6 +1,8 @@
 //! The window's playlist edits (drops into a playlist, reorders, removals) as writer
 //! batches: each edit is one [`WriteOp::Batch`] of the playlist ops the writer has, so it
-//! commits in one transaction, all of it or none.
+//! commits in one transaction, all of it or none. A move or a removal names each entry by
+//! its position and the track the window saw there, and its batch checks them first: an
+//! edit made from an older view of the playlist writes nothing.
 
 use library::WriteOp;
 
@@ -14,14 +16,25 @@ pub(super) fn append(playlist: i64, tracks: &[i64]) -> WriteOp {
     WriteOp::Batch(ops.collect())
 }
 
-/// Moves the entries at positions `from` of `playlist` together, in playlist order, to the
-/// gap before position `to` (counted before the move). One move per entry that moves.
-pub(super) fn move_to(playlist: i64, from: &[usize], to: usize) -> WriteOp {
-    let mut from = from.to_vec();
+/// The check that `entries` (position, track) still hold in `playlist`.
+fn expect(playlist: i64, entries: &[(usize, i64)]) -> WriteOp {
+    WriteOp::ExpectPlaylistEntries {
+        playlist,
+        entries: entries.to_vec(),
+    }
+}
+
+/// Moves the entries `from` (position, track) of `playlist` together, in playlist order, to
+/// the gap before position `to` (counted before the move), once they are checked. One move
+/// per entry that moves.
+pub(super) fn move_to(playlist: i64, from: &[(usize, i64)], to: usize) -> WriteOp {
+    let check = expect(playlist, from);
+    let mut from: Vec<usize> = from.iter().map(|&(position, _)| position).collect();
     from.sort_unstable();
     from.dedup();
     let (before, after) = from.split_at(from.partition_point(|&f| f < to));
-    let mut ops = Vec::with_capacity(from.len());
+    let mut ops = Vec::with_capacity(from.len() + 1);
+    ops.push(check);
     let mut add = |from: usize, to: usize| {
         if from != to {
             ops.push(WriteOp::MoveInPlaylist { playlist, from, to });
@@ -40,16 +53,20 @@ pub(super) fn move_to(playlist: i64, from: &[usize], to: usize) -> WriteOp {
     WriteOp::Batch(ops)
 }
 
-/// Removes the entries at `positions` of `playlist`.
-pub(super) fn remove(playlist: i64, positions: &[usize]) -> WriteOp {
-    let mut positions = positions.to_vec();
+/// Removes the entries `entries` (position, track) of `playlist`, once they are checked.
+pub(super) fn remove(playlist: i64, entries: &[(usize, i64)]) -> WriteOp {
+    let mut positions: Vec<usize> = entries.iter().map(|&(position, _)| position).collect();
     // Last first, so each position still names its entry.
     positions.sort_unstable_by(|a, b| b.cmp(a));
     positions.dedup();
-    let ops = positions
+    let removals = positions
         .into_iter()
         .map(|position| WriteOp::RemoveFromPlaylist { playlist, position });
-    WriteOp::Batch(ops.collect())
+    WriteOp::Batch(
+        std::iter::once(expect(playlist, entries))
+            .chain(removals)
+            .collect(),
+    )
 }
 
 #[cfg(test)]
@@ -70,6 +87,8 @@ mod tests {
                 WriteOp::RemoveFromPlaylist { position, .. } => {
                     entries.remove(position);
                 }
+                // Checked by the writer; here every entry holds.
+                WriteOp::ExpectPlaylistEntries { .. } => {}
                 ref other => panic!("unexpected op {other:?}"),
             }
         }
@@ -79,7 +98,7 @@ mod tests {
     #[test]
     fn moving_a_duplicate_moves_that_entry() {
         // [a, b, a]: the a at 2 moves to the top, ahead of the a that was at 0.
-        let moved = applied(vec!["a@0", "b@1", "a@2"], &move_to(1, &[2], 0));
+        let moved = applied(vec!["a@0", "b@1", "a@2"], &move_to(1, &[(2, 0)], 0));
         assert_eq!(moved, ["a@2", "a@0", "b@1"]);
     }
 
@@ -88,32 +107,40 @@ mod tests {
         let list: Vec<usize> = (0..6).collect();
         // Up, down, around the gap, to the end, and nowhere.
         assert_eq!(
-            applied(list.clone(), &move_to(1, &[4, 1], 0)),
+            applied(list.clone(), &move_to(1, &[(4, 0), (1, 0)], 0)),
             [1, 4, 0, 2, 3, 5]
         );
         assert_eq!(
-            applied(list.clone(), &move_to(1, &[0, 2], 5)),
+            applied(list.clone(), &move_to(1, &[(0, 0), (2, 0)], 5)),
             [1, 3, 4, 0, 2, 5]
         );
         assert_eq!(
-            applied(list.clone(), &move_to(1, &[1, 4], 3)),
+            applied(list.clone(), &move_to(1, &[(1, 0), (4, 0)], 3)),
             [0, 2, 1, 4, 3, 5]
         );
         assert_eq!(
-            applied(list.clone(), &move_to(1, &[0, 5], 6)),
+            applied(list.clone(), &move_to(1, &[(0, 0), (5, 0)], 6)),
             [1, 2, 3, 4, 0, 5]
         );
-        assert_eq!(applied(list.clone(), &move_to(1, &[2, 3], 3)), list);
+        assert_eq!(
+            applied(list.clone(), &move_to(1, &[(2, 0), (3, 0)], 3)),
+            list
+        );
         // One op per entry moved, at most.
-        let WriteOp::Batch(ops) = move_to(1, &[1, 4], 3) else {
+        let WriteOp::Batch(ops) = move_to(1, &[(1, 0), (4, 0)], 3) else {
             unreachable!()
         };
-        assert!(ops.len() <= 2, "{ops:?}");
+        // The check, then one op per entry moved at most.
+        assert!(ops.len() <= 3, "{ops:?}");
+        assert!(matches!(ops[0], WriteOp::ExpectPlaylistEntries { .. }));
     }
 
     #[test]
     fn removal_takes_exactly_those_positions() {
-        let removed = applied(vec!["a@0", "b@1", "a@2", "c@3"], &remove(1, &[2, 0, 2]));
+        let removed = applied(
+            vec!["a@0", "b@1", "a@2", "c@3"],
+            &remove(1, &[(2, 0), (0, 0), (2, 0)]),
+        );
         assert_eq!(removed, ["b@1", "c@3"]);
     }
 

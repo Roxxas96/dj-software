@@ -364,24 +364,35 @@ impl LibraryMode {
         self.try_send_job(Job::EditPlaylist(playlist_edits::append(playlist, tracks)))
     }
 
-    /// Moves the entries at positions `from` (from 0) of `playlist` together, in playlist
-    /// order, to the gap before position `to` (counted before the move), in one write.
+    /// Moves the entries `from` of `playlist` (each a position from 0 and the track seen
+    /// there) together, in playlist order, to the gap before position `to` (counted before
+    /// the move), in one write; nothing moves unless each still holds its track.
     ///
     /// # Errors
     ///
     /// As [`LibraryMode::add_to_playlist`].
-    pub fn move_in_playlist(&self, playlist: i64, from: &[usize], to: usize) -> Result<(), String> {
+    pub fn move_in_playlist(
+        &self,
+        playlist: i64,
+        from: &[(usize, i64)],
+        to: usize,
+    ) -> Result<(), String> {
         self.try_send_job(Job::EditPlaylist(playlist_edits::move_to(
             playlist, from, to,
         )))
     }
 
-    /// Removes the entries at `positions` (from 0) of `playlist`, in one write.
+    /// Removes the entries `positions` of `playlist` (each a position from 0 and the track
+    /// seen there), in one write; nothing is removed unless each still holds its track.
     ///
     /// # Errors
     ///
     /// As [`LibraryMode::add_to_playlist`].
-    pub fn remove_from_playlist(&self, playlist: i64, positions: &[usize]) -> Result<(), String> {
+    pub fn remove_from_playlist(
+        &self,
+        playlist: i64,
+        positions: &[(usize, i64)],
+    ) -> Result<(), String> {
         self.try_send_job(Job::EditPlaylist(playlist_edits::remove(
             playlist, positions,
         )))

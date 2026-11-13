@@ -1137,9 +1137,10 @@ fn dragging_within_the_playlist_moves_the_rows() {
     // The lower half of row 7: after it.
     let to = song(&harness, 7);
     drag_to(&mut harness, from, pos2(to.center().x, to.max.y - 3.0));
+    // Each row's position goes with the track the window saw there.
     let moves = |from: Vec<usize>, to| LibraryStep::MoveInPlaylist {
         playlist: 41,
-        from,
+        from: from.into_iter().map(|at| (at, 1000 + at as i64)).collect(),
         to,
     };
     assert_eq!(
@@ -1219,7 +1220,7 @@ fn the_track_menu_adds_to_and_removes_from_a_playlist() {
         harness.state().steps,
         [LibraryStep::RemoveFromPlaylist {
             playlist: 41,
-            positions: vec![11, 14],
+            positions: vec![(11, 1001), (14, 1004)],
         }]
     );
     // A row not picked: that row alone. Outside a playlist there is no removal.
@@ -1234,7 +1235,7 @@ fn the_track_menu_adds_to_and_removes_from_a_playlist() {
         harness.state().steps,
         [LibraryStep::RemoveFromPlaylist {
             playlist: 41,
-            positions: vec![17],
+            positions: vec![(17, 1007)],
         }]
     );
     let mut harness = clicking(with_playlists(numbered(0, 20, 20)), Decks::default());
@@ -1243,4 +1244,25 @@ fn the_track_menu_adds_to_and_removes_from_a_playlist() {
     harness.run_steps(2);
     harness.get_by_label("Add to playlist");
     assert!(harness.query_by_label("Remove from playlist").is_none());
+}
+
+#[test]
+fn rows_dropped_back_on_their_own_playlist_do_nothing() {
+    // The list is "Peak" (41): its rows dropped on "Peak" in the tree overshot a move.
+    let mut harness = clicking(in_playlist(0, 20), Decks::default());
+    let from = at_label(&harness, "Song 5");
+    let peak = at_label(&harness, "Peak");
+    drag_to(&mut harness, from, peak);
+    assert_eq!(harness.state().steps, []);
+    assert!(!egui::DragAndDrop::has_any_payload(&harness.ctx));
+    // On another playlist they are added.
+    let warm = at_label(&harness, "Warm up");
+    drag_to(&mut harness, from, warm);
+    assert_eq!(
+        harness.state().steps,
+        [LibraryStep::AddToPlaylist {
+            playlist: 40,
+            tracks: vec![1005],
+        }]
+    );
 }
