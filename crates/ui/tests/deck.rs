@@ -1226,3 +1226,31 @@ fn drag_on_an_empty_deck_sends_nothing() {
     let sent: Vec<UiCommand> = received.try_iter().collect();
     assert!(sent.is_empty(), "{sent:?}");
 }
+
+#[test]
+fn a_click_on_the_jog_of_a_playing_deck_sends_nothing() {
+    let (snapshot, frame) = loaded_plain();
+    let view = view(&snapshot, &frame);
+    let (mut harness, received) = sending(view);
+    let at = harness.get_by_label("jog").rect().center() + vec2(0.0, -30.0);
+    press_and_release(&mut harness, at);
+    let sent: Vec<UiCommand> = received.try_iter().collect();
+    assert!(sent.is_empty(), "{sent:?}");
+}
+
+#[test]
+fn a_drag_at_the_jog_hub_turns_nothing() {
+    let (snapshot, frame) = loaded_plain();
+    let view = view(&snapshot, &frame);
+    let (mut harness, received) = sending(view);
+    let centre = harness.get_by_label("jog").rect().center();
+    drag_through(
+        &mut harness,
+        centre + vec2(-5.0, 0.0),
+        &[centre + vec2(0.0, 5.0), centre + vec2(5.0, 0.0)],
+    );
+    let scratched = received
+        .try_iter()
+        .any(|c| matches!(c, UiCommand::Action(Action::JogScratch(_), _)));
+    assert!(!scratched);
+}

@@ -207,29 +207,35 @@ impl Lanes {
         if !down {
             ui.data_mut(|d| d.remove::<DeckId>(remembered));
             carry_steps(ui.ctx(), response.id, 0.0, false);
-            // A late release still goes to the deck pressed.
+            // A late release still goes to the deck touched.
             if let Some(deck) = lanes.iter().flatten().next().map(|l| l.0) {
                 sink.button(response, Action::JogTouch(deck));
             }
             return;
         }
-        let pressed = response.interact_pointer_pos().and_then(|pos| {
+        // Only a drag touches the platter: a click would hold a playing deck. Its deck is
+        // the one under the press, and stays so for the whole drag.
+        let dragging = response.dragged_by(PointerButton::Primary);
+        if !dragging {
+            return;
+        }
+        let deck = ui.data(|d| d.get_temp::<DeckId>(remembered)).or_else(|| {
+            let origin = ui.input(|i| i.pointer.press_origin())?;
             lanes
                 .iter()
                 .flatten()
-                .find(|(_, rect, _)| rect.contains(pos))
+                .find(|(_, rect, _)| rect.contains(origin))
+                .map(|&(deck, ..)| deck)
         });
-        let deck = ui
-            .data(|d| d.get_temp::<DeckId>(remembered))
-            .or_else(|| pressed.map(|&(deck, ..)| deck));
         let Some(deck) = deck else { return };
         ui.data_mut(|d| d.insert_temp(remembered, deck));
         let mut amount = 0.0;
-        let dragging = response.dragged_by(PointerButton::Primary);
         let lane = lanes.iter().flatten().find(|l| l.0 == deck);
         if let (Some(&(_, _, steps_per_point)), Some((from, to))) = (lane, path) {
             amount = (f64::from(from.x - to.x) * steps_per_point) as f32;
         }
+        // The touch comes first on the frame the drag starts.
+        sink.button(response, Action::JogTouch(deck));
         let steps = carry_steps(ui.ctx(), response.id, amount, dragging);
         if steps != 0 {
             sink.send(UiCommand::Action(
@@ -237,7 +243,6 @@ impl Lanes {
                 Input::Relative(steps),
             ));
         }
-        sink.button(response, Action::JogTouch(deck));
     }
 }
 

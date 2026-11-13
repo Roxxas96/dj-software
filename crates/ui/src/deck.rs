@@ -40,6 +40,8 @@ const PANEL_NAMES: [&str; 4] = [
 
 /// The brightness below which a lit box takes white text instead of dark.
 const DARK_FILL: f32 = 0.35;
+/// Points from the jog's centre within which a drag does not turn it.
+const JOG_DEAD_ZONE: f32 = 8.0;
 /// A record's speed: the jog's marker turns at this at the original tempo.
 const JOG_RPM: f64 = 100.0 / 3.0;
 /// The share of the panels' width each deck panel takes; the mixer has the rest.
@@ -1073,8 +1075,18 @@ fn jog(ui: &mut Ui, view: &DeckView, accent: Color32, sink: &mut Sink<'_>) {
         let mut amount = 0.0;
         if let Some((from, to)) = drag_path(&response) {
             let (from, to) = (from - rect.center(), to - rect.center());
-            let turned = (from.x * to.y - from.y * to.x).atan2(from.dot(to));
+            // Round the hub the angle swings wildly: moves there are ignored.
+            let turned = if from.length().min(to.length()) < JOG_DEAD_ZONE {
+                0.0
+            } else {
+                (from.x * to.y - from.y * to.x).atan2(from.dot(to))
+            };
             amount = turned / std::f32::consts::TAU * f32::from(view.jog_steps_per_turn);
+        }
+        // The platter is touched once a drag starts, never by a click, which would hold a
+        // playing deck; a release always reaches the press.
+        if dragging || !ui.input(|i| i.pointer.primary_down()) {
+            sink.button(&response, Action::JogTouch(view.deck));
         }
         let steps = carry_steps(ui.ctx(), id, amount, dragging);
         if steps != 0 {
@@ -1083,7 +1095,6 @@ fn jog(ui: &mut Ui, view: &DeckView, accent: Color32, sink: &mut Sink<'_>) {
                 Input::Relative(steps),
             ));
         }
-        sink.button(&response, Action::JogTouch(view.deck));
     }
     let painter = ui.painter();
     let centre = rect.center();
