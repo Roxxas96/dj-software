@@ -52,8 +52,11 @@ knob is turned; the soft takeover waits until the knob reaches the value on scre
 
 | Control | Gesture |
 |---|---|
-| Knobs (gain, EQ, filter) | Drag up or down; hold Shift for a fine move (a quarter of the speed); scroll over it; double-click to reset to centre |
-| Faders, crossfader, pitch slider, master and headphone levels | Click or drag; double-click to reset (the pitch slider to 0 %, the crossfader to the centre) |
+| Knobs (gain, EQ, filter, HEADPHONE level, MIX) | Drag up or down; hold Shift for a fine move (a quarter of the speed); scroll over it; double-click to reset: gain, EQ and filter to centre, HEADPHONE to 0.8, MIX to 0.0 (cue only) |
+| Channel faders | Click or drag; no double-click reset |
+| Crossfader, pitch slider | Click or drag; double-click resets them (the crossfader to the centre, the pitch slider to 0 %) |
+| Master level | A bar: click or drag; double-click resets it to 0.8, its default |
+| Auto-loop size button | Click to set a loop of that many beats |
 | Buttons (PLAY, CUE, SYNC, PFL, LOOP IN and OUT, the loop arrows, VINYL, SLIP, KEYLOCK, the pad-mode arrows) | Click; a button that the controller holds (CUE, a loop roll) is held while the mouse button is down |
 | Pads | Click to play; Shift-click for the shifted action (beat jump shift); right-click a hotcue pad to name and colour it |
 | Hotcue flags on a waveform | Right-click to open the same editor |
@@ -61,7 +64,8 @@ knob is turned; the soft takeover waits until the knob reaches the value on scre
 | Waveform lane | Drag sideways to scratch; scroll or pinch to zoom |
 | Overview waveform | Click to seek |
 | Time under the BPM | Click to cycle remaining, total and elapsed |
-| FX slots, pad mode | Pick from the dropdown |
+| FX slots | Click a slot's name to toggle that effect on or off; its arrow opens the effect list; the FX level bar takes a click or drag |
+| Pad mode | Pick from the dropdown, or step through the modes with the ◀ ▶ arrows beside it (they wrap round) |
 | Browser tree | Click to select; the arrow, or a double-click, opens a drive or folder; right-click a playlist for Rename and Delete, and the Playlists node for New playlist |
 | Browser list | Click to select; Shift-click for a range, Cmd/Ctrl-click to add or remove a row; double-click loads on the first free deck; right-click for the track menu; scroll to move |
 | Search box and column headers | Type to search; Escape clears it; click a header to sort, again to reverse |
@@ -73,7 +77,7 @@ stay in the library. Dropping a playlist's own rows back on its tree row does no
 
 ### Playlists from the tree
 
-"New playlist…" on the Playlists node asks for a name and selects the new playlist.
+"New playlist…" on the Playlists node asks for a name and, when the Playlists node is open, selects the new playlist.
 "Rename…" asks for the new name, starting with the current one selected. "Delete…" asks
 "Delete <name>? Its tracks stay in the library." and has Delete and Cancel, with Cancel
 focused, so Enter alone never deletes. In the name dialogs Enter means OK and Escape means
