@@ -421,6 +421,99 @@ fn empty_decks_keep_their_height() {
     );
 }
 
+/// A short silent WAV at `path` whose ID3 tag holds a 16-pixel red PNG as its front cover.
+fn wav_with_cover(path: &std::path::Path) {
+    use lofty::config::{ParseOptions, WriteOptions};
+    use lofty::file::AudioFile;
+    use lofty::id3::v2::{AttachedPictureFrame, Frame, Id3v2Tag};
+    use lofty::iff::wav::WavFile;
+    use lofty::picture::{MimeType, Picture, PictureType};
+    let frames = 441u32;
+    let mut bytes = b"RIFF".to_vec();
+    bytes.extend_from_slice(&(36 + frames * 2).to_le_bytes());
+    bytes.extend_from_slice(b"WAVEfmt ");
+    bytes.extend_from_slice(&16u32.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&44_100u32.to_le_bytes());
+    bytes.extend_from_slice(&88_200u32.to_le_bytes());
+    bytes.extend_from_slice(&2u16.to_le_bytes());
+    bytes.extend_from_slice(&16u16.to_le_bytes());
+    bytes.extend_from_slice(b"data");
+    bytes.extend_from_slice(&(frames * 2).to_le_bytes());
+    bytes.resize(bytes.len() + (frames * 2) as usize, 0);
+    std::fs::write(path, bytes).unwrap();
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(16, 16, image::Rgba([255, 0, 0, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let mut tag = Id3v2Tag::new();
+    tag.insert(Frame::Picture(AttachedPictureFrame::new(
+        lofty::TextEncoding::Latin1,
+        Picture::unchecked(png)
+            .pic_type(PictureType::CoverFront)
+            .mime_type(MimeType::Png)
+            .build(),
+    )));
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .unwrap();
+    let mut wav = WavFile::read_from(&mut file, ParseOptions::new()).unwrap();
+    wav.set_id3v2(tag);
+    wav.save_to(&mut file, WriteOptions::default()).unwrap();
+}
+
+#[test]
+fn the_deck_header_draws_the_track_s_embedded_cover() {
+    let path = std::env::temp_dir().join(format!("open-jockey-cover-{}.wav", std::process::id()));
+    wav_with_cover(&path);
+    let (snapshot, mut frame) = loaded();
+    frame.decks[0].as_mut().unwrap().path = path.clone();
+    let mut reads = DeckReads::default();
+    reads.decks[0].0 = snapshot;
+    let sections = sections(Layout::Pro);
+    let mut panels = DeckPanels::default();
+    let mut covers = Covers::default();
+    let ctx = egui::Context::default();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let drawn = loop {
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.set_min_size(egui::vec2(1440.0, 400.0));
+            panels.show_reads(
+                ui,
+                &frame,
+                &reads,
+                &mut covers,
+                &sections,
+                &mut Sink::new(&channel().0, &mut HeldButtons::default()),
+            );
+        });
+        output.textures_delta.clear();
+        let mut stack: Vec<egui::Shape> = output.shapes.into_iter().map(|c| c.shape).collect();
+        let mut textured = false;
+        while let Some(shape) = stack.pop() {
+            match shape {
+                egui::Shape::Vec(inner) => stack.extend(inner),
+                egui::Shape::Mesh(mesh) => {
+                    textured |= mesh.texture_id != egui::TextureId::default()
+                }
+                egui::Shape::Rect(rect) => {
+                    textured |= rect.fill_texture_id() != egui::TextureId::default();
+                }
+                _ => {}
+            }
+        }
+        if textured || std::time::Instant::now() > deadline {
+            break textured;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    let _ = std::fs::remove_file(&path);
+    assert!(drawn, "the header never drew the cover");
+}
+
 /// Every filled rect and every rect outline drawn for the two decks of `frame`.
 fn deck_rects(frame: &ControlFrame) -> Vec<egui::epaint::RectShape> {
     let mut reads = DeckReads::default();
