@@ -1266,3 +1266,159 @@ fn rows_dropped_back_on_their_own_playlist_do_nothing() {
         }]
     );
 }
+
+/// Right-clicks the tree row labelled `row` and clicks the menu item `item`.
+fn tree_menu(harness: &mut Harness<'_, Clicking>, row: &str, item: &str) {
+    let at = at_label(harness, row);
+    click_with(harness, PointerButton::Secondary, at);
+    harness.run_steps(2);
+    let item = at_label(harness, item);
+    click(harness, item);
+    harness.run_steps(3);
+}
+
+fn playlist_harness() -> Harness<'static, Clicking> {
+    clicking(with_playlists(numbered(0, 20, 20)), Decks::default())
+}
+
+#[test]
+fn new_playlist_from_the_playlists_node() {
+    let mut harness = playlist_harness();
+    // Only the Playlists node offers it; a playlist offers rename and delete.
+    tree_menu(&mut harness, "Playlists", "New playlist\u{2026}");
+    harness.get_by_label("New playlist");
+    // The name field has the keyboard: typing and OK send the step.
+    harness.event(Event::Text("Fresh".into()));
+    harness.run_steps(2);
+    let ok = at_label(&harness, "OK");
+    click(&mut harness, ok);
+    harness.run_steps(2);
+    assert_eq!(
+        harness.state().steps,
+        [LibraryStep::CreatePlaylist {
+            name: "Fresh".into()
+        }]
+    );
+    assert!(harness.query_by_label("OK").is_none());
+
+    // Enter means OK.
+    harness.state_mut().steps.clear();
+    tree_menu(&mut harness, "Playlists", "New playlist\u{2026}");
+    harness.event(Event::Text("Second".into()));
+    harness.run_steps(2);
+    harness.key_press(Key::Enter);
+    harness.run_steps(3);
+    assert_eq!(
+        harness.state().steps,
+        [LibraryStep::CreatePlaylist {
+            name: "Second".into()
+        }]
+    );
+    assert!(harness.query_by_label("OK").is_none());
+
+    // Escape means Cancel, and so does Cancel.
+    harness.state_mut().steps.clear();
+    tree_menu(&mut harness, "Playlists", "New playlist\u{2026}");
+    harness.event(Event::Text("Never".into()));
+    harness.run_steps(2);
+    harness.key_press(Key::Escape);
+    harness.run_steps(3);
+    assert!(harness.query_by_label("OK").is_none());
+    tree_menu(&mut harness, "Playlists", "New playlist\u{2026}");
+    let cancel = at_label(&harness, "Cancel");
+    click(&mut harness, cancel);
+    harness.run_steps(3);
+    assert!(harness.query_by_label("OK").is_none());
+    assert_eq!(harness.state().steps, []);
+
+    // An empty name cannot be sent from the window either.
+    tree_menu(&mut harness, "Playlists", "New playlist\u{2026}");
+    let ok = at_label(&harness, "OK");
+    click(&mut harness, ok);
+    harness.key_press(Key::Enter);
+    harness.run_steps(3);
+    assert_eq!(harness.state().steps, []);
+    harness.get_by_label("OK");
+}
+
+#[test]
+fn a_playlist_menu_has_no_new_and_the_node_no_delete() {
+    let mut harness = playlist_harness();
+    let at = at_label(&harness, "Peak");
+    click_with(&mut harness, PointerButton::Secondary, at);
+    harness.run_steps(2);
+    harness.get_by_label("Rename\u{2026}");
+    harness.get_by_label("Delete\u{2026}");
+    assert!(harness.query_by_label("New playlist\u{2026}").is_none());
+}
+
+#[test]
+fn rename_playlist() {
+    let mut harness = playlist_harness();
+    tree_menu(&mut harness, "Peak", "Rename\u{2026}");
+    harness.get_by_label("Rename playlist");
+    // The field holds the current name, selected: typing replaces it.
+    harness.event(Event::Text("Closing".into()));
+    harness.run_steps(2);
+    harness.key_press(Key::Enter);
+    harness.run_steps(3);
+    assert_eq!(
+        harness.state().steps,
+        [LibraryStep::RenamePlaylist {
+            playlist: 41,
+            name: "Closing".into()
+        }]
+    );
+    assert!(harness.query_by_label("OK").is_none());
+}
+
+#[test]
+fn delete_asks_first_and_cancel_keeps_it() {
+    let mut harness = playlist_harness();
+    tree_menu(&mut harness, "Peak", "Delete\u{2026}");
+    harness.get_by_label("Delete playlist");
+    harness.get_by_label("Delete Peak? Its tracks stay in the library.");
+    assert_eq!(harness.state().steps, []);
+    // Cancel has the focus: Enter cancels.
+    harness.key_press(Key::Enter);
+    harness.run_steps(3);
+    assert!(harness.query_by_label("Delete playlist").is_none());
+    assert_eq!(harness.state().steps, []);
+    // Escape and the Cancel button too.
+    tree_menu(&mut harness, "Peak", "Delete\u{2026}");
+    harness.key_press(Key::Escape);
+    harness.run_steps(3);
+    assert!(harness.query_by_label("Delete playlist").is_none());
+    tree_menu(&mut harness, "Peak", "Delete\u{2026}");
+    let cancel = at_label(&harness, "Cancel");
+    click(&mut harness, cancel);
+    harness.run_steps(3);
+    assert!(harness.query_by_label("Delete playlist").is_none());
+    assert_eq!(harness.state().steps, []);
+}
+
+#[test]
+fn delete_confirmed_deletes() {
+    let mut harness = playlist_harness();
+    tree_menu(&mut harness, "Peak", "Delete\u{2026}");
+    let delete = at_label(&harness, "Delete");
+    click(&mut harness, delete);
+    harness.run_steps(3);
+    assert_eq!(
+        harness.state().steps,
+        [LibraryStep::DeletePlaylist { playlist: 41 }]
+    );
+    assert!(harness.query_by_label("Delete playlist").is_none());
+}
+
+#[test]
+fn the_press_that_closes_a_dialog_reaches_nothing_under_it() {
+    let mut harness = playlist_harness();
+    tree_menu(&mut harness, "Peak", "Delete\u{2026}");
+    // A click on a track row outside the dialog closes it and selects nothing.
+    let row = at_label(&harness, "Song 3");
+    click(&mut harness, row);
+    harness.run_steps(3);
+    assert!(harness.query_by_label("Delete playlist").is_none());
+    assert_eq!(harness.state().steps, []);
+}

@@ -51,6 +51,9 @@ pub enum Job {
     },
     /// Write a playlist edit from the window, then reread the browser to show it.
     EditPlaylist(WriteOp),
+    /// Make the playlist `name` (already checked), reread the browser, and highlight the
+    /// new playlist's tree row.
+    CreatePlaylist(String),
     Grid {
         deck: DeckId,
         track: i64,
@@ -223,6 +226,39 @@ fn run(
                 match browser.refresh() {
                     Ok(view) => {
                         let _ = events.send(Event::Browser(view));
+                    }
+                    Err(e) => say(format!("warning: library browser: {}", safe(e))),
+                }
+            }
+            Job::CreatePlaylist(name) => {
+                let created = lib.writer().submit_wait(WriteOp::CreatePlaylist { name });
+                let id = match created {
+                    Ok(library::WriteOutcome::Created { id }) => Some(id),
+                    Ok(_) => None,
+                    Err(e) => {
+                        say(format!(
+                            "warning: could not create the playlist: {}",
+                            safe(e)
+                        ));
+                        None
+                    }
+                };
+                match browser.refresh() {
+                    Ok(view) => {
+                        // Its row is there when the Playlists node is open.
+                        let row = id.and_then(|id| {
+                            view.tree.iter().position(|row| row.playlist == Some(id))
+                        });
+                        let shown = match row {
+                            Some(at) => browser.edit(BrowserEdit::SelectTree(at)),
+                            None => Ok(view),
+                        };
+                        match shown {
+                            Ok(view) => {
+                                let _ = events.send(Event::Browser(view));
+                            }
+                            Err(e) => say(format!("warning: library browser: {}", safe(e))),
+                        }
                     }
                     Err(e) => say(format!("warning: library browser: {}", safe(e))),
                 }

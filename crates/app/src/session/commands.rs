@@ -147,6 +147,21 @@ fn library_step(
                 parts.event(why);
             }
         }
+        LibraryStep::CreatePlaylist { name } => {
+            if let Err(why) = library.create_playlist(&name) {
+                parts.event(why);
+            }
+        }
+        LibraryStep::RenamePlaylist { playlist, name } => {
+            if let Err(why) = library.rename_playlist(playlist, &name) {
+                parts.event(why);
+            }
+        }
+        LibraryStep::DeletePlaylist { playlist } => {
+            if let Err(why) = library.delete_playlist(playlist) {
+                parts.event(why);
+            }
+        }
         LibraryStep::MoveInPlaylist { playlist, from, to } => {
             if let Err(why) = library.move_in_playlist(playlist, &from, to) {
                 parts.event(why);
@@ -1243,6 +1258,144 @@ mod tests {
         assert!(!events.iter().any(|e| e.contains("Sine")), "{events:?}");
         let held = decks.library.deck_view(deck, &decks.engine.deck(deck));
         assert_eq!(held.map(|view| view.row.id), Some(7));
+        drop(decks.renderer);
+    }
+
+    /// The playlists the library holds, as (id, name).
+    fn playlists(decks: &Labelled) -> Vec<(i64, String)> {
+        let reader = decks.library.library().reader().unwrap();
+        let all = reader.playlists().unwrap();
+        all.into_iter().map(|p| (p.id, p.name)).collect()
+    }
+
+    /// Sends `step` from the window and returns the events the session made of it at once.
+    fn events_of(decks: &mut Labelled, step: ui::LibraryStep) -> Vec<String> {
+        let mut parts = FrameParts::new(&Config::default());
+        let (tx, rx) = channel();
+        tx.send(UiCommand::Library(step)).unwrap();
+        decks.drain(&rx, &mut parts);
+        parts.events.iter().map(|(_, text)| text.clone()).collect()
+    }
+
+    #[test]
+    fn creating_a_playlist_writes_it_and_selects_it() {
+        let mut decks = labelled();
+        let step = ui::LibraryStep::CreatePlaylist {
+            name: "Fresh".into(),
+        };
+        assert!(events_of(&mut decks, step).is_empty());
+        poll_until(&mut decks, |library, _| {
+            library.browser().is_some_and(|view| {
+                view.playlist.is_some() && view.path == "Playlists \u{25b8} Fresh"
+            })
+        });
+        let held = playlists(&decks);
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].1, "Fresh");
+        let selected = decks.library.browser().unwrap().playlist;
+        assert_eq!(selected, Some(held[0].0));
+        drop(decks.renderer);
+    }
+
+    #[test]
+    fn renaming_a_playlist_writes_the_new_name() {
+        let mut decks = labelled();
+        let playlist = peak(&decks, &[7]);
+        let step = ui::LibraryStep::RenamePlaylist {
+            playlist,
+            name: "Closing".into(),
+        };
+        assert!(events_of(&mut decks, step).is_empty());
+        poll_until(&mut decks, |library, _| {
+            library.browser().is_some_and(|view| {
+                view.tree
+                    .iter()
+                    .any(|row| row.playlist == Some(playlist) && row.label == "Closing")
+            })
+        });
+        assert_eq!(playlists(&decks), [(playlist, "Closing".to_owned())]);
+        drop(decks.renderer);
+    }
+
+    #[test]
+    fn deleting_a_playlist_keeps_its_tracks() {
+        let mut decks = labelled();
+        let playlist = peak(&decks, &[7]);
+        open_playlist(&mut decks, playlist);
+        let step = ui::LibraryStep::DeletePlaylist { playlist };
+        assert!(events_of(&mut decks, step).is_empty());
+        poll_until(&mut decks, |library, _| {
+            library
+                .browser()
+                .is_some_and(|view| view.tree.iter().all(|row| row.playlist.is_none()))
+        });
+        assert!(playlists(&decks).is_empty());
+        let reader = decks.library.library().reader().unwrap();
+        assert!(reader.track(7).unwrap().is_some());
+        drop(decks.renderer);
+    }
+
+    #[test]
+    fn an_empty_playlist_name_is_refused() {
+        let mut decks = labelled();
+        let playlist = peak(&decks, &[]);
+        for name in ["", "   "] {
+            let create = ui::LibraryStep::CreatePlaylist { name: name.into() };
+            assert_eq!(events_of(&mut decks, create), ["A playlist needs a name"]);
+            let rename = ui::LibraryStep::RenamePlaylist {
+                playlist,
+                name: name.into(),
+            };
+            assert_eq!(events_of(&mut decks, rename), ["A playlist needs a name"]);
+        }
+        // A write refused is not made, even a while later.
+        let until = Instant::now() + std::time::Duration::from_millis(100);
+        poll_until(&mut decks, |_, _| Instant::now() > until);
+        assert_eq!(playlists(&decks), [(playlist, "Peak".to_owned())]);
+        drop(decks.renderer);
+    }
+
+    #[test]
+    fn a_duplicate_playlist_name_is_refused_but_case_counts() {
+        let mut decks = labelled();
+        let peak_id = peak(&decks, &[]);
+        let other = match decks
+            .library
+            .library()
+            .writer()
+            .submit_wait(library::WriteOp::CreatePlaylist {
+                name: "Warm".into(),
+            })
+            .unwrap()
+        {
+            library::WriteOutcome::Created { id } => id,
+            other => panic!("unexpected outcome {other:?}"),
+        };
+        let said = ["There is already a playlist called Peak"];
+        let create = ui::LibraryStep::CreatePlaylist {
+            name: "Peak".into(),
+        };
+        assert_eq!(events_of(&mut decks, create), said);
+        let rename = ui::LibraryStep::RenamePlaylist {
+            playlist: other,
+            name: "Peak".into(),
+        };
+        assert_eq!(events_of(&mut decks, rename), said);
+        // Renaming to its own name is no clash; another case is another name.
+        let same = ui::LibraryStep::RenamePlaylist {
+            playlist: peak_id,
+            name: "Peak".into(),
+        };
+        assert!(events_of(&mut decks, same).is_empty());
+        let lower = ui::LibraryStep::CreatePlaylist {
+            name: "peak".into(),
+        };
+        assert!(events_of(&mut decks, lower).is_empty());
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
+        while playlists(&decks).len() < 3 {
+            assert!(Instant::now() < deadline, "{:?}", playlists(&decks));
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         drop(decks.renderer);
     }
 }

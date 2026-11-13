@@ -14,6 +14,7 @@ pub mod layout;
 mod menu;
 pub mod mixer;
 mod model;
+mod playlist_dialog;
 pub mod settings;
 pub mod sideview;
 pub mod theme;
