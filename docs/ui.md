@@ -2,8 +2,8 @@
 
 `open-jockey` with no command opens a window that mirrors a Pioneer DDJ-SB3 in the layout of
 VirtualDJ's Pro view: scrolling waveforms, deck panels, the mixer and a folder-tree browser.
-You perform on the controller (transport, jogs, faders, pads); the window sets things up: its
-layout, colours and displays, a pad mode or an effect, and the settings.
+Everything on screen works with the mouse, so you can perform without a controller (see
+[Mouse](#mouse)); a DDJ-SB3 drives the same controls, and the window shows what it does.
 
 ```bash
 cargo run --release -p open-jockey                       # the default configuration file
@@ -42,6 +42,61 @@ from the mixer, and the states, FX and pads on the outside.
 The deck row is as tall as its contents, so the browser takes all the rest of the height.
 The same holds for every layout and for 4-Decks. Dragging the deck divider overrides that
 height (see [Dividers](#dividers-folding-and-the-sideview)).
+
+## Mouse
+
+Every control the window draws can be used with the mouse. A mouse control does what the
+controller input bound to it does (the window sends the same action), so a controller and the
+mouse can be used together: a knob or fader the mouse moved does not jump when the SB3's
+knob is turned; the soft takeover waits until the knob reaches the value on screen.
+
+| Control | Gesture |
+|---|---|
+| Knobs (gain, EQ, filter) | Drag up or down; hold Shift for a fine move (a quarter of the speed); scroll over it; double-click to reset to centre |
+| Faders, crossfader, pitch slider, master and headphone levels | Click or drag; double-click to reset (the pitch slider to 0 %, the crossfader to the centre) |
+| Buttons (PLAY, CUE, SYNC, PFL, LOOP IN and OUT, the loop arrows, VINYL, SLIP, KEYLOCK, the pad-mode arrows) | Click; a button that the controller holds (CUE, a loop roll) is held while the mouse button is down |
+| Pads | Click to play; Shift-click for the shifted action (beat jump shift); right-click a hotcue pad to name and colour it |
+| Hotcue flags on a waveform | Right-click to open the same editor |
+| Jog | Drag round it to scratch (clockwise goes forward) |
+| Waveform lane | Drag sideways to scratch; scroll or pinch to zoom |
+| Overview waveform | Click to seek |
+| Time under the BPM | Click to cycle remaining, total and elapsed |
+| FX slots, pad mode | Pick from the dropdown |
+| Browser tree | Click to select; the arrow, or a double-click, opens a drive or folder; right-click a playlist for Rename and Delete, and the Playlists node for New playlist |
+| Browser list | Click to select; Shift-click for a range, Cmd/Ctrl-click to add or remove a row; double-click loads on the first free deck; right-click for the track menu; scroll to move |
+| Search box and column headers | Type to search; Escape clears it; click a header to sort, again to reverse |
+| Tracks | Drag onto a deck to load it, onto a playlist in the tree to add it (in list order), or inside an open playlist to reorder it |
+
+The track menu loads on a deck ("Load on deck N"), adds the selected tracks to a playlist
+("Add to playlist") and, in a playlist, removes them ("Remove from playlist"). The tracks
+stay in the library. Dropping a playlist's own rows back on its tree row does nothing.
+
+### Playlists from the tree
+
+"New playlist…" on the Playlists node asks for a name and selects the new playlist.
+"Rename…" asks for the new name, starting with the current one selected. "Delete…" asks
+"Delete <name>? Its tracks stay in the library." and has Delete and Cancel, with Cancel
+focused, so Enter alone never deletes. In the name dialogs Enter means OK and Escape means
+Cancel; OK is greyed out for an empty name. A name that is empty, or that another playlist
+already has (the same letters, capitals included), is refused with a message in the events.
+
+### Safety rules
+
+- **A load onto a playing deck is refused.** A double-click, the track menu or a drop onto a
+  deck that plays says "Deck N is playing" and leaves its track in place. The SB3's LOAD
+  button is not covered; see [Known limits](#known-limits).
+- **Closing a menu or dialog never triggers what is under it.** The press that closes the
+  hotcue editor or a playlist dialog by clicking outside is used up by the close: it plays no
+  pad, selects no row and moves no control.
+- **A plain click on the jog or on a waveform does nothing.** Only a drag touches the
+  platter, so a stray click never stops or nudges a playing track. (Clicking the overview
+  seeks, on purpose.)
+- **Deleting is never one click.** A hotcue is deleted from its own menu item, and a
+  playlist after a question.
+- **Playlist edits check the view they were made from.** A drop, a reorder or a removal
+  names the tracks the window saw and where. If the playlist changed since (another window,
+  the CLI, an import), nothing is written and the events say "The playlist changed; try
+  again".
 
 ## What each area shows
 
@@ -291,6 +346,9 @@ window's change is added to the file as it now is. See [config.md](config.md).
 
 - One audio device: master and headphones must be channels of the same device. Two devices
   come in a later plan.
-- The window sets things up (the LAYOUT menu, the dropdowns, the settings window); performing
-  (transport, jog, faders, pads) and the library's actions (browsing and loading) are on the
-  controller only.
+- The USER buttons are not built.
+- There are no keyboard shortcuts: everything is the mouse, or the controller.
+- The PAD SCRATCH mode's pads are not clickable; the controller's pads do the scratch
+  routine, and the on-screen pads of that mode are not its pads.
+- The SB3's LOAD button still loads onto a playing deck (the refusal covers the window's
+  loads, which are the ones a misclick makes).
