@@ -302,6 +302,53 @@ fn dragging_a_channel_fader_sends_absolute() {
     assert!(value > 0.95, "got {value}");
 }
 
+/// The first value a press at `at` sends for `action`, holding still for a few frames.
+fn first_value_pressed(
+    harness: &mut Harness<'_>,
+    received: &Receiver<UiCommand>,
+    at: Pos2,
+    action: Action,
+) -> Option<f32> {
+    harness.event(Event::PointerMoved(at));
+    harness.run_steps(1);
+    harness.event(button(true, at));
+    harness.run_steps(3);
+    harness.event(button(false, at));
+    harness.run_steps(2);
+    received.try_iter().find_map(|command| match command {
+        UiCommand::Action(a, Input::Absolute(v)) if a == action => Some(v),
+        _ => None,
+    })
+}
+
+#[test]
+fn a_press_on_a_handle_takes_it_where_it_is() {
+    let mut frame = ControlFrame::default();
+    frame.control.decks[1].fader = 0.5;
+    frame.control.crossfader = 0.3;
+    frame.control.master_level = 0.6;
+    let (mut harness, received) = sending(frame);
+    let layout = mixer_layout(MIXER, true, true);
+    // On the handle, a little off its middle: no jump.
+    let fader = layout.sides[1].fader;
+    let handle = pos2(fader.center().x, fader.center().y + 3.0);
+    let channel = Action::Fader(deck(2));
+    let value = first_value_pressed(&mut harness, &received, handle, channel);
+    assert_eq!(value, Some(0.5));
+    let slot = layout.crossfader.shrink2(vec2(5.0, 0.0));
+    let x = slot.left() + 0.3 * slot.width() + 3.0;
+    let at = pos2(x, slot.center().y);
+    let value = first_value_pressed(&mut harness, &received, at, Action::Crossfader);
+    assert!(value.is_some_and(|v| (v - 0.3).abs() < 1e-4), "{value:?}");
+    let bar = layout.top.master_bar;
+    let at = pos2(bar.left() + 0.6 * bar.width() - 2.0, bar.center().y);
+    let value = first_value_pressed(&mut harness, &received, at, Action::MasterLevel);
+    assert!(value.is_some_and(|v| (v - 0.6).abs() < 1e-4), "{value:?}");
+    // Off the handle, the track jumps.
+    let value = first_value_pressed(&mut harness, &received, fader.center_top(), channel);
+    assert_eq!(value, Some(1.0));
+}
+
 #[test]
 fn clicking_pfl_sends_a_press_and_release() {
     let (mut harness, received) = sending(ControlFrame::default());

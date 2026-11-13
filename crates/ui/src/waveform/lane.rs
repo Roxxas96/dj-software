@@ -6,16 +6,14 @@ use std::time::Instant;
 
 use actions::{Action, Input, Side};
 use analysis::Waveform;
-use egui::{
-    Align2, Color32, FontId, Mesh, Painter, PointerButton, Pos2, Rect, Shape, Ui, pos2, vec2,
-};
+use egui::{Align2, Color32, FontId, Mesh, Painter, Pos2, Rect, Shape, Ui, pos2, vec2};
 use engine::{DeckId, DeckSnapshot, Hotcue, HotcueSlot, PLATTER_SECONDS_PER_TURN};
 
 use super::colour::band_colours;
 use super::styles::{self, MAX_BARS};
 use super::{Playhead, ZoomGesture, ticks};
 use crate::command::UiCommand;
-use crate::controls::{Sink, carry_steps, drag_path};
+use crate::controls::{Sink, carry_steps, context_press, drag_path, moved_drag};
 use crate::deck::DeckReads;
 use crate::hotcue_menu::{self, HotcueTarget};
 use crate::model::{ControlFrame, HotcueMark};
@@ -103,9 +101,9 @@ impl Lanes {
         };
         let (area, response) =
             ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
-        // A right-click on a hotcue flag opens its editor.
-        let right_click = response
-            .secondary_clicked()
+        // A right-click on a hotcue flag opens its editor (on macOS, Ctrl + click too).
+        let right_click = context_press(&response, ui)
+            .opened
             .then(|| response.interact_pointer_pos())
             .flatten();
         let mut flag = None;
@@ -221,13 +219,14 @@ impl Lanes {
             carry_steps(ui.ctx(), response.id, 0.0, false);
             // A late release still goes to the deck touched.
             if let Some(deck) = lanes.iter().flatten().next().map(|l| l.0) {
-                sink.button(response, Action::JogTouch(deck));
+                sink.release(response, Action::JogTouch(deck));
             }
             return;
         }
-        // Only a drag touches the platter: a click would hold a playing deck. Its deck is
-        // the one under the press, and stays so for the whole drag.
-        let dragging = response.dragged_by(PointerButton::Primary);
+        // Only a drag that moved touches the platter: a click, even a slow one, would hold
+        // a playing deck. Its deck is the one under the press, and stays so for the whole
+        // drag.
+        let dragging = moved_drag(response);
         if !dragging {
             return;
         }

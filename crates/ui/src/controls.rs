@@ -46,10 +46,44 @@ pub fn knob_input(response: &Response, value: f32, reset: f32, ui: &Ui) -> Optio
     (delta != 0.0).then(|| Input::Absolute((value + delta).clamp(0.0, 1.0)))
 }
 
+/// How far, in points, the pointer must go from where it was pressed before a press is a
+/// drag: egui's own click distance.
+pub const DRAG_DISTANCE: f32 = 6.0;
+
+/// Whether the primary-button press on `response` is a drag that has moved: the pointer
+/// went [`DRAG_DISTANCE`] from the press at some point of it. egui also calls a press held
+/// still past its click time a drag; that one is no drag here, so a slow click grabs
+/// nothing. Call it every frame the widget is shown, so it forgets a drag that ended.
+pub fn moved_drag(response: &Response) -> bool {
+    let key = response.id.with("drag_moved");
+    if !response.dragged_by(PointerButton::Primary) {
+        response.ctx.data_mut(|d| d.remove::<bool>(key));
+        return false;
+    }
+    if response
+        .ctx
+        .data(|d| d.get_temp::<bool>(key))
+        .unwrap_or(false)
+    {
+        return true;
+    }
+    let moved = response.ctx.input(|i| {
+        let pointer = &i.pointer;
+        pointer
+            .press_origin()
+            .zip(pointer.latest_pos())
+            .is_some_and(|(from, to)| from.distance(to) >= DRAG_DISTANCE)
+    });
+    if moved {
+        response.ctx.data_mut(|d| d.insert_temp(key, true));
+    }
+    moved
+}
+
 /// Where the primary-button drag of `response` went since the last frame, as the pointer's
-/// previous and present positions, or `None` when it did not move or is not a drag. A
-/// drag starts a few points after the press, so the first leg runs from the press itself:
-/// the points that told it from a click are not lost.
+/// previous and present positions, or `None` when it did not move or is not a drag that
+/// has moved ([`moved_drag`]). The first leg runs from the press itself: the points that
+/// told the drag from a click are not lost.
 pub fn drag_path(response: &Response) -> Option<(Pos2, Pos2)> {
     let key = response.id.with("drag_last");
     let held =
@@ -62,7 +96,7 @@ pub fn drag_path(response: &Response) -> Option<(Pos2, Pos2)> {
     let last = response
         .ctx
         .data_mut(|d| *d.get_temp_mut_or_insert_with(key, || pos));
-    if !response.dragged_by(PointerButton::Primary) {
+    if !moved_drag(response) {
         return None;
     }
     response.ctx.data_mut(|d| d.insert_temp(key, pos));
@@ -110,44 +144,134 @@ pub fn turn_knob(response: &Response, shown: f32, reset: f32, ui: &Ui) -> Option
     Some(input)
 }
 
+/// A fader's handle, for [`grab_fader`]: where it is (the fader's value, as
+/// [`fader_input`] maps it) and how far it reaches either side of that point along the
+/// track, in points.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Handle {
+    pub value: f32,
+    pub reach: f32,
+}
+
+/// What a fader keeps for the length of a press: how far the pointer is from the point it
+/// sets (0, or where it took the handle), and the value it sent last.
+#[derive(Debug, Clone, Copy, Default)]
+struct FaderPress {
+    offset: f32,
+    sent: Option<f32>,
+}
+
 /// The fader's value for a click or a drag at the pointer, mapped along `track` (the
 /// handle's travel): a click jumps there, a drag follows. A vertical fader has 1 at the
 /// top, a horizontal one at the right; a control that runs the other way inverts the
 /// value. A double-click gives `reset` when there is one. `None` when the pointer is not
-/// pressing the fader.
+/// pressing the fader, or the value is the one it sent last in this press: a press held
+/// still sends once. A tap (the press and the release in one frame) sets the value too.
 pub fn fader_input(
     response: &Response,
     track: Rect,
     vertical: bool,
     reset: Option<f32>,
 ) -> Option<Input> {
+    fader_press(response, track, vertical, reset, None)
+}
+
+/// [`fader_input`] for a fader whose `handle` the pointer can take: a press on the handle
+/// moves it from where it is, by as far as the pointer goes, without a jump; a press on
+/// the track elsewhere jumps there.
+pub fn grab_fader(
+    response: &Response,
+    track: Rect,
+    vertical: bool,
+    reset: Option<f32>,
+    handle: Handle,
+) -> Option<Input> {
+    fader_press(response, track, vertical, reset, Some(handle))
+}
+
+fn fader_press(
+    response: &Response,
+    track: Rect,
+    vertical: bool,
+    reset: Option<f32>,
+    handle: Option<Handle>,
+) -> Option<Input> {
+    let ctx = &response.ctx;
+    let key = response.id.with("fader_press");
     if let Some(reset) = reset
         && response.double_clicked_by(PointerButton::Primary)
     {
+        ctx.data_mut(|d| d.remove::<FaderPress>(key));
         return Some(Input::Absolute(reset.clamp(0.0, 1.0)));
     }
     let pressing = response.dragged_by(PointerButton::Primary)
-        || (response.is_pointer_button_down_on()
-            && response.ctx.input(|i| i.pointer.primary_down()));
-    if !pressing {
+        || (response.is_pointer_button_down_on() && ctx.input(|i| i.pointer.primary_down()));
+    let tapped = !pressing && is_tap(response);
+    let pos = response
+        .interact_pointer_pos()
+        .filter(|_| pressing || tapped);
+    let Some(pos) = pos else {
+        ctx.data_mut(|d| d.remove::<FaderPress>(key));
         return None;
-    }
-    let pos = response.interact_pointer_pos()?;
-    let value = if vertical {
-        1.0 - (pos.y - track.min.y) / track.height().max(1.0)
-    } else {
-        (pos.x - track.min.x) / track.width().max(1.0)
     };
-    Some(Input::Absolute(value.clamp(0.0, 1.0)))
+    // Along the track: points from its start, and the value there.
+    let along = |p: Pos2| if vertical { p.y } else { p.x };
+    let length = if vertical {
+        track.height()
+    } else {
+        track.width()
+    }
+    .max(1.0);
+    let start = along(track.min);
+    let value_at = |at: f32| {
+        let share = (at - start) / length;
+        if vertical { 1.0 - share } else { share }
+    };
+    let point_of = |value: f32| {
+        let share = if vertical { 1.0 - value } else { value };
+        start + share * length
+    };
+    let mut press = ctx
+        .data(|d| d.get_temp::<FaderPress>(key))
+        .unwrap_or_else(|| {
+            let origin = ctx.input(|i| i.pointer.press_origin()).unwrap_or(pos);
+            let offset = handle
+                .map(|h| point_of(h.value.clamp(0.0, 1.0)) - along(origin))
+                .filter(|offset| offset.abs() <= handle.map_or(0.0, |h| h.reach))
+                .unwrap_or(0.0);
+            FaderPress { offset, sent: None }
+        });
+    let value = value_at(along(pos) + press.offset).clamp(0.0, 1.0);
+    let changed = press.sent != Some(value);
+    press.sent = Some(value);
+    ctx.data_mut(|d| {
+        if tapped {
+            d.remove::<FaderPress>(key);
+        } else {
+            d.insert_temp(key, press);
+        }
+    });
+    changed.then_some(Input::Absolute(value))
+}
+
+/// Whether the primary button went down and up on `response` within this one frame, as a
+/// trackpad tap can: no frame saw it held.
+fn is_tap(response: &Response) -> bool {
+    response.clicked_by(PointerButton::Primary)
+        && response
+            .ctx
+            .input(|i| i.pointer.button_pressed(PointerButton::Primary))
 }
 
 /// `Press` on the frame the pointer goes down on the button, `Release` on the frame that
-/// press ends (the pointer comes up anywhere, or the window loses it), `None` in
-/// between: a held button never repeats. Whether the button is held is kept in egui's
-/// memory under the widget's id.
+/// press ends (the pointer comes up anywhere), `None` in between: a held button never
+/// repeats. A tap (down and up in one frame) gives `Press`, then `Release` the next frame.
+/// Whether the button is held is kept in egui's memory under the widget's id. egui keeps
+/// the pointer down when the window loses focus: [`HeldButtons::sweep`] releases the
+/// buttons then.
 pub fn button_input(response: &Response) -> Option<Input> {
     let down = response.ctx.input(|i| i.pointer.primary_down());
-    let pressing = response.is_pointer_button_down_on() && down;
+    let pressing = response.is_pointer_button_down_on() && down || is_tap(response);
     let held_id = button_held(response.id);
     let held = response
         .ctx
@@ -159,6 +283,39 @@ pub fn button_input(response: &Response) -> Option<Input> {
     }
     response.ctx.data_mut(|d| d.insert_temp(held_id, next));
     Some(if next { Input::Press } else { Input::Release })
+}
+
+/// How a primary press on a control with a right-click menu counts, from
+/// [`context_press`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContextPress {
+    /// The press is a right-click (on macOS, it began with Ctrl held): it presses nothing.
+    pub right_click: bool,
+    /// The control was right-clicked this frame: open its menu.
+    pub opened: bool,
+}
+
+/// How the press on `response` counts. On macOS Ctrl + click is a right-click, as the
+/// system has it: decided when the press begins, and kept until it ends, whatever Ctrl
+/// does meanwhile. Call it every frame the control is shown.
+pub fn context_press(response: &Response, ui: &Ui) -> ContextPress {
+    let key = response.id.with("ctrl_right_click");
+    let latched = ui.data(|d| d.get_temp::<bool>(key));
+    let right_click =
+        latched.unwrap_or_else(|| cfg!(target_os = "macos") && ui.input(|i| i.modifiers.ctrl));
+    ui.data_mut(|d| {
+        if response.is_pointer_button_down_on() {
+            d.insert_temp(key, right_click);
+        } else {
+            d.remove::<bool>(key);
+        }
+    });
+    let opened =
+        response.secondary_clicked() || right_click && response.clicked_by(PointerButton::Primary);
+    ContextPress {
+        right_click,
+        opened,
+    }
 }
 
 /// Where [`button_input`] keeps whether the button `id` is held.
@@ -220,8 +377,24 @@ impl HeldButtons {
         }
     }
 
-    /// Ends the frame: releases every held button that was not drawn in it, sending the
-    /// release to `commands`. Once the pointer is up, the buttons released that way are
+    /// The release of the button of `response`, which presses `action`, if it is held and
+    /// its press ended this frame; never a press. For a control that presses only on a
+    /// drag, to deliver the release once the drag is over.
+    pub fn release(&mut self, response: &Response, action: Action) -> Option<UiCommand> {
+        let held = response
+            .ctx
+            .data(|d| d.get_temp::<bool>(button_held(response.id)))
+            .unwrap_or(false);
+        if held {
+            self.button(response, action)
+        } else {
+            None
+        }
+    }
+
+    /// Ends the frame: releases every held button that was not drawn in it, or all of them
+    /// when the window has lost focus (egui keeps the pointer down then), sending the
+    /// releases to `commands`. Once the pointer is up, the buttons released that way are
     /// forgotten, so the next press on one counts.
     pub fn sweep(&mut self, ctx: &egui::Context, commands: &Sender<UiCommand>) {
         if !self.swept.is_empty() && !ctx.input(|i| i.pointer.primary_down()) {
@@ -229,9 +402,10 @@ impl HeldButtons {
                 ctx.data_mut(|d| d.remove::<bool>(button_held(id)));
             }
         }
+        let focused = ctx.input(|i| i.focused);
         let swept = &mut self.swept;
         self.held.retain_mut(|held| {
-            if std::mem::take(&mut held.drawn) {
+            if std::mem::take(&mut held.drawn) && focused {
                 return true;
             }
             let _ = commands.send(UiCommand::Action(held.action, Input::Release));
@@ -270,6 +444,14 @@ impl<'a> Sink<'a> {
     /// Sends the press or release of the button of `response`, which presses `action`.
     pub fn button(&mut self, response: &Response, action: Action) {
         if let Some(command) = self.held.button(response, action) {
+            self.send(command);
+        }
+    }
+
+    /// Sends the release of the button of `response`, which presses `action`, if its
+    /// press ended this frame ([`HeldButtons::release`]).
+    pub fn release(&mut self, response: &Response, action: Action) {
+        if let Some(command) = self.held.release(response, action) {
             self.send(command);
         }
     }
@@ -554,6 +736,209 @@ mod tests {
             sent.try_iter().collect::<Vec<_>>(),
             [UiCommand::Action(cue, Input::Press)]
         );
+    }
+
+    /// A fader on [`TRACK`] whose inputs the state records.
+    fn fader_harness() -> Harness<'static, Seen> {
+        let mut harness = Harness::builder().with_step_dt(0.01).build_ui_state(
+            |ui, seen: &mut Seen| {
+                let response =
+                    ui.interact(TRACK, ui.scope_id().with("fader"), Sense::click_and_drag());
+                if let Some(input) = fader_input(&response, TRACK, true, None) {
+                    seen.inputs.push(input);
+                }
+            },
+            Seen::default(),
+        );
+        harness.run_steps(2);
+        harness
+    }
+
+    fn pointer_at(at: Pos2, pressed: bool) -> Event {
+        Event::PointerButton {
+            pos: at,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        }
+    }
+
+    /// A trackpad tap at `at`: the press and the release reach the same frame (kittest's
+    /// queued events take a frame each).
+    pub(crate) fn tap<S>(harness: &mut Harness<'_, S>, at: Pos2) {
+        let events = &mut harness.input_mut().events;
+        events.push(pointer_at(at, true));
+        events.push(pointer_at(at, false));
+        harness.step();
+    }
+
+    /// The window gains or loses focus, as eframe tells egui: the event and the flag.
+    pub(crate) fn focus<S>(harness: &mut Harness<'_, S>, focused: bool) {
+        let input = harness.input_mut();
+        input.focused = focused;
+        input.events.push(Event::WindowFocused(focused));
+        harness.step();
+    }
+
+    #[test]
+    fn a_still_press_on_a_fader_sends_once() {
+        let mut harness = fader_harness();
+        let at = pos2(30.0, 45.0);
+        harness.event(Event::PointerMoved(at));
+        harness.run_steps(1);
+        harness.event(pointer_at(at, true));
+        harness.run_steps(10);
+        assert_eq!(harness.state().inputs, [Input::Absolute(0.75)]);
+        // A move sends the new value, once.
+        harness.event(Event::PointerMoved(pos2(30.0, 70.0)));
+        harness.run_steps(5);
+        assert_eq!(
+            harness.state().inputs,
+            [Input::Absolute(0.75), Input::Absolute(0.5)]
+        );
+        harness.event(pointer_at(pos2(30.0, 70.0), false));
+        harness.run_steps(2);
+        assert_eq!(harness.state().inputs.len(), 2);
+    }
+
+    #[test]
+    fn a_tap_on_a_fader_sets_it() {
+        let mut harness = fader_harness();
+        let at = pos2(30.0, 45.0);
+        harness.event(Event::PointerMoved(at));
+        harness.run_steps(1);
+        tap(&mut harness, at);
+        harness.run_steps(3);
+        assert_eq!(harness.state().inputs, [Input::Absolute(0.75)]);
+    }
+
+    #[test]
+    fn a_tap_presses_and_releases_a_button() {
+        let (mut harness, sent) = pressing();
+        harness.event(Event::PointerMoved(CENTRE));
+        harness.run_steps(1);
+        tap(&mut harness, CENTRE);
+        harness.run_steps(3);
+        let cue = Action::Cue(engine::DeckId::new(0).unwrap());
+        assert_eq!(
+            sent.try_iter().collect::<Vec<_>>(),
+            [
+                UiCommand::Action(cue, Input::Press),
+                UiCommand::Action(cue, Input::Release)
+            ]
+        );
+    }
+
+    #[test]
+    fn losing_focus_releases_a_held_button() {
+        let (mut harness, sent) = pressing();
+        harness.event(Event::PointerMoved(CENTRE));
+        harness.run_steps(1);
+        press(&harness, Modifiers::NONE);
+        harness.run_steps(2);
+        let cue = Action::Cue(engine::DeckId::new(0).unwrap());
+        assert_eq!(
+            sent.try_iter().collect::<Vec<_>>(),
+            [UiCommand::Action(cue, Input::Press)]
+        );
+        // egui keeps the button down when the window loses focus.
+        focus(&mut harness, false);
+        harness.run_steps(2);
+        assert_eq!(
+            sent.try_iter().collect::<Vec<_>>(),
+            [UiCommand::Action(cue, Input::Release)]
+        );
+        // Back, and let go: the release was sent; the next press counts.
+        focus(&mut harness, true);
+        release(&harness);
+        harness.run_steps(2);
+        assert_eq!(sent.try_iter().count(), 0);
+        press(&harness, Modifiers::NONE);
+        harness.run_steps(2);
+        assert_eq!(
+            sent.try_iter().collect::<Vec<_>>(),
+            [UiCommand::Action(cue, Input::Press)]
+        );
+    }
+
+    #[test]
+    fn a_press_on_the_handle_takes_it_without_a_jump() {
+        // The handle at 0.5: the middle of the 100-point track, y = 70, reaching 4 points.
+        let handle = Handle {
+            value: 0.5,
+            reach: 4.0,
+        };
+        let mut harness = Harness::builder().with_step_dt(0.01).build_ui_state(
+            move |ui, seen: &mut Seen| {
+                let response =
+                    ui.interact(TRACK, ui.scope_id().with("fader"), Sense::click_and_drag());
+                if let Some(input) = grab_fader(&response, TRACK, true, None, handle) {
+                    seen.inputs.push(input);
+                }
+            },
+            Seen::default(),
+        );
+        harness.run_steps(2);
+        // Pressed 3 points under its middle: it stays where it is, then follows the drag.
+        let at = pos2(30.0, 73.0);
+        harness.event(Event::PointerMoved(at));
+        harness.run_steps(1);
+        harness.event(pointer_at(at, true));
+        harness.run_steps(2);
+        harness.event(Event::PointerMoved(pos2(30.0, 63.0)));
+        harness.run_steps(2);
+        harness.event(pointer_at(pos2(30.0, 63.0), false));
+        harness.run_steps(2);
+        let values: Vec<f32> = harness
+            .state()
+            .inputs
+            .iter()
+            .map(|i| match i {
+                Input::Absolute(v) => *v,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(values.len(), 2, "{values:?}");
+        assert!((values[0] - 0.5).abs() < 1e-4, "{values:?}");
+        assert!((values[1] - 0.6).abs() < 1e-4, "{values:?}");
+        // Off the handle, the track jumps.
+        let at = pos2(30.0, 45.0);
+        harness.event(Event::PointerMoved(at));
+        harness.run_steps(1);
+        harness.event(pointer_at(at, true));
+        harness.run_steps(2);
+        assert_eq!(harness.state().inputs.last(), Some(&Input::Absolute(0.75)));
+    }
+
+    #[test]
+    fn a_press_held_still_is_no_drag() {
+        let mut harness = Harness::builder().with_step_dt(0.01).build_ui_state(
+            |ui, moved: &mut Vec<bool>| {
+                let rect = Rect::from_center_size(CENTRE, vec2(40.0, 40.0));
+                let response = ui.interact(rect, Id::NULL.with("drag"), Sense::click_and_drag());
+                moved.push(moved_drag(&response));
+            },
+            Vec::new(),
+        );
+        harness.event(Event::PointerMoved(CENTRE));
+        harness.run_steps(1);
+        press(&harness, Modifiers::NONE);
+        // A second and more: egui calls it a drag by now.
+        harness.run_steps(110);
+        assert!(!harness.state().iter().any(|&m| m));
+        // 3 points is still a click; 6 is a drag, and it stays one back near the press.
+        harness.event(Event::PointerMoved(CENTRE + vec2(3.0, 0.0)));
+        harness.run_steps(1);
+        assert_eq!(harness.state().last(), Some(&false));
+        harness.event(Event::PointerMoved(CENTRE + vec2(6.0, 0.0)));
+        harness.run_steps(1);
+        assert_eq!(harness.state().last(), Some(&true));
+        harness.event(Event::PointerMoved(CENTRE));
+        harness.run_steps(1);
+        assert_eq!(harness.state().last(), Some(&true));
+        release(&harness);
+        harness.run_steps(1);
+        assert_eq!(harness.state().last(), Some(&false));
     }
 
     #[test]

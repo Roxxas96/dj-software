@@ -10,9 +10,8 @@ use actions::{
 };
 use analysis::{Key, KeyNotation, Waveform};
 use egui::{
-    Align, Color32, CornerRadius, Id, Label, Layout, Margin, Mesh, PointerButton, Rect, RichText,
-    Role, Sense, Shape, Stroke, StrokeKind, TextureHandle, Ui, UiBuilder, Vec2, WidgetInfo, pos2,
-    vec2,
+    Align, Color32, CornerRadius, Id, Label, Layout, Margin, Mesh, Rect, RichText, Role, Sense,
+    Shape, Stroke, StrokeKind, TextureHandle, Ui, UiBuilder, Vec2, WidgetInfo, pos2, vec2,
 };
 use engine::{
     ChannelSnapshot, DeckId, DeckSnapshot, EffectKind, EngineMonitor, Grid, Hotcue, HotcueSlot,
@@ -20,7 +19,9 @@ use engine::{
 };
 
 use crate::command::{LibraryStep, UiCommand, ViewChange};
-use crate::controls::{Sink, carry_steps, drag_path, fader_input};
+use crate::controls::{
+    Handle, Sink, carry_steps, context_press, drag_path, fader_input, grab_fader, moved_drag,
+};
 use crate::cover::{self, Covers};
 use crate::hotcue_menu::{self, HotcueTarget};
 use crate::layout::{Sections, deck_slots};
@@ -1092,7 +1093,9 @@ fn fx(ui: &mut Ui, view: &DeckView, accent: Color32, level: bool, sink: &mut Sin
 }
 
 /// The platter: a circle with a marker that turns with the playhead. Dragging it round
-/// touches, scratches (clockwise goes forward) and lets go, as the controller's jog does.
+/// a paused deck touches, scratches (clockwise goes forward) and lets go, as the
+/// controller's jog does; round a playing deck it turns the ring, which nudges the pitch,
+/// without a touch. The deck's state when the drag starts holds for the whole drag.
 fn jog(ui: &mut Ui, view: &DeckView, accent: Color32, sink: &mut Sink<'_>) {
     let p = theme::palette(ui.ctx());
     let (_, rect) = ui.allocate_space(Vec2::splat(JOG_SIDE));
@@ -1101,7 +1104,6 @@ fn jog(ui: &mut Ui, view: &DeckView, accent: Color32, sink: &mut Sink<'_>) {
     response.widget_info(|| WidgetInfo::labeled(Role::Image, true, "jog"));
     // An empty deck has nothing to scratch.
     if view.progress.is_some() {
-        let dragging = response.dragged_by(PointerButton::Primary);
         let mut amount = 0.0;
         if let Some((from, to)) = drag_path(&response) {
             let (from, to) = (from - rect.center(), to - rect.center());
@@ -1113,17 +1115,31 @@ fn jog(ui: &mut Ui, view: &DeckView, accent: Color32, sink: &mut Sink<'_>) {
             };
             amount = turned / std::f32::consts::TAU * f32::from(view.jog_steps_per_turn);
         }
-        // The platter is touched once a drag starts, never by a click, which would hold a
-        // playing deck; a release always reaches the press.
-        if dragging || !ui.input(|i| i.pointer.primary_down()) {
-            sink.button(&response, Action::JogTouch(view.deck));
+        // Only a drag that moved does anything: a click, even a slow one, would hold a
+        // playing deck.
+        let dragging = moved_drag(&response);
+        let nudging = id.with("nudging");
+        let nudge = if dragging {
+            ui.data_mut(|d| *d.get_temp_mut_or_insert_with(nudging, || view.playing))
+        } else {
+            ui.data_mut(|d| d.remove::<bool>(nudging));
+            false
+        };
+        let touch = Action::JogTouch(view.deck);
+        if dragging && !nudge {
+            sink.button(&response, touch);
+        } else {
+            // A release always reaches the press.
+            sink.release(&response, touch);
         }
         let steps = carry_steps(ui.ctx(), id, amount, dragging);
         if steps != 0 {
-            sink.send(UiCommand::Action(
-                Action::JogScratch(view.deck),
-                Input::Relative(steps),
-            ));
+            let action = if nudge {
+                Action::JogRing(view.deck)
+            } else {
+                Action::JogScratch(view.deck)
+            };
+            sink.send(UiCommand::Action(action, Input::Relative(steps)));
         }
     }
     let painter = ui.painter();
@@ -1198,8 +1214,14 @@ fn pitch(
         );
         let action = Action::Tempo(view.deck);
         let response = ui.interact(rect, control_id(action), Sense::click_and_drag());
-        // The slider's 0 is at the top: the other way round from a fader.
-        let input = match fader_input(&response, track, true, Some(PITCH_RESET)) {
+        response.widget_info(|| WidgetInfo::labeled(Role::Slider, true, "pitch"));
+        // The slider's 0 is at the top: the other way round from a fader. A press on the
+        // handle takes it where it is.
+        let handle = Handle {
+            value: 1.0 - view.pitch_slider,
+            reach: PITCH_HANDLE.y / 2.0 + 1.0,
+        };
+        let input = match grab_fader(&response, track, true, Some(PITCH_RESET), handle) {
             Some(Input::Absolute(v)) => Some(Input::Absolute(1.0 - v)),
             other => other,
         };
@@ -1313,9 +1335,16 @@ fn pads_column(
                         let id = ("pad", view.deck, slot);
                         let response =
                             ui.interact(rect, Id::NULL.with(id), Sense::click_and_drag());
-                        sink.button(&response, action);
+                        let hotcue = matches!(action, Action::Hotcue(..));
+                        let press = context_press(&response, ui);
+                        // On macOS Ctrl + click is a right-click: it presses no hotcue.
+                        if hotcue && press.right_click {
+                            sink.release(&response, action);
+                        } else {
+                            sink.button(&response, action);
+                        }
                         // A hotcue pad's right-click opens its editor.
-                        if matches!(action, Action::Hotcue(..)) && response.secondary_clicked() {
+                        if hotcue && press.opened {
                             open_hotcue_menu(ui, view, slot, pad_view.lit, rect);
                         }
                     }
