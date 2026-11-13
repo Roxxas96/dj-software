@@ -64,7 +64,8 @@ pub struct TrackFilter {
     pub folder: Option<PathBuf>,
     /// With `folder`, only the tracks directly in it, not in its subfolders.
     pub folder_only: bool,
-    /// Case-insensitive (ASCII) substring of the title or artist; `%` and `_` are literal.
+    /// Case-insensitive (ASCII) substring of the title or artist, or of the file name for
+    /// a track without a title; `%` and `_` are literal.
     pub text: Option<String>,
     /// `Some(true)` only missing tracks, `Some(false)` only present ones.
     pub missing: Option<bool>,
@@ -458,8 +459,12 @@ impl Reader {
     }
 }
 
-/// The condition a [`TrackFilter::text`] puts on the tracks (aliased `t`).
-const TEXT_MATCH: &str = "(t.title LIKE ? ESCAPE '\\' OR t.artist LIKE ? ESCAPE '\\')";
+/// The condition a [`TrackFilter::text`] puts on the tracks (aliased `t`). An untitled
+/// track is shown by its file name, so it matches there too: the path after its last `/`
+/// or `\` (`rtrim` strips every character but the separators from the end).
+const TEXT_MATCH: &str = "(t.title LIKE ? ESCAPE '\\' OR t.artist LIKE ? ESCAPE '\\' \
+     OR (trim(coalesce(t.title, '')) = '' AND substr(t.path, length(rtrim(t.path, \
+         replace(replace(t.path, '/', ''), '\\', ''))) + 1) LIKE ? ESCAPE '\\'))";
 
 /// `" AND "` and [`TEXT_MATCH`] for a non-empty `text`, with its parameters pushed onto
 /// `params`; empty when there is no text to match.
@@ -468,6 +473,7 @@ fn text_condition(text: Option<&str>, params: &mut Vec<Value>) -> String {
         return String::new();
     };
     let pattern = Value::Text(format!("%{}%", escape_like(text)));
+    params.push(pattern.clone());
     params.push(pattern.clone());
     params.push(pattern);
     format!(" AND {TEXT_MATCH}")

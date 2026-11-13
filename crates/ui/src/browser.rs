@@ -682,6 +682,7 @@ fn list_pane(
         search,
         TextEdit::singleline(&mut query.text)
             .hint_text("Search")
+            .background_color(p.row_alt)
             .margin(vec2(4.0, 1.0))
             .desired_width(search_width),
     );
@@ -787,17 +788,17 @@ fn list_pane(
 fn sort_arrow(ui: &Ui, rect: Rect, descending: bool) {
     let p = theme::palette(ui.ctx());
     let c = pos2(rect.max.x - 8.0, rect.center().y);
-    let points = if descending {
-        vec![
-            c + vec2(-3.5, -2.0),
-            c + vec2(3.5, -2.0),
-            c + vec2(0.0, 2.5),
-        ]
-    } else {
-        vec![c + vec2(-3.5, 2.0), c + vec2(3.5, 2.0), c + vec2(0.0, -2.5)]
-    };
+    // The tip points the way the column runs: up ascending, down descending.
+    let tip = if descending { 2.5 } else { -2.5 };
+    let base = -0.8 * tip;
+    let points: [Pos2; 3] = [
+        c + vec2(-3.5, base),
+        c + vec2(3.5, base),
+        c + vec2(0.0, tip),
+    ];
+    // `convex_polygon` takes a Vec: one small one, only while a column is sorted.
     ui.painter().add(egui::Shape::convex_polygon(
-        points,
+        points.to_vec(),
         p.text_dim,
         Stroke::NONE,
     ));
