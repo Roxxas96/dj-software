@@ -8,6 +8,7 @@
 //! ([`worker`]), stems on their own thread ([`stem_jobs`]); cue points and hotcues are
 //! written with the non-blocking `Writer::submit`.
 
+mod delete;
 mod memory_sync;
 mod playlist_edits;
 mod stem_jobs;
@@ -36,9 +37,10 @@ use library::{
 use crate::console::ConsoleCommand;
 use crate::format::{bpm_text, grid_text, key_text, notation_from_setting, safe, track_name};
 use crate::printer::Printer;
+pub use delete::{SystemTrash, Trash};
 use memory_sync::{MemoryAction, MemorySync, engine_grid};
 use stem_jobs::{Reply, StemsControl, StemsSetup};
-use worker::{Event, Job};
+use worker::{DeckFiles, Event, Job};
 
 /// How often failed writes, analysis and the watcher are checked, and the most often the
 /// browser is reread.
@@ -53,6 +55,14 @@ const WORKERS_WHILE_PLAYING: usize = 1;
 /// block, so a read fails only while it is storing one).
 const SHUTDOWN_READ_ATTEMPTS: usize = 50;
 const SHUTDOWN_READ_PAUSE: Duration = Duration::from_millis(1);
+
+/// A Trash for tests that use none: it refuses every move, and never makes its folder.
+#[cfg(test)]
+fn unused_trash() -> Arc<dyn Trash> {
+    let trash = delete::FakeTrash::new(Path::new("/nonexistent/open-jockey-trash"));
+    trash.fail();
+    Arc::new(trash)
+}
 
 /// A file's size and mtime as last scanned: when it changes, the track is analyzed again.
 type FileStamp = (Option<i64>, Option<i64>);
@@ -127,6 +137,13 @@ pub struct LibraryMode {
     /// The deck's `load_seq` once the engine has applied the latest `Load` sent.
     engine_loads: [u64; 4],
     load_seq: [u64; 4],
+    /// Per deck, the `seq` of the latest decoded load taken from the worker, applied or
+    /// not: a later one is still on its way, and a delete leaves its file alone.
+    taken_loads: [u64; 4],
+    /// How many delete questions were sent to the worker.
+    delete_asks: u64,
+    /// The worker's answer to the latest delete question.
+    delete_check: Option<ui::DeleteCheck>,
     notation: KeyNotation,
     browser: Option<BrowserView>,
     analysis_status: Option<String>,
@@ -177,20 +194,24 @@ impl LibraryMode {
     /// and starts the worker, and with `stems` enabled the stems thread. Prints what it
     /// does (before the control loop starts).
     pub fn start(db: Option<&Path>, stems: &crate::config::StemsConfig) -> anyhow::Result<Self> {
-        Self::start_with(db, stems.enabled.then(|| StemsSetup::from_config(stems)))
+        let stems = stems.enabled.then(|| StemsSetup::from_config(stems));
+        Self::start_browsing(db, stems, None, Arc::new(SystemTrash))
     }
 
-    /// [`LibraryMode::start`] with stems set up as `stems` says (`None`: disabled).
+    /// [`LibraryMode::start`] with stems set up as `stems` says (`None`: disabled), and a
+    /// Trash that refuses every move.
+    #[cfg(test)]
     fn start_with(db: Option<&Path>, stems: Option<StemsSetup>) -> anyhow::Result<Self> {
-        Self::start_browsing(db, stems, None)
+        Self::start_browsing(db, stems, None, unused_trash())
     }
 
     /// [`LibraryMode::start_with`] with the browser's tree starting at `drives` (`None`:
-    /// the computer's drives).
+    /// the computer's drives), moving what the browser deletes to `trash`.
     fn start_browsing(
         db: Option<&Path>,
         stems: Option<StemsSetup>,
         drives: Option<Vec<library::Drive>>,
+        trash: Arc<dyn Trash>,
     ) -> anyhow::Result<Self> {
         let lib = Arc::new(crate::library_cmd::open_library(db)?);
         let reader = lib.reader()?;
@@ -217,7 +238,7 @@ impl LibraryMode {
         };
 
         let (events_tx, events) = channel();
-        let (jobs, worker) = worker::spawn(Arc::clone(&lib), events_tx, drives)
+        let (jobs, worker) = worker::spawn(Arc::clone(&lib), events_tx, drives, trash)
             .context("starting the library worker")?;
         let stems = stems
             .map(|setup| StemsControl::start(Arc::clone(&lib), setup))
@@ -246,6 +267,9 @@ impl LibraryMode {
             outgoing: [None, None, None, None],
             engine_loads: [0; 4],
             load_seq: [0; 4],
+            taken_loads: [0; 4],
+            delete_asks: 0,
+            delete_check: None,
             notation,
             browser: None,
             analysis_status: None,
@@ -453,6 +477,57 @@ impl LibraryMode {
         self.try_send_job(Job::EditPlaylist(WriteOp::DeletePlaylist(playlist)))
     }
 
+    /// Asks the worker what deleting `target` would do; its answer comes as
+    /// [`LibraryMode::delete_check`] with a later [`poll`](Self::poll).
+    ///
+    /// # Errors
+    ///
+    /// As [`LibraryMode::add_to_playlist`].
+    pub fn ask_delete(&mut self, target: ui::DeleteTarget) -> Result<(), String> {
+        self.delete_asks += 1;
+        self.try_send_job(Job::AskDelete {
+            seq: self.delete_asks,
+            target,
+            decks: self.deck_files(),
+        })
+    }
+
+    /// Deletes `target` (the window asked first): entries out of a playlist, a playlist,
+    /// or files and a folder to the Trash. The worker checks again with the decks as they
+    /// are now, and refuses with an event; the browser is read again once it is done.
+    ///
+    /// # Errors
+    ///
+    /// As [`LibraryMode::add_to_playlist`].
+    pub fn delete(&self, target: ui::DeleteTarget) -> Result<(), String> {
+        self.try_send_job(Job::Delete {
+            target,
+            decks: self.deck_files(),
+        })
+    }
+
+    /// The worker's answer to the latest delete question.
+    pub fn delete_check(&self) -> Option<&ui::DeleteCheck> {
+        self.delete_check.as_ref()
+    }
+
+    /// The files on the decks, with those still playing until a new load applies, and
+    /// the loads taken from the worker so far.
+    fn deck_files(&self) -> DeckFiles {
+        let mut loaded = Vec::new();
+        for deck in DeckId::ALL {
+            let i = deck.index();
+            let outgoing = self.outgoing[i].as_ref().map(|(track, _)| track);
+            for track in self.decks[i].iter().chain(outgoing) {
+                loaded.push((deck, track.path.clone()));
+            }
+        }
+        DeckFiles {
+            loaded,
+            taken: self.taken_loads,
+        }
+    }
+
     /// Performs a request from a controller action.
     pub fn handle_request(
         &mut self,
@@ -590,6 +665,10 @@ impl LibraryMode {
                 self.dirty = true;
             }
             Event::Message(text) => printer.event(text),
+            Event::DeleteCheck(check) => {
+                self.delete_check = Some(check);
+                self.dirty = true;
+            }
             Event::Loaded(loaded) => self.load(*loaded, engine, printer),
             Event::Grid { deck, track, grid } => {
                 if let Some(t) = self.decks[deck.index()]
@@ -669,6 +748,9 @@ impl LibraryMode {
     fn load(&mut self, loaded: worker::Loaded, engine: &mut EngineController, printer: &Printer) {
         let deck = loaded.deck;
         let n = deck.index() + 1;
+        // From now on the deck holds this file, or keeps its own: no longer on its way.
+        let taken = &mut self.taken_loads[deck.index()];
+        *taken = (*taken).max(loaded.seq);
         if loaded.seq != self.load_seq[deck.index()] {
             return; // A later load for this deck was asked for.
         }
@@ -2959,7 +3041,9 @@ mod tests {
             path: music,
         }];
         let db = dir.path().join("library.sqlite3");
-        let mut mode = LibraryMode::start_browsing(Some(&db), None, Some(drives)).unwrap();
+        let mut mode =
+            LibraryMode::start_browsing(Some(&db), None, Some(drives), super::unused_trash())
+                .unwrap();
         let (mut engine, mut renderer) = engine::engine(engine::EngineConfig {
             sample_rate: 44_100,
             max_block_frames: 512,

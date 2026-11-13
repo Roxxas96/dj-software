@@ -8,6 +8,7 @@ mod command;
 pub mod controls;
 pub mod cover;
 pub mod deck;
+pub mod delete_dialog;
 mod fonts;
 pub mod hotcue_menu;
 pub mod layout;
@@ -29,11 +30,13 @@ use std::sync::mpsc::{Sender, channel};
 use anyhow::anyhow;
 use engine::EngineMonitor;
 
-pub use command::{ExportStep, ImportStep, LibraryStep, Resolution, UiCommand, ViewChange};
+pub use command::{
+    DeleteTarget, ExportStep, ImportStep, LibraryStep, Resolution, UiCommand, ViewChange,
+};
 pub use model::{
-    ControlFrame, DeckInfo, EVENT_SHOWN, EVENTS_KEPT, ExportChoice, ExportSummary, ExportView,
-    GHOSTS, GLOBAL_GHOSTS, HotcueMark, ImportSummary, ImportView, PlaylistLabel, Published,
-    SettingRow, StickLabel, TrackLabel,
+    ControlFrame, DeckInfo, DeleteCheck, EVENT_SHOWN, EVENTS_KEPT, ExportChoice, ExportSummary,
+    ExportView, GHOSTS, GLOBAL_GHOSTS, HotcueMark, ImportSummary, ImportView, PlaylistLabel,
+    Published, SettingRow, StickLabel, TrackLabel,
 };
 pub use view::{
     ColourScheme, JogDisplay, Layout, MAX_SHARE, MIN_SHARE, PanelSizes, TimeMode, ViewState,
@@ -262,6 +265,7 @@ pub fn root_with_reads(
                     );
                 });
             } else if let Some(view) = &frame.browser {
+                delete_dialog::answer(ui.ctx(), frame.delete_check.as_ref());
                 let view = screen.browser.pick(ui.ctx(), view);
                 changes = browser::show(
                     ui,

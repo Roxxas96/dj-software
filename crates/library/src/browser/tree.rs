@@ -35,6 +35,8 @@ pub struct TreeRow {
     pub note: Option<&'static str>,
     /// The library id of a playlist's row; `None` for every other row.
     pub playlist: Option<i64>,
+    /// A folder row's folder on disk, as the tree read it; `None` for every other row.
+    pub path: Option<PathBuf>,
 }
 
 /// What a tree row's list shows.
@@ -138,6 +140,36 @@ impl Tree {
         self.nodes.iter().map(|n| n.row.clone()).collect()
     }
 
+    /// The name of the drive `path` is on: the drive whose folder holds it most closely.
+    pub(super) fn drive_of(&self, path: &Path) -> Option<&str> {
+        self.nodes
+            .iter()
+            .filter(|n| n.row.kind == TreeKind::Drive)
+            .filter_map(|n| match &n.target {
+                Target::Dir(dir) if path.starts_with(dir) => Some((dir, &n.row.label)),
+                _ => None,
+            })
+            .max_by_key(|(dir, _)| dir.components().count())
+            .map(|(_, label)| label.as_str())
+    }
+
+    /// Takes out the folders that are no longer on disk (a folder moved to the Trash), with
+    /// the rows below them. Drives come and go with [`Tree::set_drives`] instead.
+    pub(super) fn drop_gone_folders(&mut self) {
+        let mut at = 0;
+        while at < self.nodes.len() {
+            let node = &self.nodes[at];
+            let gone = node.row.kind == TreeKind::Folder
+                && matches!(&node.target, Target::Dir(dir) if is_gone(dir));
+            if gone {
+                let end = self.subtree_end(at);
+                self.nodes.drain(at..end);
+            } else {
+                at += 1;
+            }
+        }
+    }
+
     /// Row `index`'s label after its ancestors', such as `"Music ▸ House"`.
     pub(super) fn path(&self, index: usize) -> String {
         let mut labels = vec![self.nodes[index].row.label.as_str()];
@@ -179,7 +211,10 @@ impl Tree {
         match read {
             Ok(children) => {
                 let children = children.into_iter().map(|(name, path)| Node {
-                    row: row(name, depth, TreeKind::Folder),
+                    row: TreeRow {
+                        path: Some(path.clone()),
+                        ..row(name, depth, TreeKind::Folder)
+                    },
                     target: Target::Dir(path),
                 });
                 self.nodes.splice(index + 1..index + 1, children);
@@ -232,7 +267,13 @@ fn row(label: String, depth: u8, kind: TreeKind) -> TreeRow {
         expanded: false,
         note: None,
         playlist: None,
+        path: None,
     }
+}
+
+/// True only when `dir` is known not to exist (not when it cannot be checked).
+fn is_gone(dir: &Path) -> bool {
+    matches!(fs::symlink_metadata(dir), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
 }
 
 /// `dir`'s visible subfolders (links to folders included) as `(name, path)`, sorted by

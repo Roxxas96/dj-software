@@ -82,6 +82,13 @@ pub enum LibraryStep {
     RenamePlaylist { playlist: i64, name: String },
     /// Deletes `playlist`; its tracks stay in the library. The window asks first.
     DeletePlaylist { playlist: i64 },
+    /// Asks what deleting `target` would do: the session answers with the frame's
+    /// [`DeleteCheck`](crate::DeleteCheck) (the question to ask, or why it cannot be
+    /// deleted). Nothing is deleted.
+    AskDelete(DeleteTarget),
+    /// Deletes `target`, once the window asked and the viewer said yes. The session checks
+    /// again first: anything refused now is an event, and nothing is deleted.
+    Delete(DeleteTarget),
     /// Names and colours (`0xRRGGBB`; `None` for the slot's default) hotcue `slot` of
     /// `track`, the track the window saw on `deck` when its editor opened. Saved only if
     /// `deck` still holds `track`.
@@ -92,6 +99,29 @@ pub enum LibraryStep {
         name: Option<String>,
         color: Option<u32>,
     },
+}
+
+/// What a Delete in the browser deletes, from where the viewer is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeleteTarget {
+    /// The entries of `playlist`, each a position (from 0) and the track the window saw
+    /// there, taken out of it as [`LibraryStep::RemoveFromPlaylist`] does. The files stay.
+    Entries {
+        playlist: i64,
+        entries: Vec<(usize, i64)>,
+    },
+    /// Every entry of the playlist list `list` the window selected whole: refused if the
+    /// browser no longer shows it with every row selected.
+    AllEntries { list: library::ListIdentity },
+    /// The files of library tracks `tracks`, moved to the Trash.
+    Files { tracks: Vec<i64> },
+    /// Every file of the folder list `list` the window selected whole, moved to the Trash;
+    /// refused as [`DeleteTarget::AllEntries`] is.
+    AllFiles { list: library::ListIdentity },
+    /// Playlist `id`, as [`LibraryStep::DeletePlaylist`] does; its tracks stay.
+    Playlist { id: i64 },
+    /// The folder `path` and everything in it, moved to the Trash.
+    Folder { path: std::path::PathBuf },
 }
 
 /// What the window asks of the import from VirtualDJ; the session answers with the

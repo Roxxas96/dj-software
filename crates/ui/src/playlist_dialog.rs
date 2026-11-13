@@ -1,6 +1,6 @@
-//! The small dialogs of the browser tree's playlist menus: "New playlist", "Rename
-//! playlist" (a name field, OK and Cancel) and "Delete playlist" (which asks first, with
-//! Cancel focused). What they decide goes out as [`LibraryStep`]s; the session checks the
+//! The small dialogs of the browser tree's playlist menus: "New playlist" and "Rename
+//! playlist" (a name field, OK and Cancel); deleting asks in the
+//! [`delete_dialog`](crate::delete_dialog). What they decide goes out as [`LibraryStep`]s; the session checks the
 //! name, where the playlists are known. Enter in the name field is OK and Escape is
 //! Cancel; the dialogs are modal, so a click outside cancels and does nothing else.
 //!
@@ -19,8 +19,6 @@ pub enum Dialog {
     New,
     /// A new name for playlist `playlist`, which is called `name` now.
     Rename { playlist: i64, name: String },
-    /// The question whether to delete playlist `playlist`, called `name`.
-    Delete { playlist: i64, name: String },
 }
 
 /// An open dialog.
@@ -29,7 +27,7 @@ struct Open {
     dialog: Dialog,
     /// The name field's text.
     text: String,
-    /// The dialog has not been drawn yet: its field (or Cancel) takes the keyboard.
+    /// The dialog has not been drawn yet: its field takes the keyboard.
     fresh: bool,
 }
 
@@ -46,7 +44,7 @@ pub(crate) fn is_open(ctx: &Context) -> bool {
 pub fn open(ctx: &Context, dialog: Dialog) {
     let text = match &dialog {
         Dialog::Rename { name, .. } => name.clone(),
-        Dialog::New | Dialog::Delete { .. } => String::new(),
+        Dialog::New => String::new(),
     };
     let open = Open {
         dialog,
@@ -83,27 +81,8 @@ fn contents(ui: &mut Ui, open: &mut Open, steps: &mut Vec<LibraryStep>) -> bool 
     let (title, verb) = match &open.dialog {
         Dialog::New => ("New playlist", "OK"),
         Dialog::Rename { .. } => ("Rename playlist", "OK"),
-        Dialog::Delete { .. } => ("Delete playlist", "Delete"),
     };
     ui.heading(title);
-    if let Dialog::Delete { playlist, name } = &open.dialog {
-        ui.label(format!("Delete {name}? Its tracks stay in the library."));
-        let playlist = *playlist;
-        let mut done = false;
-        ui.horizontal(|ui| {
-            if ui.button(verb).clicked() {
-                steps.push(LibraryStep::DeletePlaylist { playlist });
-                done = true;
-            }
-            let cancel = ui.button("Cancel");
-            // Enter then cancels; Delete takes a Tab to, or a click.
-            if open.fresh {
-                cancel.request_focus();
-            }
-            done |= cancel.clicked();
-        });
-        return done;
-    }
     let mut edit = TextEdit::singleline(&mut open.text)
         .hint_text("Name")
         .desired_width(f32::INFINITY)
@@ -128,7 +107,7 @@ fn contents(ui: &mut Ui, open: &mut Open, steps: &mut Vec<LibraryStep>) -> bool 
                     playlist: *playlist,
                     name: name.clone(),
                 },
-                _ => LibraryStep::CreatePlaylist { name: name.clone() },
+                Dialog::New => LibraryStep::CreatePlaylist { name: name.clone() },
             });
             done = true;
         }

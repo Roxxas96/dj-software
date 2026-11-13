@@ -18,7 +18,7 @@ use library::{
 use ui::browser::{Arrangement, COLUMNS, Decks};
 use ui::cover::Covers;
 use ui::theme;
-use ui::{Layout, LibraryStep, UiCommand};
+use ui::{DeleteCheck, DeleteTarget, Layout, LibraryStep, UiCommand};
 
 fn tree_row(label: &str, depth: u8, kind: TreeKind) -> TreeRow {
     TreeRow {
@@ -28,6 +28,7 @@ fn tree_row(label: &str, depth: u8, kind: TreeKind) -> TreeRow {
         expanded: false,
         note: None,
         playlist: None,
+        path: None,
     }
 }
 
@@ -516,6 +517,8 @@ struct Clicking {
     steps: Vec<LibraryStep>,
     /// The panes a Delete key asked to delete from.
     deletes: Vec<Focus>,
+    /// The session's answer to the latest delete question, as the frame carries it.
+    answer: Option<DeleteCheck>,
     /// A window floats over the list.
     window: bool,
 }
@@ -563,6 +566,7 @@ fn clicking_in(
         covers: Covers::default(),
         steps: Vec::new(),
         deletes: Vec::new(),
+        answer: None,
         window: false,
     };
     let mut harness = Harness::builder()
@@ -570,6 +574,7 @@ fn clicking_in(
         .with_step_dt(0.01)
         .build_ui_state(
             move |ui, state: &mut Clicking| {
+                ui::delete_dialog::answer(ui.ctx(), state.answer.as_ref());
                 let changes = ui::browser::show(
                     ui,
                     &state.view,
@@ -1422,55 +1427,250 @@ fn rename_playlist() {
     assert!(harness.query_by_label("OK").is_none());
 }
 
+/// The question to delete playlist "Peak" (41).
+const DELETE_PEAK: DeleteTarget = DeleteTarget::Playlist { id: 41 };
+
+/// The session answers the delete question about `target` (its `seq`th) with `answer`.
+fn answer(harness: &mut Harness<'_, Clicking>, seq: u64, target: &DeleteTarget, answer: &str) {
+    harness.state_mut().answer = Some(DeleteCheck {
+        seq,
+        target: target.clone(),
+        answer: Ok(answer.to_owned()),
+    });
+    harness.run_steps(3);
+}
+
+/// The delete questions and deletes among `steps`.
+fn deleting(steps: &[LibraryStep]) -> Vec<&LibraryStep> {
+    steps
+        .iter()
+        .filter(|s| matches!(s, LibraryStep::AskDelete(_) | LibraryStep::Delete(_)))
+        .collect()
+}
+
 #[test]
 fn delete_asks_first_and_cancel_keeps_it() {
     let mut harness = playlist_harness();
     tree_menu(&mut harness, "Peak", "Delete\u{2026}");
     harness.get_by_label("Delete playlist");
-    harness.get_by_label("Delete Peak? Its tracks stay in the library.");
-    assert_eq!(harness.state().steps, []);
+    // Asked of the session; until it answers, only Cancel.
+    assert_eq!(harness.state().steps, [LibraryStep::AskDelete(DELETE_PEAK)]);
+    harness.get_by_label("Checking\u{2026}");
+    assert!(harness.query_by_label("Delete").is_none());
+    let question = "Delete the playlist Peak? Its tracks stay in the library.";
+    answer(&mut harness, 1, &DELETE_PEAK, question);
+    harness.get_by_label(question);
     // Cancel has the focus: Enter cancels.
+    assert!(harness.get_by_label("Cancel").is_focused());
     harness.key_press(Key::Enter);
     harness.run_steps(3);
     assert!(harness.query_by_label("Delete playlist").is_none());
-    assert_eq!(harness.state().steps, []);
     // Escape and the Cancel button too.
     tree_menu(&mut harness, "Peak", "Delete\u{2026}");
+    answer(&mut harness, 2, &DELETE_PEAK, question);
     harness.key_press(Key::Escape);
     harness.run_steps(3);
     assert!(harness.query_by_label("Delete playlist").is_none());
     tree_menu(&mut harness, "Peak", "Delete\u{2026}");
+    answer(&mut harness, 3, &DELETE_PEAK, question);
     let cancel = at_label(&harness, "Cancel");
     click(&mut harness, cancel);
     harness.run_steps(3);
     assert!(harness.query_by_label("Delete playlist").is_none());
-    assert_eq!(harness.state().steps, []);
+    let asked = LibraryStep::AskDelete(DELETE_PEAK);
+    assert_eq!(harness.state().steps, [asked.clone(), asked.clone(), asked]);
 }
 
 #[test]
 fn delete_confirmed_deletes() {
     let mut harness = playlist_harness();
     tree_menu(&mut harness, "Peak", "Delete\u{2026}");
+    answer(&mut harness, 1, &DELETE_PEAK, "Delete the playlist Peak?");
     let delete = at_label(&harness, "Delete");
     click(&mut harness, delete);
     harness.run_steps(3);
     assert_eq!(
         harness.state().steps,
-        [LibraryStep::DeletePlaylist { playlist: 41 }]
+        [
+            LibraryStep::AskDelete(DELETE_PEAK),
+            LibraryStep::Delete(DELETE_PEAK)
+        ]
     );
     assert!(harness.query_by_label("Delete playlist").is_none());
 }
 
 #[test]
-fn the_press_that_closes_a_dialog_reaches_nothing_under_it() {
+fn an_answer_to_an_older_question_is_not_shown() {
     let mut harness = playlist_harness();
     tree_menu(&mut harness, "Peak", "Delete\u{2026}");
+    answer(&mut harness, 1, &DELETE_PEAK, "Delete the playlist Peak?");
+    harness.key_press(Key::Escape);
+    harness.run_steps(3);
+    // Asked again: the frame still holds the first answer, which is not this question's.
+    tree_menu(&mut harness, "Peak", "Delete\u{2026}");
+    harness.get_by_label("Checking\u{2026}");
+    assert!(harness.query_by_label("Delete").is_none());
+}
+
+#[test]
+fn a_refusal_shows_the_reason_and_ok() {
+    let mut harness = playlist_harness();
+    tree_menu(&mut harness, "Peak", "Delete\u{2026}");
+    let reason = "Intro.mp3 is loaded on deck 1: unload it first.";
+    harness.state_mut().answer = Some(DeleteCheck {
+        seq: 1,
+        target: DELETE_PEAK,
+        answer: Err(reason.to_owned()),
+    });
+    harness.run_steps(3);
+    harness.get_by_label(reason);
+    assert!(harness.query_by_label("Delete").is_none());
+    assert!(harness.query_by_label("Cancel").is_none());
+    assert!(harness.get_by_label("OK").is_focused());
+    harness.key_press(Key::Enter);
+    harness.run_steps(3);
+    assert!(harness.query_by_label(reason).is_none());
+    assert_eq!(harness.state().steps, [LibraryStep::AskDelete(DELETE_PEAK)]);
+}
+
+#[test]
+fn the_press_that_closes_a_dialog_reaches_nothing_under_it() {
+    let mut harness = playlist_harness();
+    tree_menu(&mut harness, "Peak", "Rename\u{2026}");
     // A click on a track row outside the dialog closes it and selects nothing.
     let row = at_label(&harness, "Song 3");
     click(&mut harness, row);
     harness.run_steps(3);
-    assert!(harness.query_by_label("Delete playlist").is_none());
+    assert!(harness.query_by_label("Rename playlist").is_none());
     assert_eq!(harness.state().steps, []);
+    // The delete question's too.
+    tree_menu(&mut harness, "Peak", "Delete\u{2026}");
+    answer(&mut harness, 1, &DELETE_PEAK, "Delete the playlist Peak?");
+    click(&mut harness, row);
+    harness.run_steps(3);
+    assert!(harness.query_by_label("Delete playlist").is_none());
+    assert_eq!(harness.state().steps, [LibraryStep::AskDelete(DELETE_PEAK)]);
+}
+
+#[test]
+fn the_delete_key_in_a_playlist_removes_entries_after_asking() {
+    let mut harness = owning(in_playlist(0, 20), Decks::default());
+    // Songs 0 (clicked) and 3 picked.
+    let at = at_label(&harness, "Song 3");
+    click_holding(&mut harness, at, Modifiers::COMMAND);
+    harness.run_steps(2);
+    harness.state_mut().steps.clear();
+    press(&mut harness, Key::Delete);
+    let target = DeleteTarget::Entries {
+        playlist: 41,
+        entries: vec![(0, 1000), (3, 1003)],
+    };
+    assert_eq!(
+        harness.state().steps,
+        [LibraryStep::AskDelete(target.clone())]
+    );
+    let question = "Remove 2 tracks from Peak? The files stay.";
+    answer(&mut harness, 1, &target, question);
+    harness.get_by_label("Remove from playlist");
+    harness.get_by_label(question);
+    // Nothing changes until the viewer says so; Cancel has the keyboard, so Enter and
+    // the Delete key do nothing.
+    assert!(harness.get_by_label("Cancel").is_focused());
+    press(&mut harness, Key::Delete);
+    assert_eq!(harness.state().steps.len(), 1);
+    press(&mut harness, Key::Enter);
+    assert!(harness.query_by_label(question).is_none());
+    assert_eq!(deleting(&harness.state().steps).len(), 1);
+
+    // Asked again and confirmed: the step names the same entries.
+    press(&mut harness, Key::Backspace);
+    answer(&mut harness, 2, &target, question);
+    let remove = at_label(&harness, "Remove");
+    click(&mut harness, remove);
+    harness.run_steps(3);
+    assert_eq!(
+        deleting(&harness.state().steps),
+        [
+            &LibraryStep::AskDelete(target.clone()),
+            &LibraryStep::AskDelete(target.clone()),
+            &LibraryStep::Delete(target),
+        ]
+    );
+    assert!(harness.query_by_label("Remove from playlist").is_none());
+}
+
+#[test]
+fn the_delete_key_picks_what_the_pane_holds() {
+    // A folder's list: the files of the rows' library tracks.
+    let mut harness = owning(numbered(0, 20, 20), Decks::default());
+    press(&mut harness, Key::Delete);
+    assert_eq!(
+        harness.state().steps,
+        [LibraryStep::AskDelete(DeleteTarget::Files {
+            tracks: vec![1000]
+        })]
+    );
+    // The whole list selected: the library resolves it.
+    let mut view = numbered(0, 20, 5000);
+    view.all_selected = true;
+    let list = view.identity();
+    let mut harness = owning(view, Decks::default());
+    press(&mut harness, Key::Delete);
+    assert_eq!(
+        deleting(&harness.state().steps),
+        [&LibraryStep::AskDelete(DeleteTarget::AllFiles { list })]
+    );
+    let mut view = in_playlist(0, 20);
+    view.all_selected = true;
+    let list = view.identity();
+    let mut harness = owning(view, Decks::default());
+    press(&mut harness, Key::Delete);
+    assert_eq!(
+        deleting(&harness.state().steps),
+        [&LibraryStep::AskDelete(DeleteTarget::AllEntries { list })]
+    );
+    // The tree: the highlighted folder, by its path; a drive is not deleted.
+    let mut view = with_tree(numbered(0, 20, 20), 3, 1, Focus::Tree);
+    view.tree[1].path = Some(PathBuf::from("/music/House"));
+    view.tree[0].kind = TreeKind::Drive;
+    let mut harness = owning(view.clone(), Decks::default());
+    press(&mut harness, Key::Delete);
+    let folder = DeleteTarget::Folder {
+        path: PathBuf::from("/music/House"),
+    };
+    assert_eq!(
+        harness.state().steps,
+        [LibraryStep::AskDelete(folder.clone())]
+    );
+    view.tree_cursor = 0;
+    let mut harness = owning(view, Decks::default());
+    press(&mut harness, Key::Delete);
+    assert_eq!(harness.state().steps, []);
+    // A folder's menu asks too.
+    let mut view = with_tree(numbered(0, 20, 20), 3, 1, Focus::Tree);
+    view.tree[1].path = Some(PathBuf::from("/music/House"));
+    let mut harness = clicking(view, Decks::default());
+    tree_menu(&mut harness, "Folder 1", "Delete\u{2026}");
+    assert_eq!(harness.state().steps, [LibraryStep::AskDelete(folder)]);
+    harness.get_by_label("Move to the Trash");
+}
+
+#[test]
+fn a_track_menu_deletes_the_rows_picked() {
+    let mut harness = clicking(numbered(0, 20, 20), Decks::default());
+    let at = at_label(&harness, "Song 4");
+    click_with(&mut harness, PointerButton::Secondary, at);
+    harness.run_steps(2);
+    let item = at_label(&harness, "Delete\u{2026}");
+    click(&mut harness, item);
+    harness.run_steps(3);
+    assert_eq!(
+        deleting(&harness.state().steps),
+        [&LibraryStep::AskDelete(DeleteTarget::Files {
+            tracks: vec![1004]
+        })]
+    );
+    harness.get_by_label("Move to the Trash");
 }
 
 // The library from the keyboard.
@@ -1683,12 +1883,18 @@ fn typing_goes_to_the_search_box() {
 
 #[test]
 fn delete_asks_for_the_focused_pane() {
-    let mut harness = owning(numbered(0, 20, 20), Decks::default());
-    press(&mut harness, Key::Delete);
-    press(&mut harness, Key::Backspace);
-    harness.key_press_modifiers(Modifiers::COMMAND, Key::Backspace);
-    harness.run_steps(2);
-    assert_eq!(harness.state().deletes, [Focus::List; 3]);
+    // Each opens the question (which then has the keyboard).
+    for (modifiers, key) in [
+        (Modifiers::NONE, Key::Delete),
+        (Modifiers::NONE, Key::Backspace),
+        (Modifiers::COMMAND, Key::Backspace),
+    ] {
+        let mut harness = owning(numbered(0, 20, 20), Decks::default());
+        harness.key_press_modifiers(modifiers, key);
+        harness.run_steps(2);
+        assert_eq!(harness.state().deletes, [Focus::List]);
+        harness.get_by_label("Move to the Trash");
+    }
     let view = with_tree(numbered(0, 20, 20), 4, 1, Focus::Tree);
     let mut harness = owning(view, Decks::default());
     press(&mut harness, Key::Delete);

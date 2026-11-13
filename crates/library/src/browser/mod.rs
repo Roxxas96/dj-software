@@ -460,6 +460,7 @@ impl Browser {
     pub fn refresh(&mut self) -> Result<BrowserView, LibraryError> {
         let mut tree = self.tree.clone();
         tree.set_drives((self.roots)());
+        tree.drop_gone_folders();
         tree.set_playlists(&self.reader.playlists()?);
         let current = self.tree.target(self.tree_cursor);
         let same_row =
@@ -571,6 +572,41 @@ impl Browser {
                 .map(|(_, track, _)| track.id)
                 .collect(),
         })
+    }
+
+    /// Every file of a folder's list, in list order (its search and sort applied): what a
+    /// whole-list selection of a folder stands for. Empty for a playlist's list.
+    #[must_use]
+    pub fn list_files(&self) -> Vec<PathBuf> {
+        match &self.list.items {
+            Items::Files { files, .. } => files.clone(),
+            Items::None | Items::Playlist { .. } => Vec::new(),
+        }
+    }
+
+    /// Every entry of a playlist's list as (position in the playlist, track), in list order
+    /// (its search and sort applied): what a whole-list selection of a playlist stands for.
+    /// Empty for a folder's list.
+    ///
+    /// # Errors
+    ///
+    /// Any database error.
+    pub fn list_entries(&self) -> Result<Vec<(usize, i64)>, LibraryError> {
+        Ok(match &self.list.items {
+            Items::Playlist { id, query } => self
+                .reader
+                .playlist_page(*id, query.text.as_deref(), query.sort, 0, self.list.count)?
+                .into_iter()
+                .map(|(_, track, position)| (position, track.id))
+                .collect(),
+            Items::None | Items::Files { .. } => Vec::new(),
+        })
+    }
+
+    /// The name the tree gives the drive `path` is on, if it shows that drive.
+    #[must_use]
+    pub fn drive_name(&self, path: &Path) -> Option<String> {
+        self.tree.drive_of(path).map(str::to_owned)
     }
 
     /// The highlighted folder, when its list has audio files the library doesn't have.

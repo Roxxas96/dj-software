@@ -17,6 +17,7 @@ use library::{
     PendingTrack, Reader, TrackRow, WriteOp,
 };
 
+use super::delete::{self, Deleter, Trash};
 use super::memory_sync::engine_grid;
 use crate::format::safe;
 
@@ -63,6 +64,20 @@ pub enum Job {
     /// Make the playlist `name` (trimmed, not empty) unless a playlist has that name,
     /// reread the browser, and highlight the new playlist's tree row.
     CreatePlaylist(String),
+    /// Work out what deleting `target` would do, with `decks` as they are, and answer
+    /// with [`Event::DeleteCheck`] numbered `seq`. Nothing is deleted.
+    AskDelete {
+        seq: u64,
+        target: ui::DeleteTarget,
+        decks: DeckFiles,
+    },
+    /// Delete `target`, checked again now with `decks` as they are: entries and playlists
+    /// through the writer, files and folders to the Trash. Then reread the browser and say
+    /// what was done, or why nothing was.
+    Delete {
+        target: ui::DeleteTarget,
+        decks: DeckFiles,
+    },
     Grid {
         deck: DeckId,
         track: i64,
@@ -73,9 +88,25 @@ pub enum Job {
     },
 }
 
+/// The files on the decks as the control loop knows them, for a delete to leave alone.
+#[derive(Debug, Clone, Default)]
+pub struct DeckFiles {
+    /// Each deck's loaded file (and the one a deck still plays until its new load applies).
+    pub loaded: Vec<(DeckId, PathBuf)>,
+    /// Per deck, the `seq` of the latest load the control loop has taken from the loader
+    /// ([`Event::Loaded`]): a load asked for later is still on its way to the deck.
+    pub taken: [u64; 4],
+}
+
+/// Per deck, the latest load handed to the loader, as `(seq, file)`: until the control
+/// loop takes it, its file is as good as loaded. The loader clears a load it fails.
+type InFlight = Arc<Mutex<[Option<(u64, PathBuf)>; 4]>>;
+
 /// What the worker reports to the control loop.
 #[derive(Debug)]
 pub enum Event {
+    /// The answer to [`Job::AskDelete`].
+    DeleteCheck(ui::DeleteCheck),
     Browser(BrowserView),
     /// A line to print.
     Message(String),
@@ -124,11 +155,13 @@ struct LoadJob {
 }
 
 /// Starts the worker (and its loader), browsing `drives`, or the computer's drives when
-/// `None`. It stops when the returned sender is dropped.
+/// `None`, and moving what is deleted to `trash`. It stops when the returned sender is
+/// dropped.
 pub fn spawn(
     lib: Arc<Library>,
     events: Sender<Event>,
     drives: Option<Vec<Drive>>,
+    trash: Arc<dyn Trash>,
 ) -> std::io::Result<(Sender<Job>, JoinHandle<()>)> {
     // Unit tests must not read the real disks.
     let roots = move || {
@@ -140,7 +173,7 @@ pub fn spawn(
             }
         })
     };
-    spawn_with(lib, events, decode::decode_file, roots)
+    spawn_with(lib, events, decode::decode_file, roots, trash)
 }
 
 /// [`spawn`] with the loader decoding through `decode` and the browser's tree starting
@@ -150,11 +183,12 @@ fn spawn_with(
     events: Sender<Event>,
     decode: DecodeFn,
     roots: impl Fn() -> Vec<Drive> + Send + 'static,
+    trash: Arc<dyn Trash>,
 ) -> std::io::Result<(Sender<Job>, JoinHandle<()>)> {
     let (tx, rx) = channel();
     let handle = std::thread::Builder::new()
         .name("library-worker".into())
-        .spawn(move || run(&lib, &rx, &events, decode, roots))?;
+        .spawn(move || run(&lib, &rx, &events, decode, roots, trash.as_ref()))?;
     Ok((tx, handle))
 }
 
@@ -176,6 +210,7 @@ fn run(
     events: &Sender<Event>,
     decode: DecodeFn,
     roots: impl Fn() -> Vec<Drive> + Send + 'static,
+    trash: &dyn Trash,
 ) {
     let say = |text: String| {
         let _ = events.send(Event::Message(text));
@@ -197,9 +232,19 @@ fn run(
     adder.offer(&browser);
     let (load_tx, load_rx) = channel::<LoadJob>();
     let loader_events = events.clone();
+    let in_flight = InFlight::default();
+    let loader_flight = Arc::clone(&in_flight);
     let loader = std::thread::Builder::new()
         .name("track-loader".into())
-        .spawn(move || load_tracks(&loader_reader, &load_rx, &loader_events, decode));
+        .spawn(move || {
+            load_tracks(
+                &loader_reader,
+                &load_rx,
+                &loader_events,
+                decode,
+                &loader_flight,
+            );
+        });
     if let Err(e) = &loader {
         say(format!("error: cannot start the track loader: {e}"));
     }
@@ -347,7 +392,10 @@ fn run(
                 }
             }
             Job::LoadSelected { deck, seq } => match browser.selected_track() {
-                Some(row) => request_load(&reader, &load_tx, (deck, row.id, seq, false), &say),
+                Some(row) => {
+                    let load = (deck, row.id, seq, false);
+                    request_load(&reader, &load_tx, &in_flight, load, &say);
+                }
                 None => say(format!(
                     "Deck {}: nothing selected in the browser",
                     deck_number(deck)
@@ -360,7 +408,40 @@ fn run(
                 refuse_if_playing,
             } => {
                 let load = (deck, track, seq, refuse_if_playing);
-                request_load(&reader, &load_tx, load, &say);
+                request_load(&reader, &load_tx, &in_flight, load, &say);
+            }
+            Job::AskDelete { seq, target, decks } => {
+                let loaded = loaded_files(&decks, &in_flight);
+                let answer = delete::ask(&target, &browser, &reader, &loaded);
+                let check = ui::DeleteCheck {
+                    seq,
+                    target,
+                    answer,
+                };
+                let _ = events.send(Event::DeleteCheck(check));
+            }
+            Job::Delete { target, decks } => {
+                let loaded = loaded_files(&decks, &in_flight);
+                let writer = lib.writer();
+                let deleter = Deleter {
+                    reader: &reader,
+                    writer: &writer,
+                    browser: &browser,
+                    trash,
+                };
+                let done = deleter.delete(&target, &loaded);
+                // The library first, then the browser read again, then the event.
+                if done.refresh {
+                    match browser.refresh() {
+                        Ok(view) => {
+                            let _ = events.send(Event::Browser(view));
+                        }
+                        Err(e) => say(format!("warning: library browser: {}", safe(e))),
+                    }
+                }
+                if let Some(message) = done.message {
+                    say(message);
+                }
             }
             Job::Grid {
                 deck,
@@ -470,11 +551,28 @@ impl FolderAdder {
     }
 }
 
+/// The files a delete must leave alone: those on the decks, and those of loads on their
+/// way to a deck that the control loop has not taken yet.
+fn loaded_files(decks: &DeckFiles, in_flight: &InFlight) -> Vec<(DeckId, PathBuf)> {
+    let mut loaded = decks.loaded.clone();
+    let flying = in_flight.lock().unwrap_or_else(PoisonError::into_inner);
+    for deck in DeckId::ALL {
+        if let Some((seq, path)) = &flying[deck.index()]
+            && *seq > decks.taken[deck.index()]
+        {
+            loaded.push((deck, path.clone()));
+        }
+    }
+    loaded
+}
+
 /// Looks the track up and hands it to the loader, unless its file is missing.
-/// Asks the loader to decode `(deck, track, seq, refuse_if_playing)`'s track.
+/// Asks the loader to decode `(deck, track, seq, refuse_if_playing)`'s track, noting it in
+/// `in_flight` until the control loop takes it.
 fn request_load(
     reader: &Reader,
     loader: &Sender<LoadJob>,
+    in_flight: &InFlight,
     (deck, track, seq, refuse_if_playing): (DeckId, i64, u64, bool),
     say: &dyn Fn(String),
 ) {
@@ -498,6 +596,8 @@ fn request_load(
         row: details.row,
         path: details.path,
     };
+    in_flight.lock().unwrap_or_else(PoisonError::into_inner)[deck.index()] =
+        Some((seq, job.path.clone()));
     if loader.send(job).is_err() {
         say(format!(
             "Deck {n}: cannot load track {track}: the loader stopped"
@@ -558,12 +658,14 @@ fn read_memory(
     (memory, hotcues.is_some())
 }
 
-/// Decodes queued tracks; of several queued for one deck only the latest is decoded.
+/// Decodes queued tracks; of several queued for one deck only the latest is decoded. A
+/// load that fails is taken out of `in_flight`.
 fn load_tracks(
     reader: &Reader,
     jobs: &Receiver<LoadJob>,
     events: &Sender<Event>,
     decode: DecodeFn,
+    in_flight: &InFlight,
 ) {
     while let Ok(first) = jobs.recv() {
         let mut latest: HashMap<usize, LoadJob> = HashMap::new();
@@ -573,15 +675,21 @@ fn load_tracks(
         let mut batch: Vec<LoadJob> = latest.into_values().collect();
         batch.sort_by_key(|j| j.deck.index());
         for job in batch {
-            load_one(reader, job, events, decode);
+            let (deck, seq) = (job.deck.index(), job.seq);
+            if !load_one(reader, job, events, decode) {
+                let mut flying = in_flight.lock().unwrap_or_else(PoisonError::into_inner);
+                if flying[deck].as_ref().is_some_and(|(s, _)| *s == seq) {
+                    flying[deck] = None;
+                }
+            }
         }
     }
 }
 
 /// Decodes one track, then reads its memory (so a change saved during the decode is
 /// loaded). A decoder panic (say, on a malformed file) fails this load only: it is
-/// reported and the loader goes on.
-fn load_one(reader: &Reader, job: LoadJob, events: &Sender<Event>, decode: DecodeFn) {
+/// reported and the loader goes on. Returns whether the track was decoded.
+fn load_one(reader: &Reader, job: LoadJob, events: &Sender<Event>, decode: DecodeFn) -> bool {
     let n = deck_number(job.deck);
     let result = catch_unwind(AssertUnwindSafe(|| decode(&job.path)))
         .map_err(|_| "the decoder crashed on this file".to_owned())
@@ -606,6 +714,7 @@ fn load_one(reader: &Reader, job: LoadJob, events: &Sender<Event>, decode: Decod
                 hotcues_read,
                 refuse_if_playing: job.refuse_if_playing,
             })));
+            true
         }
         Err(e) => {
             let _ = events.send(Event::Message(format!(
@@ -613,6 +722,7 @@ fn load_one(reader: &Reader, job: LoadJob, events: &Sender<Event>, decode: Decod
                 crate::format::track_name(&job.row),
                 safe(e)
             )));
+            false
         }
     }
 }
@@ -670,6 +780,10 @@ mod tests {
         DeckId::new(n - 1).unwrap()
     }
 
+    fn no_trash() -> Arc<dyn Trash> {
+        super::super::unused_trash()
+    }
+
     /// The next event `matches` accepts, skipping others, within 10 s.
     fn wait_for<T>(events: &Receiver<Event>, mut matches: impl FnMut(Event) -> Option<T>) -> T {
         loop {
@@ -695,7 +809,7 @@ mod tests {
         let id = ids(&s.lib)[0];
         std::fs::remove_file(s.music.join("gone.wav")).unwrap();
         let (tx, events) = channel();
-        let (jobs, worker) = spawn(Arc::clone(&s.lib), tx, None).unwrap();
+        let (jobs, worker) = spawn(Arc::clone(&s.lib), tx, None, no_trash()).unwrap();
         jobs.send(Job::LoadTrack {
             deck: deck(2),
             track: id,
@@ -738,7 +852,7 @@ mod tests {
             .edit_grid(id, library::GridEdit::SetBpm(120.0), None)
             .unwrap();
         let (tx, events) = channel();
-        let (jobs, _worker) = spawn(Arc::clone(&s.lib), tx, None).unwrap();
+        let (jobs, _worker) = spawn(Arc::clone(&s.lib), tx, None, no_trash()).unwrap();
         jobs.send(Job::LoadTrack {
             deck: deck(1),
             track: id,
@@ -783,7 +897,7 @@ mod tests {
             })
             .unwrap();
         let (tx, events) = channel();
-        let (jobs, _worker) = spawn(Arc::clone(&s.lib), tx, None).unwrap();
+        let (jobs, _worker) = spawn(Arc::clone(&s.lib), tx, None, no_trash()).unwrap();
         jobs.send(Job::LoadTrack {
             deck: deck(1),
             track: id,
@@ -824,7 +938,7 @@ mod tests {
             }]))
             .unwrap();
         let (tx, events) = channel();
-        let (jobs, _worker) = spawn(Arc::clone(&s.lib), tx, None).unwrap();
+        let (jobs, _worker) = spawn(Arc::clone(&s.lib), tx, None, no_trash()).unwrap();
         jobs.send(Job::LoadTrack {
             deck: deck(1),
             track: id,
@@ -871,7 +985,8 @@ mod tests {
         let id = ids(&s.lib)[0];
         DURING_DECODE.set((Arc::clone(&s.lib), id)).unwrap();
         let (tx, events) = channel();
-        let (jobs, _worker) = spawn_with(Arc::clone(&s.lib), tx, saving_decode, Vec::new).unwrap();
+        let (jobs, _worker) =
+            spawn_with(Arc::clone(&s.lib), tx, saving_decode, Vec::new, no_trash()).unwrap();
         jobs.send(Job::LoadTrack {
             deck: deck(1),
             track: id,
@@ -905,8 +1020,14 @@ mod tests {
         };
         let (boom, fine) = (id_of("boom.wav"), id_of("fine.wav"));
         let (tx, events) = channel();
-        let (jobs, _worker) =
-            spawn_with(Arc::clone(&s.lib), tx, panicking_decode, Vec::new).unwrap();
+        let (jobs, _worker) = spawn_with(
+            Arc::clone(&s.lib),
+            tx,
+            panicking_decode,
+            Vec::new,
+            no_trash(),
+        )
+        .unwrap();
         jobs.send(Job::LoadTrack {
             deck: deck(1),
             track: boom,
@@ -948,8 +1069,14 @@ mod tests {
                 .unwrap();
         }
         let (tx, events) = channel();
-        let (jobs, _worker) =
-            spawn_with(Arc::clone(&s.lib), tx, decode::decode_file, Vec::new).unwrap();
+        let (jobs, _worker) = spawn_with(
+            Arc::clone(&s.lib),
+            tx,
+            decode::decode_file,
+            Vec::new,
+            no_trash(),
+        )
+        .unwrap();
         let view = |events: &Receiver<Event>| {
             wait_for(events, |e| match e {
                 Event::Browser(v) => Some(v),
@@ -1034,8 +1161,14 @@ mod tests {
             })
             .unwrap();
         let (tx, events) = channel();
-        let (jobs, _worker) =
-            spawn_with(Arc::clone(&s.lib), tx, decode::decode_file, Vec::new).unwrap();
+        let (jobs, _worker) = spawn_with(
+            Arc::clone(&s.lib),
+            tx,
+            decode::decode_file,
+            Vec::new,
+            no_trash(),
+        )
+        .unwrap();
         let view = |events: &Receiver<Event>| {
             wait_for(events, |e| match e {
                 Event::Browser(v) => Some(v),
@@ -1080,9 +1213,13 @@ mod tests {
             name: "music".into(),
             path: s.music.clone(),
         }];
-        let (jobs, _worker) = spawn_with(Arc::clone(&s.lib), tx, decode::decode_file, move || {
-            roots.clone()
-        })
+        let (jobs, _worker) = spawn_with(
+            Arc::clone(&s.lib),
+            tx,
+            decode::decode_file,
+            move || roots.clone(),
+            no_trash(),
+        )
         .unwrap();
         let view = |events: &Receiver<Event>| {
             wait_for(events, |e| match e {
@@ -1149,9 +1286,13 @@ mod tests {
             path: music.clone(),
         }];
         let (tx, events) = channel();
-        let (jobs, _worker) = spawn_with(Arc::clone(&lib), tx, decode::decode_file, move || {
-            roots.clone()
-        })
+        let (jobs, _worker) = spawn_with(
+            Arc::clone(&lib),
+            tx,
+            decode::decode_file,
+            move || roots.clone(),
+            no_trash(),
+        )
         .unwrap();
         // Highlighting the drive adds its two files, and only those.
         wait_for(&events, |e| matches!(e, Event::FolderAdded).then_some(()));
