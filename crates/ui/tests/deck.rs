@@ -658,6 +658,49 @@ fn play_cue_sync_and_states_send_their_actions() {
     }
 }
 
+/// The fills of the rectangles drawn inside `area` in the harness's last frame.
+fn fills_in<S>(harness: &Harness<'_, S>, area: egui::Rect) -> Vec<egui::Color32> {
+    let mut fills = Vec::new();
+    let mut stack: Vec<egui::Shape> = harness
+        .output()
+        .shapes
+        .iter()
+        .map(|c| c.shape.clone())
+        .collect();
+    while let Some(shape) = stack.pop() {
+        match shape {
+            egui::Shape::Vec(inner) => stack.extend(inner),
+            egui::Shape::Rect(rect) if area.expand(0.5).contains_rect(rect.rect) => {
+                fills.push(rect.fill);
+            }
+            _ => {}
+        }
+    }
+    fills
+}
+
+#[test]
+fn a_held_button_looks_pressed_until_it_is_let_go() {
+    let (snapshot, frame) = loaded_plain();
+    let (mut harness, _received) = sending(view(&snapshot, &frame));
+    let play = harness.get_by_label("PLAY").rect();
+    let idle = fills_in(&harness, play);
+    assert!(!idle.is_empty(), "PLAY draws no fill");
+    harness.event(Event::PointerMoved(play.center()));
+    harness.run_steps(1);
+    let hovered = fills_in(&harness, play);
+    assert_ne!(hovered, idle, "no hover highlight");
+    harness.event(pointer(true, play.center()));
+    harness.run_steps(2);
+    let held = fills_in(&harness, play);
+    assert_ne!(held, idle, "held looks idle");
+    assert_ne!(held, hovered, "held looks only hovered");
+    harness.event(pointer(false, play.center()));
+    harness.event(Event::PointerGone);
+    harness.run_steps(2);
+    assert_eq!(fills_in(&harness, play), idle, "not back to idle");
+}
+
 #[test]
 fn a_held_cue_no_longer_drawn_is_released() {
     let (snapshot, frame) = loaded_plain();

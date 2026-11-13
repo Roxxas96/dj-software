@@ -27,7 +27,7 @@ use crate::hotcue_menu::{self, HotcueTarget};
 use crate::layout::{Sections, deck_slots};
 use crate::mixer;
 use crate::model::{ControlFrame, GHOST_FX_LEVEL, GHOST_TEMPO, HotcueMark};
-use crate::theme::{self, EDGE_LABEL_WIDTH, SECTION_GAP, edge_label};
+use crate::theme::{self, ButtonLook, EDGE_LABEL_WIDTH, SECTION_GAP, edge_label};
 use crate::view::{JogDisplay, TimeMode, WaveformPalette};
 use crate::waveform::{Playhead, band_colours, layers, loudest};
 
@@ -1322,7 +1322,9 @@ fn pads_column(
                 ui.spacing_mut().item_spacing.x = PAD_GAP;
                 for (column, pad_view) in pads.iter().enumerate() {
                     let fill = pad_view.colour.map_or(accent, |c| p.mark(Some(c)));
-                    let rect = indicator(ui, pad, &pad_view.label, pad_view.lit.then_some(fill));
+                    let lit = pad_view.lit.then_some(fill);
+                    let (rect, _) = ui.allocate_exact_size(pad, Sense::hover());
+                    let mut look = ButtonLook::Idle;
                     let slot = HotcueSlot::ALL[row * 4 + column];
                     if let Some(action) = window_pad_action(
                         view.pad_mode_choice,
@@ -1340,14 +1342,22 @@ fn pads_column(
                         // On macOS Ctrl + click is a right-click: it presses no hotcue.
                         if hotcue && press.right_click {
                             sink.release(&response, action);
+                            // It presses nothing, so it does not look pressed.
+                            look = if response.hovered() {
+                                ButtonLook::Hovered
+                            } else {
+                                ButtonLook::Idle
+                            };
                         } else {
                             sink.button(&response, action);
+                            look = ButtonLook::of(&response);
                         }
                         // A hotcue pad's right-click opens its editor.
                         if hotcue && press.opened {
                             open_hotcue_menu(ui, view, slot, pad_view.lit, rect);
                         }
                     }
+                    indicator(ui, rect, &pad_view.label, lit, look);
                 }
             });
         }
@@ -1420,8 +1430,9 @@ fn pad_mode_arrow(ui: &mut Ui, view: &DeckView, step: isize, sink: &mut Sink<'_>
     response.widget_info(|| WidgetInfo::labeled(Role::Button, true, name));
     let action = Action::PadMode(Side::of(view.deck), stepped_pad_mode(view, step));
     sink.button(&response, action);
+    let look = ButtonLook::of(&response);
     ui.painter()
-        .rect_filled(rect, CornerRadius::same(2), p.lane);
+        .rect_filled(look.rect(rect), CornerRadius::same(2), look.fill(p.lane));
     // A triangle pointing the way it steps.
     let c = rect.center();
     let (w, h) = (3.5 * step as f32, 4.5);
@@ -1489,7 +1500,8 @@ fn control_id(action: Action) -> Id {
     Id::NULL.with(("deck", action))
 }
 
-/// An [`indicator`] that the mouse presses: it sends `action` through `sink`.
+/// An [`indicator`] of `size` that the mouse presses: it sends `action` through `sink`,
+/// and looks pressed while held.
 fn button(
     ui: &mut Ui,
     sink: &mut Sink<'_>,
@@ -1498,29 +1510,29 @@ fn button(
     lit: Option<Color32>,
     action: Action,
 ) {
-    let rect = indicator(ui, size, text, lit);
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
     let response = ui.interact(rect, control_id(action), Sense::click_and_drag());
     sink.button(&response, action);
+    indicator(ui, rect, text, lit, ButtonLook::of(&response));
 }
 
-/// A box of `size` with `text`, filled with `lit`'s colour when lit; returns where it is.
-fn indicator(ui: &mut Ui, size: Vec2, text: &str, lit: Option<Color32>) -> Rect {
+/// A box at `rect` with `text`, filled with `lit`'s colour when lit, in `look`.
+fn indicator(ui: &mut Ui, rect: Rect, text: &str, lit: Option<Color32>, look: ButtonLook) {
     let p = theme::palette(ui.ctx());
-    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
     let (fill, colour) = match lit {
         // A dark fill (a hotcue's saved colour) takes light text.
         Some(colour) if theme::luminance(colour) < DARK_FILL => (colour, Color32::WHITE),
         Some(colour) => (colour, p.on_accent),
         None => (p.lane, p.text_dim),
     };
-    ui.painter().rect_filled(rect, CornerRadius::same(2), fill);
+    ui.painter()
+        .rect_filled(look.rect(rect), CornerRadius::same(2), look.fill(fill));
     if !text.is_empty() {
         let label = Label::new(RichText::new(text).color(colour).size(SMALL_FONT))
             .selectable(false)
             .truncate();
         ui.place(rect, label);
     }
-    rect
 }
 
 #[cfg(test)]

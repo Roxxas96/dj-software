@@ -19,7 +19,7 @@ use crate::model::{
     ControlFrame, GHOST_CROSSFADER, GHOST_EQ_HIGH, GHOST_EQ_LOW, GHOST_EQ_MID, GHOST_FADER,
     GHOST_FILTER, GHOST_HEADPHONE, GHOST_HEADPHONE_MIX, GHOST_MASTER, GHOST_TRIM,
 };
-use crate::theme::{self, SECTION_GAP};
+use crate::theme::{self, ButtonLook, SECTION_GAP};
 
 /// How long a channel meter's peak marker stays at the highest peak.
 const PEAK_HOLD: Duration = Duration::from_secs(1);
@@ -370,10 +370,12 @@ fn pfl_button(ui: &mut Ui, rect: Rect, deck: DeckId, on: bool, sink: &mut Sink<'
     sink.button(&response, action);
     let accent = theme::palette(ui.ctx()).deck_accent(deck);
     let p = theme::palette(ui.ctx());
+    let look = ButtonLook::of(&response);
+    let fill = look.fill(if on { accent } else { p.background });
     ui.painter().rect(
-        rect,
+        look.rect(rect),
         CornerRadius::same(3),
-        if on { accent } else { p.background },
+        fill,
         Stroke::new(1.0, accent),
         StrokeKind::Inside,
     );
