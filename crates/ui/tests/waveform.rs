@@ -272,6 +272,7 @@ fn flag_right_click_opens_the_same_editor() {
 /// returned; the second number is the lane's width.
 fn scrubbing(
     loaded: bool,
+    overlaid: bool,
 ) -> (
     Harness<'static>,
     std::sync::mpsc::Receiver<ui::UiCommand>,
@@ -286,11 +287,17 @@ fn scrubbing(
         duration_frames: 1_280_000,
         position_frames: 441_000.0,
         load_seq: 1,
+        playing: true,
         ..DeckSnapshot::default()
     };
-    let frame = ControlFrame::default();
+    let mut frame = ControlFrame::default();
     let mut reads = DeckReads::default();
     reads.decks[0] = (snapshot, 0);
+    if overlaid {
+        // Both decks loaded and sharing the one lane.
+        frame.view.waveform_style = WaveformStyle::Overlaid;
+        reads.decks[1] = (snapshot, 0);
+    }
     let (commands, received) = std::sync::mpsc::channel();
     let width = std::rc::Rc::new(std::cell::Cell::new(0.0));
     let seen = std::rc::Rc::clone(&width);
@@ -323,7 +330,7 @@ fn lane_drag_follows_the_pointer() {
     use egui::{Event, pos2};
     use ui::UiCommand;
 
-    let (mut harness, received, width) = scrubbing(true);
+    let (mut harness, received, width) = scrubbing(true, false);
     let start = pos2(600.0, 50.0);
     harness.event(Event::PointerMoved(start));
     harness.run_steps(1);
@@ -378,7 +385,7 @@ fn lane_drag_follows_the_pointer() {
 fn a_drag_on_an_empty_lane_sends_nothing() {
     use egui::{Event, pos2};
 
-    let (mut harness, received, _) = scrubbing(false);
+    let (mut harness, received, _) = scrubbing(false, false);
     let start = pos2(600.0, 50.0);
     harness.event(Event::PointerMoved(start));
     harness.run_steps(1);
@@ -390,4 +397,53 @@ fn a_drag_on_an_empty_lane_sends_nothing() {
     harness.run_steps(2);
     let sent: Vec<ui::UiCommand> = received.try_iter().collect();
     assert!(sent.is_empty(), "{sent:?}");
+}
+
+/// Drags the lane from `start` to `end`, and what it sent.
+fn drag_lane(
+    harness: &mut Harness<'static>,
+    received: &std::sync::mpsc::Receiver<ui::UiCommand>,
+    start: egui::Pos2,
+    end: egui::Pos2,
+) -> Vec<ui::UiCommand> {
+    use egui::Event;
+    harness.event(Event::PointerMoved(start));
+    harness.run_steps(1);
+    harness.event(left_button(start, true));
+    harness.run_steps(2);
+    harness.event(Event::PointerMoved(end));
+    harness.run_steps(1);
+    harness.event(left_button(end, false));
+    harness.run_steps(2);
+    received.try_iter().collect()
+}
+
+#[test]
+fn a_click_on_a_playing_lane_sends_nothing() {
+    use egui::pos2;
+    let (mut harness, received, _) = scrubbing(true, false);
+    let at = pos2(600.0, 50.0);
+    let sent = drag_lane(&mut harness, &received, at, at);
+    assert!(sent.is_empty(), "{sent:?}");
+}
+
+#[test]
+fn an_overlaid_lane_scrubs_its_first_deck() {
+    use egui::pos2;
+    let (mut harness, received, _) = scrubbing(true, true);
+    let sent = drag_lane(
+        &mut harness,
+        &received,
+        pos2(600.0, 50.0),
+        pos2(500.0, 50.0),
+    );
+    let first = DeckId::new(0).unwrap();
+    assert!(!sent.is_empty());
+    for command in &sent {
+        match command {
+            ui::UiCommand::Action(actions::Action::JogTouch(d), _)
+            | ui::UiCommand::Action(actions::Action::JogScratch(d), _) => assert_eq!(*d, first),
+            other => panic!("{other:?}"),
+        }
+    }
 }
