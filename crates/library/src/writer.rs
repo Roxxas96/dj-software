@@ -169,7 +169,9 @@ pub enum WriteOp {
         playlist: i64,
         entries: Vec<(usize, i64)>,
     },
-    /// Applies several ops in one transaction: all of them or none.
+    /// Applies several ops in one transaction: all of them or none. Its playlist entry
+    /// edits are made in memory and each playlist is written once, from its first entry
+    /// that changed.
     Batch(Vec<WriteOp>),
     /// Runs raw statements in one transaction. Meant for tests and maintenance; regular
     /// code uses the typed ops.
@@ -635,9 +637,16 @@ fn apply(tx: &Transaction<'_>, op: &WriteOp) -> Result<WriteOutcome, LibraryErro
         | WriteOp::MoveInPlaylist { .. }
         | WriteOp::ExpectPlaylistEntries { .. } => crate::playlists::apply(tx, op),
         WriteOp::Batch(ops) => {
+            let mut edits = crate::playlists::EntryEdits::default();
             for op in ops {
+                if edits.take(tx, op)? {
+                    continue;
+                }
+                // Any other op sees the entries edited so far.
+                edits.write(tx)?;
                 apply(tx, op)?;
             }
+            edits.write(tx)?;
             Ok(WriteOutcome::Done)
         }
         WriteOp::Raw(statements) => run_raw(tx, statements),

@@ -1,9 +1,13 @@
 //! Playlists and the paged track queries behind the library and set-prep views.
 //!
-//! Playlist ops run inside the writer's transaction and keep positions dense (0..n). A
-//! reorder loads the playlist's entries, rearranges them in memory and rewrites the rows,
-//! so the composite primary key `(playlist_id, position)` never sees a transient clash.
+//! Playlist ops run inside the writer's transaction and keep positions dense (0..n). An
+//! entry edit loads the playlist's entries, changes them in memory and rewrites the rows
+//! from the first one that changed, so the composite primary key `(playlist_id, position)`
+//! never sees a transient clash; a batch's edits share one load and one rewrite per
+//! playlist.
 
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::path::{MAIN_SEPARATOR, PathBuf};
 
 use rusqlite::types::Value;
@@ -648,51 +652,114 @@ pub(crate) fn apply(tx: &Transaction<'_>, op: &WriteOp) -> Result<WriteOutcome, 
             renumber_playlists(tx, &ids)?;
             Ok(WriteOutcome::Done)
         }
-        WriteOp::AddToPlaylist {
-            playlist,
-            track,
-            at,
-        } => {
-            let mut entries = entries(tx, *playlist)?;
-            let known: bool = tx.query_row(
-                "SELECT EXISTS (SELECT 1 FROM tracks WHERE id = ?1)",
-                [track],
-                |r| r.get(0),
-            )?;
-            if !known {
-                return Err(LibraryError::NoSuchTrack(*track));
+        op => {
+            let mut edits = EntryEdits::default();
+            if !edits.take(tx, op)? {
+                unreachable!("only playlist ops are routed here");
             }
-            entries.insert(at.unwrap_or(usize::MAX).min(entries.len()), *track);
-            rewrite(tx, *playlist, &entries)?;
+            edits.write(tx)?;
             Ok(WriteOutcome::Done)
         }
-        WriteOp::RemoveFromPlaylist { playlist, position } => {
-            let mut entries = entries(tx, *playlist)?;
-            check_position(*position, entries.len())?;
-            entries.remove(*position);
-            rewrite(tx, *playlist, &entries)?;
-            Ok(WriteOutcome::Done)
-        }
-        WriteOp::MoveInPlaylist { playlist, from, to } => {
-            let mut entries = entries(tx, *playlist)?;
-            check_position(*from, entries.len())?;
-            let moved = entries.remove(*from);
-            entries.insert((*to).min(entries.len()), moved);
-            rewrite(tx, *playlist, &entries)?;
-            Ok(WriteOutcome::Done)
-        }
-        WriteOp::ExpectPlaylistEntries { playlist, entries } => {
-            let held = self::entries(tx, *playlist)?;
-            if entries
-                .iter()
-                .all(|&(position, track)| held.get(position) == Some(&track))
-            {
-                Ok(WriteOutcome::Done)
-            } else {
-                Err(LibraryError::PlaylistChanged(*playlist))
+    }
+}
+
+/// Playlist entry edits ([`WriteOp::AddToPlaylist`], [`WriteOp::RemoveFromPlaylist`],
+/// [`WriteOp::MoveInPlaylist`] and [`WriteOp::ExpectPlaylistEntries`]) made in memory, each
+/// playlist's entries loaded once, until [`EntryEdits::write`].
+#[derive(Debug, Default)]
+pub(crate) struct EntryEdits {
+    playlists: HashMap<i64, Edited>,
+}
+
+/// A playlist's entries as edited, and the first position whose entry changed since they
+/// were loaded or written (their length when none did).
+#[derive(Debug)]
+struct Edited {
+    entries: Vec<i64>,
+    from: usize,
+}
+
+impl Edited {
+    fn changed_at(&mut self, position: usize) {
+        self.from = self.from.min(position);
+    }
+}
+
+impl EntryEdits {
+    /// Makes `op` in memory if it is an entry edit (`true`); any other op is left alone
+    /// (`false`). On an error the transaction must be rolled back.
+    pub(crate) fn take(
+        &mut self,
+        tx: &Transaction<'_>,
+        op: &WriteOp,
+    ) -> Result<bool, LibraryError> {
+        match op {
+            WriteOp::AddToPlaylist {
+                playlist,
+                track,
+                at,
+            } => {
+                let known: bool = tx
+                    .prepare_cached("SELECT EXISTS (SELECT 1 FROM tracks WHERE id = ?1)")?
+                    .query_row([track], |r| r.get(0))?;
+                let edited = self.load(tx, *playlist)?;
+                if !known {
+                    return Err(LibraryError::NoSuchTrack(*track));
+                }
+                let at = at.unwrap_or(usize::MAX).min(edited.entries.len());
+                edited.entries.insert(at, *track);
+                edited.changed_at(at);
             }
+            WriteOp::RemoveFromPlaylist { playlist, position } => {
+                let edited = self.load(tx, *playlist)?;
+                check_position(*position, edited.entries.len())?;
+                edited.entries.remove(*position);
+                edited.changed_at(*position);
+            }
+            WriteOp::MoveInPlaylist { playlist, from, to } => {
+                let edited = self.load(tx, *playlist)?;
+                check_position(*from, edited.entries.len())?;
+                let moved = edited.entries.remove(*from);
+                let to = (*to).min(edited.entries.len());
+                edited.entries.insert(to, moved);
+                if to != *from {
+                    edited.changed_at((*from).min(to));
+                }
+            }
+            WriteOp::ExpectPlaylistEntries { playlist, entries } => {
+                let held = &self.load(tx, *playlist)?.entries;
+                if !entries
+                    .iter()
+                    .all(|&(position, track)| held.get(position) == Some(&track))
+                {
+                    return Err(LibraryError::PlaylistChanged(*playlist));
+                }
+            }
+            _ => return Ok(false),
         }
-        _ => unreachable!("only playlist ops are routed here"),
+        Ok(true)
+    }
+
+    /// Playlist `id`'s entries as edited so far, loaded on first use; errors if the
+    /// playlist does not exist.
+    fn load(&mut self, tx: &Transaction<'_>, id: i64) -> Result<&mut Edited, LibraryError> {
+        Ok(match self.playlists.entry(id) {
+            Entry::Occupied(edited) => edited.into_mut(),
+            Entry::Vacant(slot) => {
+                let entries = entries(tx, id)?;
+                let from = entries.len();
+                slot.insert(Edited { entries, from })
+            }
+        })
+    }
+
+    /// Writes each edited playlist's rows from its first changed position, and forgets
+    /// them (a later edit loads them again).
+    pub(crate) fn write(&mut self, tx: &Transaction<'_>) -> Result<(), LibraryError> {
+        for (playlist, edited) in self.playlists.drain() {
+            rewrite_from(tx, playlist, &edited.entries, edited.from)?;
+        }
+        Ok(())
     }
 }
 
@@ -759,14 +826,23 @@ fn entries(tx: &Transaction<'_>, playlist: i64) -> Result<Vec<i64>, LibraryError
 
 /// Replaces a playlist's rows with `tracks` at positions 0..n.
 fn rewrite(tx: &Transaction<'_>, playlist: i64, tracks: &[i64]) -> Result<(), LibraryError> {
-    tx.execute(
-        "DELETE FROM playlist_tracks WHERE playlist_id = ?1",
-        [playlist],
-    )?;
+    rewrite_from(tx, playlist, tracks, 0)
+}
+
+/// Replaces a playlist's rows at positions `from..` with `tracks[from..]`, the rows before
+/// `from` holding `tracks[..from]` already.
+fn rewrite_from(
+    tx: &Transaction<'_>,
+    playlist: i64,
+    tracks: &[i64],
+    from: usize,
+) -> Result<(), LibraryError> {
+    tx.prepare_cached("DELETE FROM playlist_tracks WHERE playlist_id = ?1 AND position >= ?2")?
+        .execute((playlist, to_i64(from)))?;
     let mut stmt = tx.prepare_cached(
         "INSERT INTO playlist_tracks(playlist_id, track_id, position) VALUES (?1, ?2, ?3)",
     )?;
-    for (position, track) in tracks.iter().enumerate() {
+    for (position, track) in tracks.iter().enumerate().skip(from) {
         stmt.execute((playlist, track, to_i64(position)))?;
     }
     Ok(())
