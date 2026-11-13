@@ -805,8 +805,8 @@ fn fifty_thousand() -> (tempfile::TempDir, Library) {
     (dir, lib)
 }
 
-/// The bound a 50,000-track timing must stay under: loose enough for debug and for CI's
-/// Windows runners.
+/// The bound a 50,000-track timing must stay under: loose enough for debug and for CI
+/// runners.
 fn fifty_thousand_bound() -> Duration {
     // CI's shared runners are slower and noisier than a desktop: a debug sorted refresh
     // took 1.1 s on ubuntu-latest (160 ms in release).
