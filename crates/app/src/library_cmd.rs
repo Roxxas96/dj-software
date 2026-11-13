@@ -153,7 +153,8 @@ pub struct ListArgs {
     /// Only the tracks under this folder
     #[arg(long, value_name = "DIR")]
     pub folder: Option<PathBuf>,
-    /// Only tracks whose title or artist contains this text (case-insensitive)
+    /// Only tracks whose title or artist contains this text, or the file name of a track
+    /// without a title (case-insensitive)
     #[arg(long, value_name = "TEXT")]
     pub search: Option<String>,
     /// Sort order (default: artist; playlist order for --playlist)
@@ -663,12 +664,20 @@ fn list_tracks(lib: &Library, args: &ListArgs) -> anyhow::Result<()> {
     let (rows, total, positions) = match &args.playlist {
         Some(name) => {
             let playlist = find_playlist(&reader, name)?;
-            let mut entries: Vec<(usize, TrackRow)> = playlist_rows(&reader, &playlist)?
-                .into_iter()
-                .enumerate()
-                .map(|(i, r)| (i + 1, r))
-                .filter(|(_, r)| matches_search(r, args.search.as_deref()))
-                .collect();
+            let search = args.search.as_deref();
+            let mut entries: Vec<(usize, TrackRow)> = Vec::new();
+            for (i, row) in playlist_rows(&reader, &playlist)?.into_iter().enumerate() {
+                // An untitled track is listed by its file name: read it to search it.
+                let name = match search {
+                    Some(_) if is_untitled(&row) => reader
+                        .track(row.id)?
+                        .and_then(|t| t.path.file_name().map(|n| n.to_string_lossy().into_owned())),
+                    _ => None,
+                };
+                if matches_search(&row, name.as_deref(), search) {
+                    entries.push((i + 1, row));
+                }
+            }
             if let Some(sort) = args.sort {
                 entries.sort_by(|a, b| compare(&a.1, &b.1, sort.key()));
             }
@@ -729,16 +738,22 @@ fn playlist_rows(reader: &Reader, playlist: &PlaylistSummary) -> anyhow::Result<
     }
 }
 
-fn matches_search(row: &TrackRow, search: Option<&str>) -> bool {
+/// Whether the track has no title to show: it is listed by its file name.
+fn is_untitled(row: &TrackRow) -> bool {
+    row.title.as_deref().is_none_or(|t| t.trim().is_empty())
+}
+
+/// Whether `row` holds `search` (any row without one) in its title or artist, ignoring
+/// case, or, untitled, in its `file_name`: what `--search` matches outside a playlist too.
+fn matches_search(row: &TrackRow, file_name: Option<&str>, search: Option<&str>) -> bool {
     let Some(text) = search.filter(|t| !t.is_empty()) else {
         return true;
     };
     let text = text.to_lowercase();
-    [&row.title, &row.artist].iter().any(|field| {
-        field
-            .as_deref()
-            .is_some_and(|f| f.to_lowercase().contains(&text))
-    })
+    let name = file_name.filter(|_| is_untitled(row));
+    [row.title.as_deref(), row.artist.as_deref(), name]
+        .iter()
+        .any(|field| field.is_some_and(|f| f.to_lowercase().contains(&text)))
 }
 
 /// Orders playlist rows like the library sorts (unknown values first, ties by id; added
@@ -1480,9 +1495,30 @@ mod tests {
         let mut rows = [row(3, Some(130.0)), row(1, None), row(2, Some(120.0))];
         rows.sort_by(|a, b| compare(a, b, TrackSortKey::Bpm));
         assert_eq!(rows.map(|r| r.id), [1, 2, 3]);
-        assert!(matches_search(&row(1, None), Some("song 1")));
-        assert!(matches_search(&row(1, None), Some("ARTIST")));
-        assert!(!matches_search(&row(1, None), Some("nope")));
+        assert!(matches_search(&row(1, None), None, Some("song 1")));
+        assert!(matches_search(&row(1, None), None, Some("ARTIST")));
+        assert!(!matches_search(&row(1, None), None, Some("nope")));
+        // An untitled track is listed by its file name, and found by it.
+        let untitled = TrackRow {
+            title: None,
+            ..row(4, None)
+        };
+        assert!(matches_search(
+            &untitled,
+            Some("Night-Drive.flac"),
+            Some("night")
+        ));
+        assert!(!matches_search(
+            &untitled,
+            Some("Night-Drive.flac"),
+            Some("day")
+        ));
+        // A titled one is not found by its file name.
+        assert!(!matches_search(
+            &row(1, None),
+            Some("Night-Drive.flac"),
+            Some("night")
+        ));
     }
 
     mod export {

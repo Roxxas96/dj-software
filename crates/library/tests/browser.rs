@@ -649,6 +649,65 @@ fn search_matches_an_untitled_tracks_file_name() {
     assert_eq!(file_names(&view), ["Night-Drive.flac"]);
 }
 
+/// Makes the tracks `ids` untitled (title NULL): the list shows their file names.
+fn untitle(lib: &Library, ids: &[i64]) {
+    let stmts = ids
+        .iter()
+        .map(|&id| RawStatement {
+            sql: "UPDATE tracks SET title = NULL WHERE id = ?1".into(),
+            params: vec![Value::Integer(id)],
+        })
+        .collect();
+    lib.writer().submit_wait(WriteOp::Raw(stmts)).unwrap();
+}
+
+#[test]
+fn search_finds_an_untitled_windows_file_by_its_name() {
+    // A Windows path, matched in SQL on every system: the name is after the last `\`.
+    let (_dir, lib) = open();
+    let night = add_artist_tracks(&lib, &[(r"C:\m\Night.flac", "x", "Someone")])[0];
+    untitle(&lib, &[night]);
+    create_playlist(&lib, "Mix", &[night]);
+    let mut b = browser(&lib, Vec::new());
+    scroll(&mut b, 1);
+    assert_eq!(search(&mut b, Some("night"), 1).list_count, 1);
+    // The folders before it are not its name.
+    assert_eq!(search(&mut b, Some(r"m\"), 2).list_count, 0);
+    assert_eq!(search(&mut b, Some("C:"), 3).list_count, 0);
+}
+
+#[test]
+fn sorting_by_title_puts_untitled_tracks_by_file_name() {
+    let (_dir, lib) = open();
+    let ids = add_artist_tracks(
+        &lib,
+        &[
+            ("/m/zz/b.flac", "Mango", "x"),
+            ("/m/zz/Kiwi.flac", "x", "x"),
+            ("/m/aa/z.flac", "apple", "x"),
+        ],
+    );
+    untitle(&lib, &[ids[1]]);
+    create_playlist(&lib, "Mix", &ids);
+    let mut b = browser(&lib, Vec::new());
+    scroll(&mut b, 1);
+    // As shown: apple, Kiwi.flac, Mango (ignoring case), not the folders or NULL first.
+    let view = sort(&mut b, Some(TrackSortKey::Title), false, 1);
+    let order: Vec<i64> = view
+        .list
+        .iter()
+        .map(|r| r.track.as_ref().unwrap().id)
+        .collect();
+    assert_eq!(order, [ids[2], ids[1], ids[0]]);
+    let view = sort(&mut b, Some(TrackSortKey::Title), true, 2);
+    let order: Vec<i64> = view
+        .list
+        .iter()
+        .map(|r| r.track.as_ref().unwrap().id)
+        .collect();
+    assert_eq!(order, [ids[0], ids[1], ids[2]]);
+}
+
 #[test]
 fn a_failed_search_keeps_the_list_and_takes_its_seq() {
     let s = searchable();
