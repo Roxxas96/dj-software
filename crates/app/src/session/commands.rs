@@ -147,6 +147,11 @@ fn library_step(
                 parts.event(why);
             }
         }
+        LibraryStep::AddListToPlaylist { playlist } => {
+            if let Err(why) = library.add_list_to_playlist(playlist) {
+                parts.event(why);
+            }
+        }
         LibraryStep::CreatePlaylist { name } => {
             if let Err(why) = library.create_playlist(&name) {
                 parts.event(why);

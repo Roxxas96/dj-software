@@ -50,6 +50,11 @@ pub enum BrowserEdit {
     /// Opens or closes the drive or folder at tree row `0..`; the highlight stays on its
     /// entry, or moves to the folder when the folder closes over it.
     ToggleTreeAt(usize),
+    /// Selects every row of the list, whatever its length, and focuses the list. The
+    /// browser only notes it ([`BrowserView::all_selected`]); no row ids are built until
+    /// something needs them ([`Browser::list_track_ids`]). Any other edit that picks or
+    /// changes the list (not [`BrowserEdit::ShowPage`]) takes it back.
+    SelectAll,
     /// Filters the list by `text` (`None`: no filter). `seq` grows with each query, so the
     /// window can drop views of older ones.
     Search { text: Option<String>, seq: u64 },
@@ -106,6 +111,9 @@ pub struct BrowserView {
     pub seq: u64,
     /// The library id of the playlist the list shows; `None` for a folder's list.
     pub playlist: Option<i64>,
+    /// Every row of the list is selected ([`BrowserEdit::SelectAll`]); `list_count` is how
+    /// many.
+    pub all_selected: bool,
 }
 
 /// What every list is filtered and ordered by, whichever tree entry it belongs to.
@@ -234,6 +242,8 @@ pub struct Browser {
     query: Query,
     /// The `seq` of the latest search or sort.
     seq: u64,
+    /// Every row of the list is selected.
+    all_selected: bool,
 }
 
 impl std::fmt::Debug for Browser {
@@ -283,6 +293,7 @@ impl Browser {
             focus: Focus::Tree,
             query,
             seq: 0,
+            all_selected: false,
         })
     }
 
@@ -299,13 +310,16 @@ impl Browser {
     /// Any database error; the browser is then unchanged.
     pub fn apply(&mut self, req: BrowserRequest) -> Result<BrowserView, LibraryError> {
         match req {
-            BrowserRequest::Scroll(steps) => match self.focus {
-                Focus::Tree => self.move_tree(steps)?,
-                Focus::List => {
-                    let to = step(self.list.cursor, steps, self.list.count);
-                    self.list.seek(&self.reader, to)?;
+            BrowserRequest::Scroll(steps) => {
+                self.all_selected = false;
+                match self.focus {
+                    Focus::Tree => self.move_tree(steps)?,
+                    Focus::List => {
+                        let to = step(self.list.cursor, steps, self.list.count);
+                        self.list.seek(&self.reader, to)?;
+                    }
                 }
-            },
+            }
             BrowserRequest::ToggleFolder => self.tree.toggle(self.tree_cursor),
             BrowserRequest::ToggleFocus => {
                 self.focus = match self.focus {
@@ -331,7 +345,14 @@ impl Browser {
     /// Any database error; the browser is then unchanged, except that a failed search or
     /// sort still takes its `seq`.
     pub fn edit(&mut self, edit: BrowserEdit) -> Result<BrowserView, LibraryError> {
+        if !matches!(edit, BrowserEdit::SelectAll | BrowserEdit::ShowPage { .. }) {
+            self.all_selected = false;
+        }
         match edit {
+            BrowserEdit::SelectAll => {
+                self.all_selected = self.list.count > 0;
+                self.focus = Focus::List;
+            }
             BrowserEdit::SelectTree(at) => {
                 let to = at.min(self.tree.len() - 1);
                 if to != self.tree_cursor {
@@ -436,6 +457,7 @@ impl Browser {
             }
         };
         list.seek(&self.reader, list_cursor)?;
+        self.all_selected = false;
         self.tree = tree;
         self.tree_cursor = tree_cursor;
         self.list = list;
@@ -468,6 +490,7 @@ impl Browser {
                 Items::Playlist { id, .. } => Some(id),
                 _ => None,
             },
+            all_selected: self.all_selected,
         }
     }
 
@@ -476,6 +499,30 @@ impl Browser {
     #[must_use]
     pub fn selected_track(&self) -> Option<TrackRow> {
         self.list.selected().and_then(|r| r.track.clone())
+    }
+
+    /// The library ids of the list's tracks, in list order: what a whole-list selection
+    /// ([`BrowserEdit::SelectAll`]) stands for. Rows the library does not have (files of a
+    /// folder) are left out. Built when asked, not kept: a long playlist reads its rows
+    /// from the database here.
+    ///
+    /// # Errors
+    ///
+    /// Any database error.
+    pub fn list_track_ids(&self) -> Result<Vec<i64>, LibraryError> {
+        Ok(match &self.list.items {
+            Items::None => Vec::new(),
+            Items::Files { files, tracks, .. } => files
+                .iter()
+                .filter_map(|path| tracks.get(path).map(|t| t.id))
+                .collect(),
+            Items::Playlist { id, query } => self
+                .reader
+                .playlist_page(*id, query.text.as_deref(), query.sort, 0, self.list.count)?
+                .into_iter()
+                .map(|(_, track, _)| track.id)
+                .collect(),
+        })
     }
 
     /// The highlighted folder, when its list has audio files the library doesn't have.

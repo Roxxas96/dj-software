@@ -233,6 +233,7 @@ fn browser() -> BrowserView {
         list,
         list_offset: 0,
         list_count: BROWSER_ROWS,
+        all_selected: false,
         list_cursor: 0,
         search: None,
         sort: None,

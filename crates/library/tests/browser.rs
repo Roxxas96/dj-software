@@ -1289,3 +1289,52 @@ fn a_folder_list_has_no_playlist_or_positions() {
     assert_eq!(view.playlist, None);
     assert!(view.list.iter().all(|r| r.position.is_none()));
 }
+
+#[test]
+fn select_all_marks_the_whole_list_until_another_pick() {
+    let f = fixture();
+    let mut b = browser(&f.lib, Vec::new());
+    scroll(&mut b, 1);
+    let view = b.edit(BrowserEdit::SelectAll).unwrap();
+    assert!(view.all_selected);
+    assert_eq!(view.focus, Focus::List);
+    // Paging the list is not a new pick.
+    let view = b.edit(BrowserEdit::ShowPage { offset: 0 }).unwrap();
+    assert!(view.all_selected);
+    // The ids it stands for are the list's, in order, built on demand.
+    let ids = b.list_track_ids().unwrap();
+    assert_eq!(ids.len(), view.list_count);
+    assert_eq!(
+        ids,
+        view.list
+            .iter()
+            .map(|r| r.track.as_ref().unwrap().id)
+            .collect::<Vec<_>>()
+    );
+    // Any other pick or list change takes it back.
+    let view = b.edit(BrowserEdit::SelectRow(1)).unwrap();
+    assert!(!view.all_selected);
+    assert!(b.edit(BrowserEdit::SelectAll).unwrap().all_selected);
+    let view = b
+        .edit(BrowserEdit::Search {
+            text: Some("t".into()),
+            seq: 1,
+        })
+        .unwrap();
+    assert!(!view.all_selected);
+    b.edit(BrowserEdit::Search { text: None, seq: 2 }).unwrap();
+    assert!(b.edit(BrowserEdit::SelectAll).unwrap().all_selected);
+    assert!(!scroll(&mut b, 1).all_selected);
+    assert!(b.edit(BrowserEdit::SelectAll).unwrap().all_selected);
+    assert!(!b.edit(BrowserEdit::SelectTree(2)).unwrap().all_selected);
+    assert!(b.edit(BrowserEdit::SelectAll).unwrap().all_selected);
+    assert!(!b.refresh().unwrap().all_selected);
+}
+
+#[test]
+fn select_all_of_an_empty_list_selects_nothing() {
+    let (_dir, lib) = open();
+    let mut b = browser(&lib, Vec::new());
+    assert!(!b.edit(BrowserEdit::SelectAll).unwrap().all_selected);
+    assert!(b.list_track_ids().unwrap().is_empty());
+}
