@@ -104,6 +104,8 @@ pub enum LibraryError {
     PositionOutOfRange { position: usize, len: usize },
     #[error("playlist {0} changed: its entries are not where they were")]
     PlaylistChanged(i64),
+    #[error("there is already a playlist called {0}")]
+    PlaylistNameTaken(String),
     #[error("track {0}'s audio changed while it was being analyzed; analyze it again")]
     TrackChanged(i64),
     #[error("track {track_id} has a corrupt stored waveform: {source}")]

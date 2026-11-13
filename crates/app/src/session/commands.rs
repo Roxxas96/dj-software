@@ -1355,6 +1355,20 @@ mod tests {
         drop(decks.renderer);
     }
 
+    /// Polls `library` until it prints `text`, for at most 10 s.
+    fn printed(decks: &mut Labelled, text: &str) {
+        let (printer, events) = Printer::capturing();
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
+        while !events.lock().unwrap().iter().any(|e| e == text) {
+            assert!(Instant::now() < deadline, "{:?}", events.lock().unwrap());
+            decks
+                .library
+                .poll(Instant::now(), &mut decks.engine, &printer);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        printer.finish();
+    }
+
     #[test]
     fn a_duplicate_playlist_name_is_refused_but_case_counts() {
         let mut decks = labelled();
@@ -1371,16 +1385,24 @@ mod tests {
             library::WriteOutcome::Created { id } => id,
             other => panic!("unexpected outcome {other:?}"),
         };
-        let said = ["There is already a playlist called Peak"];
+        // The name is checked on the library worker, with the write, never on the control
+        // thread: the refusal arrives as the worker's event.
+        let said = "There is already a playlist called Peak";
         let create = ui::LibraryStep::CreatePlaylist {
             name: "Peak".into(),
         };
-        assert_eq!(events_of(&mut decks, create), said);
+        assert!(events_of(&mut decks, create).is_empty());
+        printed(&mut decks, said);
         let rename = ui::LibraryStep::RenamePlaylist {
             playlist: other,
-            name: "Peak".into(),
+            name: " Peak ".into(),
         };
-        assert_eq!(events_of(&mut decks, rename), said);
+        assert!(events_of(&mut decks, rename).is_empty());
+        printed(&mut decks, said);
+        assert_eq!(
+            playlists(&decks),
+            [(peak_id, "Peak".to_owned()), (other, "Warm".to_owned())]
+        );
         // Renaming to its own name is no clash; another case is another name.
         let same = ui::LibraryStep::RenamePlaylist {
             playlist: peak_id,
