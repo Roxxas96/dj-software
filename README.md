@@ -108,8 +108,9 @@ On Linux you also need the ALSA headers (`libasound2-dev` on Debian and Ubuntu).
 ## Quick start
 
 ```bash
-# Open the window: the DDJ-SB3 drives it, with the library ([audio], [controller] and
-# [ui] in the configuration file set the device, the mapping and the waveforms)
+# Open the window: every control works with the mouse, and a DDJ-SB3 drives it too, with the
+# library ([audio], [controller] and [ui] in the configuration file set the device, the mapping
+# and the waveforms)
 cargo run --release -p open-jockey
 
 # List output devices and their channel counts
@@ -139,7 +140,8 @@ cargo run --release -p open-jockey -- play --library --controller ddj-sb3 \
 cargo run --release -p open-jockey -- midi monitor --controller ddj-sb3
 ```
 
-The window is described in [docs/ui.md](docs/ui.md); its layout, colours and displays are
+The window is described in [docs/ui.md](docs/ui.md), including its [mouse controls](docs/ui.md#mouse): play, mix,
+scratch and manage playlists without a controller. Its layout, colours and displays are
 changed from the LAYOUT menu, and the settings from the gear's Settings window (they are saved to
 `config.toml`, keeping its comments). Channel numbers are 1-based, as printed on the hardware. `--cue-track` needs `--headphones`.
 `--library` needs `--controller`. Press Ctrl-C to stop.
