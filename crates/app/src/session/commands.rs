@@ -138,7 +138,7 @@ fn library_step(
             parts.event(format!("Deck {} is playing", deck.index() + 1));
         }
         LibraryStep::Load { deck, track } => {
-            if let Err(why) = library.load_track(deck, track) {
+            if let Err(why) = library.load_track_unless_playing(deck, track) {
                 parts.event(why);
             }
         }
@@ -757,9 +757,8 @@ mod tests {
         })
     }
 
-    #[test]
-    fn load_by_id_loads_the_track() {
-        let mut decks = labelled();
+    /// Adds track 9, a short sine that decodes, to the library.
+    fn add_sine_9(decks: &Labelled) {
         let fixture = concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../decode/tests/fixtures/sine440.wav"
@@ -779,6 +778,12 @@ mod tests {
                 params: vec![],
             }]))
             .unwrap();
+    }
+
+    #[test]
+    fn load_by_id_loads_the_track() {
+        let mut decks = labelled();
+        add_sine_9(&decks);
         let mut parts = FrameParts::new(&Config::default());
         let (tx, rx) = channel();
         tx.send(load(1, 9)).unwrap();
@@ -858,6 +863,44 @@ mod tests {
                     && view.track.as_ref().map(|t| t.id) == Some(7)
             })
         });
+        drop(decks.renderer);
+    }
+
+    #[test]
+    fn a_deck_that_starts_during_the_decode_keeps_its_track() {
+        let mut decks = labelled();
+        add_sine_9(&decks);
+        let deck = DeckId::new(0).unwrap();
+        let mut parts = FrameParts::new(&Config::default());
+        let (tx, rx) = channel();
+        // Deck 1 holds track 7, stopped: the load is asked for.
+        tx.send(load(0, 9)).unwrap();
+        decks.drain(&rx, &mut parts);
+        assert!(parts.events.is_empty(), "{:?}", parts.events);
+        // It starts before the decoded track arrives.
+        decks
+            .engine
+            .send(Command::Deck(deck, engine::DeckCommand::Play))
+            .unwrap();
+        let (mut master, mut headphones) = (vec![0.0; 1024], vec![0.0; 1024]);
+        decks.renderer.render(&mut master, &mut headphones);
+        assert!(decks.engine.deck(deck).playing);
+        // Polled without rendering, so the deck reads as playing throughout.
+        let (printer, events) = Printer::capturing();
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
+        let refused = |events: &[String]| events.iter().any(|e| e == "Deck 1 is playing");
+        while !refused(&events.lock().unwrap()) {
+            assert!(Instant::now() < deadline, "{:?}", events.lock().unwrap());
+            decks
+                .library
+                .poll(Instant::now(), &mut decks.engine, &printer);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        printer.finish();
+        let events = events.lock().unwrap().clone();
+        assert!(!events.iter().any(|e| e.contains("Sine")), "{events:?}");
+        let held = decks.library.deck_view(deck, &decks.engine.deck(deck));
+        assert_eq!(held.map(|view| view.row.id), Some(7));
         drop(decks.renderer);
     }
 }

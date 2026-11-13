@@ -328,8 +328,9 @@ fn tree_pane(ui: &mut Ui, view: &BrowserView, steps: &mut Vec<LibraryStep>) {
         let response = ui.interact(rect, Id::NULL.with(("browser tree", at)), Sense::click());
         let arrow = tree_row(ui, rect, entry);
         let opens = matches!(entry.kind, TreeKind::Drive | TreeKind::Folder);
-        // Drawn over the row, the arrow takes its own clicks.
-        let arrow_clicked = arrow.is_some_and(|arrow| {
+        // Drawn over the row, the arrow of a node that opens takes its own clicks; a
+        // node that cannot (the Playlists node) leaves them to the row.
+        let arrow_clicked = arrow.filter(|_| opens).is_some_and(|arrow| {
             let id = Id::NULL.with(("browser tree arrow", at));
             ui.interact(arrow, id, Sense::click()).clicked()
         });
@@ -588,7 +589,8 @@ fn list_pane(
         let rect = row(ui, fill);
         let response = ui.interact(rect, Id::NULL.with(("browser row", at)), Sense::click());
         let track = entry.track.as_ref().map(|t| t.id);
-        if response.clicked() {
+        // The first click of a double-click selected the row already.
+        if response.clicked() && !response.double_clicked() {
             steps.push(LibraryStep::Browse(BrowserEdit::SelectRow(at)));
         }
         if let (true, Some(track)) = (response.double_clicked(), track) {
