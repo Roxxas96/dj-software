@@ -11,6 +11,7 @@ use analysis::{KeyNotation, Waveform};
 use engine::{EffectKind, EqMode, SAMPLER_SLOTS, StemKnobs};
 use library::{BrowserView, TrackRow};
 
+use crate::command::DeleteTarget;
 use crate::view::ViewState;
 
 /// The soft-takeover targets of a deck that can show a pickup value.
@@ -393,6 +394,20 @@ pub struct ControlFrame {
     pub import: ImportView,
     /// Where the export to a USB stick is.
     pub export: ExportView,
+    /// The session's answer to the latest [`LibraryStep::AskDelete`](crate::LibraryStep).
+    pub delete_check: Option<DeleteCheck>,
+}
+
+/// What deleting a [`DeleteTarget`] would do, as the session found when the window asked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeleteCheck {
+    /// Counts the asks: the window shows only an answer newer than its question.
+    pub seq: u64,
+    /// What the window asked about.
+    pub target: DeleteTarget,
+    /// The question to ask, such as "Move 3 files to the Trash?", or why it cannot be
+    /// deleted, such as "Intro.mp3 is loaded on deck 1: unload it first."
+    pub answer: Result<String, String>,
 }
 
 impl Default for ControlFrame {
@@ -421,6 +436,7 @@ impl Default for ControlFrame {
             mappings: Vec::new(),
             import: ImportView::default(),
             export: ExportView::default(),
+            delete_check: None,
         }
     }
 }

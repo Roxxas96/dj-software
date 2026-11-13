@@ -336,6 +336,29 @@ impl crate::Reader {
     }
 }
 
+impl crate::Reader {
+    /// The library tracks whose file is `path`, or lies anywhere under it when it is a
+    /// folder (not merely sharing its prefix), as the library stores their paths
+    /// (canonical).
+    ///
+    /// # Errors
+    ///
+    /// Fails if `path` is not valid UTF-8 or the read fails.
+    pub fn tracks_under(&self, path: &Path) -> Result<Vec<i64>, LibraryError> {
+        let exact = utf8(path)?.to_owned();
+        let prefix = dir_prefix(path)?;
+        // As in `flag_missing`: every path under the folder sorts in [prefix, upper).
+        let mut upper = prefix.clone();
+        upper.pop();
+        upper.push(char::from_u32(u32::from(MAIN_SEPARATOR) + 1).unwrap_or(char::MAX));
+        let mut stmt = self.connection().prepare_cached(
+            "SELECT id FROM tracks WHERE path = ?1 OR (path >= ?2 AND path < ?3) ORDER BY id",
+        )?;
+        let rows = stmt.query_map([&exact, &prefix, &upper], |r| r.get::<_, i64>(0))?;
+        rows.map(|r| r.map_err(LibraryError::from)).collect()
+    }
+}
+
 /// Removes `path` (as given, and in canonical form if it still resolves) from the library
 /// folders. Its tracks, and their cues, are kept.
 ///

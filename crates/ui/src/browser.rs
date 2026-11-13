@@ -22,8 +22,10 @@ use egui::{
 use engine::DeckId;
 use library::{BrowserEdit, BrowserView, Focus, ListRow, TrackSortKey, TreeKind, TreeRow};
 
+use crate::command::DeleteTarget;
 use crate::cover::{self, Covers};
 use crate::deck::{key_text, split_remix};
+use crate::delete_dialog;
 use crate::layout::clamp_sizes;
 use crate::playlist_dialog::{self, Dialog};
 use crate::theme::{self, Palette};
@@ -492,7 +494,8 @@ impl Keys {
         let owned = ctx.data(|d| d.get_temp(owner_id())).unwrap_or(false);
         // A text field (the search box, a dialog's name) keeps its keys, and so does a
         // dialog's button or a menu.
-        if !owned || ctx.text_edit_focused() || playlist_dialog::is_open(ctx) {
+        let dialog = playlist_dialog::is_open(ctx) || delete_dialog::is_open(ctx);
+        if !owned || ctx.text_edit_focused() || dialog {
             return Self::default();
         }
         if egui::Popup::is_any_open(ctx) {
@@ -667,7 +670,13 @@ pub fn show(
     pane(ui, list, |ui| {
         list_pane(ui, view, decks, notation, &keys, steps);
     });
+    if keys.delete
+        && let Some(target) = focused_target(ui.ctx(), view)
+    {
+        delete_dialog::open(ui.ctx(), target, steps);
+    }
     playlist_dialog::show(ui.ctx(), steps);
+    delete_dialog::show(ui.ctx(), steps);
     if arrangement.info {
         crate::landmark_rect(ui, info, "info panel");
         pane(ui, info, |ui| info_pane(ui, view, notation, covers));
@@ -767,9 +776,9 @@ fn tree_pane(ui: &mut Ui, view: &BrowserView, keys: &Keys, steps: &mut Vec<Libra
         let rect = row(ui, highlight(&p, at == view.tree_cursor, focused));
         let response = ui.interact(rect, Id::NULL.with(("browser tree", at)), Sense::CLICK);
         let arrow = tree_row(ui, rect, entry);
-        // Drives and folders have no menu.
-        if entry.kind == TreeKind::Playlists || entry.playlist.is_some() {
-            response.context_menu(|ui| tree_menu(ui, entry));
+        // Drives have no menu.
+        if entry.kind == TreeKind::Playlists || tree_target(entry).is_some() {
+            response.context_menu(|ui| tree_menu(ui, entry, steps));
         }
         // Tracks dropped on a playlist go at its end; rows of that same playlist dropped
         // back on it overshot a move, and do nothing.
@@ -818,6 +827,53 @@ fn search_id() -> Id {
     Id::NULL.with("open-jockey-browser-search")
 }
 
+/// What a Delete key deletes in `view`'s focused pane: in the list, the rows picked (or
+/// the cursor's row, or the whole list when it is all selected); in the tree, the
+/// highlighted playlist or folder. `None` where there is nothing to delete.
+fn focused_target(ctx: &egui::Context, view: &BrowserView) -> Option<DeleteTarget> {
+    match view.focus {
+        Focus::List => {
+            let selection = Selection::take(ctx, view);
+            let rows = if selection.rows.is_empty() {
+                vec![view.list_cursor]
+            } else {
+                selection.rows.iter().copied().collect()
+            };
+            selection.put(ctx);
+            list_target(view, &rows)
+        }
+        Focus::Tree => view.tree.get(view.tree_cursor).and_then(tree_target),
+    }
+}
+
+/// What deleting rows `rows` of `view`'s list deletes: entries of its playlist, or the
+/// files of a folder's library tracks; with the whole list selected, all of it.
+fn list_target(view: &BrowserView, rows: &[usize]) -> Option<DeleteTarget> {
+    if view.all_selected {
+        let list = view.identity();
+        return Some(match view.playlist {
+            Some(_) => DeleteTarget::AllEntries { list },
+            None => DeleteTarget::AllFiles { list },
+        });
+    }
+    let drag = track_drag(view, rows)?;
+    Some(match drag.entries() {
+        Some((playlist, entries)) => DeleteTarget::Entries { playlist, entries },
+        None => DeleteTarget::Files {
+            tracks: drag.tracks,
+        },
+    })
+}
+
+/// What deleting tree row `entry` deletes: a playlist, or a folder (not a drive).
+fn tree_target(entry: &TreeRow) -> Option<DeleteTarget> {
+    match entry.kind {
+        TreeKind::Playlist => entry.playlist.map(|id| DeleteTarget::Playlist { id }),
+        TreeKind::Folder => entry.path.clone().map(|path| DeleteTarget::Folder { path }),
+        TreeKind::Drive | TreeKind::Playlists => None,
+    }
+}
+
 /// What the keys do in the tree: move the highlight, and open or close the highlighted
 /// drive or folder.
 fn tree_keys(view: &BrowserView, keys: &Keys, rows: usize, steps: &mut Vec<LibraryStep>) {
@@ -837,24 +893,27 @@ fn tree_keys(view: &BrowserView, keys: &Keys, rows: usize, steps: &mut Vec<Libra
     }
 }
 
-/// The menu of a tree row: "New playlist…" on the Playlists node, "Rename…" and "Delete…"
-/// on a playlist; each opens its dialog, and Delete asks first.
-fn tree_menu(ui: &mut Ui, entry: &TreeRow) {
+/// The menu of a tree row: "New playlist…" on the Playlists node, "Rename…" on a
+/// playlist, and "Delete…" on a playlist or a folder; each opens its dialog, and Delete
+/// asks first.
+fn tree_menu(ui: &mut Ui, entry: &TreeRow, steps: &mut Vec<LibraryStep>) {
     let ctx = ui.ctx().clone();
     if entry.kind == TreeKind::Playlists {
         if ui.button("New playlist\u{2026}").clicked() {
             playlist_dialog::open(&ctx, Dialog::New);
         }
-    } else if let Some(playlist) = entry.playlist {
-        let name = || entry.label.clone();
-        if ui.button("Rename\u{2026}").clicked() {
-            let name = name();
-            playlist_dialog::open(&ctx, Dialog::Rename { playlist, name });
-        }
-        if ui.button("Delete\u{2026}").clicked() {
-            let name = name();
-            playlist_dialog::open(&ctx, Dialog::Delete { playlist, name });
-        }
+        return;
+    }
+    if let Some(playlist) = entry.playlist
+        && ui.button("Rename\u{2026}").clicked()
+    {
+        let name = entry.label.clone();
+        playlist_dialog::open(&ctx, Dialog::Rename { playlist, name });
+    }
+    if let Some(target) = tree_target(entry)
+        && ui.button("Delete\u{2026}").clicked()
+    {
+        delete_dialog::open(&ctx, target, steps);
     }
 }
 
@@ -1274,7 +1333,8 @@ fn list_keys(
 }
 
 /// The menu of a library track's row `at`: load it on a deck, add it (or the rows picked,
-/// when it is one of them) to a playlist, or take them out of the playlist shown.
+/// when it is one of them) to a playlist, take them out of the playlist shown, or delete
+/// them (asking first).
 fn track_menu(
     ui: &mut Ui,
     view: &BrowserView,
@@ -1327,11 +1387,10 @@ fn track_menu(
             }
         });
     }
-    // Taking a whole list out of its playlist is not offered: it names no positions.
-    let Some(playlist) = view.playlist.filter(|_| !view.all_selected) else {
-        return;
-    };
-    if ui.button("Remove from playlist").clicked()
+    // Taking a whole list out of its playlist this way is not offered: it names no
+    // positions. "Delete…" does it, through the library.
+    if let Some(playlist) = view.playlist.filter(|_| !view.all_selected)
+        && ui.button("Remove from playlist").clicked()
         && let Some((_, positions)) =
             track_drag(view, &selection.acting_on(at)).and_then(|drag| drag.entries())
     {
@@ -1340,6 +1399,11 @@ fn track_menu(
             positions,
         });
         selection.clear();
+    }
+    if ui.button("Delete\u{2026}").clicked()
+        && let Some(target) = list_target(view, &selection.acting_on(at))
+    {
+        delete_dialog::open(ui.ctx(), target, steps);
     }
 }
 

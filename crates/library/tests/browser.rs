@@ -1338,3 +1338,75 @@ fn select_all_of_an_empty_list_selects_nothing() {
     assert!(!b.edit(BrowserEdit::SelectAll).unwrap().all_selected);
     assert!(b.list_track_ids().unwrap().is_empty());
 }
+
+#[test]
+fn folder_rows_carry_their_path_and_go_once_gone() {
+    let (_lib_dir, lib) = open();
+    let (_d, root) = disk();
+    let mut b = browser(&lib, vec![drive("Stick", &root)]);
+    let view = toggle_folder(&mut b);
+    let paths: Vec<_> = view.tree.iter().map(|r| r.path.clone()).collect();
+    // Folders only: not the drive, nor the Playlists node.
+    assert_eq!(
+        paths,
+        [None, Some(root.join("A")), Some(root.join("B")), None]
+    );
+    assert_eq!(
+        b.drive_name(&root.join("A/a1.mp3")).as_deref(),
+        Some("Stick")
+    );
+    assert_eq!(b.drive_name(Path::new("/elsewhere/x.mp3")), None);
+    // Opened, A shows its subfolder; once A is gone (to the Trash), a refresh drops it and
+    // everything below it.
+    scroll(&mut b, 1);
+    toggle_folder(&mut b);
+    fs::remove_dir_all(root.join("A")).unwrap();
+    let view = b.refresh().unwrap();
+    assert_eq!(labels(&view), ["Stick", "B", "Playlists"]);
+}
+
+#[test]
+fn a_whole_list_is_resolved_by_the_library() {
+    let (_lib_dir, lib) = open();
+    let (_d, root) = disk();
+    let ids: Vec<i64> = ["a1.mp3", "a2.wav"]
+        .iter()
+        .map(|f| add_file_track(&lib, &root.join("A").join(f), f))
+        .collect();
+    let peak = create_playlist(&lib, "Peak", &[ids[1], ids[0], ids[1]]);
+    let mut b = browser(&lib, vec![drive("root", &root)]);
+    toggle_folder(&mut b);
+    b.edit(BrowserEdit::SelectTree(1)).unwrap();
+    // A folder's list: its files, with or without a library track; no playlist entries.
+    assert_eq!(
+        b.list_files(),
+        [root.join("A/a1.mp3"), root.join("A/a2.wav")]
+    );
+    assert!(b.list_entries().unwrap().is_empty());
+    let at = b.view().tree.iter().position(|r| r.playlist == Some(peak));
+    b.edit(BrowserEdit::SelectTree(at.unwrap())).unwrap();
+    assert_eq!(
+        b.list_entries().unwrap(),
+        [(0, ids[1]), (1, ids[0]), (2, ids[1])]
+    );
+    assert!(b.list_files().is_empty());
+}
+
+#[test]
+fn tracks_under_a_folder_are_found_not_its_namesakes() {
+    let (_lib_dir, lib) = open();
+    // As the platform writes paths.
+    let native = |path: &str| path.replace('/', std::path::MAIN_SEPARATOR_STR);
+    let tracks = [
+        ("/m/Old/a.mp3", "a"),
+        ("/m/Old/deep/b.mp3", "b"),
+        ("/m/Older/c.mp3", "c"),
+        ("/m/Old.mp3", "d"),
+    ];
+    let ids = add_tracks(&lib, &tracks.map(|(p, t)| (native(p), t.to_owned())));
+    let reader = lib.reader().unwrap();
+    let under = |path: &str| reader.tracks_under(Path::new(&native(path))).unwrap();
+    assert_eq!(under("/m/Old"), [ids[0], ids[1]]);
+    assert_eq!(under("/m/Old.mp3"), [ids[3]]);
+    assert!(under("/m/Ol").is_empty());
+}

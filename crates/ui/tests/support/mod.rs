@@ -197,6 +197,7 @@ fn tree_row(label: &str, depth: u8, kind: TreeKind, expanded: bool) -> TreeRow {
         expanded,
         note: None,
         playlist: None,
+        path: None,
     }
 }
 

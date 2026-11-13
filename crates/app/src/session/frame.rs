@@ -254,6 +254,7 @@ impl FrameParts {
             global_ghosts: pass.global_ghosts,
             decks,
             browser: pass.library.and_then(|l| l.browser().cloned()),
+            delete_check: pass.library.and_then(|l| l.delete_check().cloned()),
             controller: pass.controller.map(str::to_owned),
             key_notation: pass.library.map(LibraryMode::notation).unwrap_or_default(),
             ..self.idle()

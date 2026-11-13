@@ -167,6 +167,16 @@ fn library_step(
                 parts.event(why);
             }
         }
+        LibraryStep::AskDelete(target) => {
+            if let Err(why) = library.ask_delete(target) {
+                parts.event(why);
+            }
+        }
+        LibraryStep::Delete(target) => {
+            if let Err(why) = library.delete(target) {
+                parts.event(why);
+            }
+        }
         LibraryStep::MoveInPlaylist { playlist, from, to } => {
             if let Err(why) = library.move_in_playlist(playlist, &from, to) {
                 parts.event(why);
@@ -1163,6 +1173,32 @@ mod tests {
             positions: vec![(2, 7), (0, 7)],
         };
         edit_playlist(&mut decks, step, playlist, &[9, 8, 7]);
+        drop(decks.renderer);
+    }
+
+    #[test]
+    fn the_window_asks_before_removing_entries() {
+        let mut decks = labelled();
+        add_track(&decks, 9, "Nine");
+        let playlist = peak(&decks, &[7, 9]);
+        let target = ui::DeleteTarget::Entries {
+            playlist,
+            entries: vec![(0, 7)],
+        };
+        open_playlist(&mut decks, playlist);
+        send_steps(&mut decks, vec![ui::LibraryStep::AskDelete(target.clone())]);
+        poll_until(&mut decks, |library, _| library.delete_check().is_some());
+        let check = decks.library.delete_check().unwrap();
+        assert_eq!(check.seq, 1);
+        assert_eq!(check.target, target);
+        assert_eq!(
+            check.answer,
+            Ok("Remove 1 track from Peak? The files stay.".to_owned())
+        );
+        // Asking changed nothing; the delete does, as a removal would.
+        let reader = decks.library.library().reader().unwrap();
+        assert_eq!(reader.playlist_tracks(playlist, 0, 10).unwrap().len(), 2);
+        edit_playlist(&mut decks, ui::LibraryStep::Delete(target), playlist, &[9]);
         drop(decks.renderer);
     }
 
