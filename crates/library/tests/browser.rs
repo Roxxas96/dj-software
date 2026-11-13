@@ -808,7 +808,9 @@ fn fifty_thousand() -> (tempfile::TempDir, Library) {
 /// The bound a 50,000-track timing must stay under: loose enough for debug and for CI's
 /// Windows runners.
 fn fifty_thousand_bound() -> Duration {
-    if cfg!(windows) && std::env::var_os("CI").is_some() {
+    // CI's shared runners are slower and noisier than a desktop: a debug sorted refresh
+    // took 1.1 s on ubuntu-latest (160 ms in release).
+    if std::env::var_os("CI").is_some() {
         Duration::from_millis(2000)
     } else {
         Duration::from_millis(750)
