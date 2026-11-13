@@ -79,6 +79,20 @@ pub struct ListRow {
     pub position: Option<usize>,
 }
 
+/// Which list the browser shows: a whole-list selection is only good for the list it was
+/// made on, so what acts on it carries this and the browser compares.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ListIdentity {
+    /// The highlighted tree row.
+    pub tree_cursor: usize,
+    /// The latest search or sort the list reflects.
+    pub seq: u64,
+    /// How many rows the list has.
+    pub count: usize,
+    /// The library id of the playlist shown; `None` for a folder.
+    pub playlist: Option<i64>,
+}
+
 /// What the browser shows.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BrowserView {
@@ -114,6 +128,19 @@ pub struct BrowserView {
     /// Every row of the list is selected ([`BrowserEdit::SelectAll`]); `list_count` is how
     /// many.
     pub all_selected: bool,
+}
+
+impl BrowserView {
+    /// The list this view shows.
+    #[must_use]
+    pub fn identity(&self) -> ListIdentity {
+        ListIdentity {
+            tree_cursor: self.tree_cursor,
+            seq: self.seq,
+            count: self.list_count,
+            playlist: self.playlist,
+        }
+    }
 }
 
 /// What every list is filtered and ordered by, whichever tree entry it belongs to.
@@ -499,6 +526,27 @@ impl Browser {
     #[must_use]
     pub fn selected_track(&self) -> Option<TrackRow> {
         self.list.selected().and_then(|r| r.track.clone())
+    }
+
+    /// The list shown now.
+    #[must_use]
+    pub fn identity(&self) -> ListIdentity {
+        ListIdentity {
+            tree_cursor: self.tree_cursor,
+            seq: self.seq,
+            count: self.list.count,
+            playlist: match self.list.items {
+                Items::Playlist { id, .. } => Some(id),
+                _ => None,
+            },
+        }
+    }
+
+    /// Every row of the list is selected ([`BrowserEdit::SelectAll`]) and nothing has
+    /// changed the pick or the list since.
+    #[must_use]
+    pub fn all_selected(&self) -> bool {
+        self.all_selected
     }
 
     /// The library ids of the list's tracks, in list order: what a whole-list selection

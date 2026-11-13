@@ -516,6 +516,8 @@ struct Clicking {
     steps: Vec<LibraryStep>,
     /// The panes a Delete key asked to delete from.
     deletes: Vec<Focus>,
+    /// A window floats over the list.
+    window: bool,
 }
 
 /// `count` library tracks titled "Song N" by their row in the whole list, the page at
@@ -561,6 +563,7 @@ fn clicking_in(
         covers: Covers::default(),
         steps: Vec::new(),
         deletes: Vec::new(),
+        window: false,
     };
     let mut harness = Harness::builder()
         .with_size([1000.0, 300.0])
@@ -576,6 +579,14 @@ fn clicking_in(
                     &arrangement,
                     |_| {},
                 );
+                if state.window {
+                    egui::Window::new("Settings")
+                        .fixed_pos(pos2(300.0, 60.0))
+                        .fixed_size([300.0, 150.0])
+                        .show(ui.ctx(), |ui| {
+                            ui.label("floating");
+                        });
+                }
                 state.steps.extend(changes.library);
                 state.deletes.extend(changes.delete_requested);
             },
@@ -1771,4 +1782,104 @@ fn the_focused_pane_looks_focused() {
     assert_eq!(bright(&tree, p.highlight), 1);
     assert_eq!(bright(&tree, p.highlight_dim), 1);
     assert_ne!(list, tree);
+}
+
+#[test]
+fn a_window_over_the_list_does_not_take_the_keys() {
+    let mut harness = clicking(numbered(0, 20, 20), Decks::default());
+    harness.state_mut().window = true;
+    harness.run_steps(3);
+    // A click on the window, which sits over the list, is not the browser's.
+    click(&mut harness, pos2(450.0, 100.0));
+    harness.run_steps(2);
+    harness.state_mut().steps.clear();
+    press(&mut harness, Key::ArrowDown);
+    press(&mut harness, Key::Delete);
+    assert_eq!(harness.state().steps, []);
+    assert!(harness.state().deletes.is_empty());
+    // The browser clicked first, then the window: the keys go back.
+    click(&mut harness, pos2(100.0, 150.0));
+    harness.state_mut().steps.clear();
+    press(&mut harness, Key::ArrowDown);
+    assert_eq!(harness.state().steps.len(), 1);
+    click(&mut harness, pos2(450.0, 100.0));
+    harness.state_mut().steps.clear();
+    press(&mut harness, Key::ArrowDown);
+    assert_eq!(harness.state().steps, []);
+}
+
+#[test]
+fn key_repeats_in_one_frame_each_move_a_row() {
+    let view = numbered(0, 40, 40);
+    let ctx = egui::Context::default();
+    let mut covers = Covers::default();
+    let mut frame = |events: Vec<Event>| {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1000.0, 300.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let mut steps = Vec::new();
+        let mut output = ctx.run_ui(input, |ui| {
+            let changes = ui::browser::show(
+                ui,
+                &view,
+                Decks::default(),
+                KeyNotation::default(),
+                &mut covers,
+                &Arrangement::default(),
+                |_| {},
+            );
+            steps.extend(changes.library);
+        });
+        output.textures_delta.clear();
+        steps
+    };
+    let at = pos2(100.0, 200.0);
+    frame(vec![]);
+    frame(vec![Event::PointerMoved(at)]);
+    frame(vec![button(PointerButton::Primary, true, at)]);
+    frame(vec![button(PointerButton::Primary, false, at)]);
+    let down = |key| Event::Key {
+        key,
+        pressed: true,
+        modifiers: Modifiers::NONE,
+        repeat: false,
+        physical_key: None,
+    };
+    // Three presses (a held key's repeats) in one frame.
+    let steps = frame(vec![down(Key::ArrowDown); 3]);
+    assert_eq!(steps, [browse(BrowserEdit::SelectRow(3))]);
+}
+
+#[test]
+fn cmd_a_from_the_tree_selects_the_list_too() {
+    let view = with_tree(numbered(0, 20, 20), 4, 1, Focus::Tree);
+    let mut harness = owning(view, Decks::default());
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    harness.run_steps(2);
+    assert_eq!(harness.state().steps, [browse(BrowserEdit::SelectAll)]);
+}
+
+#[test]
+fn a_click_takes_back_the_whole_list_selection() {
+    let mut view = numbered(0, 20, 20);
+    view.all_selected = true;
+    let mut harness = clicking(view, Decks::default());
+    // The cursor row, which a plain click would leave alone... and a Cmd-click would
+    // un-pick without moving the cursor: both send the pick.
+    let first = at_label(&harness, "Song 0");
+    let fourth = at_label(&harness, "Song 3");
+    click(&mut harness, first);
+    click_holding(&mut harness, fourth, Modifiers::COMMAND);
+    let selects: Vec<_> = harness
+        .state()
+        .steps
+        .iter()
+        .filter(|s| matches!(s, LibraryStep::Browse(BrowserEdit::SelectRow(_))))
+        .collect();
+    assert_eq!(selects.len(), 2, "{:?}", harness.state().steps);
 }

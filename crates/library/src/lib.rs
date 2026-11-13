@@ -23,8 +23,8 @@ mod watch;
 mod writer;
 
 pub use browser::{
-    BROWSER_PAGE_ROWS, Browser, BrowserEdit, BrowserRequest, BrowserView, Drive, Focus, ListRow,
-    TreeKind, TreeRow, drives, remix_of,
+    BROWSER_PAGE_ROWS, Browser, BrowserEdit, BrowserRequest, BrowserView, Drive, Focus,
+    ListIdentity, ListRow, TreeKind, TreeRow, drives, remix_of,
 };
 pub use cues::HotcuePoint;
 pub use db::{Library, Reader};
