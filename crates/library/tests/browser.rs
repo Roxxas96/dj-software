@@ -671,12 +671,11 @@ fn a_failed_search_keeps_the_list_and_takes_its_seq() {
     assert_eq!(view.list_count, 4);
 }
 
-/// Mirrors `queries_stay_fast_with_50k_tracks` in `tests/playlists.rs`: every build, with
-/// a bound loose enough for debug and for CI's Windows runners.
-#[test]
-fn search_on_fifty_thousand_tracks_is_fast() {
+/// A library of 50,000 tracks (a fifth without analysis), all in one playlist "All" in id
+/// order.
+fn fifty_thousand() -> (tempfile::TempDir, Library) {
     const N: i64 = 50_000;
-    let (_d, lib) = open();
+    let (dir, lib) = open();
     let mut stmts: Vec<RawStatement> = (0..N)
         .map(|i| RawStatement {
             sql: "INSERT INTO tracks(path, fingerprint, title, artist, added_at) \
@@ -707,14 +706,28 @@ fn search_on_fifty_thousand_tracks_is_fast() {
             params: vec![Value::Integer(playlist)],
         }]))
         .unwrap();
-    let mut b = browser(&lib, Vec::new());
-    assert_eq!(scroll(&mut b, 1).list_count, 50_000);
+    (dir, lib)
+}
 
-    let bound = if cfg!(windows) && std::env::var_os("CI").is_some() {
+/// The bound a 50,000-track timing must stay under: loose enough for debug and for CI's
+/// Windows runners.
+fn fifty_thousand_bound() -> Duration {
+    if cfg!(windows) && std::env::var_os("CI").is_some() {
         Duration::from_millis(2000)
     } else {
         Duration::from_millis(750)
-    };
+    }
+}
+
+/// Mirrors `queries_stay_fast_with_50k_tracks` in `tests/playlists.rs`: every build, with
+/// a bound loose enough for debug and for CI's Windows runners.
+#[test]
+fn search_on_fifty_thousand_tracks_is_fast() {
+    let (_d, lib) = fifty_thousand();
+    let mut b = browser(&lib, Vec::new());
+    assert_eq!(scroll(&mut b, 1).list_count, 50_000);
+
+    let bound = fifty_thousand_bound();
     let mut timings = Vec::new();
     let mut seq = 0;
     let mut timed = |b: &mut Browser, name: &str, edit: fn(u64) -> BrowserEdit| {
@@ -742,6 +755,46 @@ fn search_on_fifty_thousand_tracks_is_fast() {
     let none = |seq| BrowserEdit::Search { text: None, seq };
     let view = timed(&mut b, "sorted, no search", none);
     assert_eq!(view.list_count, 50_000);
+    println!("{}", timings.join("\n"));
+}
+
+/// A refresh (after every load, analysis result and playlist edit) finds the selected
+/// row again in one query, whatever the sort and search.
+#[test]
+fn refresh_on_fifty_thousand_tracks_is_fast() {
+    let (_d, lib) = fifty_thousand();
+    let mut b = browser(&lib, Vec::new());
+    scroll(&mut b, 1);
+    let bound = fifty_thousand_bound();
+    let mut timings = Vec::new();
+    let mut timed = |b: &mut Browser, name: &str, row: usize| {
+        let before = b.edit(BrowserEdit::SelectRow(row)).unwrap();
+        let start = Instant::now();
+        let view = b.refresh().unwrap();
+        let elapsed = start.elapsed();
+        timings.push(format!("{name}: {elapsed:?}"));
+        assert_eq!(view.list_cursor, row, "{name}");
+        assert_eq!(
+            view.track.map(|t| t.id),
+            before.track.map(|t| t.id),
+            "{name}"
+        );
+        assert!(elapsed < bound, "{name} took {elapsed:?} (bound {bound:?})");
+    };
+    timed(&mut b, "refresh unsorted", 30_000);
+    b.edit(BrowserEdit::Sort {
+        key: Some(TrackSortKey::Bpm),
+        descending: true,
+        seq: 1,
+    })
+    .unwrap();
+    timed(&mut b, "refresh sorted by bpm", 30_000);
+    b.edit(BrowserEdit::Search {
+        text: Some("title 4".into()),
+        seq: 2,
+    })
+    .unwrap();
+    timed(&mut b, "refresh sorted and searched", 9_000);
     println!("{}", timings.join("\n"));
 }
 
@@ -974,6 +1027,45 @@ fn refresh_keeps_the_selected_playlist_entry_or_falls_back_to_the_row() {
     let view = b.refresh().unwrap();
     assert_eq!(view.path, "Playlists ▸ Warm up");
     assert_eq!((view.tree_cursor, view.list_cursor), (1, 0));
+}
+
+#[test]
+fn refresh_keeps_the_nearest_occurrence_in_a_sorted_list() {
+    let f = fixture();
+    let playlist = f.lib.reader().unwrap().playlists().unwrap()[0].id;
+    // Peak time: t2, h1, t1, h1, h2, h1.
+    for track in [f.ids[0], f.ids[1], f.ids[0]] {
+        f.lib
+            .writer()
+            .submit_wait(WriteOp::AddToPlaylist {
+                playlist,
+                track,
+                at: None,
+            })
+            .unwrap();
+    }
+    let mut b = browser(&f.lib, Vec::new());
+    scroll(&mut b, 1);
+    // No track has a BPM: the sort keeps playlist order, through the sorted query.
+    b.edit(BrowserEdit::Sort {
+        key: Some(TrackSortKey::Bpm),
+        descending: false,
+        seq: 1,
+    })
+    .unwrap();
+    let view = b.edit(BrowserEdit::SelectRow(5)).unwrap();
+    assert_eq!(view.track.as_ref().map(|t| t.id), Some(f.ids[0]));
+    f.lib
+        .writer()
+        .submit_wait(WriteOp::RemoveFromPlaylist {
+            playlist,
+            position: 0,
+        })
+        .unwrap();
+    // h1, t1, h1, h2, h1: the h1 nearest the old row, not the first.
+    let view = b.refresh().unwrap();
+    assert_eq!(view.list_cursor, 4);
+    assert_eq!(view.track.map(|t| t.id), Some(f.ids[0]));
 }
 
 #[test]

@@ -631,7 +631,7 @@ fn page(reader: &Reader, items: &Items, offset: usize) -> Result<Vec<ListRow>, L
 
 /// Where `row` is in `list`, if it is there: a folder's file by path; in a playlist
 /// (where a track may appear more than once), its track's occurrence nearest `near`,
-/// read a page at a time.
+/// found with one query.
 fn find_row(
     reader: &Reader,
     list: &List,
@@ -641,29 +641,13 @@ fn find_row(
     match &list.items {
         Items::None => Ok(None),
         Items::Files { files, .. } => Ok(files.iter().position(|p| *p == row.path)),
-        Items::Playlist { .. } => {
-            let Some(id) = row.track.as_ref().map(|t| t.id) else {
+        Items::Playlist { id, query } => {
+            let Some(track) = row.track.as_ref().map(|t| t.id) else {
                 return Ok(None);
             };
-            let mut best: Option<usize> = None;
-            let mut offset = 0;
-            while offset < list.count {
-                let rows = page(reader, &list.items, offset)?;
-                if rows.is_empty() {
-                    break;
-                }
-                let ids = rows.iter().map(|r| r.track.as_ref().map(|t| t.id));
-                for (i, at_id) in ids.enumerate() {
-                    let at = offset + i;
-                    if at_id == Some(id)
-                        && best.is_none_or(|b| at.abs_diff(near) < b.abs_diff(near))
-                    {
-                        best = Some(at);
-                    }
-                }
-                offset += rows.len();
-            }
-            Ok(best)
+            let ranks = reader.playlist_ranks(*id, query.text.as_deref(), query.sort, track)?;
+            // The first of two equally near keeps the earlier one, as a scan from the top.
+            Ok(ranks.into_iter().min_by_key(|at| at.abs_diff(near)))
         }
     }
 }
