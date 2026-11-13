@@ -332,8 +332,10 @@ fn dragging_the_crossfader_sends_absolute() {
 #[test]
 fn master_and_headphone_knobs_send_their_actions() {
     let (mut harness, received) = sending(ControlFrame::default());
-    harness.get_by_label("HEADPHONE");
-    harness.get_by_label("MIX");
+    // At this width the words would leave the master level's bar short: letters.
+    harness.get_by_label("HP");
+    harness.get_by_label("MX");
+    harness.get_by_label("MASTER");
     let layout = mixer_layout(MIXER, true, true);
     let [level, mix] = layout.top.headphone;
     // 15 points of the 150 a full turn takes, less the drag's threshold.

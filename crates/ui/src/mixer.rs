@@ -40,8 +40,15 @@ const FADER_OFFSET: f32 = 0.6;
 const PFL_HEIGHT: f32 = 18.0;
 /// Between the two bars of the centre meter.
 const METER_GAP: f32 = 4.0;
-/// The width of the master level's caption.
-const MASTER_CAPTION: f32 = 44.0;
+/// The master level's caption and its width: the word, and a shorter one where the word
+/// would leave the bar less than [`MASTER_BAR_MIN`].
+const MASTER_CAPTION: (&str, f32) = ("MASTER", 44.0);
+const MASTER_SHORT_CAPTION: (&str, f32) = ("MST", 22.0);
+/// Between the master level's bar and the ends of its place.
+const MASTER_BAR_MARGIN: f32 = 4.0;
+/// The master level's bar is at least this wide where the row has room, and at most this.
+const MASTER_BAR_MIN: f32 = 60.0;
+const MASTER_BAR_MAX: f32 = 80.0;
 /// The least width of the master level, caption and bar, in the two-deck mixer's top row.
 const MASTER_MIN: f32 = 76.0;
 /// The least width the top row leaves each deck's name in the two-deck mixer ("DECK 1" is
@@ -408,6 +415,8 @@ pub struct TopRow {
     /// The master level: its caption, then its bar.
     pub master: Rect,
     pub master_caption: Rect,
+    /// The caption's text: MASTER, or MST where the word would leave the bar short.
+    pub master_text: &'static str,
     /// The bar, which a click or a drag sets.
     pub master_bar: Rect,
     /// The headphone level's knob, then the mix's.
@@ -445,16 +454,30 @@ fn headphone_reach(words: bool) -> f32 {
     level.max(mix) + HEADPHONE_CAPTION_GAP + 2.0 * HEADPHONE_RADIUS + HEADPHONE_GAP
 }
 
-/// Lays out the top row's middle in `top`: the master level `master_width` wide, centred
-/// on `centre`, with the headphone knobs either side, captioned in `words` or letters.
+/// The master level's caption for a level `width` wide: the word where it leaves the bar
+/// [`MASTER_BAR_MIN`], else the short one.
+fn master_caption(width: f32) -> (&'static str, f32) {
+    if width - MASTER_CAPTION.1 - MASTER_BAR_MARGIN >= MASTER_BAR_MIN {
+        MASTER_CAPTION
+    } else {
+        MASTER_SHORT_CAPTION
+    }
+}
+
+/// Lays out the top row's middle in `top`: the master level at most `master_width` wide
+/// (its bar no wider than [`MASTER_BAR_MAX`]), centred on `centre`, with the headphone
+/// knobs either side, captioned in `words` or letters.
 fn top_row(top: Rect, centre: f32, master_width: f32, words: bool) -> TopRow {
+    let (master_text, caption_width) = master_caption(master_width);
+    let master_width = master_width.min(caption_width + MASTER_BAR_MARGIN + MASTER_BAR_MAX);
     let master = Rect::from_x_y_ranges(
         centre - master_width / 2.0..=centre + master_width / 2.0,
         top.y_range(),
     );
-    let width = MASTER_CAPTION.min(master.width() / 2.0);
+    let width = caption_width.min(master.width() / 2.0);
     let (master_caption, bar) = master.split_left_right_at_x(master.left() + width);
-    let master_bar = Rect::from_center_size(bar.center(), vec2(bar.width() - 4.0, 6.0));
+    let master_bar =
+        Rect::from_center_size(bar.center(), vec2(bar.width() - MASTER_BAR_MARGIN, 6.0));
     let r = HEADPHONE_RADIUS;
     let y = top.center().y;
     let level = pos2(master.left() - HEADPHONE_GAP - r, y);
@@ -468,6 +491,7 @@ fn top_row(top: Rect, centre: f32, master_width: f32, words: bool) -> TopRow {
     TopRow {
         master,
         master_caption,
+        master_text,
         master_bar,
         headphone: [level, mix],
         headphone_radius: r,
@@ -507,15 +531,17 @@ pub fn mixer_layout(rect: Rect, eq: bool, meters: bool) -> MixerLayout {
     let (top, body, bottom) = rows(rect);
     let (master, crossfader) = centre_parts(rect, top, bottom);
     let centre = rect.center().x;
-    // The top row keeps room for the decks' names: the master level narrows, then the
-    // headphone knobs' captions shrink to letters.
+    // The top row keeps room for the decks' names: the headphone knobs' captions shrink
+    // to letters where the words would leave the master level's bar short, then the
+    // master level narrows (and its caption shortens).
     let master_room = |words| top.width() - 2.0 * (NAME_MIN + HEADER_GAP + headphone_reach(words));
-    let words = master_room(true) >= MASTER_MIN.min(master.width());
+    let bar_fits = MASTER_CAPTION.1 + MASTER_BAR_MARGIN + MASTER_BAR_MIN;
+    let words = master_room(true) >= bar_fits.min(master.width());
     let master_width = master_room(words)
         .min(master.width())
         .max(MASTER_MIN.min(master.width()));
     let top_middle = top_row(top, centre, master_width, words);
-    let names = master_width / 2.0 + headphone_reach(words) + HEADER_GAP;
+    let names = top_middle.master.width() / 2.0 + headphone_reach(words) + HEADER_GAP;
     // The middle band holds the faders, the meter between them and the headphone buttons.
     let band = rect.width() * MIDDLE_SHARE / 2.0;
     let offset = band * FADER_OFFSET;
@@ -855,7 +881,7 @@ fn master(
 ) {
     let p = theme::palette(ui.ctx());
     let painter = ui.painter().clone();
-    caption(ui, row.master_caption, "MASTER", p.text_dim);
+    caption(ui, row.master_caption, row.master_text, p.text_dim);
     let bar = row.master_bar;
     let action = Action::MasterLevel;
     // The whole row's height takes a click, the bar being thin.
@@ -1161,13 +1187,23 @@ mod tests {
 
     #[test]
     fn the_top_row_keeps_room_for_the_names() {
-        // Two decks at 1024 and 1440 wide, and the tests' size; the words where they fit.
-        for (width, words) in [(246.0, false), (346.0, true), (360.0, true)] {
+        // Two decks at 1024 and 1440 wide, and the tests' size; the words where they leave
+        // the master level's bar 60 points, else the letters; the short master caption
+        // where even those do not.
+        for (width, words, caption, bar) in [
+            (246.0, false, "MST", 50.0),
+            (346.0, false, "MASTER", 60.0),
+            (360.0, false, "MASTER", 60.0),
+            (480.0, true, "MASTER", 60.0),
+        ] {
             let rect = Rect::from_min_size(pos2(10.0, 20.0), vec2(width, 300.0));
             let layout = mixer_layout(rect, true, true);
             let top = &layout.top;
             let at = format!("{width}: {top:?}");
             assert_eq!(top.words, words, "{at}");
+            assert_eq!(top.master_text, caption, "{at}");
+            let wide = top.master_bar.width();
+            assert!((bar..=MASTER_BAR_MAX).contains(&wide), "{at}");
             assert!(
                 (top.master.center().x - rect.center().x).abs() < 0.5,
                 "{at}"
