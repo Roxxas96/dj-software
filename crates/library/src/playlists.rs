@@ -265,13 +265,7 @@ impl Reader {
     ) -> Result<Vec<(PathBuf, TrackRow, usize)>, LibraryError> {
         let mut params = vec![Value::Integer(id)];
         let matching = text_condition(text, &mut params);
-        let order = match sort {
-            None => "pt.position".to_owned(),
-            Some(sort) => {
-                let dir = if sort.descending { "DESC" } else { "ASC" };
-                format!("{} {dir}, pt.position", sort_expr(sort.key, "t", "a"))
-            }
-        };
+        let order = playlist_order(sort);
         let sql = format!(
             "SELECT {TRACK_COLUMNS}, t.path, pt.position FROM playlist_tracks pt \
              JOIN tracks t ON t.id = pt.track_id \
@@ -285,6 +279,34 @@ impl Reader {
             let (path, track) = file_and_row(row)?;
             let position: i64 = row.get(10)?;
             Ok((path, track, usize::try_from(position).unwrap_or(0)))
+        })?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// Where track `track`'s entries are in the list [`Reader::playlist_page`] pages for
+    /// `text` and `sort` (from 0, ascending): one query, whatever the list's length.
+    pub(crate) fn playlist_ranks(
+        &self,
+        id: i64,
+        text: Option<&str>,
+        sort: Option<TrackSort>,
+        track: i64,
+    ) -> Result<Vec<usize>, LibraryError> {
+        let mut params = vec![Value::Integer(id)];
+        let matching = text_condition(text, &mut params);
+        let order = playlist_order(sort);
+        let sql = format!(
+            "SELECT rank FROM (SELECT pt.track_id AS track, \
+                 ROW_NUMBER() OVER (ORDER BY {order}) - 1 AS rank \
+                 FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id \
+                 LEFT JOIN analysis a ON a.track_id = t.id \
+                 WHERE pt.playlist_id = ?{matching}) \
+             WHERE track = ? ORDER BY rank"
+        );
+        params.push(Value::Integer(track));
+        let mut stmt = self.connection().prepare_cached(&sql)?;
+        let rows = stmt.query_map(params_from_iter(&params), |row| {
+            Ok(usize::try_from(row.get::<_, i64>(0)?).unwrap_or(0))
         })?;
         Ok(rows.collect::<Result<_, _>>()?)
     }
@@ -526,6 +548,18 @@ fn filter_clause(filter: &TrackFilter) -> Result<(String, Vec<Value>), LibraryEr
         format!("WHERE {}", conds.join(" AND "))
     };
     Ok((where_clause, params))
+}
+
+/// The `ORDER BY` of a playlist's entries (aliased `pt`, with `t` and `a`) sorted by
+/// `sort`: playlist order with `None`, and for ties.
+fn playlist_order(sort: Option<TrackSort>) -> String {
+    match sort {
+        None => "pt.position".to_owned(),
+        Some(sort) => {
+            let dir = if sort.descending { "DESC" } else { "ASC" };
+            format!("{} {dir}, pt.position", sort_expr(sort.key, "t", "a"))
+        }
+    }
 }
 
 /// The expression `key` orders by, over the columns of `t` (the track) and `a` (its
