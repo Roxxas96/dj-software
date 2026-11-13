@@ -12,7 +12,7 @@ use egui::{
 };
 use engine::{DeckId, EqMode, StemKnobs};
 
-use crate::controls::{Sink, fader_input, turn_knob};
+use crate::controls::{Handle, Sink, grab_fader, turn_knob};
 use crate::deck::DeckReads;
 use crate::layout::{Sections, mixer_order};
 use crate::model::{
@@ -97,6 +97,11 @@ const LEVEL_RESET: f32 = 0.8;
 const MIX_RESET: f32 = 0.0;
 /// How far past a fader's track (either side) a click still takes it.
 const FADER_GRAB: f32 = 4.0;
+/// A channel fader's handle, along its track, and the crossfader's.
+const FADER_HANDLE: f32 = 8.0;
+const CROSSFADER_HANDLE: f32 = 10.0;
+/// How far either side of the master level's edge a press takes the level where it is.
+const MASTER_EDGE_REACH: f32 = 4.0;
 
 /// The labels of the three EQ knobs, top to bottom. The stems' names show only where the
 /// knobs control the stems: in stems mode, on a deck whose stems are ready.
@@ -301,7 +306,13 @@ fn side_strip(
         knob(&painter, centre, knob_radius, value, ghost, accent);
         caption(ui, layout.captions[i], name, p.text_dim);
     }
-    play_fader(ui, sink, layout.fader, Action::Fader(channel.deck));
+    play_fader(
+        ui,
+        sink,
+        layout.fader,
+        state.fader,
+        Action::Fader(channel.deck),
+    );
     fader(
         &painter,
         layout.fader,
@@ -338,12 +349,17 @@ fn play_knob(
     sink.act(action, turn_knob(&response, value, reset, ui));
 }
 
-/// Lets the mouse set the vertical fader on `track`: a click or a drag sends `action`
-/// the value under the pointer. A channel fader has no reset.
-fn play_fader(ui: &mut Ui, sink: &Sink<'_>, track: Rect, action: Action) {
+/// Lets the mouse set the vertical fader on `track` at `value`: a click or a drag sends
+/// `action` the value under the pointer, and a press on the handle takes it where it is.
+/// A channel fader has no reset.
+fn play_fader(ui: &mut Ui, sink: &Sink<'_>, track: Rect, value: f32, action: Action) {
     let grab = track.expand2(vec2(FADER_GRAB, FADER_GRAB));
     let response = ui.interact(grab, control_id(action), Sense::click_and_drag());
-    sink.act(action, fader_input(&response, track, true, None));
+    let handle = Handle {
+        value,
+        reach: FADER_HANDLE / 2.0 + 1.0,
+    };
+    sink.act(action, grab_fader(&response, track, true, None, handle));
 }
 
 /// The headphone button of `deck` in `rect`, lit in the deck's accent when `on`; the
@@ -745,7 +761,7 @@ pub fn strip(
         knob(&painter, centre, radius, value, ghost, accent);
         caption(ui, layout.captions[i], knob_letter(name), p.text_dim);
     }
-    play_fader(ui, sink, layout.fader, Action::Fader(deck));
+    play_fader(ui, sink, layout.fader, state.fader, Action::Fader(deck));
     fader(
         &painter,
         layout.fader,
@@ -789,7 +805,10 @@ fn fader(painter: &egui::Painter, track: Rect, value: f32, ghost: Option<f32>, a
     let slot = Rect::from_center_size(track.center(), vec2(4.0, track.height()));
     painter.rect_filled(slot, CornerRadius::same(2), p.background);
     let y = |v: f32| track.bottom() - v.clamp(0.0, 1.0) * track.height();
-    let handle = Rect::from_center_size(pos2(track.center().x, y(value)), vec2(track.width(), 8.0));
+    let handle = Rect::from_center_size(
+        pos2(track.center().x, y(value)),
+        vec2(track.width(), FADER_HANDLE),
+    );
     painter.rect_filled(handle, CornerRadius::same(2), accent);
     if let Some(at) = ghost_marker(ghost, |v| pos2(track.center().x, y(v))) {
         let wide = Rect::from_center_size(at, vec2(track.width() + 6.0, 8.0));
@@ -850,12 +869,19 @@ fn crossfader(ui: &mut Ui, rect: Rect, frame: &ControlFrame, sink: &Sink<'_>) {
     let slot = Rect::from_center_size(rect.center(), vec2(rect.width() - 10.0, 4.0));
     let action = Action::Crossfader;
     let response = ui.interact(rect, control_id(action), Sense::click_and_drag());
-    let input = fader_input(&response, slot, false, Some(CROSSFADER_RESET));
+    let handle = Handle {
+        value: frame.control.crossfader,
+        reach: CROSSFADER_HANDLE / 2.0 + 1.0,
+    };
+    let input = grab_fader(&response, slot, false, Some(CROSSFADER_RESET), handle);
     sink.act(action, input);
     let painter = ui.painter();
     painter.rect_filled(slot, CornerRadius::same(2), p.background);
     let x = slot.left() + frame.control.crossfader.clamp(0.0, 1.0) * slot.width();
-    let handle = Rect::from_center_size(pos2(x, slot.center().y), vec2(10.0, rect.height() - 4.0));
+    let handle = Rect::from_center_size(
+        pos2(x, slot.center().y),
+        vec2(CROSSFADER_HANDLE, rect.height() - 4.0),
+    );
     painter.rect_filled(handle, CornerRadius::same(2), p.text.gamma_multiply(dim));
     let at = |v: f32| pos2(slot.left() + v * slot.width(), slot.center().y);
     if let Some(at) = ghost_marker(frame.global_ghosts[GHOST_CROSSFADER], at) {
@@ -887,9 +913,14 @@ fn master(
     // The whole row's height takes a click, the bar being thin.
     let grab = Rect::from_x_y_ranges(bar.x_range(), row.master.y_range());
     let response = ui.interact(grab, control_id(action), Sense::click_and_drag());
+    // The level's edge is the handle: a press there takes it where it is.
+    let handle = Handle {
+        value: frame.control.master_level,
+        reach: MASTER_EDGE_REACH,
+    };
     sink.act(
         action,
-        fader_input(&response, bar, false, Some(LEVEL_RESET)),
+        grab_fader(&response, bar, false, Some(LEVEL_RESET), handle),
     );
     painter.rect_filled(bar, CornerRadius::ZERO, p.background);
     let level = frame.control.master_level.clamp(0.0, 1.0);

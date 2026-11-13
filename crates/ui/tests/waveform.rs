@@ -167,15 +167,12 @@ fn a_named_hotcue_flag_shows_its_name_beside_the_number() {
     assert!(texts.contains(&"Drop".to_owned()), "{texts:?}");
 }
 
-#[test]
-fn flag_right_click_opens_the_same_editor() {
-    use egui::accesskit::Role;
-    use egui::{Event, Modifiers, PointerButton, pos2};
-    use egui_kittest::kittest::Queryable;
+/// Deck 1's lane holding track 1 with hotcue 2, "Drop", where the playhead is, and the
+/// hotcue editor; what it sends goes to the receiver returned.
+fn flagged() -> (Harness<'static>, std::sync::mpsc::Receiver<ui::UiCommand>) {
     use ui::controls::{HeldButtons, Sink};
     use ui::deck::DeckReads;
 
-    // Deck 1 holds track 1 with hotcue 2, "Drop", where the playhead is.
     let mut snapshot = DeckSnapshot {
         loaded: true,
         track_sample_rate: 44_100,
@@ -222,6 +219,16 @@ fn flag_right_click_opens_the_same_editor() {
             held.sweep(ui.ctx(), &commands);
         });
     harness.run_steps(3);
+    (harness, received)
+}
+
+#[test]
+fn flag_right_click_opens_the_same_editor() {
+    use egui::accesskit::Role;
+    use egui::{Event, Modifiers, PointerButton, pos2};
+    use egui_kittest::kittest::Queryable;
+
+    let (mut harness, received) = flagged();
     assert!(harness.query_by_role(Role::TextInput).is_none());
     // Deck 1's lane is the top half; the flag hangs from its top at the playhead.
     let flag = pos2(506.0, 14.0);
@@ -266,6 +273,35 @@ fn flag_right_click_opens_the_same_editor() {
             color: colour,
         })]
     );
+}
+
+#[test]
+fn ctrl_click_on_a_flag_is_a_right_click_on_macos() {
+    use egui::accesskit::Role;
+    use egui::{Event, Modifiers, PointerButton, pos2};
+    use egui_kittest::kittest::Queryable;
+
+    let (mut harness, received) = flagged();
+    let flag = pos2(506.0, 14.0);
+    harness.event(Event::PointerMoved(flag));
+    harness.run_steps(1);
+    for pressed in [true, false] {
+        harness.event_modifiers(
+            Event::PointerButton {
+                pos: flag,
+                button: PointerButton::Primary,
+                pressed,
+                modifiers: Modifiers::CTRL,
+            },
+            Modifiers::CTRL,
+        );
+        harness.run_steps(1);
+    }
+    harness.run_steps(2);
+    let opened = harness.query_by_role(Role::TextInput).is_some();
+    assert_eq!(opened, cfg!(target_os = "macos"));
+    let sent: Vec<ui::UiCommand> = received.try_iter().collect();
+    assert!(sent.is_empty(), "{sent:?}");
 }
 
 /// Deck 1 loaded in the top lane of a 1000-point-wide window, which sends to the receiver
@@ -424,6 +460,22 @@ fn a_click_on_a_playing_lane_sends_nothing() {
     let (mut harness, received, _) = scrubbing(true, false);
     let at = pos2(600.0, 50.0);
     let sent = drag_lane(&mut harness, &received, at, at);
+    assert!(sent.is_empty(), "{sent:?}");
+}
+
+#[test]
+fn a_slow_still_click_on_a_playing_lane_sends_nothing() {
+    use egui::{Event, pos2};
+    let (mut harness, received, _) = scrubbing(true, false);
+    let at = pos2(600.0, 50.0);
+    harness.event(Event::PointerMoved(at));
+    harness.run_steps(1);
+    harness.event(left_button(at, true));
+    // More than a second: egui calls it a drag by now.
+    harness.run_steps(110);
+    harness.event(left_button(at, false));
+    harness.run_steps(2);
+    let sent: Vec<ui::UiCommand> = received.try_iter().collect();
     assert!(sent.is_empty(), "{sent:?}");
 }
 

@@ -605,6 +605,15 @@ fn press_and_release<S>(harness: &mut Harness<'_, S>, at: Pos2) {
     harness.run_steps(2);
 }
 
+/// A trackpad tap at `at`: the press and the release reach the same frame (kittest's
+/// queued events take a frame each).
+fn tap<S>(harness: &mut Harness<'_, S>, at: Pos2) {
+    let events = &mut harness.input_mut().events;
+    events.push(pointer(true, at));
+    events.push(pointer(false, at));
+    harness.step();
+}
+
 /// Presses and lets go of the control labelled `label`.
 fn press_label<S>(harness: &mut Harness<'_, S>, label: &str) {
     let at = harness.get_by_label(label).rect().center();
@@ -1013,6 +1022,37 @@ fn right_click_on_a_set_pad_opens_the_editor() {
 }
 
 #[test]
+fn ctrl_click_on_a_pad_is_a_right_click_on_macos() {
+    let view = with_drop();
+    let (mut harness, received) = editing(view.clone());
+    let at = pad_at(&harness, &view, 3);
+    harness.event(Event::PointerMoved(at));
+    harness.run_steps(1);
+    for pressed in [true, false] {
+        let event = Event::PointerButton {
+            pos: at,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::CTRL,
+        };
+        harness.event_modifiers(event, Modifiers::CTRL);
+        harness.run_steps(1);
+    }
+    harness.run_steps(2);
+    let sent: Vec<UiCommand> = received.try_iter().collect();
+    if cfg!(target_os = "macos") {
+        harness.get_by_label("Delete");
+        assert_eq!(sent, [], "no pad press");
+    } else {
+        assert!(harness.query_by_label("Delete").is_none());
+        assert_eq!(
+            sent,
+            press_release(Action::Hotcue(DeckId::new(0).unwrap(), slot(3)))
+        );
+    }
+}
+
+#[test]
 fn right_click_on_an_empty_pad_offers_set_here_only() {
     let view = with_drop();
     let (mut harness, received) = editing(view.clone());
@@ -1138,14 +1178,11 @@ fn drag_through<S>(harness: &mut Harness<'_, S>, from: Pos2, path: &[Pos2]) {
     harness.run_steps(2);
 }
 
-#[test]
-fn jog_drag_touches_scratches_and_releases() {
-    let (snapshot, frame) = loaded_plain();
-    let view = view(&snapshot, &frame);
+/// A quarter turn clockwise round the jog, from twelve o'clock to three, and what it sent.
+fn quarter_turn(view: DeckView) -> Vec<UiCommand> {
     let (mut harness, received) = sending(view);
     let rect = harness.get_by_label("jog").rect();
     let (centre, radius) = (rect.center(), rect.width() * 0.4);
-    // A quarter turn clockwise, from twelve o'clock to three.
     let arc: Vec<Pos2> = (1..=10)
         .map(|i| {
             let angle = std::f32::consts::FRAC_PI_2 * i as f32 / 10.0;
@@ -1153,7 +1190,24 @@ fn jog_drag_touches_scratches_and_releases() {
         })
         .collect();
     drag_through(&mut harness, centre + vec2(0.0, -radius), &arc);
-    let sent: Vec<UiCommand> = received.try_iter().collect();
+    received.try_iter().collect()
+}
+
+/// The steps `sent` turned `action` by.
+fn steps_of(sent: &[UiCommand], action: Action) -> i32 {
+    sent.iter()
+        .filter_map(|command| match command {
+            UiCommand::Action(a, Input::Relative(steps)) if *a == action => Some(*steps),
+            _ => None,
+        })
+        .sum()
+}
+
+#[test]
+fn jog_drag_on_a_paused_deck_touches_scratches_and_releases() {
+    let (mut snapshot, frame) = loaded_plain();
+    snapshot.playing = false;
+    let sent = quarter_turn(view(&snapshot, &frame));
     let id = DeckId::new(0).unwrap();
     assert_eq!(
         sent.first(),
@@ -1163,24 +1217,143 @@ fn jog_drag_touches_scratches_and_releases() {
         sent.last(),
         Some(&UiCommand::Action(Action::JogTouch(id), Input::Release))
     );
-    let steps: i32 = sent
-        .iter()
-        .filter_map(|command| match command {
-            UiCommand::Action(Action::JogScratch(d), Input::Relative(steps)) if *d == id => {
-                Some(*steps)
-            }
-            _ => None,
-        })
-        .sum();
     // A quarter of 720 steps per turn.
+    let steps = steps_of(&sent, Action::JogScratch(id));
     assert!((steps - 180).abs() <= 2, "{steps} steps: {sent:?}");
-    assert_eq!(
-        sent.len(),
-        2 + sent
-            .iter()
-            .filter(|c| matches!(c, UiCommand::Action(Action::JogScratch(_), _)))
-            .count()
+    let scratches = sent
+        .iter()
+        .filter(|c| matches!(c, UiCommand::Action(Action::JogScratch(_), _)))
+        .count();
+    assert_eq!(sent.len(), 2 + scratches, "{sent:?}");
+}
+
+#[test]
+fn jog_drag_on_a_playing_deck_nudges() {
+    let (snapshot, frame) = loaded_plain();
+    let sent = quarter_turn(view(&snapshot, &frame));
+    let id = DeckId::new(0).unwrap();
+    // The ring bends the pitch: no touch, which would hold the deck.
+    let steps = steps_of(&sent, Action::JogRing(id));
+    assert!((steps - 180).abs() <= 2, "{steps} steps: {sent:?}");
+    assert!(
+        sent.iter()
+            .all(|c| matches!(c, UiCommand::Action(Action::JogRing(_), Input::Relative(_)))),
+        "{sent:?}"
     );
+}
+
+/// Presses at `at` and holds still for more than a second (egui calls that a drag), then
+/// lets go.
+fn hold_still<S>(harness: &mut Harness<'_, S>, at: Pos2) {
+    harness.event(Event::PointerMoved(at));
+    harness.run_steps(1);
+    harness.event(pointer(true, at));
+    harness.run_steps(110);
+    harness.event(pointer(false, at));
+    harness.run_steps(2);
+}
+
+#[test]
+fn a_slow_still_click_on_the_jog_sends_nothing() {
+    for playing in [true, false] {
+        let (mut snapshot, frame) = loaded_plain();
+        snapshot.playing = playing;
+        let (mut harness, received) = sending(view(&snapshot, &frame));
+        let at = harness.get_by_label("jog").rect().center() + vec2(0.0, -30.0);
+        hold_still(&mut harness, at);
+        let sent: Vec<UiCommand> = received.try_iter().collect();
+        assert!(sent.is_empty(), "playing {playing}: {sent:?}");
+    }
+}
+
+#[test]
+fn a_still_press_on_the_overview_seeks_once() {
+    let (snapshot, frame) = loaded_plain();
+    let (mut harness, received) = sending(view(&snapshot, &frame));
+    let rect = harness.get_by_label("overview").rect();
+    let at = pos2(rect.left() + rect.width() * 0.25, rect.center().y);
+    harness.event(Event::PointerMoved(at));
+    harness.run_steps(1);
+    harness.event(pointer(true, at));
+    harness.run_steps(8);
+    harness.event(pointer(false, at));
+    harness.run_steps(2);
+    let sent: Vec<UiCommand> = received.try_iter().collect();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    let UiCommand::Action(Action::Seek(_), Input::Absolute(x)) = sent[0] else {
+        panic!("{sent:?}");
+    };
+    assert!((x - 0.25).abs() <= 0.01, "{x}");
+}
+
+#[test]
+fn a_tap_on_the_overview_seeks_and_a_tap_on_cue_presses_it() {
+    let (snapshot, frame) = loaded_plain();
+    let (mut harness, received) = sending(view(&snapshot, &frame));
+    let rect = harness.get_by_label("overview").rect();
+    let at = pos2(rect.left() + rect.width() * 0.25, rect.center().y);
+    harness.event(Event::PointerMoved(at));
+    harness.run_steps(1);
+    tap(&mut harness, at);
+    harness.run_steps(2);
+    let sent: Vec<UiCommand> = received.try_iter().collect();
+    assert!(
+        matches!(sent[..], [UiCommand::Action(Action::Seek(_), Input::Absolute(x))] if (x - 0.25).abs() <= 0.01),
+        "{sent:?}"
+    );
+    let cue = harness.get_by_label("CUE").rect().center();
+    harness.event(Event::PointerMoved(cue));
+    harness.run_steps(1);
+    tap(&mut harness, cue);
+    harness.run_steps(2);
+    let sent: Vec<UiCommand> = received.try_iter().collect();
+    assert_eq!(sent, press_release(Action::Cue(DeckId::new(0).unwrap())));
+}
+
+#[test]
+fn a_press_on_the_pitch_handle_takes_it_where_it_is() {
+    let (snapshot, mut frame) = loaded_plain();
+    frame.control.decks[0].tempo = 0.25;
+    let view = view(&snapshot, &frame);
+    let (mut harness, received) = sending(view.clone());
+    let tempo = Action::Tempo(DeckId::new(0).unwrap());
+    // The slider's handle (6 points tall) rides its track, 3 points in from each end.
+    let rect = harness.get_by_label("pitch").rect();
+    let y = rect.top() + 3.0 + (rect.height() - 6.0) * view.pitch_slider;
+    let at = pos2(rect.center().x, y + 2.0);
+    harness.event(Event::PointerMoved(at));
+    harness.run_steps(1);
+    harness.event(pointer(true, at));
+    harness.run_steps(3);
+    harness.event(pointer(false, at));
+    harness.run_steps(2);
+    let sent: Vec<UiCommand> = received.try_iter().collect();
+    let [UiCommand::Action(action, Input::Absolute(v))] = sent[..] else {
+        panic!("{sent:?}");
+    };
+    assert_eq!(action, tempo);
+    assert!(
+        (v - view.pitch_slider).abs() < 1e-4,
+        "{v} for {}",
+        view.pitch_slider
+    );
+}
+
+#[test]
+fn losing_focus_releases_a_held_cue() {
+    let (snapshot, frame) = loaded_plain();
+    let (mut harness, received) = sending(view(&snapshot, &frame));
+    let cue = harness.get_by_label("CUE").rect().center();
+    harness.event(Event::PointerMoved(cue));
+    harness.run_steps(1);
+    harness.event(pointer(true, cue));
+    harness.run_steps(2);
+    let input = harness.input_mut();
+    input.focused = false;
+    input.events.push(Event::WindowFocused(false));
+    harness.run_steps(2);
+    let sent: Vec<UiCommand> = received.try_iter().collect();
+    assert_eq!(sent, press_release(Action::Cue(DeckId::new(0).unwrap())));
 }
 
 #[test]
@@ -1199,8 +1372,9 @@ fn overview_click_seeks() {
             _ => None,
         })
         .collect();
-    assert!(!seeks.is_empty(), "{sent:?}");
-    assert!(seeks.iter().all(|x| (x - 0.25).abs() <= 0.01), "{seeks:?}");
+    // Once: a press held still does not seek again every frame.
+    assert_eq!(seeks.len(), 1, "{sent:?}");
+    assert!((seeks[0] - 0.25).abs() <= 0.01, "{seeks:?}");
     assert!(
         sent.iter()
             .all(|c| matches!(c, UiCommand::Action(Action::Seek(_), _)))
