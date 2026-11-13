@@ -331,7 +331,8 @@ impl Reader {
         Ok(usize::try_from(n).unwrap_or(0))
     }
 
-    /// The files of the library tracks matching `filter`, ordered by `sort`, ties by path.
+    /// The files of the library tracks matching `filter`, ordered by `sort` as the browser
+    /// shows them (by title, an untitled track by its file name), ties by path.
     ///
     /// # Errors
     ///
@@ -347,7 +348,7 @@ impl Reader {
         let sql = format!(
             "SELECT t.path FROM tracks t LEFT JOIN analysis a ON a.track_id = t.id \
              {where_clause} ORDER BY {} {dir}, t.path",
-            sort_expr(sort.key, "t", "a")
+            shown_sort_expr(sort.key)
         );
         let mut stmt = self.connection().prepare_cached(&sql)?;
         let rows = stmt.query_map(params_from_iter(&params), |r| {
@@ -490,12 +491,42 @@ impl Reader {
     }
 }
 
+/// Whether a track (aliased `t`) is untitled: the list shows its file name instead.
+macro_rules! untitled {
+    () => {
+        "trim(coalesce(t.title, '')) = ''"
+    };
+}
+
+/// A track's (aliased `t`) file name: its path after the last `/` or `\` (`rtrim` strips
+/// every character but the separators from the end). One rule for both systems' paths: on
+/// Unix a file whose name holds a `\` (rare) is cut there too.
+macro_rules! file_name {
+    () => {
+        "substr(t.path, length(rtrim(t.path, \
+         replace(replace(t.path, '/', ''), '\\', ''))) + 1)"
+    };
+}
+
 /// The condition a [`TrackFilter::text`] puts on the tracks (aliased `t`). An untitled
-/// track is shown by its file name, so it matches there too: the path after its last `/`
-/// or `\` (`rtrim` strips every character but the separators from the end).
-const TEXT_MATCH: &str = "(t.title LIKE ? ESCAPE '\\' OR t.artist LIKE ? ESCAPE '\\' \
-     OR (trim(coalesce(t.title, '')) = '' AND substr(t.path, length(rtrim(t.path, \
-         replace(replace(t.path, '/', ''), '\\', ''))) + 1) LIKE ? ESCAPE '\\'))";
+/// track is shown by its file name, so it matches there too.
+const TEXT_MATCH: &str = concat!(
+    "(t.title LIKE ? ESCAPE '\\' OR t.artist LIKE ? ESCAPE '\\' OR (",
+    untitled!(),
+    " AND ",
+    file_name!(),
+    " LIKE ? ESCAPE '\\'))"
+);
+
+/// What a list sorted by title orders a track (aliased `t`) by: its title, or for an
+/// untitled track the file name the list shows, ignoring ASCII case.
+const SHOWN_TITLE: &str = concat!(
+    "(CASE WHEN ",
+    untitled!(),
+    " THEN ",
+    file_name!(),
+    " ELSE t.title END) COLLATE NOCASE"
+);
 
 /// `" AND "` and [`TEXT_MATCH`] for a non-empty `text`, with its parameters pushed onto
 /// `params`; empty when there is no text to match.
@@ -561,8 +592,17 @@ fn playlist_order(sort: Option<TrackSort>) -> String {
         None => "pt.position".to_owned(),
         Some(sort) => {
             let dir = if sort.descending { "DESC" } else { "ASC" };
-            format!("{} {dir}, pt.position", sort_expr(sort.key, "t", "a"))
+            format!("{} {dir}, pt.position", shown_sort_expr(sort.key))
         }
+    }
+}
+
+/// [`sort_expr`] over `t` and `a` for a list as the browser shows it: by title, an untitled
+/// track sorts by its file name ([`SHOWN_TITLE`]).
+fn shown_sort_expr(key: TrackSortKey) -> String {
+    match key {
+        TrackSortKey::Title => SHOWN_TITLE.to_owned(),
+        key => sort_expr(key, "t", "a"),
     }
 }
 
