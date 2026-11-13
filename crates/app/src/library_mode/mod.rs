@@ -317,7 +317,29 @@ impl LibraryMode {
     /// Why the load cannot be asked for (the worker stopped).
     pub fn load_track(&mut self, deck: DeckId, track: i64) -> Result<(), String> {
         let seq = self.next_seq(deck);
-        self.try_send_job(Job::LoadTrack { deck, track, seq })
+        let refuse_if_playing = false;
+        self.try_send_job(Job::LoadTrack {
+            deck,
+            track,
+            seq,
+            refuse_if_playing,
+        })
+    }
+
+    /// [`LibraryMode::load_track`] for the window: refused with the event `Deck N is
+    /// playing` if the deck plays once the track is decoded, its track left in place.
+    ///
+    /// # Errors
+    ///
+    /// Why the load cannot be asked for (the worker stopped).
+    pub fn load_track_unless_playing(&mut self, deck: DeckId, track: i64) -> Result<(), String> {
+        let seq = self.next_seq(deck);
+        self.try_send_job(Job::LoadTrack {
+            deck,
+            track,
+            seq,
+            refuse_if_playing: true,
+        })
     }
 
     /// Changes the browser as `edit` asks; the new view arrives with a later
@@ -548,6 +570,10 @@ impl LibraryMode {
         let n = deck.index() + 1;
         if loaded.seq != self.load_seq[deck.index()] {
             return; // A later load for this deck was asked for.
+        }
+        if loaded.refuse_if_playing && engine.deck(deck).playing {
+            printer.event(format!("Deck {n} is playing"));
+            return;
         }
         // Save the outgoing track's last cue and hotcue changes first.
         self.sync_deck(deck, engine, printer);
@@ -1380,6 +1406,7 @@ pub(crate) mod testing {
             buffer: Arc::new(engine::TrackBuffer::new(44_100, vec![0.0; 2 * 4410]).unwrap()),
             memory: engine::TrackMemory::default(),
             hotcues_read: true,
+            refuse_if_playing: false,
         }
     }
 }

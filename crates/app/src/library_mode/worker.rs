@@ -42,6 +42,8 @@ pub enum Job {
         deck: DeckId,
         track: i64,
         seq: u64,
+        /// Drop the load if the deck plays once the track is decoded (the window's loads).
+        refuse_if_playing: bool,
     },
     Grid {
         deck: DeckId,
@@ -91,11 +93,14 @@ pub struct Loaded {
     /// The hotcues could be read. If not, `memory` has none and the deck's hotcues are not
     /// saved for this load (Ruling R19), so its empty pads never overwrite stored ones.
     pub hotcues_read: bool,
+    /// The load is dropped if the deck plays when it arrives (the window's loads).
+    pub refuse_if_playing: bool,
 }
 
 struct LoadJob {
     deck: DeckId,
     seq: u64,
+    refuse_if_playing: bool,
     row: TrackRow,
     path: PathBuf,
 }
@@ -225,14 +230,20 @@ fn run(
                 }
             }
             Job::LoadSelected { deck, seq } => match browser.selected_track() {
-                Some(row) => request_load(&reader, &load_tx, deck, row.id, seq, &say),
+                Some(row) => request_load(&reader, &load_tx, (deck, row.id, seq, false), &say),
                 None => say(format!(
                     "Deck {}: nothing selected in the browser",
                     deck_number(deck)
                 )),
             },
-            Job::LoadTrack { deck, track, seq } => {
-                request_load(&reader, &load_tx, deck, track, seq, &say);
+            Job::LoadTrack {
+                deck,
+                track,
+                seq,
+                refuse_if_playing,
+            } => {
+                let load = (deck, track, seq, refuse_if_playing);
+                request_load(&reader, &load_tx, load, &say);
             }
             Job::Grid {
                 deck,
@@ -343,12 +354,11 @@ impl FolderAdder {
 }
 
 /// Looks the track up and hands it to the loader, unless its file is missing.
+/// Asks the loader to decode `(deck, track, seq, refuse_if_playing)`'s track.
 fn request_load(
     reader: &Reader,
     loader: &Sender<LoadJob>,
-    deck: DeckId,
-    track: i64,
-    seq: u64,
+    (deck, track, seq, refuse_if_playing): (DeckId, i64, u64, bool),
     say: &dyn Fn(String),
 ) {
     let n = deck_number(deck);
@@ -367,6 +377,7 @@ fn request_load(
     let job = LoadJob {
         deck,
         seq,
+        refuse_if_playing,
         row: details.row,
         path: details.path,
     };
@@ -476,6 +487,7 @@ fn load_one(reader: &Reader, job: LoadJob, events: &Sender<Event>, decode: Decod
                 buffer: Arc::new(decoded.track),
                 memory,
                 hotcues_read,
+                refuse_if_playing: job.refuse_if_playing,
             })));
         }
         Err(e) => {
@@ -571,6 +583,7 @@ mod tests {
             deck: deck(2),
             track: id,
             seq: 1,
+            refuse_if_playing: false,
         })
         .unwrap();
         let text = wait_for(&events, message);
@@ -613,6 +626,7 @@ mod tests {
             deck: deck(1),
             track: id,
             seq: 7,
+            refuse_if_playing: false,
         })
         .unwrap();
         let loaded = wait_for(&events, |e| match e {
@@ -657,6 +671,7 @@ mod tests {
             deck: deck(1),
             track: id,
             seq: 1,
+            refuse_if_playing: false,
         })
         .unwrap();
         let loaded = wait_for(&events, |e| match e {
@@ -697,6 +712,7 @@ mod tests {
             deck: deck(1),
             track: id,
             seq: 1,
+            refuse_if_playing: false,
         })
         .unwrap();
         let text = wait_for(&events, message);
@@ -743,6 +759,7 @@ mod tests {
             deck: deck(1),
             track: id,
             seq: 1,
+            refuse_if_playing: false,
         })
         .unwrap();
         let loaded = wait_for(&events, |e| match e {
@@ -777,6 +794,7 @@ mod tests {
             deck: deck(1),
             track: boom,
             seq: 1,
+            refuse_if_playing: false,
         })
         .unwrap();
         let text = wait_for(&events, message);
@@ -789,6 +807,7 @@ mod tests {
             deck: deck(1),
             track: fine,
             seq: 2,
+            refuse_if_playing: false,
         })
         .unwrap();
         let loaded = wait_for(&events, |e| match e {

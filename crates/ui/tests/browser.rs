@@ -646,6 +646,19 @@ fn clicking_the_tree_selects_and_opens() {
 }
 
 #[test]
+fn the_arrow_of_a_node_that_cannot_open_selects_it() {
+    let mut view = view();
+    let mut playlists = tree_row("Playlists", 0, TreeKind::Playlists);
+    playlists.expanded = true;
+    view.tree.push(playlists);
+    let mut harness = clicking(view, Decks::default());
+    let node = harness.get_by_label("Playlists").rect();
+    let arrow = pos2(node.min.x - 24.0, node.center().y);
+    click(&mut harness, arrow);
+    assert_eq!(harness.state().steps, [browse(BrowserEdit::SelectTree(2))]);
+}
+
+#[test]
 fn double_click_loads_on_the_first_free_deck() {
     let decks = Decks {
         playing: [true, false, false, false],
@@ -655,6 +668,14 @@ fn double_click_loads_on_the_first_free_deck() {
     let at = at_label(&harness, "Song 4");
     double_click(&mut harness, at);
     assert_eq!(loads(&harness.state().steps), [&load(2, 1004)]);
+    // The first click selects the row; the second, the double-click's, does not again.
+    let selects: Vec<_> = harness
+        .state()
+        .steps
+        .iter()
+        .filter(|s| matches!(s, LibraryStep::Browse(_)))
+        .collect();
+    assert_eq!(selects, [&browse(BrowserEdit::SelectRow(4))]);
 
     // In the four-deck view decks 3 and 4 come after 1 and 2.
     let decks = Decks {
