@@ -824,3 +824,134 @@ fn expected_entries_guard_the_edit_in_the_same_transaction() {
         assert_eq!(order(&lib, p), [t[0], t[1], t[2]]);
     }
 }
+
+/// The window appends a drop of many tracks as one batch: the playlist is written once
+/// for the batch, from the first entry that changes, not once per track.
+#[test]
+fn appending_two_hundred_to_fifty_thousand_is_fast() {
+    const N: usize = 50_000;
+    let (_d, lib) = open();
+    let mut stmts: Vec<RawStatement> = (0..N)
+        .map(|i| insert_track_stmt(&format!("/m/{i}.flac"), &format!("t{i}"), "a"))
+        .collect();
+    stmts.push(raw(
+        "INSERT INTO playlists(name, position) VALUES ('All', 0)",
+        vec![],
+    ));
+    stmts.push(raw(
+        "INSERT INTO playlist_tracks(playlist_id, track_id, position) \
+         SELECT (SELECT id FROM playlists), id, id - 1 FROM tracks",
+        vec![],
+    ));
+    submit(&lib, WriteOp::Raw(stmts));
+    let p = playlists(&lib)[0].id;
+    let added: Vec<i64> = (1..=200).collect();
+    let batch = added
+        .iter()
+        .map(|&track| WriteOp::AddToPlaylist {
+            playlist: p,
+            track,
+            at: None,
+        })
+        .collect();
+    let bound = if cfg!(windows) && std::env::var_os("CI").is_some() {
+        Duration::from_millis(2000)
+    } else {
+        Duration::from_millis(750)
+    };
+    let start = Instant::now();
+    submit(&lib, WriteOp::Batch(batch));
+    let elapsed = start.elapsed();
+    println!("append 200 to 50k: {elapsed:?}");
+    assert!(elapsed < bound, "took {elapsed:?} (bound {bound:?})");
+    let reader = lib.reader().unwrap();
+    let tail: Vec<i64> = reader
+        .playlist_tracks(p, N - 1, 300)
+        .unwrap()
+        .iter()
+        .map(|r| r.id)
+        .collect();
+    assert_eq!(tail[0], i64::try_from(N).unwrap());
+    assert_eq!(tail[1..], added[..]);
+    assert_eq!(playlists(&lib)[0].track_count, 50_200);
+}
+
+/// A batch's playlist edits land as the same ops one at a time would, across playlists
+/// and around other ops, with dense positions.
+#[test]
+fn a_batch_of_edits_matches_the_edits_one_by_one() {
+    let (_d, lib) = open();
+    let t = n_tracks(&lib, 5);
+    let p = create(&lib, "P");
+    let q = create(&lib, "Q");
+    for id in [t[0], t[1], t[2]] {
+        add(&lib, p, id, None);
+    }
+    add(&lib, q, t[4], None);
+    let ops = vec![
+        WriteOp::AddToPlaylist {
+            playlist: p,
+            track: t[3],
+            at: Some(1),
+        },
+        WriteOp::AddToPlaylist {
+            playlist: q,
+            track: t[0],
+            at: Some(0),
+        },
+        WriteOp::MoveInPlaylist {
+            playlist: p,
+            from: 0,
+            to: 3,
+        },
+        WriteOp::RenamePlaylist {
+            id: q,
+            name: "Q2".into(),
+        },
+        WriteOp::ExpectPlaylistEntries {
+            playlist: p,
+            entries: vec![(0, t[3]), (3, t[0])],
+        },
+        WriteOp::RemoveFromPlaylist {
+            playlist: p,
+            position: 1,
+        },
+        WriteOp::AddToPlaylist {
+            playlist: p,
+            track: t[4],
+            at: None,
+        },
+    ];
+    submit(&lib, WriteOp::Batch(ops));
+    assert_eq!(order(&lib, p), [t[3], t[2], t[0], t[4]]);
+    assert_eq!(positions(&lib, p), [0, 1, 2, 3]);
+    assert_eq!(order(&lib, q), [t[0], t[4]]);
+    assert_eq!(positions(&lib, q), [0, 1]);
+    assert_eq!(playlists(&lib)[1].name, "Q2");
+    // A failure late in the batch undoes its earlier edits.
+    let err = lib
+        .writer()
+        .submit_wait(WriteOp::Batch(vec![
+            WriteOp::AddToPlaylist {
+                playlist: p,
+                track: t[1],
+                at: None,
+            },
+            WriteOp::RemoveFromPlaylist {
+                playlist: p,
+                position: 9,
+            },
+        ]))
+        .unwrap_err();
+    assert!(
+        matches!(
+            err,
+            LibraryError::PositionOutOfRange {
+                position: 9,
+                len: 5
+            }
+        ),
+        "{err:?}"
+    );
+    assert_eq!(order(&lib, p), [t[3], t[2], t[0], t[4]]);
+}
