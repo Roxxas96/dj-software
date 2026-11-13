@@ -45,6 +45,8 @@ const DARK_FILL: f32 = 0.35;
 const JOG_DEAD_ZONE: f32 = 8.0;
 /// A record's speed: the jog's marker turns at this at the original tempo.
 const JOG_RPM: f64 = 100.0 / 3.0;
+/// The overview's landing triangle, in points.
+const OVERVIEW_LANDING: f32 = 6.0;
 /// The share of the panels' width each deck panel takes; the mixer has the rest.
 const PANEL_SHARE: f32 = 0.38;
 /// The same in the 4-Decks view, where the mixer has four strips to fit.
@@ -156,6 +158,8 @@ pub struct DeckView {
     pub jog_steps_per_turn: u16,
     /// The playhead's place in the track, 0 to 1; `None` without a track.
     pub progress: Option<f32>,
+    /// Where the track would be while a held roll or slice slips, 0 to 1 like `progress`.
+    pub landing: Option<f32>,
     /// How far the jog's marker has turned, 0 to 1 clockwise from the top.
     pub jog_turn: f32,
     pub keylock: bool,
@@ -273,6 +277,10 @@ impl DeckView {
             jog_display: frame.view.jog_display,
             jog_steps_per_turn: frame.control.jog_steps_per_turn,
             progress: (loaded && duration > 0.0).then(|| (position / duration) as f32),
+            landing: snapshot
+                .ghost_frames
+                .filter(|_| loaded && duration > 0.0)
+                .map(|ghost| (ghost / duration).clamp(0.0, 1.0) as f32),
             jog_turn: if loaded {
                 (position / f64::from(rate) * JOG_RPM / 60.0).fract() as f32
             } else {
@@ -1007,6 +1015,21 @@ fn overview_strip(ui: &Ui, view: &DeckView, rect: Rect, sink: &mut Sink<'_>) {
         let x = rect.left() + rect.width() * progress.clamp(0.0, 1.0);
         let head = Rect::from_x_y_ranges(x - 1.0..=x + 1.0, rect.y_range());
         mesh.add_colored_rect(head, p.playhead);
+    }
+    if let Some(landing) = view.landing {
+        // A triangle on the top edge, tip down, in the deck's accent.
+        let x = rect.left() + rect.width() * landing;
+        let size = OVERVIEW_LANDING;
+        let corners = [
+            pos2(x - size / 2.0, rect.top()),
+            pos2(x + size / 2.0, rect.top()),
+            pos2(x, rect.top() + size),
+        ];
+        let base = mesh.vertices.len() as u32;
+        for corner in corners {
+            mesh.colored_vertex(corner, p.deck_accent(view.deck));
+        }
+        mesh.add_triangle(base, base + 1, base + 2);
     }
     painter.add(Shape::mesh(mesh));
 }

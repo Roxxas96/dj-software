@@ -1657,3 +1657,69 @@ fn the_overview_follows_the_knobs() {
     assert!(low_vertices(0.5) > 0);
     assert_eq!(low_vertices(0.0), 0);
 }
+
+/// The overview of deck 1 painted for `snapshot`: its accent-coloured vertices and the
+/// playhead's.
+fn overview_marks(snapshot: &DeckSnapshot, frame: &ControlFrame) -> (Vec<Pos2>, Vec<Pos2>) {
+    let view = view(snapshot, frame);
+    let sections = sections(Layout::Pro);
+    let ctx = egui::Context::default();
+    let (commands, _received) = channel();
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ui::deck::panel(
+            ui,
+            &view,
+            None,
+            &sections,
+            &mut Sink::new(&commands, &mut HeldButtons::default()),
+        )
+    });
+    output.textures_delta.clear();
+    let palette = ui::theme::Palette::DARK;
+    let accent = palette.deck_accent(DeckId::new(0).unwrap());
+    let (mut marks, mut head) = (Vec::new(), Vec::new());
+    let mut stack: Vec<egui::Shape> = output.shapes.into_iter().map(|c| c.shape).collect();
+    while let Some(shape) = stack.pop() {
+        match shape {
+            egui::Shape::Vec(inner) => stack.extend(inner),
+            egui::Shape::Mesh(mesh) => {
+                for v in &mesh.vertices {
+                    if v.color == accent {
+                        marks.push(v.pos);
+                    } else if v.color == palette.playhead {
+                        head.push(v.pos);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    (marks, head)
+}
+
+#[test]
+fn the_overview_shows_the_landing_point() {
+    let (mut snapshot, mut frame) = loaded_plain();
+    frame.decks[0].as_mut().unwrap().overview = Some(Arc::new(Waveform {
+        frames_per_bucket: 256,
+        buckets: vec![[255, 200, 200, 200]; 4000],
+    }));
+    snapshot.slip = true;
+    snapshot.roll_active = true;
+    snapshot.ghost_frames = Some(snapshot.position_frames - 2_000_000.0);
+    let shown = view(&snapshot, &frame);
+    let landing = shown.landing.expect("a landing point");
+    let progress = shown.progress.unwrap();
+    assert!((landing - (2_518_110.0 - 2_000_000.0) / 14_508_900.0).abs() < 1e-4);
+    assert!(landing < progress);
+
+    let (marks, head) = overview_marks(&snapshot, &frame);
+    assert!(!marks.is_empty());
+    let mark_x = marks.iter().map(|p| p.x).sum::<f32>() / marks.len() as f32;
+    let head_x = head.iter().map(|p| p.x).sum::<f32>() / head.len() as f32;
+    assert!(mark_x < head_x, "{mark_x} {head_x}");
+
+    snapshot.ghost_frames = None;
+    assert_eq!(view(&snapshot, &frame).landing, None);
+    assert!(overview_marks(&snapshot, &frame).0.is_empty());
+}

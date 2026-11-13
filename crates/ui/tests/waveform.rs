@@ -580,3 +580,149 @@ fn the_lane_follows_its_decks_knobs() {
     // Deck 1's lane has no low bars left; deck 2's is as it was.
     assert_eq!(killed, vec![flat[1]], "{killed:?} against {flat:?}");
 }
+
+/// The lane of deck `deck` (0-based) for `snapshot`, 1000 points wide, as shapes. The
+/// playhead (frame 441 000) is at 500, a beat is 22 050 frames and 16 beats are in sight.
+fn one_lane(snapshot: DeckSnapshot, deck: usize, overlay: bool) -> Vec<egui::Shape> {
+    let mut mesh = Arc::new(Mesh::default());
+    painted(move |ui| {
+        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(1000.0, 100.0));
+        let lane = Lane {
+            deck: DeckId::new(deck).unwrap(),
+            snapshot: &snapshot,
+            waveform: None,
+            position_frames: 441_000.0,
+            beats: 16.0,
+            style: WaveformStyle::Frequency,
+            palette: ui::WaveformPalette::default(),
+            knobs: ui::waveform::BandScale::UNITY,
+            overlay,
+            marks: None,
+        };
+        lane.draw(&ui.painter_at(rect), rect, &mut mesh);
+    })
+}
+
+fn slipping(ghost: Option<f64>) -> DeckSnapshot {
+    DeckSnapshot {
+        loaded: true,
+        playing: true,
+        track_sample_rate: 44_100,
+        duration_frames: 2_560_000,
+        position_frames: 441_000.0,
+        grid: Grid::from_bpm(120.0, 0.0, 44_100),
+        slip: true,
+        roll_active: ghost.is_some(),
+        ghost_frames: ghost,
+        ..DeckSnapshot::default()
+    }
+}
+
+/// The lane's x of `frame` for [`one_lane`].
+fn lane_x(frame: f64) -> f32 {
+    500.0 + ((frame - 441_000.0) / (16.0 * 22_050.0) * 1000.0) as f32
+}
+
+/// Every vertex of `colour` in the meshes painted.
+fn vertices_of(shapes: &[egui::Shape], colour: egui::Color32) -> Vec<egui::Pos2> {
+    shapes
+        .iter()
+        .filter_map(|shape| match shape {
+            egui::Shape::Mesh(mesh) => Some(mesh),
+            _ => None,
+        })
+        .flat_map(|mesh| mesh.vertices.iter().filter(|v| v.color == colour))
+        .map(|v| v.pos)
+        .collect()
+}
+
+fn accent(deck: usize) -> egui::Color32 {
+    ui::theme::Palette::DARK.deck_accent(DeckId::new(deck).unwrap())
+}
+
+#[test]
+fn a_held_roll_shows_where_it_lands() {
+    for (deck, overlay) in [(0, false), (1, false), (0, true)] {
+        let ghost = 441_000.0 + 3.0 * 22_050.0;
+        let shapes = one_lane(slipping(Some(ghost)), deck, overlay);
+        // The triangle: three accent vertices at the top edge, the tip lowest.
+        let corners = vertices_of(&shapes, accent(deck));
+        assert_eq!(corners.len(), 3, "{corners:?}");
+        let tip = corners.iter().max_by(|a, b| a.y.total_cmp(&b.y)).unwrap();
+        assert!((tip.x - lane_x(ghost)).abs() <= 1.0, "{tip:?}");
+        assert!((tip.y - 8.0).abs() <= 1.0, "{tip:?}");
+        assert!(
+            corners.iter().filter(|c| c.y < 1.0).count() == 2,
+            "{corners:?}"
+        );
+        // The line: through the lane, half see-through.
+        let half = egui::Color32::from_rgba_unmultiplied(
+            accent(deck).r(),
+            accent(deck).g(),
+            accent(deck).b(),
+            0x80,
+        );
+        let line = vertices_of(&shapes, half);
+        assert!(!line.is_empty());
+        assert!(
+            line.iter().all(|v| (v.x - lane_x(ghost)).abs() <= 1.0),
+            "{line:?}"
+        );
+        let (top, bottom) = line
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(t, b), v| (t.min(v.y), b.max(v.y)));
+        assert!(top <= 0.5 && bottom >= 99.5, "{top} {bottom}");
+    }
+}
+
+#[test]
+fn no_marker_without_slip() {
+    let shapes = one_lane(slipping(None), 0, false);
+    assert!(vertices_of(&shapes, accent(0)).is_empty());
+}
+
+/// The x range of the vertices of the loop shade painted.
+fn shade_span(snapshot: DeckSnapshot) -> Option<(f32, f32)> {
+    let shapes = one_lane(snapshot, 0, false);
+    let xs = vertices_of(&shapes, ui::theme::Palette::DARK.loop_band);
+    let min = xs.iter().map(|p| p.x).min_by(f32::total_cmp)?;
+    let max = xs.iter().map(|p| p.x).max_by(f32::total_cmp)?;
+    Some((min, max))
+}
+
+#[test]
+fn a_loop_roll_is_shaded() {
+    let snapshot = DeckSnapshot {
+        loop_in: Some(441_000.0),
+        loop_out: Some(441_000.0 + 22_050.0 * 2.0),
+        loop_active: false,
+        ..slipping(Some(441_000.0))
+    };
+    let (min, max) = shade_span(snapshot).expect("shaded");
+    assert!((min - lane_x(441_000.0)).abs() <= 1.0, "{min}");
+    assert!((max - lane_x(441_000.0 + 44_100.0)).abs() <= 1.0, "{max}");
+    // Without the roll, an inactive loop is not shaded.
+    let idle = DeckSnapshot {
+        roll_active: false,
+        ..snapshot
+    };
+    assert_eq!(shade_span(idle), None);
+}
+
+#[test]
+fn a_slicer_block_is_shaded() {
+    // The block starts on beat 8 (frame 176 400) and spans 8 beats.
+    let snapshot = DeckSnapshot {
+        slicer_block_beat: Some(8.0),
+        ..slipping(Some(441_000.0))
+    };
+    let (min, max) = shade_span(snapshot).expect("shaded");
+    assert!((min - lane_x(8.0 * 22_050.0)).abs() <= 1.0, "{min}");
+    assert!((max - lane_x(16.0 * 22_050.0)).abs() <= 1.0, "{max}");
+    // Not held: the block is not shaded.
+    let idle = DeckSnapshot {
+        roll_active: false,
+        ..snapshot
+    };
+    assert_eq!(shade_span(idle), None);
+}

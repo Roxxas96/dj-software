@@ -43,6 +43,13 @@ const NAME_GAP: f32 = 3.0;
 const NAME_CHARS: usize = 14;
 /// How opaque a saved loop's band is.
 const SAVED_LOOP_ALPHA: u8 = 0x50;
+/// The landing marker's triangle (its width and height) and line width, in points, and
+/// the line's alpha (half).
+/// Beats in a slicer block.
+const SLICER_BEATS: f64 = 8.0;
+const LANDING_SIZE: f32 = 8.0;
+const LANDING_LINE: f32 = 1.0;
+const LANDING_ALPHA: u8 = 0x80;
 /// The zoom buttons' side, and their gap from the area's top right corner.
 const ZOOM_BUTTON: f32 = 18.0;
 const ZOOM_MARGIN: f32 = 4.0;
@@ -364,9 +371,7 @@ impl Lane<'_> {
                 self.knobs,
             );
         }
-        if let (true, Some(start), Some(end)) =
-            (snapshot.loop_active, snapshot.loop_in, snapshot.loop_out)
-        {
+        if let Some((start, end)) = shaded_loop(snapshot) {
             let band = Rect::from_x_y_ranges(scale.x(start)..=scale.x(end), rect.y_range());
             mesh.add_colored_rect(band, p.loop_band);
         }
@@ -419,9 +424,32 @@ impl Lane<'_> {
             ],
             p.cue,
         );
+        if let Some(ghost) = snapshot.ghost_frames.filter(|g| g.is_finite()) {
+            self.landing(mesh, rect, scale.x(ghost), p);
+        }
         let centre = rect.center().x;
         let head = centre - PLAYHEAD_WIDTH / 2.0..=centre + PLAYHEAD_WIDTH / 2.0;
         mesh.add_colored_rect(Rect::from_x_y_ranges(head, rect.y_range()), p.playhead);
+    }
+
+    /// Where the track will land when the held roll or slice lets go: a line through the
+    /// lane at `x` and a triangle on its top edge, tip down, both in the deck's accent.
+    fn landing(&self, mesh: &mut Mesh, rect: Rect, x: f32, p: &Palette) {
+        let accent = p.deck_accent(self.deck);
+        let line = x - LANDING_LINE / 2.0..=x + LANDING_LINE / 2.0;
+        mesh.add_colored_rect(
+            Rect::from_x_y_ranges(line, rect.y_range()),
+            with_alpha(accent, LANDING_ALPHA),
+        );
+        triangle(
+            mesh,
+            [
+                pos2(x - LANDING_SIZE / 2.0, rect.top()),
+                pos2(x + LANDING_SIZE / 2.0, rect.top()),
+                pos2(x, rect.top() + LANDING_SIZE),
+            ],
+            accent,
+        );
     }
 
     /// Hotcue `slot`'s colour: its saved one, or the palette's.
@@ -557,6 +585,24 @@ fn columns(
             mesh.add_colored_rect(rect, bar.colour);
         }
     }
+}
+
+/// The span in track frames to shade as a loop: the active loop; while a roll or slice is
+/// held, the loop the deck publishes, else the slicer's block (the snapshot does not say
+/// which pad is held, nor how long a roll is).
+fn shaded_loop(snapshot: &DeckSnapshot) -> Option<(f64, f64)> {
+    let published = snapshot.loop_in.zip(snapshot.loop_out);
+    let span = if snapshot.roll_active {
+        published.or_else(|| {
+            let grid = snapshot.grid?;
+            let start =
+                grid.first_beat_frames + snapshot.slicer_block_beat? * grid.beat_period_frames;
+            Some((start, start + SLICER_BEATS * grid.beat_period_frames))
+        })
+    } else {
+        published.filter(|_| snapshot.loop_active)
+    };
+    span.filter(|(start, end)| start.is_finite() && end.is_finite() && end > start)
 }
 
 fn triangle(mesh: &mut Mesh, corners: [Pos2; 3], colour: Color32) {
