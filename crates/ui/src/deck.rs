@@ -25,7 +25,7 @@ use crate::cover::{self, Covers};
 use crate::hotcue_menu::{self, HotcueTarget};
 use crate::layout::{Sections, deck_slots};
 use crate::mixer;
-use crate::model::{ControlFrame, GHOST_TEMPO, HotcueMark};
+use crate::model::{ControlFrame, GHOST_FX_LEVEL, GHOST_TEMPO, HotcueMark};
 use crate::theme::{self, EDGE_LABEL_WIDTH, SECTION_GAP, edge_label};
 use crate::view::{JogDisplay, TimeMode, WaveformPalette};
 use crate::waveform::{Playhead, band_colours, layers, loudest};
@@ -169,6 +169,8 @@ pub struct DeckView {
     /// Each FX slot's effect and whether it is on.
     pub fx: [(EffectKind, bool); 3],
     pub fx_level: f32,
+    /// Where the controller's FX level waits to pick the level up.
+    pub fx_level_ghost: Option<f32>,
     /// What the pads do, as [`SideControl::pad_mode_label`] names it.
     pub pad_mode: &'static str,
     /// The pad mode the app switches to, [`PadMode::Hardware`] while the SB3's own mode
@@ -284,6 +286,7 @@ impl DeckView {
                 (frame.fx_slots[id.index()][slot], channel.fx_enabled[slot])
             }),
             fx_level: channel.fx_amount,
+            fx_level_ghost: frame.ghosts[id.index()][GHOST_FX_LEVEL],
             pad_mode: side.pad_mode_label(),
             pad_mode_choice: side.pad_mode,
             pad_hardware_mode: side.hardware_mode,
@@ -1071,6 +1074,16 @@ fn fx(ui: &mut Ui, view: &DeckView, accent: Color32, level: bool, sink: &mut Sin
         let level = rect.width() * view.fx_level.clamp(0.0, 1.0);
         let filled = Rect::from_min_size(rect.min, vec2(level, rect.height()));
         painter.rect_filled(filled, CornerRadius::ZERO, accent);
+        let ghost_at = |v: f32| pos2(rect.left() + rect.width() * v, rect.center().y);
+        if let Some(at) = mixer::ghost_marker(view.fx_level_ghost, ghost_at) {
+            let marker = Rect::from_center_size(at, vec2(6.0, rect.height() + 6.0));
+            painter.rect_stroke(
+                marker,
+                CornerRadius::same(1),
+                Stroke::new(1.5, p.cue),
+                StrokeKind::Outside,
+            );
+        }
         let caption = RichText::new(format!("FX {:.0}%", view.fx_level * 100.0))
             .color(p.text_dim)
             .size(SMALL_FONT);

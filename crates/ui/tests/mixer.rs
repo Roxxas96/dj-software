@@ -423,6 +423,7 @@ fn ghosts_for_every_absolute_control() {
         ("filter", 4),
         ("fader", 5),
         ("pitch", 6),
+        ("fx level", 7),
     ] {
         let mut frame = ControlFrame::default();
         frame.ghosts[0][at] = Some(0.3);

@@ -725,6 +725,7 @@ const GHOST_KINDS: [ActionKind; ui::GHOSTS] = [
     ActionKind::Filter,
     ActionKind::Fader,
     ActionKind::Tempo,
+    ActionKind::FxLevel,
 ];
 
 /// The soft-takeover targets of no deck the window shows a pickup marker for, in
@@ -989,6 +990,45 @@ action = "master.headphone_level"
         runtime.handle_batch(&[knob(90)], &mut engine);
         let at = 90.0 / 127.0;
         assert_eq!(global_ghosts(&runtime), [None, None, Some(at), None]);
+    }
+
+    #[test]
+    fn the_fx_level_shows_where_its_knob_waits() {
+        const MAP: &str = r#"
+[controller]
+name = "Test"
+port = "Test"
+
+[[input]]
+midi = { cc = 21, channel = 1 }
+action = "deck.fx_level"
+deck = 1
+"#;
+        struct Null;
+        impl controller::MidiOut for Null {
+            fn send(&mut self, _: controller::MidiMessage) {}
+        }
+        let knob = |value| TimedMidi {
+            micros: 0,
+            message: controller::MidiMessage::ControlChange {
+                channel: 0,
+                controller: 21,
+                value,
+            },
+        };
+        let (mut engine, _renderer) = engine::engine(engine::EngineConfig {
+            sample_rate: 44_100,
+            max_block_frames: 64,
+        });
+        let mapping = controller::mapping::parse_mapping("test.toml", MAP).unwrap();
+        let mut runtime = Runtime::new(mapping);
+        runtime.attach(&mut engine, &mut Null);
+        runtime.handle_batch(&[knob(100)], &mut engine);
+        assert_eq!(ghosts(&runtime)[0][7], None);
+        // The window sets it; the knob must come back to it.
+        runtime.control_state_mut().decks[0].fx_level = 0.2;
+        runtime.handle_batch(&[knob(90)], &mut engine);
+        assert_eq!(ghosts(&runtime)[0][7], Some(90.0 / 127.0));
     }
 
     #[test]
