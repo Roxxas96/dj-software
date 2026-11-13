@@ -124,6 +124,8 @@ pub struct Screen {
     pub held: controls::HeldButtons,
     /// The shares a divider was dragged to, drawn until the session's copy catches up.
     pub sizes: Option<Dragged>,
+    /// The browser view drawn: none of a search or sort older than the latest sent.
+    pub browser: browser::Fresh,
     /// Where what the viewer asks for goes: the session.
     pub commands: Sender<UiCommand>,
 }
@@ -139,6 +141,7 @@ impl Default for Screen {
             settings: settings::SettingsWindow::default(),
             held: controls::HeldButtons::default(),
             sizes: None,
+            browser: browser::Fresh::default(),
             commands: channel().0,
         }
     }
@@ -258,6 +261,7 @@ pub fn root_with_reads(
                     );
                 });
             } else if let Some(view) = &frame.browser {
+                let view = screen.browser.pick(ui.ctx(), view);
                 changes = browser::show(
                     ui,
                     view,

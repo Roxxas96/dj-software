@@ -754,6 +754,14 @@ fn compare(a: &TrackRow, b: &TrackRow, key: TrackSortKey) -> std::cmp::Ordering 
             .unwrap_or(std::cmp::Ordering::Equal),
         TrackSortKey::Key => a.key.cmp(&b.key),
         TrackSortKey::Added => std::cmp::Ordering::Equal,
+        TrackSortKey::Length => {
+            let seconds = |t: &TrackRow| {
+                Some(t.duration_frames? as f64 / f64::from(t.sample_rate.filter(|&r| r > 0)?))
+            };
+            seconds(a)
+                .partial_cmp(&seconds(b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }
     };
     order.then(a.id.cmp(&b.id))
 }

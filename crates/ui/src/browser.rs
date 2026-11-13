@@ -10,11 +10,11 @@ use std::time::Instant;
 
 use analysis::KeyNotation;
 use egui::{
-    Align, Button, Color32, CornerRadius, CursorIcon, Id, Label, Layout, Pos2, Rect, RichText,
-    Sense, Stroke, Ui, UiBuilder, Vec2, pos2, vec2,
+    Align, Button, Color32, CornerRadius, CursorIcon, Id, Key, Label, Layout, Pos2, Rect, RichText,
+    Sense, Stroke, TextEdit, Ui, UiBuilder, Vec2, pos2, vec2,
 };
 use engine::DeckId;
-use library::{BrowserEdit, BrowserView, Focus, ListRow, TreeKind, TreeRow};
+use library::{BrowserEdit, BrowserView, Focus, ListRow, TrackSortKey, TreeKind, TreeRow};
 
 use crate::cover::{self, Covers};
 use crate::deck::{key_text, split_remix};
@@ -114,6 +114,106 @@ fn notice_id() -> Id {
     Id::NULL.with("open-jockey-browser-notice")
 }
 
+/// The `seq` of the latest search or sort the window sent (0 before any): views of older
+/// queries are not shown.
+pub fn sent_seq(ctx: &egui::Context) -> u64 {
+    ctx.data(|d| d.get_temp(sent_seq_id())).unwrap_or(0)
+}
+
+/// Records that the window sent query `seq` (the search box and the headers do).
+pub fn set_sent_seq(ctx: &egui::Context, seq: u64) {
+    ctx.data_mut(|d| d.insert_temp(sent_seq_id(), seq));
+}
+
+fn sent_seq_id() -> Id {
+    Id::NULL.with("open-jockey-browser-sent-seq")
+}
+
+/// The latest view the browser may show. A view of a search or sort older than the latest
+/// one the window sent is dropped, and the last view shown stays until a fresh one comes.
+#[derive(Debug, Default)]
+pub struct Fresh {
+    shown: Option<BrowserView>,
+}
+
+impl Fresh {
+    /// The view to draw, given the session's latest `view`.
+    pub fn pick<'a>(&'a mut self, ctx: &egui::Context, view: &'a BrowserView) -> &'a BrowserView {
+        if view.seq >= sent_seq(ctx) {
+            // Copied only when it changes.
+            if self.shown.as_ref() != Some(view) {
+                self.shown = Some(view.clone());
+            }
+            return view;
+        }
+        self.shown.as_ref().unwrap_or(view)
+    }
+}
+
+/// What the search box holds and the order the headers asked for, kept from frame to frame.
+#[derive(Debug, Clone, Default)]
+struct Query {
+    text: String,
+    sort: Option<(TrackSortKey, bool)>,
+    /// The `seq` of the latest search or sort sent.
+    seq: u64,
+    /// Set from the first view drawn.
+    started: bool,
+}
+
+impl Query {
+    fn id() -> Id {
+        Id::NULL.with("open-jockey-browser-query")
+    }
+
+    /// The window's query, caught up with `view` when the view answers its latest one.
+    fn take(ctx: &egui::Context, view: &BrowserView) -> Self {
+        let mut query: Self = ctx
+            .data_mut(|d| d.remove_temp(Self::id()))
+            .unwrap_or_default();
+        if !query.started {
+            query.text = view.search.clone().unwrap_or_default();
+            query.seq = view.seq;
+            query.started = true;
+        }
+        if view.seq >= query.seq {
+            query.sort = view.sort;
+        }
+        query
+    }
+
+    fn put(self, ctx: &egui::Context) {
+        set_sent_seq(ctx, self.seq);
+        ctx.data_mut(|d| d.insert_temp(Self::id(), self));
+    }
+
+    /// The search for what the box holds now.
+    fn search(&mut self) -> LibraryStep {
+        self.seq += 1;
+        let text = (!self.text.is_empty()).then(|| self.text.clone());
+        LibraryStep::Browse(BrowserEdit::Search {
+            text,
+            seq: self.seq,
+        })
+    }
+
+    /// The sort a click on `key`'s header asks for: ascending, then descending, then the
+    /// list's natural order.
+    fn sort(&mut self, key: TrackSortKey) -> LibraryStep {
+        self.sort = match self.sort {
+            Some((k, false)) if k == key => Some((key, true)),
+            Some((k, true)) if k == key => None,
+            _ => Some((key, false)),
+        };
+        self.seq += 1;
+        LibraryStep::Browse(BrowserEdit::Sort {
+            key: self.sort.map(|(key, _)| key),
+            descending: self.sort.is_some_and(|(_, descending)| descending),
+            seq: self.seq,
+        })
+    }
+}
+
 /// A drag on a divider.
 pub(crate) struct Drag {
     /// Where the pointer is while the divider is held.
@@ -147,6 +247,20 @@ pub(crate) fn divider(ui: &mut Ui, name: &str, rect: Rect, cursor: CursorIcon) -
 
 /// The list's column headers, after the cue dot's empty one.
 pub const COLUMNS: [&str; 6] = ["Title", "Artist", "Remix", "Length", "BPM", "Key"];
+
+/// What a click on each of [`COLUMNS`] sorts by; the remix, cut from the title, does not
+/// sort.
+const SORT_KEYS: [Option<TrackSortKey>; 6] = [
+    Some(TrackSortKey::Title),
+    Some(TrackSortKey::Artist),
+    None,
+    Some(TrackSortKey::Length),
+    Some(TrackSortKey::Bpm),
+    Some(TrackSortKey::Key),
+];
+
+/// The search box's width at most, in points.
+const SEARCH_WIDTH: f32 = 200.0;
 
 /// The width of a deck marker at a loaded track's row, in points.
 const MARKER_WIDTH: f32 = 3.0;
@@ -553,13 +667,31 @@ fn list_pane(
     };
     let count = format!("{} {files}", view.list_count);
     let count_width = 70.0;
+    let search_width = SEARCH_WIDTH.min(header.width() * 0.35);
+    let search_x = header.max.x - count_width - 6.0 - search_width;
     cell(
         ui,
         header,
         header.min.x,
-        header.width() - count_width - 6.0,
+        search_x - header.min.x - 6.0,
         RichText::new(path).color(p.text_dim),
     );
+    let mut query = Query::take(ui.ctx(), view);
+    let search = Rect::from_min_size(pos2(search_x, header.min.y), vec2(search_width, ROW_HEIGHT));
+    let field = ui.put(
+        search,
+        TextEdit::singleline(&mut query.text)
+            .hint_text("Search")
+            .margin(vec2(4.0, 1.0))
+            .desired_width(search_width),
+    );
+    let escape = ui.input(|i| i.key_pressed(Key::Escape));
+    if field.changed() {
+        steps.push(query.search());
+    } else if escape && (field.has_focus() || field.lost_focus()) && !query.text.is_empty() {
+        query.text.clear();
+        steps.push(query.search());
+    }
     cell(
         ui,
         header,
@@ -570,9 +702,23 @@ fn list_pane(
     // The column headers, over the same cells as the rows.
     let head = row(ui, None);
     let cells = columns(head.min.x, head.width());
-    for (&(x, width), name) in cells[1..].iter().zip(COLUMNS) {
+    for (at, (&(x, width), name)) in cells[1..].iter().zip(COLUMNS).enumerate() {
         cell(ui, head, x, width, RichText::new(name).color(p.text_dim));
+        let Some(key) = SORT_KEYS[at] else { continue };
+        let rect = Rect::from_min_size(pos2(x, head.min.y), vec2(width, head.height()));
+        let id = Id::NULL.with(("browser header", at));
+        let response = ui.interact(rect, id, Sense::click());
+        if response.hovered() {
+            ui.output_mut(|o| o.cursor_icon = CursorIcon::PointingHand);
+        }
+        if response.clicked() {
+            steps.push(query.sort(key));
+        }
+        if let Some((_, descending)) = view.sort.filter(|(k, _)| *k == key) {
+            sort_arrow(ui, rect, descending);
+        }
     }
+    query.put(ui.ctx());
     let rows = rows_fitting(ui.available_height());
     let focused = view.focus == Focus::List;
     let page = view.list_offset..view.list_offset + view.list.len();
@@ -634,6 +780,27 @@ fn list_pane(
             cell(ui, rect, x, width, RichText::new(text).color(colour));
         }
     }
+}
+
+/// The ▲ (ascending) or ▼ (descending) at the right of a sorted column's header `rect`,
+/// drawn as a shape: egui's bundled fonts may lack the glyphs.
+fn sort_arrow(ui: &Ui, rect: Rect, descending: bool) {
+    let p = theme::palette(ui.ctx());
+    let c = pos2(rect.max.x - 8.0, rect.center().y);
+    let points = if descending {
+        vec![
+            c + vec2(-3.5, -2.0),
+            c + vec2(3.5, -2.0),
+            c + vec2(0.0, 2.5),
+        ]
+    } else {
+        vec![c + vec2(-3.5, 2.0), c + vec2(3.5, 2.0), c + vec2(0.0, -2.5)]
+    };
+    ui.painter().add(egui::Shape::convex_polygon(
+        points,
+        p.text_dim,
+        Stroke::NONE,
+    ));
 }
 
 /// The list's cells as `(x, width)`: the cue dot (right of a loaded track's marker), then
@@ -773,6 +940,9 @@ mod tests {
             list_offset: offset,
             list_count: 5000,
             list_cursor: cursor,
+            search: None,
+            sort: None,
+            seq: 0,
         }
     }
 

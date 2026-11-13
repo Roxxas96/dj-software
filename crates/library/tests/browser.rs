@@ -387,23 +387,318 @@ fn toggle_tree_at_opens_a_folder() {
     assert_eq!(b.edit(BrowserEdit::ToggleTreeAt(99)).unwrap(), before);
 }
 
+/// Inserts one track per `(path, title, artist)` and returns their ids in order.
+fn add_artist_tracks(lib: &Library, tracks: &[(&str, &str, &str)]) -> Vec<i64> {
+    let stmts = tracks
+        .iter()
+        .map(|(p, t, a)| RawStatement {
+            sql: "INSERT INTO tracks(path, fingerprint, title, artist, added_at) \
+                  VALUES (?1, x'00', ?2, ?3, 0)"
+                .into(),
+            params: vec![
+                Value::Text((*p).into()),
+                Value::Text((*t).into()),
+                Value::Text((*a).into()),
+            ],
+        })
+        .collect();
+    lib.writer().submit_wait(WriteOp::Raw(stmts)).unwrap();
+    let reader = lib.reader().unwrap();
+    tracks
+        .iter()
+        .map(|(p, _, _)| {
+            reader
+                .connection()
+                .query_row("SELECT id FROM tracks WHERE path = ?1", [p], |r| r.get(0))
+                .unwrap()
+        })
+        .collect()
+}
+
+/// Stores an analysis row for each `(track, bpm)`, and a length of `seconds` at 44.1 kHz.
+fn set_bpm_and_length(lib: &Library, tracks: &[(i64, f64, i64)]) {
+    let stmts = tracks
+        .iter()
+        .flat_map(|&(id, bpm, seconds)| {
+            [
+                RawStatement {
+                    sql: "INSERT INTO analysis(track_id, analyzer_version, bpm, key) \
+                          VALUES (?1, 1, ?2, 0)"
+                        .into(),
+                    params: vec![Value::Integer(id), Value::Real(bpm)],
+                },
+                RawStatement {
+                    sql: "UPDATE tracks SET duration_frames = ?2, sample_rate = 44100 \
+                          WHERE id = ?1"
+                        .into(),
+                    params: vec![Value::Integer(id), Value::Integer(seconds * 44_100)],
+                },
+            ]
+        })
+        .collect();
+    lib.writer().submit_wait(WriteOp::Raw(stmts)).unwrap();
+}
+
+fn search(b: &mut Browser, text: Option<&str>, seq: u64) -> BrowserView {
+    b.edit(BrowserEdit::Search {
+        text: text.map(str::to_owned),
+        seq,
+    })
+    .unwrap()
+}
+
+fn sort(b: &mut Browser, key: Option<TrackSortKey>, descending: bool, seq: u64) -> BrowserView {
+    b.edit(BrowserEdit::Sort {
+        key,
+        descending,
+        seq,
+    })
+    .unwrap()
+}
+
+fn titles(view: &BrowserView) -> Vec<&str> {
+    view.list
+        .iter()
+        .map(|r| {
+            r.track
+                .as_ref()
+                .and_then(|t| t.title.as_deref())
+                .unwrap_or("")
+        })
+        .collect()
+}
+
+/// A playlist "Mix" of four tracks and a playlist "Other" of two, highlighted on "Mix".
+struct Searchable {
+    _dir: tempfile::TempDir,
+    lib: Library,
+    ids: Vec<i64>,
+}
+
+fn searchable() -> Searchable {
+    let (dir, lib) = open();
+    let ids = add_artist_tracks(
+        &lib,
+        &[
+            ("/m/1.flac", "Deep Night", "Someone"),
+            ("/m/2.flac", "Sunrise", "DEEPER Crew"),
+            ("/m/3.flac", "Afterglow", "Nobody"),
+            ("/m/4.flac", "Bassline", "Kid_Deep"),
+        ],
+    );
+    create_playlist(&lib, "Mix", &[ids[2], ids[0], ids[3], ids[1]]);
+    create_playlist(&lib, "Other", &[ids[0], ids[2]]);
+    Searchable {
+        _dir: dir,
+        lib,
+        ids,
+    }
+}
+
 #[test]
-fn search_and_sort_leave_the_view_for_now() {
+fn search_filters_title_and_artist() {
+    let s = searchable();
+    let mut b = browser(&s.lib, Vec::new());
+    scroll(&mut b, 1);
+    b.edit(BrowserEdit::SelectRow(3)).unwrap();
+    let view = search(&mut b, Some("dEeP"), 1);
+    // In playlist order, by title or by artist, ignoring ASCII case.
+    assert_eq!(titles(&view), ["Deep Night", "Bassline", "Sunrise"]);
+    assert_eq!((view.list_count, view.list_cursor), (3, 0));
+    assert_eq!(view.track.map(|t| t.id), Some(s.ids[0]));
+    assert_eq!((view.search.as_deref(), view.seq), (Some("dEeP"), 1));
+    // `_` is literal: only "Kid_Deep".
+    let view = search(&mut b, Some("d_d"), 2);
+    assert_eq!(titles(&view), ["Bassline"]);
+
+    // Search stays set across tree moves, and the view still shows it.
+    let view = b.edit(BrowserEdit::SelectTree(2)).unwrap();
+    assert_eq!(view.path, "Playlists ▸ Other");
+    assert_eq!(view.list_count, 0);
+    assert_eq!(view.search.as_deref(), Some("d_d"));
+    let view = search(&mut b, Some("deep"), 3);
+    assert_eq!(titles(&view), ["Deep Night"]);
+}
+
+#[test]
+fn search_none_restores() {
+    let s = searchable();
+    let mut b = browser(&s.lib, Vec::new());
+    scroll(&mut b, 1);
+    search(&mut b, Some("night"), 1);
+    let view = search(&mut b, None, 2);
+    assert_eq!(
+        titles(&view),
+        ["Afterglow", "Deep Night", "Bassline", "Sunrise"]
+    );
+    assert_eq!((view.list_count, view.list_cursor), (4, 0));
+    assert_eq!((view.search, view.seq), (None, 2));
+    // An empty search is no search.
+    let view = search(&mut b, Some(""), 3);
+    assert_eq!((view.list_count, view.search), (4, None));
+}
+
+#[test]
+fn sort_by_bpm_descending() {
+    let s = searchable();
+    // Bassline has no analysis.
+    set_bpm_and_length(
+        &s.lib,
+        &[
+            (s.ids[0], 124.0, 300),
+            (s.ids[1], 128.0, 200),
+            (s.ids[2], 120.0, 400),
+        ],
+    );
+    let mut b = browser(&s.lib, Vec::new());
+    scroll(&mut b, 1);
+    let view = sort(&mut b, Some(TrackSortKey::Bpm), true, 1);
+    // Unknown values last when descending, as the library's track queries sort.
+    assert_eq!(
+        titles(&view),
+        ["Sunrise", "Deep Night", "Afterglow", "Bassline"]
+    );
+    assert_eq!(view.sort, Some((TrackSortKey::Bpm, true)));
+    assert_eq!((view.seq, view.list_cursor), (1, 0));
+    // Sorted and searched together.
+    let view = search(&mut b, Some("deep"), 2);
+    assert_eq!(titles(&view), ["Sunrise", "Deep Night", "Bassline"]);
+    assert_eq!(view.sort, Some((TrackSortKey::Bpm, true)));
+
+    // The length sorts too, unknown lengths first ascending.
+    let view = sort(&mut b, Some(TrackSortKey::Length), false, 3);
+    assert_eq!(titles(&view), ["Bassline", "Sunrise", "Deep Night"]);
+}
+
+#[test]
+fn third_click_returns_to_playlist_order() {
+    let s = searchable();
+    let mut b = browser(&s.lib, Vec::new());
+    scroll(&mut b, 1);
+    let view = sort(&mut b, Some(TrackSortKey::Title), false, 1);
+    assert_eq!(
+        titles(&view),
+        ["Afterglow", "Bassline", "Deep Night", "Sunrise"]
+    );
+    let view = sort(&mut b, Some(TrackSortKey::Title), true, 2);
+    assert_eq!(
+        titles(&view),
+        ["Sunrise", "Deep Night", "Bassline", "Afterglow"]
+    );
+    let view = sort(&mut b, None, false, 3);
+    assert_eq!(
+        titles(&view),
+        ["Afterglow", "Deep Night", "Bassline", "Sunrise"]
+    );
+    assert_eq!((view.sort, view.seq), (None, 3));
+}
+
+#[test]
+fn search_in_a_folder_keeps_matching_unscanned_files() {
     let (_lib_dir, lib) = open();
     let (_d, root) = disk();
+    let a = root.join("A");
+    fs::write(a.join("Groove-b.mp3"), b"").unwrap();
+    fs::write(a.join("z.mp3"), b"").unwrap();
+    add_file_track(&lib, &a.join("a1.mp3"), "Groove");
+    add_file_track(&lib, &a.join("z.mp3"), "Ambient");
     let mut b = browser(&lib, vec![drive("root", &root)]);
-    let before = b.view();
-    let search = BrowserEdit::Search {
-        text: Some("a1".into()),
-        seq: 1,
+    b.edit(BrowserEdit::ToggleTreeAt(0)).unwrap();
+    let view = b.edit(BrowserEdit::SelectTree(1)).unwrap();
+    assert_eq!(view.list_count, 4);
+    // By title for library tracks, by file name for the others, ignoring ASCII case.
+    let view = search(&mut b, Some("GROOVE"), 1);
+    assert_eq!(file_names(&view), ["a1.mp3", "Groove-b.mp3"]);
+    assert_eq!((view.list_count, view.list_cursor), (2, 0));
+    // A library track's file name alone does not match.
+    let view = search(&mut b, Some("z.mp"), 2);
+    assert_eq!(file_names(&view), Vec::<&str>::new());
+    // Back to the folder's natural order after a sort.
+    search(&mut b, None, 3);
+    let view = sort(&mut b, Some(TrackSortKey::Title), true, 4);
+    assert_eq!(
+        file_names(&view),
+        ["a1.mp3", "z.mp3", "a2.wav", "Groove-b.mp3"]
+    );
+    let view = sort(&mut b, None, false, 5);
+    assert_eq!(
+        file_names(&view),
+        ["a1.mp3", "a2.wav", "Groove-b.mp3", "z.mp3"]
+    );
+}
+
+/// Mirrors `queries_stay_fast_with_50k_tracks` in `tests/playlists.rs`: every build, with
+/// a bound loose enough for debug and for CI's Windows runners.
+#[test]
+fn search_on_fifty_thousand_tracks_is_fast() {
+    const N: i64 = 50_000;
+    let (_d, lib) = open();
+    let mut stmts: Vec<RawStatement> = (0..N)
+        .map(|i| RawStatement {
+            sql: "INSERT INTO tracks(path, fingerprint, title, artist, added_at) \
+                  VALUES (?1, x'00', ?2, ?3, ?4)"
+                .into(),
+            params: vec![
+                Value::Text(format!("/m/{i}.flac")),
+                Value::Text(format!("Title {:05}", (i * 31) % N)),
+                Value::Text(format!("artist {:05}", (i * 7919) % N)),
+                Value::Integer((i * 104_729) % 1_000_003),
+            ],
+        })
+        .collect();
+    stmts.push(RawStatement {
+        sql: "INSERT INTO analysis(track_id, analyzer_version, bpm, key) \
+              SELECT id, 1, 80.0 + (id * 37) % 9000 / 100.0, id % 24 FROM tracks \
+              WHERE id % 5 != 0"
+            .into(),
+        params: vec![],
+    });
+    lib.writer().submit_wait(WriteOp::Raw(stmts)).unwrap();
+    let playlist = create_playlist(&lib, "All", &[]);
+    lib.writer()
+        .submit_wait(WriteOp::Raw(vec![RawStatement {
+            sql: "INSERT INTO playlist_tracks(playlist_id, track_id, position) \
+                  SELECT ?1, id, id - 1 FROM tracks"
+                .into(),
+            params: vec![Value::Integer(playlist)],
+        }]))
+        .unwrap();
+    let mut b = browser(&lib, Vec::new());
+    assert_eq!(scroll(&mut b, 1).list_count, 50_000);
+
+    let bound = if cfg!(windows) && std::env::var_os("CI").is_some() {
+        Duration::from_millis(2000)
+    } else {
+        Duration::from_millis(750)
     };
-    assert_eq!(b.edit(search).unwrap(), before);
-    let sort = BrowserEdit::Sort {
-        key: TrackSortKey::Bpm,
+    let mut timings = Vec::new();
+    let mut seq = 0;
+    let mut timed = |b: &mut Browser, name: &str, edit: fn(u64) -> BrowserEdit| {
+        seq += 1;
+        let start = Instant::now();
+        let view = b.edit(edit(seq)).unwrap();
+        let elapsed = start.elapsed();
+        timings.push(format!("{name}: {elapsed:?}"));
+        assert!(elapsed < bound, "{name} took {elapsed:?} (bound {bound:?})");
+        view
+    };
+    let text = |seq| BrowserEdit::Search {
+        text: Some("title 4".into()),
+        seq,
+    };
+    let view = timed(&mut b, "search", text);
+    assert_eq!(view.list_count, 10_000);
+    let by_bpm = |seq| BrowserEdit::Sort {
+        key: Some(TrackSortKey::Bpm),
         descending: true,
-        seq: 2,
+        seq,
     };
-    assert_eq!(b.edit(sort).unwrap(), before);
+    let view = timed(&mut b, "sort the search by bpm", by_bpm);
+    assert_eq!(view.list_count, 10_000);
+    let none = |seq| BrowserEdit::Search { text: None, seq };
+    let view = timed(&mut b, "sorted, no search", none);
+    assert_eq!(view.list_count, 50_000);
+    println!("{}", timings.join("\n"));
 }
 
 #[test]

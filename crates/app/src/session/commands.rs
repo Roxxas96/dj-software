@@ -867,6 +867,61 @@ mod tests {
     }
 
     #[test]
+    fn only_the_latest_search_result_shows() {
+        let mut decks = labelled();
+        add_sine_9(&decks);
+        let lib = decks.library.library();
+        let playlist = match lib
+            .writer()
+            .submit_wait(library::WriteOp::CreatePlaylistWith {
+                name: "Peak".into(),
+                tracks: vec![7, 9],
+            })
+            .unwrap()
+        {
+            library::WriteOutcome::Created { id } => id,
+            other => panic!("unexpected outcome {other:?}"),
+        };
+        assert!(playlist > 0);
+        decks
+            .library
+            .changed_flag()
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        poll_until(&mut decks, |library, _| {
+            library.browser().is_some_and(|view| view.tree.len() == 2)
+        });
+        let mut parts = FrameParts::new(&Config::default());
+        let (tx, rx) = channel();
+        let browse = |edit| UiCommand::Library(ui::LibraryStep::Browse(edit));
+        tx.send(browse(library::BrowserEdit::SelectTree(1)))
+            .unwrap();
+        // Two searches back to back, as typing sends them.
+        for (text, seq) in [("zzz", 1), ("sine", 2)] {
+            let text = Some(text.to_owned());
+            tx.send(browse(library::BrowserEdit::Search { text, seq }))
+                .unwrap();
+        }
+        decks.drain(&rx, &mut parts);
+        assert!(parts.events.is_empty(), "{:?}", parts.events);
+        poll_until(&mut decks, |library, _| {
+            library.browser().is_some_and(|view| view.seq == 2)
+        });
+        // Polled a while longer: the view of the first search never comes after.
+        let until = Instant::now() + std::time::Duration::from_millis(100);
+        poll_until(&mut decks, |_, _| Instant::now() > until);
+        let view = decks.library.browser().unwrap();
+        assert_eq!((view.seq, view.search.as_deref()), (2, Some("sine")));
+        assert_eq!(view.path, "Playlists ▸ Peak");
+        let ids: Vec<_> = view
+            .list
+            .iter()
+            .filter_map(|row| row.track.as_ref().map(|t| t.id))
+            .collect();
+        assert_eq!(ids, [9]);
+        drop(decks.renderer);
+    }
+
+    #[test]
     fn a_deck_that_starts_during_the_decode_keeps_its_track() {
         let mut decks = labelled();
         add_sine_9(&decks);
