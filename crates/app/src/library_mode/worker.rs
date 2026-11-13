@@ -13,8 +13,8 @@ use std::thread::JoinHandle;
 
 use engine::{DeckId, Hotcue, TrackBuffer, TrackMemory};
 use library::{
-    Beatgrid, Browser, BrowserRequest, BrowserView, Drive, GridEdit, Library, PendingTrack, Reader,
-    TrackRow,
+    Beatgrid, Browser, BrowserEdit, BrowserRequest, BrowserView, Drive, GridEdit, Library,
+    PendingTrack, Reader, TrackRow,
 };
 
 use super::memory_sync::engine_grid;
@@ -24,6 +24,8 @@ use crate::format::safe;
 #[derive(Debug)]
 pub enum Job {
     Browse(BrowserRequest),
+    /// A change to the browser from the window.
+    Edit(BrowserEdit),
     /// Reread the browser, and the rows and beatgrids of the tracks on the decks; with
     /// `find_new_tracks`, also report the tracks that need analysis (the watcher found
     /// some).
@@ -177,6 +179,13 @@ fn run(
     for job in jobs {
         match job {
             Job::Browse(req) => match browser.apply(req) {
+                Ok(view) => {
+                    let _ = events.send(Event::Browser(view));
+                    adder.offer(&browser);
+                }
+                Err(e) => say(format!("warning: library browser: {}", safe(e))),
+            },
+            Job::Edit(edit) => match browser.edit(edit) {
                 Ok(view) => {
                     let _ = events.send(Event::Browser(view));
                     adder.offer(&browser);

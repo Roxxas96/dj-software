@@ -261,7 +261,11 @@ pub fn root_with_reads(
                 changes = browser::show(
                     ui,
                     view,
-                    frame.decks.each_ref().map(|d| d.as_ref().map(|d| d.row.id)),
+                    browser::Decks {
+                        loaded: frame.decks.each_ref().map(|d| d.as_ref().map(|d| d.row.id)),
+                        playing: reads.decks.each_ref().map(|(d, _)| d.playing),
+                        four: frame.view.four_decks,
+                    },
                     frame.key_notation,
                     &mut screen.covers,
                     &arrangement,
@@ -292,6 +296,10 @@ pub fn root_with_reads(
             sizes: kept,
             base: frame.view.sizes,
         });
+    }
+    let sink = controls::Sink::new(&screen.commands, &mut screen.held);
+    for step in changes.library.drain(..) {
+        sink.send(UiCommand::Library(step));
     }
     if let Some(change) = changes.unfold {
         let _ = screen.commands.send(UiCommand::View(change));

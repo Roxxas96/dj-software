@@ -205,7 +205,7 @@ impl Tree {
     }
 
     /// The index just past the rows below row `index`.
-    fn subtree_end(&self, index: usize) -> usize {
+    pub(super) fn subtree_end(&self, index: usize) -> usize {
         subtree_end(&self.nodes, index)
     }
 }

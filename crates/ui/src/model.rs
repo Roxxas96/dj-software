@@ -427,10 +427,24 @@ impl Default for ControlFrame {
 impl ControlFrame {
     /// The top bar's status: the newest event while it shows, else the first status line.
     pub fn status_line(&self, now: Instant) -> &str {
-        self.events
-            .back()
+        self.status_line_with(now, None)
+    }
+
+    /// [`ControlFrame::status_line`] with the window's own latest event `own` (when it
+    /// happened, and its text) among the session's.
+    pub fn status_line_with<'a>(
+        &'a self,
+        now: Instant,
+        own: Option<(Instant, &'a str)>,
+    ) -> &'a str {
+        let session = self.events.back().map(|(at, text)| (*at, text.as_str()));
+        let newest = match (session, own) {
+            (Some(s), Some(o)) => Some(if o.0 > s.0 { o } else { s }),
+            (s, o) => s.or(o),
+        };
+        newest
             .filter(|(at, _)| now.saturating_duration_since(*at) < EVENT_SHOWN)
-            .map(|(_, text)| text.as_str())
+            .map(|(_, text)| text)
             .or_else(|| self.status.first().map(String::as_str))
             .unwrap_or("")
     }
@@ -453,5 +467,19 @@ mod tests {
         let later = start + EVENT_SHOWN;
         assert_eq!(frame.status_line(later), "▸ Music  1/3");
         assert_eq!(ControlFrame::default().status_line(later), "");
+    }
+
+    #[test]
+    fn the_windows_own_event_shows_when_it_is_the_newest() {
+        let start = Instant::now();
+        let mut frame = ControlFrame::default();
+        let own = Some((start, "Every deck is playing"));
+        assert_eq!(frame.status_line_with(start, own), "Every deck is playing");
+        let later = start + Duration::from_secs(1);
+        frame.events.push_back((later, "Deck 1 ◂ A – B".into()));
+        assert_eq!(frame.status_line_with(later, own), "Deck 1 ◂ A – B");
+        let own = Some((later + Duration::from_secs(1), "Every deck is playing"));
+        assert_eq!(frame.status_line_with(later, own), "Every deck is playing");
+        assert_eq!(frame.status_line_with(later + EVENT_SHOWN * 2, own), "");
     }
 }

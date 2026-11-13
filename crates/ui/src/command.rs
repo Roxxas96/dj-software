@@ -3,6 +3,7 @@
 //! next frame.
 
 use engine::{DeckId, EffectKind, HotcueSlot};
+use library::BrowserEdit;
 
 use crate::view::{
     ColourScheme, JogDisplay, Layout, PanelSizes, WaveformPalette, WaveformPosition, WaveformStyle,
@@ -40,6 +41,11 @@ pub enum UiCommand {
 /// What the window asks of the library.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LibraryStep {
+    /// Changes the browser as a click on it does.
+    Browse(BrowserEdit),
+    /// Loads library track `track` on `deck`, as the console's `load` does. Refused while
+    /// `deck` plays.
+    Load { deck: DeckId, track: i64 },
     /// Names and colours (`0xRRGGBB`; `None` for the slot's default) hotcue `slot` of
     /// `track`, the track the window saw on `deck` when its editor opened. Saved only if
     /// `deck` still holds `track`.

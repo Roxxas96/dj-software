@@ -6,21 +6,22 @@
 
 use std::ops::Range;
 use std::path::Path;
+use std::time::Instant;
 
 use analysis::KeyNotation;
 use egui::{
-    Align, Button, Color32, CornerRadius, CursorIcon, Label, Layout, Pos2, Rect, RichText, Sense,
-    Stroke, Ui, UiBuilder, Vec2, pos2, vec2,
+    Align, Button, Color32, CornerRadius, CursorIcon, Id, Label, Layout, Pos2, Rect, RichText,
+    Sense, Stroke, Ui, UiBuilder, Vec2, pos2, vec2,
 };
 use engine::DeckId;
-use library::{BrowserView, Focus, ListRow, TreeKind, TreeRow};
+use library::{BrowserEdit, BrowserView, Focus, ListRow, TreeKind, TreeRow};
 
-use crate::ViewChange;
 use crate::cover::{self, Covers};
 use crate::deck::{key_text, split_remix};
 use crate::layout::clamp_sizes;
 use crate::theme::{self, Palette};
 use crate::view::PanelSizes;
+use crate::{LibraryStep, ViewChange};
 
 const ROW_HEIGHT: f32 = 20.0;
 /// How wide the strip around a divider that grabs the pointer is, in points.
@@ -77,7 +78,7 @@ impl Default for Arrangement {
 }
 
 /// What the viewer did to the browser's arrangement this frame.
-#[derive(Debug, Default, Clone, Copy, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct Changes {
     /// The shares after a divider moved.
     pub sizes: Option<PanelSizes>,
@@ -85,6 +86,32 @@ pub struct Changes {
     pub stopped: bool,
     /// A folded panel's tab was clicked.
     pub unfold: Option<ViewChange>,
+    /// What the clicks, double-clicks, menus and wheel asked of the library, in order.
+    pub library: Vec<LibraryStep>,
+}
+
+/// What the browser knows of the decks.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Decks {
+    /// Each deck's loaded track id, to mark those tracks in the list.
+    pub loaded: [Option<i64>; 4],
+    /// Each deck plays: a double-click loads on the first deck that does not.
+    pub playing: [bool; 4],
+    /// The window shows four decks, not two.
+    pub four: bool,
+}
+
+/// The window's own event when a double-click finds every deck shown playing.
+pub const EVERY_DECK_PLAYING: &str = "Every deck is playing";
+
+/// The browser's latest event of its own (such as [`EVERY_DECK_PLAYING`]) and when it
+/// happened, for the status line.
+pub fn notice(ctx: &egui::Context) -> Option<(Instant, &'static str)> {
+    ctx.data(|d| d.get_temp(notice_id()))
+}
+
+fn notice_id() -> Id {
+    Id::NULL.with("open-jockey-browser-notice")
 }
 
 /// A drag on a divider.
@@ -125,12 +152,11 @@ pub const COLUMNS: [&str; 6] = ["Title", "Artist", "Remix", "Length", "BPM", "Ke
 const MARKER_WIDTH: f32 = 3.0;
 
 /// Draws the browser into all of `ui`'s space, with `sideview` drawn in the sideview's
-/// column when `arrangement` shows it. `loaded` holds each deck's loaded track id, to mark
-/// those tracks in the list.
+/// column when `arrangement` shows it, and `decks` as they are.
 pub fn show(
     ui: &mut Ui,
     view: &BrowserView,
-    loaded: [Option<i64>; 4],
+    decks: Decks,
     notation: KeyNotation,
     covers: &mut Covers,
     arrangement: &Arrangement,
@@ -202,8 +228,9 @@ pub fn show(
     let side = Rect::from_min_max(pos2(side_edge, area.min.y), area.max);
     crate::landmark_rect(ui, tree, "tree");
     crate::landmark_rect(ui, list, "list");
-    pane(ui, tree, |ui| tree_pane(ui, view));
-    pane(ui, list, |ui| list_pane(ui, view, loaded, notation));
+    let steps = &mut changes.library;
+    pane(ui, tree, |ui| tree_pane(ui, view, steps));
+    pane(ui, list, |ui| list_pane(ui, view, decks, notation, steps));
     if arrangement.info {
         crate::landmark_rect(ui, info, "info panel");
         pane(ui, info, |ui| info_pane(ui, view, notation, covers));
@@ -246,6 +273,8 @@ fn pane(ui: &mut Ui, rect: Rect, add: impl FnOnce(&mut Ui)) {
     let rect = rect.shrink2(vec2(4.0, 2.0));
     let mut child = ui.new_child(UiBuilder::new().max_rect(rect));
     child.set_clip_rect(rect.intersect(ui.clip_rect()));
+    // A click on a row's text is a click on the row.
+    child.style_mut().interaction.selectable_labels = false;
     add(&mut child);
 }
 
@@ -280,9 +309,12 @@ fn cell(ui: &mut Ui, row: Rect, x: f32, width: f32, text: RichText) {
     });
 }
 
-fn tree_pane(ui: &mut Ui, view: &BrowserView) {
+fn tree_pane(ui: &mut Ui, view: &BrowserView, steps: &mut Vec<LibraryStep>) {
     let rows = rows_fitting(ui.available_height());
-    let window = visible_window(view.tree_cursor, view.tree.len(), rows);
+    let count = view.tree.len();
+    let follow = visible_window(view.tree_cursor, count, rows);
+    let seen = (view.tree_cursor, 0, count);
+    let (window, _) = scroll(ui, "tree_scroll", seen, 0..count, count, follow);
     let focused = view.focus == Focus::Tree;
     let p = theme::palette(ui.ctx());
     for (at, entry) in view
@@ -293,16 +325,34 @@ fn tree_pane(ui: &mut Ui, view: &BrowserView) {
         .skip(window.start)
     {
         let rect = row(ui, highlight(&p, at == view.tree_cursor, focused));
-        tree_row(ui, rect, entry);
+        let response = ui.interact(rect, Id::NULL.with(("browser tree", at)), Sense::click());
+        let arrow = tree_row(ui, rect, entry);
+        let opens = matches!(entry.kind, TreeKind::Drive | TreeKind::Folder);
+        // Drawn over the row, the arrow takes its own clicks.
+        let arrow_clicked = arrow.is_some_and(|arrow| {
+            let id = Id::NULL.with(("browser tree arrow", at));
+            ui.interact(arrow, id, Sense::click()).clicked()
+        });
+        if (arrow_clicked || response.double_clicked()) && opens {
+            steps.push(LibraryStep::Browse(BrowserEdit::ToggleTreeAt(at)));
+        } else if response.clicked() {
+            steps.push(LibraryStep::Browse(BrowserEdit::SelectTree(at)));
+        }
     }
 }
 
-fn tree_row(ui: &mut Ui, rect: Rect, entry: &TreeRow) {
+/// Draws a tree row on `rect`; returns where its arrow is, for the rows that have one.
+fn tree_row(ui: &mut Ui, rect: Rect, entry: &TreeRow) -> Option<Rect> {
     let p = theme::palette(ui.ctx());
     let x = rect.min.x + 4.0 + f32::from(entry.depth) * INDENT;
     let mid = rect.center().y;
+    let mut arrow = None;
     // Only the nodes that can open get a triangle.
     if entry.kind != TreeKind::Playlist {
+        arrow = Some(Rect::from_center_size(
+            pos2(x + 4.0, mid),
+            vec2(12.0, rect.height()),
+        ));
         let c = pos2(x + 4.0, mid);
         let points = if entry.expanded {
             vec![
@@ -328,7 +378,7 @@ fn tree_row(ui: &mut Ui, rect: Rect, entry: &TreeRow) {
     let width = (rect.max.x - label_x - 2.0).max(0.0);
     let Some(note) = entry.note else {
         cell(ui, rect, label_x, width, RichText::new(&entry.label));
-        return;
+        return arrow;
     };
     // The note follows the label, dimmed.
     let font = egui::TextStyle::Body.resolve(ui.style());
@@ -342,6 +392,7 @@ fn tree_row(ui: &mut Ui, rect: Rect, entry: &TreeRow) {
         width - label_width - 6.0,
         RichText::new(note).color(p.text_dim),
     );
+    arrow
 }
 
 /// A small drive, folder or playlist icon centred on `at` (egui's fonts have no such glyphs).
@@ -381,12 +432,114 @@ fn page_window(view: &BrowserView, rows: usize) -> Range<usize> {
     start..(start + rows).min(page.end)
 }
 
-/// The list rows to draw, with their absolute indices.
-fn drawn_rows(view: &BrowserView, rows: usize) -> impl Iterator<Item = (usize, &ListRow)> {
-    page_window(view, rows).map(move |at| (at, &view.list[at - view.list_offset]))
+/// What the wheel did to a pane, kept from frame to frame.
+#[derive(Debug, Clone, Copy, Default)]
+struct Scroll {
+    /// The first row drawn, once the wheel moved it; `None` follows the cursor.
+    start: Option<usize>,
+    /// The part of a row the wheel moved past the last whole row.
+    carry: f32,
+    /// The cursor, page offset and row count this was for: the session moving any of them
+    /// is a new view.
+    seen: (usize, usize, usize),
+    /// A row past the page was asked for since the view last changed.
+    asked: bool,
 }
 
-fn list_pane(ui: &mut Ui, view: &BrowserView, loaded: [Option<i64>; 4], notation: KeyNotation) {
+/// The rows a pane shows, `follow` long, when the wheel over it scrolls within `page`
+/// (the rows the view holds, of `count`). Where it follows the cursor, it draws `follow`;
+/// once the wheel has turned, the rows it scrolled to, until the view moves its cursor out
+/// of them. A scroll past the page returns the row beyond it for the session to load, once
+/// per view.
+fn scroll(
+    ui: &Ui,
+    name: &str,
+    seen: (usize, usize, usize),
+    page: Range<usize>,
+    count: usize,
+    follow: Range<usize>,
+) -> (Range<usize>, Option<usize>) {
+    let rows = follow.len();
+    let id = Id::NULL.with(("browser scroll", name));
+    let mut state: Scroll = ui.ctx().data(|d| d.get_temp(id)).unwrap_or_default();
+    let last_start = page.end.saturating_sub(rows).max(page.start);
+    if state.seen != seen {
+        // A move that keeps the cursor in sight leaves the rows where the wheel put them.
+        let (cursor, ..) = seen;
+        state.start = state
+            .start
+            .filter(|&start| (start..start + rows).contains(&cursor))
+            .map(|start| start.clamp(page.start, last_start));
+        state.seen = seen;
+        state.asked = false;
+    }
+    let mut ask = None;
+    let hovered = ui.rect_contains_pointer(ui.max_rect());
+    let delta = if hovered {
+        ui.input(|i| i.smooth_scroll_delta().y)
+    } else {
+        0.0
+    };
+    if delta != 0.0 {
+        ui.ctx().input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
+        let total = state.carry - delta / ROW_HEIGHT;
+        let steps = total.trunc();
+        state.carry = total - steps;
+        if steps != 0.0 {
+            let from = state.start.unwrap_or(follow.start) as f32;
+            let to = from + steps;
+            if to > last_start as f32 && page.end < count && !state.asked {
+                ask = Some(page.end);
+            } else if to < page.start as f32 && page.start > 0 && !state.asked {
+                ask = Some(page.start - 1);
+            }
+            state.asked |= ask.is_some();
+            state.start = Some((to.max(0.0) as usize).clamp(page.start, last_start));
+        }
+    }
+    ui.ctx().data_mut(|d| d.insert_temp(id, state));
+    let start = state.start.unwrap_or(follow.start);
+    (start..(start + rows).min(page.end), ask)
+}
+
+/// The label of each deck's item in a track's menu.
+const LOAD_ON: [&str; 4] = [
+    "Load on deck 1",
+    "Load on deck 2",
+    "Load on deck 3",
+    "Load on deck 4",
+];
+
+/// The decks `decks` shows, left before right: 1 and 2, then 3 and 4 in the four-deck
+/// view.
+fn shown_decks(decks: Decks) -> usize {
+    if decks.four { 4 } else { 2 }
+}
+
+/// Loads `track` on the first deck shown that is not playing; with none, the browser's
+/// own event says so.
+fn load_on_free_deck(ui: &Ui, decks: Decks, track: i64, steps: &mut Vec<LibraryStep>) {
+    match (0..shown_decks(decks)).find(|&i| !decks.playing[i]) {
+        Some(i) => steps.push(LibraryStep::Load {
+            deck: DeckId::ALL[i],
+            track,
+        }),
+        None => {
+            let now = Instant::now();
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(notice_id(), (now, EVERY_DECK_PLAYING)));
+        }
+    }
+}
+
+fn list_pane(
+    ui: &mut Ui,
+    view: &BrowserView,
+    decks: Decks,
+    notation: KeyNotation,
+    steps: &mut Vec<LibraryStep>,
+) {
+    let loaded = decks.loaded;
     let p = theme::palette(ui.ctx());
     let header = row(ui, None);
     // The library separates the path with "▸" (U+25B8), which egui's bundled fonts lack and
@@ -421,10 +574,35 @@ fn list_pane(ui: &mut Ui, view: &BrowserView, loaded: [Option<i64>; 4], notation
     }
     let rows = rows_fitting(ui.available_height());
     let focused = view.focus == Focus::List;
-    for (at, entry) in drawn_rows(view, rows) {
+    let page = view.list_offset..view.list_offset + view.list.len();
+    let seen = (view.list_cursor, view.list_offset, view.list_count);
+    let follow = page_window(view, rows);
+    let (window, ask) = scroll(ui, "list_scroll", seen, page, view.list_count, follow);
+    if let Some(at) = ask {
+        steps.push(LibraryStep::Browse(BrowserEdit::SelectRow(at)));
+    }
+    for at in window {
+        let entry = &view.list[at - view.list_offset];
         let alt = (at % 2 == 1).then_some(p.row_alt);
         let fill = highlight(&p, at == view.list_cursor, focused).or(alt);
         let rect = row(ui, fill);
+        let response = ui.interact(rect, Id::NULL.with(("browser row", at)), Sense::click());
+        let track = entry.track.as_ref().map(|t| t.id);
+        if response.clicked() {
+            steps.push(LibraryStep::Browse(BrowserEdit::SelectRow(at)));
+        }
+        if let (true, Some(track)) = (response.double_clicked(), track) {
+            load_on_free_deck(ui, decks, track, steps);
+        }
+        if let Some(track) = track {
+            response.context_menu(|ui| {
+                for (deck, label) in DeckId::ALL.iter().zip(LOAD_ON).take(shown_decks(decks)) {
+                    if ui.button(label).clicked() {
+                        steps.push(LibraryStep::Load { deck: *deck, track });
+                    }
+                }
+            });
+        }
         let fields = Fields::of(entry, notation);
         if let Some(deck) = entry
             .track
