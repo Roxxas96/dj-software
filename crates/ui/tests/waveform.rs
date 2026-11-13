@@ -216,8 +216,8 @@ fn flag_right_click_opens_the_same_editor() {
         .with_size([1000.0, 200.0])
         .with_step_dt(0.01)
         .build_ui(move |ui| {
-            lanes.show(ui, &frame, &reads, &commands);
             let mut sink = Sink::new(&commands, &mut held);
+            lanes.show(ui, &frame, &reads, &mut sink);
             ui::hotcue_menu::show(ui.ctx(), &mut sink);
             held.sweep(ui.ctx(), &commands);
         });
@@ -266,4 +266,128 @@ fn flag_right_click_opens_the_same_editor() {
             color: colour,
         })]
     );
+}
+
+/// Deck 1 loaded in the top lane of a 1000-point-wide window, which sends to the receiver
+/// returned; the second number is the lane's width.
+fn scrubbing(
+    loaded: bool,
+) -> (
+    Harness<'static>,
+    std::sync::mpsc::Receiver<ui::UiCommand>,
+    std::rc::Rc<std::cell::Cell<f32>>,
+) {
+    use ui::controls::{HeldButtons, Sink};
+    use ui::deck::DeckReads;
+
+    let snapshot = DeckSnapshot {
+        loaded,
+        track_sample_rate: 44_100,
+        duration_frames: 1_280_000,
+        position_frames: 441_000.0,
+        load_seq: 1,
+        ..DeckSnapshot::default()
+    };
+    let frame = ControlFrame::default();
+    let mut reads = DeckReads::default();
+    reads.decks[0] = (snapshot, 0);
+    let (commands, received) = std::sync::mpsc::channel();
+    let width = std::rc::Rc::new(std::cell::Cell::new(0.0));
+    let seen = std::rc::Rc::clone(&width);
+    let mut lanes = ui::waveform::Lanes::default();
+    let mut held = HeldButtons::default();
+    let mut harness = Harness::builder()
+        .with_size([1000.0, 200.0])
+        .with_step_dt(0.01)
+        .build_ui(move |ui| {
+            seen.set(ui.available_width());
+            let mut sink = Sink::new(&commands, &mut held);
+            lanes.show(ui, &frame, &reads, &mut sink);
+            held.sweep(ui.ctx(), &commands);
+        });
+    harness.run_steps(3);
+    (harness, received, width)
+}
+
+fn left_button(pos: egui::Pos2, pressed: bool) -> egui::Event {
+    egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: egui::Modifiers::NONE,
+    }
+}
+
+#[test]
+fn lane_drag_follows_the_pointer() {
+    use egui::{Event, pos2};
+    use ui::UiCommand;
+
+    let (mut harness, received, width) = scrubbing(true);
+    let start = pos2(600.0, 50.0);
+    harness.event(Event::PointerMoved(start));
+    harness.run_steps(1);
+    harness.event(left_button(start, true));
+    harness.run_steps(2);
+    // 100 points to the left, ten a frame.
+    for i in 1..=10 {
+        harness.event(Event::PointerMoved(pos2(600.0 - 10.0 * i as f32, 50.0)));
+        harness.run_steps(1);
+    }
+    harness.event(left_button(pos2(500.0, 50.0), false));
+    harness.run_steps(2);
+    let sent: Vec<UiCommand> = received.try_iter().collect();
+    let deck = DeckId::new(0).unwrap();
+    assert_eq!(
+        sent.first(),
+        Some(&UiCommand::Action(
+            actions::Action::JogTouch(deck),
+            actions::Input::Press
+        ))
+    );
+    assert_eq!(
+        sent.last(),
+        Some(&UiCommand::Action(
+            actions::Action::JogTouch(deck),
+            actions::Input::Release
+        ))
+    );
+    let steps: i32 = sent
+        .iter()
+        .filter_map(|c| match c {
+            UiCommand::Action(actions::Action::JogScratch(d), actions::Input::Relative(s))
+                if *d == deck =>
+            {
+                Some(*s)
+            }
+            _ => None,
+        })
+        .sum();
+    // 100 points of 16 beats of 0.5 s over the lane's width, in steps of 1.8 s / 720.
+    let frames_per_point = 16.0 * 0.5 * 44_100.0 / f64::from(width.get());
+    let frames_per_step = 1.8 * 44_100.0 / 720.0;
+    let expected = 100.0 * frames_per_point / frames_per_step;
+    assert!(steps > 0, "a drag to the left goes forward: {steps}");
+    assert!(
+        (f64::from(steps) - expected).abs() <= 1.0,
+        "{steps} steps, expected {expected}"
+    );
+}
+
+#[test]
+fn a_drag_on_an_empty_lane_sends_nothing() {
+    use egui::{Event, pos2};
+
+    let (mut harness, received, _) = scrubbing(false);
+    let start = pos2(600.0, 50.0);
+    harness.event(Event::PointerMoved(start));
+    harness.run_steps(1);
+    harness.event(left_button(start, true));
+    harness.run_steps(2);
+    harness.event(Event::PointerMoved(pos2(500.0, 50.0)));
+    harness.run_steps(1);
+    harness.event(left_button(pos2(500.0, 50.0), false));
+    harness.run_steps(2);
+    let sent: Vec<ui::UiCommand> = received.try_iter().collect();
+    assert!(sent.is_empty(), "{sent:?}");
 }

@@ -2,18 +2,20 @@
 //! one more per other deck that plays, each centred on what is being heard.
 
 use std::sync::Arc;
-use std::sync::mpsc::Sender;
 use std::time::Instant;
 
-use actions::Side;
+use actions::{Action, Input, Side};
 use analysis::Waveform;
-use egui::{Align2, Color32, FontId, Mesh, Painter, Pos2, Rect, Shape, Ui, pos2, vec2};
-use engine::{DeckId, DeckSnapshot, Hotcue, HotcueSlot};
+use egui::{
+    Align2, Color32, FontId, Mesh, Painter, PointerButton, Pos2, Rect, Shape, Ui, pos2, vec2,
+};
+use engine::{DeckId, DeckSnapshot, Hotcue, HotcueSlot, PLATTER_SECONDS_PER_TURN};
 
 use super::colour::band_colours;
 use super::styles::{self, MAX_BARS};
 use super::{Playhead, ZoomGesture, ticks};
 use crate::command::UiCommand;
+use crate::controls::{Sink, carry_steps, drag_path};
 use crate::deck::DeckReads;
 use crate::hotcue_menu::{self, HotcueTarget};
 use crate::model::{ControlFrame, HotcueMark};
@@ -76,13 +78,14 @@ pub struct Lanes {
 impl Lanes {
     /// Draws the lanes in the space `ui` has left, sharing its height equally, the decks
     /// as `reads` has them. A scroll or pinch over the lanes, or the zoom
-    /// buttons, send zoom steps on `commands` (positive zooms in) for the session to apply.
+    /// buttons, send zoom steps through `sink` (positive zooms in) for the session to apply.
+    /// Dragging a lane scrubs its deck like the jog: the waveform follows the pointer.
     pub fn show(
         &mut self,
         ui: &mut Ui,
         frame: &ControlFrame,
         reads: &DeckReads,
-        commands: &Sender<UiCommand>,
+        sink: &mut Sink<'_>,
     ) {
         let now = Instant::now();
         for (head, (snapshot, rendered_at)) in self.playheads.iter_mut().zip(&reads.decks) {
@@ -98,13 +101,17 @@ impl Lanes {
                 snapshots.each_ref().map(|s| s.playing),
             )
         };
-        let (area, response) = ui.allocate_exact_size(ui.available_size(), egui::Sense::click());
+        let (area, response) =
+            ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
         // A right-click on a hotcue flag opens its editor.
         let right_click = response
             .secondary_clicked()
             .then(|| response.interact_pointer_pos())
             .flatten();
         let mut flag = None;
+        // Where each lane with a track is, and how many jog steps a point dragged across it
+        // is worth.
+        let mut scrubbable: [Option<(DeckId, Rect, f64)>; 4] = [None; 4];
         // Overlaid, the first two decks share the first lane.
         let overlaid = frame.view.waveform_style == WaveformStyle::Overlaid && shown.len() >= 2;
         let rows = shown.len() - usize::from(overlaid);
@@ -134,6 +141,13 @@ impl Lanes {
                 marks: info.map(|info| &*info.hotcue_marks),
             };
             lane.draw(&ui.painter_at(rect), rect, &mut self.meshes[deck.index()]);
+            // The frames a point spans are the lane's zoom; a step is a jog step's worth of
+            // the platter's turn.
+            scrubbable[index] = lane.scale(rect, 1.0).map(|scale| {
+                let per_step = PLATTER_SECONDS_PER_TURN * f64::from(snapshot.track_sample_rate)
+                    / f64::from(frame.control.jog_steps_per_turn.max(1));
+                (deck, rect, scale.frames_per_point / per_step)
+            });
             // An overlay is drawn over the lane below: its flags are on top.
             if let Some(pos) = right_click.filter(|&pos| rect.contains(pos))
                 && let Some(slot) = lane.flag_at(rect, pos)
@@ -146,6 +160,7 @@ impl Lanes {
         if let Some((target, pos)) = flag {
             hotcue_menu::open(ui.ctx(), target, pos);
         }
+        Self::scrub(ui, &response, &scrubbable, sink);
         let mut steps = 0;
         if ui.rect_contains_pointer(area) {
             let (scroll, pinch) = ui.input(|i| (i.smooth_scroll_delta().y, i.zoom_delta()));
@@ -171,9 +186,58 @@ impl Lanes {
             }
         }
         if steps != 0 {
-            // Never blocks; with the session gone there is nothing left to zoom.
-            let _ = commands.send(UiCommand::Zoom(steps));
+            sink.send(UiCommand::Zoom(steps));
         }
+    }
+
+    /// Dragging a lane touches the jog of the deck under the pointer when the press began
+    /// (the first of the decks sharing an overlaid lane), scratches it by the distance
+    /// dragged and lets go. The waveform follows the pointer, so a drag to the left goes
+    /// forward. A lane with no track sends nothing.
+    fn scrub(
+        ui: &Ui,
+        response: &egui::Response,
+        lanes: &[Option<(DeckId, Rect, f64)>; 4],
+        sink: &mut Sink<'_>,
+    ) {
+        // Called every frame, so it forgets the drag when the pointer lets go.
+        let path = drag_path(response);
+        let remembered = response.id.with("scrub_deck");
+        let down = response.is_pointer_button_down_on() && ui.input(|i| i.pointer.primary_down());
+        if !down {
+            ui.data_mut(|d| d.remove::<DeckId>(remembered));
+            carry_steps(ui.ctx(), response.id, 0.0, false);
+            // A late release still goes to the deck pressed.
+            if let Some(deck) = lanes.iter().flatten().next().map(|l| l.0) {
+                sink.button(response, Action::JogTouch(deck));
+            }
+            return;
+        }
+        let pressed = response.interact_pointer_pos().and_then(|pos| {
+            lanes
+                .iter()
+                .flatten()
+                .find(|(_, rect, _)| rect.contains(pos))
+        });
+        let deck = ui
+            .data(|d| d.get_temp::<DeckId>(remembered))
+            .or_else(|| pressed.map(|&(deck, ..)| deck));
+        let Some(deck) = deck else { return };
+        ui.data_mut(|d| d.insert_temp(remembered, deck));
+        let mut amount = 0.0;
+        let dragging = response.dragged_by(PointerButton::Primary);
+        let lane = lanes.iter().flatten().find(|l| l.0 == deck);
+        if let (Some(&(_, _, steps_per_point)), Some((from, to))) = (lane, path) {
+            amount = (f64::from(from.x - to.x) * steps_per_point) as f32;
+        }
+        let steps = carry_steps(ui.ctx(), response.id, amount, dragging);
+        if steps != 0 {
+            sink.send(UiCommand::Action(
+                Action::JogScratch(deck),
+                Input::Relative(steps),
+            ));
+        }
+        sink.button(response, Action::JogTouch(deck));
     }
 }
 

@@ -4,6 +4,7 @@ mod backspin;
 mod beat_jump;
 mod hotcue;
 mod jog;
+pub use jog::PLATTER_SECONDS_PER_TURN;
 mod keylock;
 mod looping;
 mod roll;

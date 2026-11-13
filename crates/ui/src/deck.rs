@@ -10,8 +10,9 @@ use actions::{
 };
 use analysis::{Key, KeyNotation, Waveform};
 use egui::{
-    Align, Color32, CornerRadius, Id, Label, Layout, Margin, Mesh, Rect, RichText, Role, Sense,
-    Shape, Stroke, StrokeKind, TextureHandle, Ui, UiBuilder, Vec2, WidgetInfo, pos2, vec2,
+    Align, Color32, CornerRadius, Id, Label, Layout, Margin, Mesh, PointerButton, Rect, RichText,
+    Role, Sense, Shape, Stroke, StrokeKind, TextureHandle, Ui, UiBuilder, Vec2, WidgetInfo, pos2,
+    vec2,
 };
 use engine::{
     ChannelSnapshot, DeckId, DeckSnapshot, EffectKind, EngineMonitor, Grid, Hotcue, HotcueSlot,
@@ -19,7 +20,7 @@ use engine::{
 };
 
 use crate::command::{UiCommand, ViewChange};
-use crate::controls::{Sink, fader_input};
+use crate::controls::{Sink, carry_steps, drag_path, fader_input};
 use crate::cover::{self, Covers};
 use crate::hotcue_menu::{self, HotcueTarget};
 use crate::layout::{Sections, deck_slots};
@@ -148,6 +149,8 @@ pub struct DeckView {
     /// `bar.beat` for the header, when the view asks for it and the track has a grid.
     pub beat_counter: Option<String>,
     pub jog_display: JogDisplay,
+    /// Relative steps one turn of the jog sends (the controller's resolution).
+    pub jog_steps_per_turn: u16,
     /// The playhead's place in the track, 0 to 1; `None` without a track.
     pub progress: Option<f32>,
     /// How far the jog's marker has turned, 0 to 1 clockwise from the top.
@@ -261,6 +264,7 @@ impl DeckView {
                 .filter(|_| loaded && frame.view.beat_counter)
                 .and_then(|grid| beat_counter(Some(grid), position)),
             jog_display: frame.view.jog_display,
+            jog_steps_per_turn: frame.control.jog_steps_per_turn,
             progress: (loaded && duration > 0.0).then(|| (position / duration) as f32),
             jog_turn: if loaded {
                 (position / f64::from(rate) * JOG_RPM / 60.0).fract() as f32
@@ -710,7 +714,7 @@ fn middle_row(
             Part::Fx => fx(ui, view, accent, sections.fx_level, sink),
             Part::States => states(ui, view, accent, sink),
             Part::Spare => ui.add_space(spare),
-            Part::Jog => jog(ui, view, accent),
+            Part::Jog => jog(ui, view, accent, sink),
             Part::Pitch => pitch(ui, view, accent, (pitch_width, middle), sink),
             _ => {}
         }
@@ -876,7 +880,7 @@ fn header(
     // The overview along the bottom of the column, the text above it.
     let text = if overview {
         let (text, wave) = column.split_top_bottom_at_y(column.bottom() - OVERVIEW_HEIGHT);
-        overview_strip(&ui, view, wave);
+        overview_strip(&ui, view, wave, sink);
         text
     } else {
         column
@@ -943,9 +947,20 @@ fn header(
 }
 
 /// The whole track's waveform with the playhead, in `rect`.
-fn overview_strip(ui: &Ui, view: &DeckView, rect: Rect) {
+fn overview_strip(ui: &Ui, view: &DeckView, rect: Rect, sink: &mut Sink<'_>) {
     let p = theme::palette(ui.ctx());
-    let response = ui.interact(rect, ui.scope_id().with("overview"), Sense::hover());
+    let response = ui.interact(
+        rect,
+        ui.scope_id().with(("overview", view.deck)),
+        Sense::click_and_drag(),
+    );
+    // A click seeks to the point, a drag follows the pointer; an empty deck has no track.
+    if view.progress.is_some() {
+        sink.act(
+            Action::Seek(view.deck),
+            fader_input(&response, rect, false, None),
+        );
+    }
     response.widget_info(|| WidgetInfo::labeled(Role::Image, true, "overview"));
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, CornerRadius::ZERO, p.wave_background);
@@ -1044,10 +1059,32 @@ fn fx(ui: &mut Ui, view: &DeckView, accent: Color32, level: bool, sink: &mut Sin
     });
 }
 
-/// The platter: a circle with a marker that turns with the playhead.
-fn jog(ui: &mut Ui, view: &DeckView, accent: Color32) {
+/// The platter: a circle with a marker that turns with the playhead. Dragging it round
+/// touches, scratches (clockwise goes forward) and lets go, as the controller's jog does.
+fn jog(ui: &mut Ui, view: &DeckView, accent: Color32, sink: &mut Sink<'_>) {
     let p = theme::palette(ui.ctx());
-    let (rect, _) = ui.allocate_exact_size(Vec2::splat(JOG_SIDE), Sense::hover());
+    let (_, rect) = ui.allocate_space(Vec2::splat(JOG_SIDE));
+    let id = ui.make_persistent_id(("jog", view.deck));
+    let response = ui.interact(rect, id, Sense::click_and_drag());
+    response.widget_info(|| WidgetInfo::labeled(Role::Image, true, "jog"));
+    // An empty deck has nothing to scratch.
+    if view.progress.is_some() {
+        let dragging = response.dragged_by(PointerButton::Primary);
+        let mut amount = 0.0;
+        if let Some((from, to)) = drag_path(&response) {
+            let (from, to) = (from - rect.center(), to - rect.center());
+            let turned = (from.x * to.y - from.y * to.x).atan2(from.dot(to));
+            amount = turned / std::f32::consts::TAU * f32::from(view.jog_steps_per_turn);
+        }
+        let steps = carry_steps(ui.ctx(), id, amount, dragging);
+        if steps != 0 {
+            sink.send(UiCommand::Action(
+                Action::JogScratch(view.deck),
+                Input::Relative(steps),
+            ));
+        }
+        sink.button(&response, Action::JogTouch(view.deck));
+    }
     let painter = ui.painter();
     let centre = rect.center();
     let radius = JOG_SIDE / 2.0 - JOG_STROKE;
