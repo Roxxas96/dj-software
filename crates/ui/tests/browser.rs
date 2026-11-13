@@ -3,11 +3,14 @@
 use std::path::PathBuf;
 
 use analysis::KeyNotation;
-use egui::{Event, Modifiers, MouseWheelUnit, PointerButton, Pos2, pos2, vec2};
+use egui::accesskit::Role;
+use egui::{Event, Key, Modifiers, MouseWheelUnit, PointerButton, Pos2, pos2, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use engine::DeckId;
-use library::{BrowserEdit, BrowserView, Focus, ListRow, TrackRow, TreeKind, TreeRow};
+use library::{
+    BrowserEdit, BrowserView, Focus, ListRow, TrackRow, TrackSortKey, TreeKind, TreeRow,
+};
 use ui::LibraryStep;
 use ui::browser::{Arrangement, COLUMNS, Decks};
 use ui::cover::Covers;
@@ -65,6 +68,9 @@ fn view() -> BrowserView {
         list_offset: 0,
         list_count: 2,
         list_cursor: 0,
+        search: None,
+        sort: None,
+        seq: 0,
     }
 }
 
@@ -781,4 +787,119 @@ fn wheel_scrolls_the_list() {
     wheel(&mut harness, at, -10.0);
     assert!(harness.query_by_label("Folder 0").is_none());
     assert!(harness.state().steps.is_empty());
+}
+
+fn search_step(text: Option<&str>, seq: u64) -> LibraryStep {
+    browse(BrowserEdit::Search {
+        text: text.map(str::to_owned),
+        seq,
+    })
+}
+
+fn type_in_search(harness: &mut Harness<'_, Clicking>, text: &str) {
+    harness.get_by_role(Role::TextInput).focus();
+    harness.run_steps(1);
+    harness.get_by_role(Role::TextInput).type_text(text);
+    harness.run_steps(2);
+}
+
+#[test]
+fn typing_sends_search() {
+    let mut harness = clicking(numbered(0, 20, 20), Decks::default());
+    // The box above the list shows its hint while empty.
+    assert!(
+        painted_text(&harness.state().view)
+            .iter()
+            .any(|t| t == "Search")
+    );
+    type_in_search(&mut harness, "dee");
+    type_in_search(&mut harness, "p");
+    // One query per change, each newer than the last.
+    assert_eq!(
+        harness.state().steps,
+        [search_step(Some("dee"), 1), search_step(Some("deep"), 2)]
+    );
+}
+
+#[test]
+fn escape_clears_search() {
+    let mut harness = clicking(numbered(0, 20, 20), Decks::default());
+    type_in_search(&mut harness, "deep");
+    harness.key_press(Key::Escape);
+    harness.run_steps(2);
+    assert_eq!(
+        harness.state().steps,
+        [search_step(Some("deep"), 1), search_step(None, 2)]
+    );
+    // The box is empty again: typing starts afresh.
+    type_in_search(&mut harness, "x");
+    assert_eq!(harness.state().steps[2], search_step(Some("x"), 3));
+}
+
+#[test]
+fn header_click_sends_sort_then_reverses() {
+    let mut harness = clicking(numbered(0, 20, 20), Decks::default());
+    let sort = |key, descending, seq| {
+        browse(BrowserEdit::Sort {
+            key,
+            descending,
+            seq,
+        })
+    };
+    let bpm = at_label(&harness, "BPM");
+    click(&mut harness, bpm);
+    harness.run_steps(2);
+    assert_eq!(
+        harness.state().steps,
+        [sort(Some(TrackSortKey::Bpm), false, 1)]
+    );
+    // The session answers; the next click reverses, and the third returns to "#".
+    harness.state_mut().view.sort = Some((TrackSortKey::Bpm, false));
+    harness.state_mut().view.seq = 1;
+    harness.run_steps(2);
+    click(&mut harness, bpm);
+    harness.run_steps(2);
+    harness.state_mut().view.sort = Some((TrackSortKey::Bpm, true));
+    harness.state_mut().view.seq = 2;
+    harness.run_steps(2);
+    click(&mut harness, bpm);
+    harness.run_steps(2);
+    // Another column starts ascending.
+    let title = at_label(&harness, "Title");
+    click(&mut harness, title);
+    harness.run_steps(2);
+    assert_eq!(
+        harness.state().steps,
+        [
+            sort(Some(TrackSortKey::Bpm), false, 1),
+            sort(Some(TrackSortKey::Bpm), true, 2),
+            sort(None, false, 3),
+            sort(Some(TrackSortKey::Title), false, 4),
+        ]
+    );
+    // Remix has no sort.
+    let remix = at_label(&harness, "Remix");
+    click(&mut harness, remix);
+    harness.run_steps(2);
+    assert_eq!(harness.state().steps.len(), 4);
+}
+
+#[test]
+fn a_view_older_than_the_latest_query_is_dropped() {
+    let ctx = egui::Context::default();
+    let mut fresh = ui::browser::Fresh::default();
+    let mut old = numbered(0, 20, 20);
+    old.seq = 1;
+    assert_eq!(fresh.pick(&ctx, &old), &old);
+    // The window sent query 3: the view of query 2 is not shown, the last fresh one is.
+    ui::browser::set_sent_seq(&ctx, 3);
+    let mut stale = numbered(0, 5, 5);
+    stale.seq = 2;
+    assert_eq!(fresh.pick(&ctx, &stale), &old);
+    let mut latest = numbered(0, 3, 3);
+    latest.seq = 3;
+    assert_eq!(fresh.pick(&ctx, &latest), &latest);
+    let mut newer = numbered(0, 4, 4);
+    newer.seq = 4;
+    assert_eq!(fresh.pick(&ctx, &newer), &newer);
 }

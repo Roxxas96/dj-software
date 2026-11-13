@@ -79,6 +79,8 @@ pub enum TrackSortKey {
     Bpm,
     Key,
     Added,
+    /// The track's length.
+    Length,
 }
 
 /// Ordering of a track list. Ties break by track id, so paging is stable.
@@ -244,14 +246,81 @@ impl Reader {
         offset: usize,
         limit: usize,
     ) -> Result<Vec<(PathBuf, TrackRow)>, LibraryError> {
+        self.playlist_page(id, None, None, offset, limit)
+    }
+
+    /// A page of playlist `id`'s entries whose title or artist holds `text` (as
+    /// [`TrackFilter::text`]; every entry with `None`), with each track's file, ordered by
+    /// `sort` (playlist order with `None`). Ties keep playlist order, whichever the
+    /// direction.
+    pub(crate) fn playlist_page(
+        &self,
+        id: i64,
+        text: Option<&str>,
+        sort: Option<TrackSort>,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<(PathBuf, TrackRow)>, LibraryError> {
+        let mut params = vec![Value::Integer(id)];
+        let matching = text_condition(text, &mut params);
+        let order = match sort {
+            None => "pt.position".to_owned(),
+            Some(sort) => {
+                let dir = if sort.descending { "DESC" } else { "ASC" };
+                format!("{} {dir}, pt.position", sort_expr(sort.key, "t", "a"))
+            }
+        };
         let sql = format!(
             "SELECT {TRACK_COLUMNS}, t.path FROM playlist_tracks pt \
              JOIN tracks t ON t.id = pt.track_id \
              LEFT JOIN analysis a ON a.track_id = t.id \
-             WHERE pt.playlist_id = ?1 ORDER BY pt.position LIMIT ?2 OFFSET ?3"
+             WHERE pt.playlist_id = ?{matching} ORDER BY {order} LIMIT ? OFFSET ?"
+        );
+        params.push(Value::Integer(to_i64(limit)));
+        params.push(Value::Integer(to_i64(offset)));
+        let mut stmt = self.connection().prepare_cached(&sql)?;
+        let rows = stmt.query_map(params_from_iter(&params), file_and_row)?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// How many of playlist `id`'s entries have a title or artist holding `text`, as
+    /// [`TrackFilter::text`].
+    pub(crate) fn playlist_match_count(&self, id: i64, text: &str) -> Result<usize, LibraryError> {
+        let mut params = vec![Value::Integer(id)];
+        let matching = text_condition(Some(text), &mut params);
+        let sql = format!(
+            "SELECT count(*) FROM playlist_tracks pt JOIN tracks t ON t.id = pt.track_id \
+             WHERE pt.playlist_id = ?{matching}"
+        );
+        let n: i64 = self
+            .connection()
+            .prepare_cached(&sql)?
+            .query_row(params_from_iter(&params), |r| r.get(0))?;
+        Ok(usize::try_from(n).unwrap_or(0))
+    }
+
+    /// The files of the library tracks matching `filter`, ordered by `sort`, ties by path.
+    ///
+    /// # Errors
+    ///
+    /// Any database error, or [`LibraryError::NonUtf8Path`] for a folder filter that is
+    /// not valid UTF-8.
+    pub(crate) fn track_paths_sorted(
+        &self,
+        filter: &TrackFilter,
+        sort: TrackSort,
+    ) -> Result<Vec<PathBuf>, LibraryError> {
+        let (where_clause, params) = filter_clause(filter)?;
+        let dir = if sort.descending { "DESC" } else { "ASC" };
+        let sql = format!(
+            "SELECT t.path FROM tracks t LEFT JOIN analysis a ON a.track_id = t.id \
+             {where_clause} ORDER BY {} {dir}, t.path",
+            sort_expr(sort.key, "t", "a")
         );
         let mut stmt = self.connection().prepare_cached(&sql)?;
-        let rows = stmt.query_map((id, to_i64(limit), to_i64(offset)), file_and_row)?;
+        let rows = stmt.query_map(params_from_iter(&params), |r| {
+            Ok(PathBuf::from(r.get::<_, String>(0)?))
+        })?;
         Ok(rows.collect::<Result<_, _>>()?)
     }
 
@@ -324,13 +393,8 @@ impl Reader {
         if member == 0 {
             return Ok(None);
         }
-        let (column, value) = match sort.key {
-            TrackSortKey::Title => ("t.title COLLATE NOCASE", "t.title"),
-            TrackSortKey::Artist => ("t.artist COLLATE NOCASE", "t.artist"),
-            TrackSortKey::Bpm => ("a.bpm", "a.bpm"),
-            TrackSortKey::Key => ("a.key", "a.key"),
-            TrackSortKey::Added => ("t.added_at", "t.added_at"),
-        };
+        let column = sort_expr(sort.key, "t", "a");
+        let value = column.trim_end_matches(" COLLATE NOCASE");
         // Rows before the target in `ORDER BY column dir, id dir`, where SQLite puts NULLs
         // first ascending and last descending.
         let before = if sort.descending {
@@ -394,6 +458,21 @@ impl Reader {
     }
 }
 
+/// The condition a [`TrackFilter::text`] puts on the tracks (aliased `t`).
+const TEXT_MATCH: &str = "(t.title LIKE ? ESCAPE '\\' OR t.artist LIKE ? ESCAPE '\\')";
+
+/// `" AND "` and [`TEXT_MATCH`] for a non-empty `text`, with its parameters pushed onto
+/// `params`; empty when there is no text to match.
+fn text_condition(text: Option<&str>, params: &mut Vec<Value>) -> String {
+    let Some(text) = text.filter(|t| !t.is_empty()) else {
+        return String::new();
+    };
+    let pattern = Value::Text(format!("%{}%", escape_like(text)));
+    params.push(pattern.clone());
+    params.push(pattern);
+    format!(" AND {TEXT_MATCH}")
+}
+
 /// The `WHERE` clause (empty when nothing is filtered) and its parameters selecting the
 /// tracks (aliased `t`) that match `filter`.
 fn filter_clause(filter: &TrackFilter) -> Result<(String, Vec<Value>), LibraryError> {
@@ -422,11 +501,9 @@ fn filter_clause(filter: &TrackFilter) -> Result<(String, Vec<Value>), LibraryEr
             params.push(Value::Text(MAIN_SEPARATOR.to_string()));
         }
     }
-    if let Some(text) = filter.text.as_deref().filter(|t| !t.is_empty()) {
-        let pattern = Value::Text(format!("%{}%", escape_like(text)));
-        conds.push("(t.title LIKE ? ESCAPE '\\' OR t.artist LIKE ? ESCAPE '\\')");
-        params.push(pattern.clone());
-        params.push(pattern);
+    let text = text_condition(filter.text.as_deref(), &mut params);
+    if !text.is_empty() {
+        conds.push(TEXT_MATCH);
     }
     if let Some(missing) = filter.missing {
         conds.push("t.missing = ?");
@@ -440,6 +517,22 @@ fn filter_clause(filter: &TrackFilter) -> Result<(String, Vec<Value>), LibraryEr
     Ok((where_clause, params))
 }
 
+/// The expression `key` orders by, over the columns of `t` (the track) and `a` (its
+/// analysis). Text compares ignoring ASCII case; a length is in seconds, unknown (NULL)
+/// when the frames or the rate are.
+fn sort_expr(key: TrackSortKey, t: &str, a: &str) -> String {
+    match key {
+        TrackSortKey::Title => format!("{t}.title COLLATE NOCASE"),
+        TrackSortKey::Artist => format!("{t}.artist COLLATE NOCASE"),
+        TrackSortKey::Bpm => format!("{a}.bpm"),
+        TrackSortKey::Key => format!("{a}.key"),
+        TrackSortKey::Added => format!("{t}.added_at"),
+        TrackSortKey::Length => {
+            format!("(CAST({t}.duration_frames AS REAL) / nullif({t}.sample_rate, 0))")
+        }
+    }
+}
+
 /// The SQL and parameters for one page of [`Reader::tracks`].
 fn tracks_query(
     filter: &TrackFilter,
@@ -450,13 +543,8 @@ fn tracks_query(
     let (where_clause, mut params) = filter_clause(filter)?;
     // The same order inside (to pick the page) and outside (a subquery's order is not
     // kept by the outer SELECT).
-    let (table, column) = match sort.key {
-        TrackSortKey::Title => ("t", "title COLLATE NOCASE"),
-        TrackSortKey::Artist => ("t", "artist COLLATE NOCASE"),
-        TrackSortKey::Bpm => ("a", "bpm"),
-        TrackSortKey::Key => ("a", "key"),
-        TrackSortKey::Added => ("t", "added_at"),
-    };
+    let inner = sort_expr(sort.key, "t", "a");
+    let outer = sort_expr(sort.key, "p", "p");
     let dir = if sort.descending { "DESC" } else { "ASC" };
     let sql = format!(
         "SELECT p.id, p.title, p.artist, p.bpm, p.key, p.duration_frames, p.sample_rate, \
@@ -466,8 +554,8 @@ fn tracks_query(
              FROM (SELECT t.id, t.title, t.artist, a.bpm, a.key, t.duration_frames, \
                           t.sample_rate, t.missing, t.added_at \
                    FROM tracks t LEFT JOIN analysis a ON a.track_id = t.id \
-                   {where_clause} ORDER BY {table}.{column} {dir}, t.id {dir} LIMIT ? OFFSET ?) p \
-             ORDER BY p.{column} {dir}, p.id {dir}"
+                   {where_clause} ORDER BY {inner} {dir}, t.id {dir} LIMIT ? OFFSET ?) p \
+             ORDER BY {outer} {dir}, p.id {dir}"
     );
     params.push(Value::Integer(to_i64(limit)));
     params.push(Value::Integer(to_i64(offset)));

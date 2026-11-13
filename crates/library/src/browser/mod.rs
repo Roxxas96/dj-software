@@ -10,7 +10,7 @@
 mod drives;
 mod tree;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 pub use actions::BrowserRequest;
@@ -18,7 +18,7 @@ pub use drives::{Drive, drives};
 pub use tree::{TreeKind, TreeRow};
 
 use crate::scan::{is_hidden, is_supported, normalize_path};
-use crate::{LibraryError, Reader, TrackFilter, TrackRow, TrackSortKey};
+use crate::{LibraryError, Reader, TrackFilter, TrackRow, TrackSort, TrackSortKey};
 use tree::{Target, Tree};
 
 /// How many rows of a list the browser holds at once: one page around the cursor.
@@ -49,9 +49,10 @@ pub enum BrowserEdit {
     /// Filters the list by `text` (`None`: no filter). `seq` grows with each query, so the
     /// window can drop views of older ones.
     Search { text: Option<String>, seq: u64 },
-    /// Orders the list by `key`. `seq` as for [`BrowserEdit::Search`].
+    /// Orders the list by `key`, or in its natural order with `None` (a playlist's own
+    /// order, a folder's by file name). `seq` as for [`BrowserEdit::Search`].
     Sort {
-        key: TrackSortKey,
+        key: Option<TrackSortKey>,
         descending: bool,
         seq: u64,
     },
@@ -88,6 +89,23 @@ pub struct BrowserView {
     /// How many rows the whole list has.
     pub list_count: usize,
     pub list_cursor: usize,
+    /// The text the list is filtered by.
+    pub search: Option<String>,
+    /// The column the list is ordered by, and whether descending; `None` for the list's
+    /// natural order.
+    pub sort: Option<(TrackSortKey, bool)>,
+    /// The `seq` of the latest [`BrowserEdit::Search`] or [`BrowserEdit::Sort`] this view
+    /// reflects (0 before any).
+    pub seq: u64,
+}
+
+/// What every list is filtered and ordered by, whichever tree entry it belongs to.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct Query {
+    /// As [`TrackFilter::text`]; never empty.
+    text: Option<String>,
+    /// `None`: the list's natural order.
+    sort: Option<TrackSort>,
 }
 
 /// Where a list's rows come from.
@@ -95,12 +113,16 @@ pub struct BrowserView {
 enum Items {
     #[default]
     None,
-    /// A folder's audio files sorted by name, and the library's tracks among them.
+    /// A folder's audio files that match the query, in its order (by file name ignoring
+    /// case when unsorted), and the library's tracks among all its files.
     Files {
         files: Vec<PathBuf>,
         tracks: HashMap<PathBuf, TrackRow>,
+        /// Some of the folder's files, matching or not, are not in the library.
+        unknown: bool,
     },
-    Playlist(i64),
+    /// A playlist's entries that match `query`, in its order.
+    Playlist { id: i64, query: Query },
 }
 
 /// The highlighted entry's list: its rows' source, length, cursor and loaded page.
@@ -115,12 +137,12 @@ struct List {
 }
 
 impl List {
-    /// The list of `target`, with the cursor on its first row and that row's page loaded.
-    /// A folder's files are read here, once.
-    fn open(reader: &Reader, target: &Target) -> Result<Self, LibraryError> {
+    /// The list of `target` filtered and ordered by `query`, with the cursor on its first
+    /// row and that row's page loaded. A folder's files are read here, once.
+    fn open(reader: &Reader, target: &Target, query: &Query) -> Result<Self, LibraryError> {
         let (items, count) = match target {
             Target::Dir(dir) => {
-                let items = folder_items(reader, dir)?;
+                let items = folder_items(reader, dir, query)?;
                 let count = match &items {
                     Items::Files { files, .. } => files.len(),
                     _ => 0,
@@ -128,7 +150,14 @@ impl List {
                 (items, count)
             }
             Target::Playlists => (Items::None, 0),
-            Target::Playlist { id, len } => (Items::Playlist(*id), *len),
+            Target::Playlist { id, len } => {
+                let count = match &query.text {
+                    Some(text) => reader.playlist_match_count(*id, text)?,
+                    None => *len,
+                };
+                let query = query.clone();
+                (Items::Playlist { id: *id, query }, count)
+            }
         };
         let mut list = Self {
             items,
@@ -175,6 +204,10 @@ pub struct Browser {
     tree_cursor: usize,
     list: List,
     focus: Focus,
+    /// The search and sort every list opens with.
+    query: Query,
+    /// The `seq` of the latest search or sort.
+    seq: u64,
 }
 
 impl std::fmt::Debug for Browser {
@@ -185,6 +218,8 @@ impl std::fmt::Debug for Browser {
             .field("tree_cursor", &self.tree_cursor)
             .field("list", &self.list)
             .field("focus", &self.focus)
+            .field("query", &self.query)
+            .field("seq", &self.seq)
             .finish_non_exhaustive()
     }
 }
@@ -211,7 +246,8 @@ impl Browser {
         roots: impl Fn() -> Vec<Drive> + Send + 'static,
     ) -> Result<Self, LibraryError> {
         let tree = Tree::new(roots(), &reader.playlists()?);
-        let list = List::open(&reader, tree.target(0))?;
+        let query = Query::default();
+        let list = List::open(&reader, tree.target(0), &query)?;
         Ok(Self {
             reader,
             roots: Box::new(roots),
@@ -219,6 +255,8 @@ impl Browser {
             tree_cursor: 0,
             list,
             focus: Focus::Tree,
+            query,
+            seq: 0,
         })
     }
 
@@ -253,8 +291,14 @@ impl Browser {
         Ok(self.view())
     }
 
-    /// Makes `edit` and returns the new view. Search and sort leave the view as it is for
-    /// now.
+    /// Makes `edit` and returns the new view.
+    ///
+    /// A search or a sort reads the highlighted entry's list again with the cursor on its
+    /// first row, and stays set for every list after it, until the next one changes it.
+    /// An empty search is no search. In a folder, a search keeps the library tracks whose
+    /// title or artist holds the text and the other files whose name does; a sort puts
+    /// those other files with the tracks whose value is unknown: first ascending, last
+    /// descending, as the library's track queries do.
     ///
     /// # Errors
     ///
@@ -264,7 +308,7 @@ impl Browser {
             BrowserEdit::SelectTree(at) => {
                 let to = at.min(self.tree.len() - 1);
                 if to != self.tree_cursor {
-                    self.list = List::open(&self.reader, self.tree.target(to))?;
+                    self.list = List::open(&self.reader, self.tree.target(to), &self.query)?;
                     self.tree_cursor = to;
                 }
                 self.focus = Focus::Tree;
@@ -274,11 +318,37 @@ impl Browser {
                 self.focus = Focus::List;
             }
             BrowserEdit::ToggleTreeAt(at) if at < self.tree.len() => self.toggle_at(at)?,
-            BrowserEdit::ToggleTreeAt(_)
-            | BrowserEdit::Search { .. }
-            | BrowserEdit::Sort { .. } => {}
+            BrowserEdit::ToggleTreeAt(_) => {}
+            BrowserEdit::Search { text, seq } => {
+                let text = text.filter(|t| !t.is_empty());
+                let query = Query {
+                    text,
+                    ..self.query.clone()
+                };
+                self.requery(query, seq)?;
+            }
+            BrowserEdit::Sort {
+                key,
+                descending,
+                seq,
+            } => {
+                let sort = key.map(|key| TrackSort { key, descending });
+                let query = Query {
+                    sort,
+                    ..self.query.clone()
+                };
+                self.requery(query, seq)?;
+            }
         }
         Ok(self.view())
+    }
+
+    /// Reads the highlighted entry's list again under `query`, the latest one (`seq`).
+    fn requery(&mut self, query: Query, seq: u64) -> Result<(), LibraryError> {
+        self.list = List::open(&self.reader, self.tree.target(self.tree_cursor), &query)?;
+        self.query = query;
+        self.seq = seq;
+        Ok(())
     }
 
     /// Opens or closes tree row `at`, keeping the highlight on its entry: below the
@@ -290,7 +360,7 @@ impl Browser {
         let mut tree = self.tree.clone();
         tree.toggle(at);
         if cursor > at && cursor < end {
-            self.list = List::open(&self.reader, tree.target(at))?;
+            self.list = List::open(&self.reader, tree.target(at), &self.query)?;
             self.tree_cursor = at;
         } else if cursor > at {
             self.tree_cursor = (cursor + tree.len()).saturating_sub(self.tree.len());
@@ -323,7 +393,7 @@ impl Browser {
         };
         let (tree_cursor, mut list, list_cursor) = match found {
             Some(i) => {
-                let list = List::open(&self.reader, tree.target(i))?;
+                let list = List::open(&self.reader, tree.target(i), &self.query)?;
                 let at = match self.list.selected() {
                     Some(row) => find_row(&self.reader, &list, row, self.list.cursor)?,
                     None => None,
@@ -332,7 +402,7 @@ impl Browser {
             }
             None => {
                 let i = self.tree_cursor.min(tree.len() - 1);
-                (i, List::open(&self.reader, tree.target(i))?, 0)
+                (i, List::open(&self.reader, tree.target(i), &self.query)?, 0)
             }
         };
         list.seek(&self.reader, list_cursor)?;
@@ -361,6 +431,9 @@ impl Browser {
             list_offset: self.list.offset,
             list_count: self.list.count,
             list_cursor: self.list.cursor,
+            search: self.query.text.clone(),
+            sort: self.query.sort.map(|s| (s.key, s.descending)),
+            seq: self.seq,
         }
     }
 
@@ -378,9 +451,7 @@ impl Browser {
             return None;
         };
         match &self.list.items {
-            Items::Files { files, tracks } if files.iter().any(|f| !tracks.contains_key(f)) => {
-                Some(dir.clone())
-            }
+            Items::Files { unknown: true, .. } => Some(dir.clone()),
             _ => None,
         }
     }
@@ -388,7 +459,7 @@ impl Browser {
     fn move_tree(&mut self, steps: i32) -> Result<(), LibraryError> {
         let to = step(self.tree_cursor, steps, self.tree.len());
         if to != self.tree_cursor {
-            self.list = List::open(&self.reader, self.tree.target(to))?;
+            self.list = List::open(&self.reader, self.tree.target(to), &self.query)?;
             self.tree_cursor = to;
         }
         Ok(())
@@ -422,27 +493,76 @@ fn step(cursor: usize, steps: i32, count: usize) -> usize {
     }
 }
 
-/// `dir`'s audio files and the library's tracks among them. A folder that can't be read
-/// has no files. Paths are canonical, as the library stores them.
-fn folder_items(reader: &Reader, dir: &Path) -> Result<Items, LibraryError> {
+/// `dir`'s audio files that match `query`, in its order, and the library's tracks among
+/// all of them. A folder that can't be read has no files. Paths are canonical, as the
+/// library stores them.
+fn folder_items(reader: &Reader, dir: &Path, query: &Query) -> Result<Items, LibraryError> {
     let dir = normalize_path(dir).unwrap_or_else(|_| dir.to_owned());
-    let files = audio_files(&dir).unwrap_or_default();
-    let tracks = if files.is_empty() {
+    let mut files = audio_files(&dir).unwrap_or_default();
+    let filter = TrackFilter {
+        folder: Some(dir),
+        folder_only: true,
+        ..TrackFilter::default()
+    };
+    let tracks: HashMap<PathBuf, TrackRow> = if files.is_empty() {
         HashMap::new()
     } else {
-        let filter = TrackFilter {
-            folder: Some(dir),
-            folder_only: true,
-            ..TrackFilter::default()
-        };
-        match reader.track_files(&filter) {
-            Ok(tracks) => tracks.into_iter().collect(),
-            // The library holds only UTF-8 paths.
-            Err(LibraryError::NonUtf8Path(_)) => HashMap::new(),
-            Err(e) => return Err(e),
-        }
+        utf8_only(reader.track_files(&filter))?
+            .into_iter()
+            .collect()
     };
-    Ok(Items::Files { files, tracks })
+    let unknown = files.iter().any(|f| !tracks.contains_key(f));
+    if files.is_empty() || *query == Query::default() {
+        return Ok(Items::Files {
+            files,
+            tracks,
+            unknown,
+        });
+    }
+    if let Some(text) = &query.text {
+        let filter = TrackFilter {
+            text: Some(text.clone()),
+            ..filter.clone()
+        };
+        let matching: HashSet<PathBuf> = utf8_only(reader.track_files(&filter))?
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect();
+        // SQLite's LIKE ignores ASCII case only; so does this.
+        let needle = text.to_ascii_lowercase();
+        files.retain(|f| {
+            matching.contains(f)
+                || !tracks.contains_key(f) && file_name(f).to_ascii_lowercase().contains(&needle)
+        });
+    }
+    if let Some(sort) = query.sort {
+        let order = utf8_only(reader.track_paths_sorted(&filter, sort))?;
+        let rank: HashMap<&Path, usize> = order
+            .iter()
+            .enumerate()
+            .map(|(at, path)| (path.as_path(), at))
+            .collect();
+        // Files outside the library count as unknown values: first ascending, last
+        // descending. The sort is stable, so they keep their name order.
+        files.sort_by_key(|f| match rank.get(f.as_path()) {
+            Some(&at) => (!sort.descending, at),
+            None => (sort.descending, 0),
+        });
+    }
+    Ok(Items::Files {
+        files,
+        tracks,
+        unknown,
+    })
+}
+
+/// `result`, with nothing for a folder whose path is not UTF-8: the library holds only
+/// UTF-8 paths.
+fn utf8_only<T>(result: Result<Vec<T>, LibraryError>) -> Result<Vec<T>, LibraryError> {
+    match result {
+        Err(LibraryError::NonUtf8Path(_)) => Ok(Vec::new()),
+        other => other,
+    }
 }
 
 /// `dir`'s visible audio files (not its subfolders'), sorted by file name ignoring case.
@@ -467,7 +587,7 @@ fn file_name(path: &Path) -> String {
 fn page(reader: &Reader, items: &Items, offset: usize) -> Result<Vec<ListRow>, LibraryError> {
     Ok(match items {
         Items::None => Vec::new(),
-        Items::Files { files, tracks } => files
+        Items::Files { files, tracks, .. } => files
             .iter()
             .skip(offset)
             .take(BROWSER_PAGE_ROWS)
@@ -477,8 +597,14 @@ fn page(reader: &Reader, items: &Items, offset: usize) -> Result<Vec<ListRow>, L
                 file_name: file_name(path),
             })
             .collect(),
-        Items::Playlist(id) => reader
-            .playlist_files(*id, offset, BROWSER_PAGE_ROWS)?
+        Items::Playlist { id, query } => reader
+            .playlist_page(
+                *id,
+                query.text.as_deref(),
+                query.sort,
+                offset,
+                BROWSER_PAGE_ROWS,
+            )?
             .into_iter()
             .map(|(path, track)| ListRow {
                 file_name: file_name(&path),
@@ -501,20 +627,23 @@ fn find_row(
     match &list.items {
         Items::None => Ok(None),
         Items::Files { files, .. } => Ok(files.iter().position(|p| *p == row.path)),
-        Items::Playlist(playlist) => {
+        Items::Playlist { .. } => {
             let Some(id) = row.track.as_ref().map(|t| t.id) else {
                 return Ok(None);
             };
             let mut best: Option<usize> = None;
             let mut offset = 0;
             while offset < list.count {
-                let rows = reader.playlist_tracks(*playlist, offset, BROWSER_PAGE_ROWS)?;
+                let rows = page(reader, &list.items, offset)?;
                 if rows.is_empty() {
                     break;
                 }
-                for (i, row) in rows.iter().enumerate() {
+                let ids = rows.iter().map(|r| r.track.as_ref().map(|t| t.id));
+                for (i, at_id) in ids.enumerate() {
                     let at = offset + i;
-                    if row.id == id && best.is_none_or(|b| at.abs_diff(near) < b.abs_diff(near)) {
+                    if at_id == Some(id)
+                        && best.is_none_or(|b| at.abs_diff(near) < b.abs_diff(near))
+                    {
                         best = Some(at);
                     }
                 }
