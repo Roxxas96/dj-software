@@ -27,6 +27,7 @@ fn draw_styled(snapshot: DeckSnapshot, waveform: &Waveform, style: WaveformStyle
                 beats: 16.0,
                 style,
                 palette: ui::WaveformPalette::default(),
+                knobs: ui::waveform::BandScale::UNITY,
                 overlay,
                 marks: None,
             };
@@ -151,6 +152,7 @@ fn a_named_hotcue_flag_shows_its_name_beside_the_number() {
             beats: 16.0,
             style: WaveformStyle::Frequency,
             palette: ui::WaveformPalette::default(),
+            knobs: ui::waveform::BandScale::UNITY,
             overlay: false,
             marks: Some(&marks),
         };
@@ -498,4 +500,83 @@ fn an_overlaid_lane_scrubs_its_first_deck() {
             other => panic!("{other:?}"),
         }
     }
+}
+
+/// How many vertices of each mesh painted are `colour`, meshes without any left out.
+fn counts_of(shapes: &[egui::Shape], colour: egui::Color32) -> Vec<usize> {
+    shapes
+        .iter()
+        .filter_map(|shape| match shape {
+            egui::Shape::Mesh(mesh) => {
+                Some(mesh.vertices.iter().filter(|v| v.color == colour).count())
+            }
+            _ => None,
+        })
+        .filter(|&n| n > 0)
+        .collect()
+}
+
+/// Two decks with a bass-heavy track each, deck 1's LOW knob at `low`.
+fn two_lanes(low: f32) -> Vec<egui::Shape> {
+    use ui::controls::{HeldButtons, Sink};
+    use ui::deck::DeckReads;
+
+    let waveform = Arc::new(Waveform {
+        frames_per_bucket: 128,
+        buckets: vec![[255, 200, 200, 200]; 20_000],
+    });
+    let mut frame = ControlFrame::default();
+    frame.control.deck_mut(DeckId::new(0).unwrap()).eq_low = low;
+    let mut reads = DeckReads::default();
+    for index in 0..2 {
+        reads.decks[index] = (
+            DeckSnapshot {
+                loaded: true,
+                playing: true,
+                track_sample_rate: 44_100,
+                duration_frames: 2_560_000,
+                position_frames: 441_000.0,
+                load_seq: 1,
+                ..DeckSnapshot::default()
+            },
+            0,
+        );
+        frame.decks[index] = Some(ui::DeckInfo {
+            load_seq: 1,
+            row: library::TrackRow {
+                id: 1,
+                title: None,
+                artist: None,
+                bpm: None,
+                key: None,
+                duration_frames: None,
+                sample_rate: None,
+                has_cues: false,
+                missing: false,
+            },
+            path: "/music/a.mp3".into(),
+            overview: None,
+            detail: Some(Arc::clone(&waveform)),
+            stems: None,
+            hotcue_marks: Default::default(),
+        });
+    }
+    let (commands, _received) = std::sync::mpsc::channel();
+    let mut lanes = ui::waveform::Lanes::default();
+    let mut held = HeldButtons::default();
+    painted(move |ui| {
+        let mut sink = Sink::new(&commands, &mut held);
+        lanes.show(ui, &frame, &reads, &mut sink);
+    })
+}
+
+#[test]
+fn the_lane_follows_its_decks_knobs() {
+    let low =
+        ui::waveform::band_colours(ui::WaveformPalette::default(), &ui::theme::Palette::DARK)[0];
+    let flat = counts_of(&two_lanes(0.5), low);
+    assert_eq!(flat.len(), 2, "{flat:?}");
+    let killed = counts_of(&two_lanes(0.0), low);
+    // Deck 1's lane has no low bars left; deck 2's is as it was.
+    assert_eq!(killed, vec![flat[1]], "{killed:?} against {flat:?}");
 }

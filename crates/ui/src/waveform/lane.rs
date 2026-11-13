@@ -10,7 +10,7 @@ use egui::{Align2, Color32, FontId, Mesh, Painter, Pos2, Rect, Shape, Ui, pos2, 
 use engine::{DeckId, DeckSnapshot, Hotcue, HotcueSlot, PLATTER_SECONDS_PER_TURN};
 
 use super::colour::band_colours;
-use super::styles::{self, MAX_BARS};
+use super::styles::{self, BandScale, MAX_BARS, band_scale};
 use super::{Playhead, ZoomGesture, ticks};
 use crate::command::UiCommand;
 use crate::controls::{Sink, carry_steps, context_press, drag_path, moved_drag};
@@ -137,6 +137,10 @@ impl Lanes {
                 beats: frame.view.waveform_beats,
                 style: frame.view.waveform_style,
                 palette: frame.view.waveform_palette,
+                knobs: {
+                    let c = frame.control.deck(deck);
+                    band_scale(c.trim, c.eq_high, c.eq_mid, c.eq_low)
+                },
                 overlay: overlaid && index == 1,
                 marks: info.map(|info| &*info.hotcue_marks),
             };
@@ -271,6 +275,8 @@ pub struct Lane<'a> {
     pub style: WaveformStyle,
     /// The colours of the low, mid and high bands.
     pub palette: WaveformPalette,
+    /// How much the deck's knobs scale each band ([`band_scale`]).
+    pub knobs: BandScale,
     /// Drawn over another deck's lane in the same rect: no background of its own.
     pub overlay: bool,
     /// The hotcues' colours and names, when the library has them for the track.
@@ -355,6 +361,7 @@ impl Lane<'_> {
                 waveform,
                 (self.style, self.deck),
                 (p, bands),
+                self.knobs,
             );
         }
         if let (true, Some(start), Some(end)) =
@@ -512,6 +519,7 @@ fn columns(
     waveform: &Waveform,
     (style, deck): (WaveformStyle, DeckId),
     (p, bands): (&Palette, [Color32; 3]),
+    knobs: BandScale,
 ) {
     let per_bucket = f64::from(waveform.frames_per_bucket.max(1));
     let buckets = &waveform.buckets;
@@ -540,7 +548,7 @@ fn columns(
         let Some(loudest) = styles::loudest(&buckets[from..to]) else {
             continue;
         };
-        let (bars, used) = styles::bars(style, loudest, deck, p, bands);
+        let (bars, used) = styles::bars(style, loudest, deck, p, bands, knobs);
         for bar in &bars[..used] {
             let rect = Rect::from_min_max(
                 pos2(scale.x(start), rect.top() + rect.height() * bar.from),
@@ -632,6 +640,7 @@ mod tests {
             &waveform,
             (WaveformStyle::Frequency, deck),
             (&Palette::DARK, [Color32::RED; 3]),
+            BandScale::UNITY,
         );
         let mut b = Mesh::default();
         columns(
@@ -641,6 +650,7 @@ mod tests {
             &waveform,
             (WaveformStyle::Frequency, deck),
             (&Palette::DARK, [Color32::RED; 3]),
+            BandScale::UNITY,
         );
         // Moving a quarter column shifts every column a quarter point, unchanged.
         let shifted: Vec<f32> = b.vertices.iter().map(|v| v.pos.x + 0.25).collect();
@@ -672,6 +682,7 @@ mod tests {
             &waveform,
             (WaveformStyle::Frequency, deck(1)),
             (&Palette::DARK, [Color32::RED; 3]),
+            BandScale::UNITY,
         );
         let reaches: Vec<f32> = mesh
             .vertices
@@ -704,6 +715,7 @@ mod tests {
             beats: 16.0,
             style: WaveformStyle::Frequency,
             palette: WaveformPalette::default(),
+            knobs: BandScale::UNITY,
             overlay: false,
             marks,
         }
