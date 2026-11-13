@@ -302,7 +302,8 @@ impl Browser {
     ///
     /// # Errors
     ///
-    /// Any database error; the browser is then unchanged.
+    /// Any database error; the browser is then unchanged, except that a failed search or
+    /// sort still takes its `seq`.
     pub fn edit(&mut self, edit: BrowserEdit) -> Result<BrowserView, LibraryError> {
         match edit {
             BrowserEdit::SelectTree(at) => {
@@ -344,10 +345,12 @@ impl Browser {
     }
 
     /// Reads the highlighted entry's list again under `query`, the latest one (`seq`).
+    /// The browser takes `seq` even when the read fails, keeping its list and query, so
+    /// that its views stay newer than every query the window sent.
     fn requery(&mut self, query: Query, seq: u64) -> Result<(), LibraryError> {
+        self.seq = seq;
         self.list = List::open(&self.reader, self.tree.target(self.tree_cursor), &query)?;
         self.query = query;
-        self.seq = seq;
         Ok(())
     }
 

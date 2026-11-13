@@ -195,7 +195,12 @@ fn run(
                     let _ = events.send(Event::Browser(view));
                     adder.offer(&browser);
                 }
-                Err(e) => say(format!("warning: library browser: {}", safe(e))),
+                Err(e) => {
+                    say(format!("warning: library browser: {}", safe(e)));
+                    // The view as it stands, answering the query: the window drops views
+                    // older than the last query it sent.
+                    let _ = events.send(Event::Browser(browser.view()));
+                }
             },
             Job::Refresh {
                 decks,
@@ -815,6 +820,51 @@ mod tests {
             _ => None,
         });
         assert_eq!(loaded.row.id, fine);
+    }
+
+    #[test]
+    fn a_failed_search_still_sends_the_view() {
+        let s = setup(&["b.wav"]);
+        let id = ids(&s.lib)[0];
+        s.lib
+            .writer()
+            .submit_wait(WriteOp::CreatePlaylistWith {
+                name: "Peak".into(),
+                tracks: vec![id],
+            })
+            .unwrap();
+        let (tx, events) = channel();
+        let (jobs, _worker) =
+            spawn_with(Arc::clone(&s.lib), tx, decode::decode_file, Vec::new).unwrap();
+        let view = |events: &Receiver<Event>| {
+            wait_for(events, |e| match e {
+                Event::Browser(v) => Some(v),
+                _ => None,
+            })
+        };
+        view(&events);
+        jobs.send(Job::Edit(BrowserEdit::SelectTree(1))).unwrap();
+        assert_eq!(view(&events).path, "Playlists ▸ Peak");
+        // The playlist can no longer be read.
+        s.lib
+            .writer()
+            .submit_wait(WriteOp::Raw(vec![RawStatement {
+                sql: "DROP TABLE playlist_tracks".into(),
+                params: vec![],
+            }]))
+            .unwrap();
+        let search = BrowserEdit::Search {
+            text: Some("b".into()),
+            seq: 1,
+        };
+        jobs.send(Job::Edit(search)).unwrap();
+        // The window still gets a view of that query, with the list as it was.
+        let failed = view(&events);
+        assert_eq!((failed.seq, failed.search), (1, None));
+        assert_eq!(failed.list_count, 1);
+        // And later views carry it, so the window keeps showing them.
+        jobs.send(Job::Browse(BrowserRequest::ToggleFocus)).unwrap();
+        assert_eq!(view(&events).seq, 1);
     }
 
     #[test]

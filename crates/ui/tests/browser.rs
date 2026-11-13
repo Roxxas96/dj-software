@@ -300,9 +300,12 @@ fn list_has_column_headers() {
 fn rows_alternate_shades() {
     let view = many_rows(6);
     let alt = theme::Palette::default().row_alt;
+    // Row-wide fills only: the search box shares the shade.
     let mut rects: Vec<_> = painted(&view, [None; 4])
         .into_iter()
-        .filter(|(rect, fill)| *fill == alt && rect.height() > 10.0 && rect.height() < 30.0)
+        .filter(|(rect, fill)| {
+            *fill == alt && rect.height() > 10.0 && rect.height() < 30.0 && rect.width() > 250.0
+        })
         .map(|(rect, _)| rect.min.y)
         .collect();
     rects.sort_by(f32::total_cmp);

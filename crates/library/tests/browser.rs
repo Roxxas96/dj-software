@@ -627,6 +627,50 @@ fn search_in_a_folder_keeps_matching_unscanned_files() {
     );
 }
 
+#[test]
+fn search_matches_an_untitled_tracks_file_name() {
+    let (_dir, lib) = open();
+    let untitled = add_artist_tracks(&lib, &[("/m/Night-Drive.flac", "x", "Someone")])[0];
+    lib.writer()
+        .submit_wait(WriteOp::Raw(vec![RawStatement {
+            sql: "UPDATE tracks SET title = NULL WHERE id = ?1".into(),
+            params: vec![Value::Integer(untitled)],
+        }]))
+        .unwrap();
+    // A titled track is found by its title, not by its file name.
+    let titled = add_artist_tracks(&lib, &[("/drive/b.flac", "Sunrise", "Someone")])[0];
+    create_playlist(&lib, "Mix", &[untitled, titled]);
+    let mut b = browser(&lib, Vec::new());
+    scroll(&mut b, 1);
+    // The list shows the untitled track by its file name, so search finds it there.
+    let view = search(&mut b, Some("night-DRIVE"), 1);
+    assert_eq!(file_names(&view), ["Night-Drive.flac"]);
+    let view = search(&mut b, Some("drive"), 2);
+    assert_eq!(file_names(&view), ["Night-Drive.flac"]);
+}
+
+#[test]
+fn a_failed_search_keeps_the_list_and_takes_its_seq() {
+    let s = searchable();
+    let mut b = browser(&s.lib, Vec::new());
+    scroll(&mut b, 1);
+    s.lib
+        .writer()
+        .submit_wait(WriteOp::Raw(vec![RawStatement {
+            sql: "DROP TABLE playlist_tracks".into(),
+            params: vec![],
+        }]))
+        .unwrap();
+    let edit = BrowserEdit::Search {
+        text: Some("deep".into()),
+        seq: 4,
+    };
+    assert!(b.edit(edit).is_err());
+    let view = b.view();
+    assert_eq!((view.seq, view.search), (4, None));
+    assert_eq!(view.list_count, 4);
+}
+
 /// Mirrors `queries_stay_fast_with_50k_tracks` in `tests/playlists.rs`: every build, with
 /// a bound loose enough for debug and for CI's Windows runners.
 #[test]
