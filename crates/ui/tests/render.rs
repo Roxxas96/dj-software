@@ -81,6 +81,7 @@ fn render_a_held_roll() {
     deck.slip = true;
     deck.roll_active = true;
     deck.ghost_frames = Some(deck.position_frames + 5.0 * period);
-    deck.slicer_block_beat = Some(8.0 * (deck.position_frames / period / 8.0).floor());
+    let start = (deck.position_frames / (4.0 * period)).floor() * 4.0 * period;
+    deck.roll_span = Some((start, start + 4.0 * period));
     render_with("pro-roll", frame, reads, WINDOW);
 }

@@ -45,8 +45,6 @@ const NAME_CHARS: usize = 14;
 const SAVED_LOOP_ALPHA: u8 = 0x50;
 /// The landing marker's triangle (its width and height) and line width, in points, and
 /// the line's alpha (half).
-/// Beats in a slicer block.
-const SLICER_BEATS: f64 = 8.0;
 const LANDING_SIZE: f32 = 8.0;
 const LANDING_LINE: f32 = 1.0;
 const LANDING_ALPHA: u8 = 0x80;
@@ -587,21 +585,15 @@ fn columns(
     }
 }
 
-/// The span in track frames to shade as a loop: the active loop; while a roll or slice is
-/// held, the loop the deck publishes, else the slicer's block (the snapshot does not say
-/// which pad is held, nor how long a roll is).
+/// The span in track frames to shade as a loop: the held roll's or slice's, else the
+/// active loop.
 fn shaded_loop(snapshot: &DeckSnapshot) -> Option<(f64, f64)> {
-    let published = snapshot.loop_in.zip(snapshot.loop_out);
-    let span = if snapshot.roll_active {
-        published.or_else(|| {
-            let grid = snapshot.grid?;
-            let start =
-                grid.first_beat_frames + snapshot.slicer_block_beat? * grid.beat_period_frames;
-            Some((start, start + SLICER_BEATS * grid.beat_period_frames))
-        })
-    } else {
-        published.filter(|_| snapshot.loop_active)
-    };
+    let span = snapshot.roll_span.or_else(|| {
+        snapshot
+            .loop_in
+            .zip(snapshot.loop_out)
+            .filter(|_| snapshot.loop_active)
+    });
     span.filter(|(start, end)| start.is_finite() && end.is_finite() && end > start)
 }
 

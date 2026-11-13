@@ -693,16 +693,15 @@ fn shade_span(snapshot: DeckSnapshot) -> Option<(f32, f32)> {
 #[test]
 fn a_loop_roll_is_shaded() {
     let snapshot = DeckSnapshot {
-        loop_in: Some(441_000.0),
-        loop_out: Some(441_000.0 + 22_050.0 * 2.0),
-        loop_active: false,
+        roll_span: Some((441_000.0, 441_000.0 + 22_050.0 * 2.0)),
         ..slipping(Some(441_000.0))
     };
     let (min, max) = shade_span(snapshot).expect("shaded");
     assert!((min - lane_x(441_000.0)).abs() <= 1.0, "{min}");
     assert!((max - lane_x(441_000.0 + 44_100.0)).abs() <= 1.0, "{max}");
-    // Without the roll, an inactive loop is not shaded.
+    // Released: nothing is shaded.
     let idle = DeckSnapshot {
+        roll_span: None,
         roll_active: false,
         ..snapshot
     };
@@ -710,19 +709,15 @@ fn a_loop_roll_is_shaded() {
 }
 
 #[test]
-fn a_slicer_block_is_shaded() {
-    // The block starts on beat 8 (frame 176 400) and spans 8 beats.
+fn a_held_slice_is_shaded_as_its_own_beat() {
+    // A slice is a one-beat roll loop, in the block starting on beat 8.
+    let from = 11.0 * 22_050.0;
     let snapshot = DeckSnapshot {
+        roll_span: Some((from, from + 22_050.0)),
         slicer_block_beat: Some(8.0),
         ..slipping(Some(441_000.0))
     };
     let (min, max) = shade_span(snapshot).expect("shaded");
-    assert!((min - lane_x(8.0 * 22_050.0)).abs() <= 1.0, "{min}");
-    assert!((max - lane_x(16.0 * 22_050.0)).abs() <= 1.0, "{max}");
-    // Not held: the block is not shaded.
-    let idle = DeckSnapshot {
-        roll_active: false,
-        ..snapshot
-    };
-    assert_eq!(shade_span(idle), None);
+    assert!((min - lane_x(from)).abs() <= 1.0, "{min}");
+    assert!((max - lane_x(from + 22_050.0)).abs() <= 1.0, "{max}");
 }
