@@ -344,10 +344,12 @@ impl Drags {
 
 /// Names the area `rect` of `ui` for screen readers (and the tests that look for where a
 /// section is); it takes no input.
-pub(crate) fn landmark_rect(ui: &egui::Ui, rect: egui::Rect, name: &str) {
+/// Returns its response, for a drop zone on the area.
+pub(crate) fn landmark_rect(ui: &egui::Ui, rect: egui::Rect, name: &str) -> egui::Response {
     let id = ui.scope_id().with(("landmark", name));
     let response = ui.interact(rect, id, egui::Sense::hover());
     landmark(&response, name);
+    response
 }
 
 /// Names the area of `response` for screen readers.

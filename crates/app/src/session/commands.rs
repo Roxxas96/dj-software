@@ -142,6 +142,24 @@ fn library_step(
                 parts.event(why);
             }
         }
+        LibraryStep::AddToPlaylist { playlist, tracks } => {
+            if let Err(why) = library.add_to_playlist(playlist, &tracks) {
+                parts.event(why);
+            }
+        }
+        LibraryStep::MoveInPlaylist { playlist, from, to } => {
+            if let Err(why) = library.move_in_playlist(playlist, &from, to) {
+                parts.event(why);
+            }
+        }
+        LibraryStep::RemoveFromPlaylist {
+            playlist,
+            positions,
+        } => {
+            if let Err(why) = library.remove_from_playlist(playlist, &positions) {
+                parts.event(why);
+            }
+        }
     }
 }
 
@@ -918,6 +936,179 @@ mod tests {
             .filter_map(|row| row.track.as_ref().map(|t| t.id))
             .collect();
         assert_eq!(ids, [9]);
+        drop(decks.renderer);
+    }
+
+    /// Adds track `id` titled `title` (no file behind it) to the library.
+    fn add_track(decks: &Labelled, id: i64, title: &str) {
+        decks
+            .library
+            .library()
+            .writer()
+            .submit_wait(library::WriteOp::Raw(vec![library::RawStatement {
+                sql: format!(
+                    "INSERT INTO tracks(id, path, fingerprint, title, added_at) \
+                     VALUES ({id}, '/m/{title}.wav', x'0{id}', '{title}', 0)"
+                ),
+                params: vec![],
+            }]))
+            .unwrap();
+    }
+
+    /// A playlist "Peak" holding `tracks`, and its id.
+    fn peak(decks: &Labelled, tracks: &[i64]) -> i64 {
+        let outcome = decks
+            .library
+            .library()
+            .writer()
+            .submit_wait(library::WriteOp::CreatePlaylistWith {
+                name: "Peak".into(),
+                tracks: tracks.to_vec(),
+            })
+            .unwrap();
+        match outcome {
+            library::WriteOutcome::Created { id } => id,
+            other => panic!("unexpected outcome {other:?}"),
+        }
+    }
+
+    /// Sends `step` from the window, then waits until `playlist` holds `expected`, for at
+    /// most 10 s; no event may come of it.
+    fn edit_playlist(decks: &mut Labelled, step: ui::LibraryStep, playlist: i64, expected: &[i64]) {
+        let mut parts = FrameParts::new(&Config::default());
+        let (tx, rx) = channel();
+        tx.send(UiCommand::Library(step)).unwrap();
+        decks.drain(&rx, &mut parts);
+        assert!(parts.events.is_empty(), "{:?}", parts.events);
+        let reader = decks.library.library().reader().unwrap();
+        let held = || -> Vec<i64> {
+            let rows = reader.playlist_tracks(playlist, 0, 100).unwrap();
+            rows.iter().map(|row| row.id).collect()
+        };
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
+        while held() != expected {
+            assert!(Instant::now() < deadline, "{:?} != {expected:?}", held());
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        // The browser is read again once the write is done.
+        poll_until(decks, |library, _| {
+            library
+                .browser()
+                .is_some_and(|view| view.tree.iter().any(|row| row.playlist == Some(playlist)))
+        });
+    }
+
+    #[test]
+    fn drop_on_a_playing_deck_is_refused() {
+        let mut decks = labelled();
+        add_sine_9(&decks);
+        // Deck 1 holds track 7 and plays; track 9 is dropped onto it.
+        let deck = DeckId::new(0).unwrap();
+        decks
+            .engine
+            .send(Command::Deck(deck, engine::DeckCommand::Play))
+            .unwrap();
+        let (mut master, mut headphones) = (vec![0.0; 1024], vec![0.0; 1024]);
+        decks.renderer.render(&mut master, &mut headphones);
+        let mut parts = FrameParts::new(&Config::default());
+        let (tx, rx) = channel();
+        tx.send(load(0, 9)).unwrap();
+        decks.drain(&rx, &mut parts);
+        let events: Vec<&str> = parts.events.iter().map(|(_, text)| text.as_str()).collect();
+        assert_eq!(events, ["Deck 1 is playing"]);
+        // A while later deck 1 still holds track 7.
+        let until = Instant::now() + std::time::Duration::from_millis(200);
+        poll_until(&mut decks, |_, _| Instant::now() > until);
+        let held = decks.library.deck_view(deck, &decks.engine.deck(deck));
+        assert_eq!(held.map(|view| view.row.id), Some(7));
+        drop(decks.renderer);
+    }
+
+    #[test]
+    fn drag_selection_into_a_playlist_appends_in_order() {
+        let mut decks = labelled();
+        add_track(&decks, 8, "Eight");
+        add_track(&decks, 9, "Nine");
+        let playlist = peak(&decks, &[7]);
+        let step = ui::LibraryStep::AddToPlaylist {
+            playlist,
+            tracks: vec![9, 7, 8],
+        };
+        edit_playlist(&mut decks, step, playlist, &[7, 9, 7, 8]);
+        drop(decks.renderer);
+    }
+
+    #[test]
+    fn moving_in_a_playlist_writes_the_new_order() {
+        let mut decks = labelled();
+        add_track(&decks, 9, "Nine");
+        // [a, b, a]: the entry at 2 moved to the top.
+        let playlist = peak(&decks, &[7, 9, 7]);
+        let step = ui::LibraryStep::MoveInPlaylist {
+            playlist,
+            from: vec![2],
+            to: 0,
+        };
+        edit_playlist(&mut decks, step, playlist, &[7, 7, 9]);
+        // Two entries at once, to the end, keeping their order.
+        add_track(&decks, 8, "Eight");
+        let playlist = peak(&decks, &[7, 8, 9, 8]);
+        let step = ui::LibraryStep::MoveInPlaylist {
+            playlist,
+            from: vec![2, 0],
+            to: 4,
+        };
+        edit_playlist(&mut decks, step, playlist, &[8, 8, 7, 9]);
+        drop(decks.renderer);
+    }
+
+    #[test]
+    fn remove_from_playlist_removes_exactly_those_positions() {
+        let mut decks = labelled();
+        add_track(&decks, 8, "Eight");
+        add_track(&decks, 9, "Nine");
+        let playlist = peak(&decks, &[7, 9, 7, 8, 7]);
+        // The first and third 7, not the last.
+        let step = ui::LibraryStep::RemoveFromPlaylist {
+            playlist,
+            positions: vec![2, 0],
+        };
+        edit_playlist(&mut decks, step, playlist, &[9, 8, 7]);
+        drop(decks.renderer);
+    }
+
+    #[test]
+    fn a_failed_playlist_edit_changes_nothing_and_says_so() {
+        let mut decks = labelled();
+        add_track(&decks, 9, "Nine");
+        let playlist = peak(&decks, &[7, 9]);
+        // Position 5 is past the end: the batch fails as a whole, removing nothing.
+        let mut parts = FrameParts::new(&Config::default());
+        let (tx, rx) = channel();
+        let step = ui::LibraryStep::RemoveFromPlaylist {
+            playlist,
+            positions: vec![0, 5],
+        };
+        tx.send(UiCommand::Library(step)).unwrap();
+        decks.drain(&rx, &mut parts);
+        let (printer, events) = Printer::capturing();
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
+        let said = |events: &[String]| {
+            events
+                .iter()
+                .any(|e| e.starts_with("warning: could not change the playlist"))
+        };
+        while !said(&events.lock().unwrap()) {
+            assert!(Instant::now() < deadline, "{:?}", events.lock().unwrap());
+            decks
+                .library
+                .poll(Instant::now(), &mut decks.engine, &printer);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        printer.finish();
+        let reader = decks.library.library().reader().unwrap();
+        let rows = reader.playlist_tracks(playlist, 0, 100).unwrap();
+        assert_eq!(rows.iter().map(|row| row.id).collect::<Vec<_>>(), [7, 9]);
         drop(decks.renderer);
     }
 

@@ -184,6 +184,11 @@ fn hotcues() -> [Option<Hotcue>; 8] {
     hotcues
 }
 
+/// The library id of the tree's playlist at row `at`.
+pub fn playlist_id(at: usize) -> i64 {
+    10 + at as i64
+}
+
 fn tree_row(label: &str, depth: u8, kind: TreeKind, expanded: bool) -> TreeRow {
     TreeRow {
         label: label.into(),
@@ -191,6 +196,7 @@ fn tree_row(label: &str, depth: u8, kind: TreeKind, expanded: bool) -> TreeRow {
         kind,
         expanded,
         note: None,
+        playlist: None,
     }
 }
 
@@ -202,22 +208,27 @@ fn browser() -> BrowserView {
             path: PathBuf::from(format!("/music/track-{n}.mp3")),
             track: Some(track_row(n)),
             file_name: format!("track-{n}.mp3"),
+            position: Some(n),
         })
         .collect();
+    let mut tree = vec![
+        tree_row("Macintosh HD", 0, TreeKind::Drive, false),
+        tree_row("USB STICK", 0, TreeKind::Drive, false),
+        tree_row("Playlists", 0, TreeKind::Playlists, true),
+        tree_row("Warm up", 1, TreeKind::Playlist, false),
+        tree_row("Peak time", 1, TreeKind::Playlist, false),
+        tree_row("Closing", 1, TreeKind::Playlist, false),
+    ];
+    for (at, row) in tree.iter_mut().enumerate().skip(3) {
+        row.playlist = Some(playlist_id(at));
+    }
     BrowserView {
         path: "Playlists ▸ Peak time".into(),
         index: 0,
         count: BROWSER_ROWS,
         track: Some(track_row(0)),
         focus: Focus::List,
-        tree: vec![
-            tree_row("Macintosh HD", 0, TreeKind::Drive, false),
-            tree_row("USB STICK", 0, TreeKind::Drive, false),
-            tree_row("Playlists", 0, TreeKind::Playlists, true),
-            tree_row("Warm up", 1, TreeKind::Playlist, false),
-            tree_row("Peak time", 1, TreeKind::Playlist, false),
-            tree_row("Closing", 1, TreeKind::Playlist, false),
-        ],
+        tree,
         tree_cursor: 4,
         list,
         list_offset: 0,
@@ -226,6 +237,7 @@ fn browser() -> BrowserView {
         search: None,
         sort: None,
         seq: 0,
+        playlist: Some(playlist_id(4)),
     }
 }
 

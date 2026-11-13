@@ -1,6 +1,10 @@
 //! The browser draws headless, without a GPU.
 
+#[allow(dead_code, reason = "only the loaded decks are used here")]
+mod support;
+
 use std::path::PathBuf;
+use std::sync::mpsc::channel;
 
 use analysis::KeyNotation;
 use egui::accesskit::Role;
@@ -11,10 +15,10 @@ use engine::DeckId;
 use library::{
     BrowserEdit, BrowserView, Focus, ListRow, TrackRow, TrackSortKey, TreeKind, TreeRow,
 };
-use ui::LibraryStep;
 use ui::browser::{Arrangement, COLUMNS, Decks};
 use ui::cover::Covers;
 use ui::theme;
+use ui::{Layout, LibraryStep, UiCommand};
 
 fn tree_row(label: &str, depth: u8, kind: TreeKind) -> TreeRow {
     TreeRow {
@@ -23,6 +27,7 @@ fn tree_row(label: &str, depth: u8, kind: TreeKind) -> TreeRow {
         kind,
         expanded: false,
         note: None,
+        playlist: None,
     }
 }
 
@@ -58,11 +63,13 @@ fn view() -> BrowserView {
                 path: PathBuf::from("/music/just-us.mp3"),
                 track: Some(track),
                 file_name: "just-us.mp3".into(),
+                position: None,
             },
             ListRow {
                 path: PathBuf::from("/music/lost.mp3"),
                 track: Some(gone),
                 file_name: "lost.mp3".into(),
+                position: None,
             },
         ],
         list_offset: 0,
@@ -71,6 +78,7 @@ fn view() -> BrowserView {
         search: None,
         sort: None,
         seq: 0,
+        playlist: None,
     }
 }
 
@@ -905,4 +913,334 @@ fn a_view_older_than_the_latest_query_is_dropped() {
     let mut newer = numbered(0, 4, 4);
     newer.seq = 4;
     assert_eq!(fresh.pick(&ctx, &newer), &newer);
+}
+
+/// Presses at `from`, moves past the drag threshold and on to `to` in steps, and lets go.
+fn drag_to<S>(harness: &mut Harness<'_, S>, from: Pos2, to: Pos2) {
+    harness.event(Event::PointerMoved(from));
+    harness.run_steps(1);
+    harness.event(button(PointerButton::Primary, true, from));
+    harness.run_steps(1);
+    for t in [0.1_f32, 0.3, 0.6, 1.0] {
+        harness.event(Event::PointerMoved(from + (to - from) * t));
+        harness.run_steps(1);
+    }
+    harness.event(button(PointerButton::Primary, false, to));
+    harness.run_steps(2);
+}
+
+/// The whole window with two decks, sending what it asks for to the returned receiver.
+fn window() -> (Harness<'static>, std::sync::mpsc::Receiver<UiCommand>) {
+    let (frame, reads) = support::loaded(Layout::Pro, false);
+    let (commands, asked) = channel();
+    let mut screen = ui::Screen {
+        commands,
+        ..ui::Screen::default()
+    };
+    let mut harness = Harness::builder()
+        .with_size([1440.0, 900.0])
+        .build_ui(move |ui| ui::root_with_reads(ui, &frame, &reads, &mut screen));
+    harness.run_steps(3);
+    (harness, asked)
+}
+
+/// The library steps among `commands`, the browser's own moves left out.
+fn library_steps(commands: impl Iterator<Item = UiCommand>) -> Vec<LibraryStep> {
+    commands
+        .filter_map(|c| match c {
+            UiCommand::Library(LibraryStep::Browse(_)) => None,
+            UiCommand::Library(step) => Some(step),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn drag_track_onto_deck_two_loads_it() {
+    let (mut harness, asked) = window();
+    let row = harness.get_by_label("Track Number 5").rect().center();
+    let deck = harness.get_by_label("deck panel 2").rect().center();
+    drag_to(&mut harness, row, deck);
+    assert_eq!(library_steps(asked.try_iter()), [load(2, 5)]);
+    // The lanes take drops too: deck 1's lane is the top one.
+    let lanes = harness.get_by_label("lanes").rect();
+    let lane = pos2(lanes.center().x, lanes.min.y + 10.0);
+    let row = harness.get_by_label("Track Number 7").rect().center();
+    drag_to(&mut harness, row, lane);
+    assert_eq!(library_steps(asked.try_iter()), [load(1, 7)]);
+}
+
+#[test]
+fn a_drop_outside_any_target_does_nothing() {
+    let (mut harness, asked) = window();
+    let row = harness.get_by_label("Track Number 5").rect().center();
+    // The mixer, between the decks.
+    let row_of_decks = harness.get_by_label("deck row").rect();
+    let mixer = pos2(row_of_decks.center().x, row_of_decks.max.y - 20.0);
+    drag_to(&mut harness, row, mixer);
+    // The list's header, which is no playlist position either.
+    let header = harness.get_by_label("Title").rect().center();
+    drag_to(&mut harness, row, header);
+    harness.run_steps(2);
+    assert_eq!(library_steps(asked.try_iter()), []);
+    assert!(!egui::DragAndDrop::has_any_payload(&harness.ctx));
+}
+
+/// Presses and lets go at `at` with `modifiers` held.
+fn click_holding<S>(harness: &mut Harness<'_, S>, at: Pos2, modifiers: Modifiers) {
+    harness.event(Event::ModifiersChanged(modifiers));
+    harness.event(Event::PointerMoved(at));
+    harness.run_steps(1);
+    harness.event(Event::PointerButton {
+        pos: at,
+        button: PointerButton::Primary,
+        pressed: true,
+        modifiers,
+    });
+    harness.run_steps(1);
+    harness.event(Event::PointerButton {
+        pos: at,
+        button: PointerButton::Primary,
+        pressed: false,
+        modifiers,
+    });
+    harness.run_steps(1);
+    harness.event(Event::ModifiersChanged(Modifiers::NONE));
+    // Past the double-click time.
+    harness.run_steps(60);
+}
+
+#[test]
+fn shift_and_cmd_click_build_a_selection() {
+    let mut harness = clicking(numbered(0, 20, 20), Decks::default());
+    let song = |harness: &Harness<'_, Clicking>, n: usize| at_label(harness, &format!("Song {n}"));
+    let picked = |harness: &Harness<'_, Clicking>| ui::browser::selected_rows(&harness.ctx);
+    let at = song(&harness, 2);
+    click_holding(&mut harness, at, Modifiers::NONE);
+    assert_eq!(picked(&harness), [2]);
+    for n in [5, 7, 5] {
+        let at = song(&harness, n);
+        click_holding(&mut harness, at, Modifiers::COMMAND);
+    }
+    // 5 went in and out again.
+    assert_eq!(picked(&harness), [2, 7]);
+    // Shift picks from the last row Cmd-clicked in.
+    let at = song(&harness, 4);
+    click_holding(&mut harness, at, Modifiers::SHIFT);
+    assert_eq!(picked(&harness), [4, 5, 6, 7]);
+    // A plain click picks that row only.
+    let at = song(&harness, 3);
+    click_holding(&mut harness, at, Modifiers::NONE);
+    assert_eq!(picked(&harness), [3]);
+    // The cursor follows every click but the one that took a row out.
+    let selects: Vec<_> = harness
+        .state()
+        .steps
+        .iter()
+        .filter_map(|s| match s {
+            LibraryStep::Browse(BrowserEdit::SelectRow(at)) => Some(*at),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(selects, [2, 5, 7, 4, 3]);
+    // Another list starts with nothing picked: a search answered, here.
+    let at = song(&harness, 6);
+    click_holding(&mut harness, at, Modifiers::COMMAND);
+    assert_eq!(picked(&harness), [3, 6]);
+    harness.state_mut().view.seq = 1;
+    harness.run_steps(2);
+    assert!(picked(&harness).is_empty());
+}
+
+/// `numbered` rows with "Warm up" (id 40) and "Peak" (id 41) under the Playlists node.
+fn with_playlists(mut view: BrowserView) -> BrowserView {
+    let mut node = tree_row("Playlists", 0, TreeKind::Playlists);
+    node.expanded = true;
+    view.tree.push(node);
+    for (name, id) in [("Warm up", 40), ("Peak", 41)] {
+        let mut row = tree_row(name, 1, TreeKind::Playlist);
+        row.playlist = Some(id);
+        view.tree.push(row);
+    }
+    view
+}
+
+#[test]
+fn dragging_a_selection_onto_a_playlist_adds_it_in_list_order() {
+    let mut view = with_playlists(numbered(0, 20, 20));
+    // Row 4 is a file the library does not have.
+    view.list[4].track = None;
+    view.list[4].file_name = "unscanned.mp3".into();
+    let mut harness = clicking(view, Decks::default());
+    let song = |harness: &Harness<'_, Clicking>, n: usize| at_label(harness, &format!("Song {n}"));
+    let at = song(&harness, 6);
+    click_holding(&mut harness, at, Modifiers::NONE);
+    let at = song(&harness, 2);
+    click_holding(&mut harness, at, Modifiers::COMMAND);
+    let at = at_label(&harness, "unscanned.mp3");
+    click_holding(&mut harness, at, Modifiers::COMMAND);
+    harness.state_mut().steps.clear();
+    let from = song(&harness, 6);
+    let to = at_label(&harness, "Peak");
+    drag_to(&mut harness, from, to);
+    // In list order, the unscanned file left out.
+    assert_eq!(
+        harness.state().steps,
+        [LibraryStep::AddToPlaylist {
+            playlist: 41,
+            tracks: vec![1002, 1006],
+        }]
+    );
+    // A row not picked goes alone.
+    harness.state_mut().steps.clear();
+    let from = song(&harness, 9);
+    let to = at_label(&harness, "Warm up");
+    drag_to(&mut harness, from, to);
+    assert_eq!(
+        harness.state().steps,
+        [LibraryStep::AddToPlaylist {
+            playlist: 40,
+            tracks: vec![1009],
+        }]
+    );
+    // An unscanned file alone carries nothing; a drop on a folder does nothing either.
+    let from = at_label(&harness, "unscanned.mp3");
+    click_holding(&mut harness, from, Modifiers::NONE);
+    harness.state_mut().steps.clear();
+    drag_to(&mut harness, from, to);
+    let from = song(&harness, 9);
+    let folder = at_label(&harness, "House");
+    drag_to(&mut harness, from, folder);
+    assert_eq!(harness.state().steps, []);
+}
+
+/// `numbered` rows as the playlist with id 41, each at its row's position.
+fn in_playlist(offset: usize, count: usize) -> BrowserView {
+    let mut view = with_playlists(numbered(offset, count, offset + count));
+    view.playlist = Some(41);
+    for (at, row) in view.list.iter_mut().enumerate() {
+        row.position = Some(offset + at);
+    }
+    view
+}
+
+#[test]
+fn dragging_within_the_playlist_moves_the_rows() {
+    let mut harness = clicking(in_playlist(0, 20), Decks::default());
+    let song = |harness: &Harness<'_, Clicking>, n: usize| {
+        harness.get_by_label(&format!("Song {n}")).rect()
+    };
+    // Onto the upper half of row 1: before it.
+    let from = song(&harness, 5).center();
+    let to = song(&harness, 1);
+    drag_to(&mut harness, from, pos2(to.center().x, to.min.y + 3.0));
+    // The lower half of row 7: after it.
+    let to = song(&harness, 7);
+    drag_to(&mut harness, from, pos2(to.center().x, to.max.y - 3.0));
+    let moves = |from: Vec<usize>, to| LibraryStep::MoveInPlaylist {
+        playlist: 41,
+        from,
+        to,
+    };
+    assert_eq!(
+        harness.state().steps,
+        [moves(vec![5], 1), moves(vec![5], 8)]
+    );
+
+    // A picked pair moves together, by their positions.
+    harness.state_mut().steps.clear();
+    for (n, modifiers) in [(3, Modifiers::NONE), (9, Modifiers::COMMAND)] {
+        let at = song(&harness, n).center();
+        click_holding(&mut harness, at, modifiers);
+    }
+    harness.state_mut().steps.clear();
+    let from = song(&harness, 9).center();
+    let to = song(&harness, 0);
+    drag_to(&mut harness, from, pos2(to.center().x, to.min.y + 3.0));
+    assert_eq!(harness.state().steps, [moves(vec![3, 9], 0)]);
+
+    // Searched, the rows are not in playlist order: no move.
+    harness.state_mut().steps.clear();
+    harness.state_mut().view.search = Some("song".into());
+    harness.run_steps(2);
+    let from = song(&harness, 5).center();
+    let to = song(&harness, 1);
+    drag_to(&mut harness, from, pos2(to.center().x, to.min.y + 3.0));
+    assert_eq!(harness.state().steps, []);
+}
+
+#[test]
+fn the_track_menu_adds_to_and_removes_from_a_playlist() {
+    // A search shows the playlist's rows 10 to 19 from list row 0: their positions are
+    // not their rows.
+    let mut view = in_playlist(0, 10);
+    for row in &mut view.list {
+        row.position = row.position.map(|p| p + 10);
+    }
+    view.search = Some("song".into());
+    let mut harness = clicking(view, Decks::default());
+    let song = |harness: &Harness<'_, Clicking>, n: usize| at_label(harness, &format!("Song {n}"));
+    for (n, modifiers) in [(1, Modifiers::NONE), (4, Modifiers::COMMAND)] {
+        let at = song(&harness, n);
+        click_holding(&mut harness, at, modifiers);
+    }
+    harness.state_mut().steps.clear();
+    // Right-click a picked row: the menu acts on the pick.
+    let at = song(&harness, 4);
+    click_with(&mut harness, PointerButton::Secondary, at);
+    harness.run_steps(2);
+    let item = at_label(&harness, "Add to playlist");
+    harness.event(Event::PointerMoved(item));
+    harness.run_steps(10);
+    // The submenu's entry, right of the tree's.
+    let warm = harness
+        .get_all_by_label("Warm up")
+        .map(|n| n.rect().center())
+        .max_by(|a, b| a.x.total_cmp(&b.x))
+        .unwrap();
+    click(&mut harness, warm);
+    harness.run_steps(2);
+    assert_eq!(
+        harness.state().steps,
+        [LibraryStep::AddToPlaylist {
+            playlist: 40,
+            tracks: vec![1001, 1004],
+        }]
+    );
+    // Remove from playlist takes the pick's positions in the playlist.
+    harness.state_mut().steps.clear();
+    let at = song(&harness, 1);
+    click_with(&mut harness, PointerButton::Secondary, at);
+    harness.run_steps(2);
+    let item = at_label(&harness, "Remove from playlist");
+    click(&mut harness, item);
+    harness.run_steps(2);
+    assert_eq!(
+        harness.state().steps,
+        [LibraryStep::RemoveFromPlaylist {
+            playlist: 41,
+            positions: vec![11, 14],
+        }]
+    );
+    // A row not picked: that row alone. Outside a playlist there is no removal.
+    harness.state_mut().steps.clear();
+    let at = song(&harness, 7);
+    click_with(&mut harness, PointerButton::Secondary, at);
+    harness.run_steps(2);
+    let item = at_label(&harness, "Remove from playlist");
+    click(&mut harness, item);
+    harness.run_steps(2);
+    assert_eq!(
+        harness.state().steps,
+        [LibraryStep::RemoveFromPlaylist {
+            playlist: 41,
+            positions: vec![17],
+        }]
+    );
+    let mut harness = clicking(with_playlists(numbered(0, 20, 20)), Decks::default());
+    let at = song(&harness, 7);
+    click_with(&mut harness, PointerButton::Secondary, at);
+    harness.run_steps(2);
+    harness.get_by_label("Add to playlist");
+    assert!(harness.query_by_label("Remove from playlist").is_none());
 }

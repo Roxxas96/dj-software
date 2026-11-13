@@ -65,6 +65,9 @@ pub struct ListRow {
     /// `None` for a file the library doesn't have.
     pub track: Option<TrackRow>,
     pub file_name: String,
+    /// The row's position in its playlist, from 0, whatever the list's search and sort;
+    /// `None` outside a playlist.
+    pub position: Option<usize>,
 }
 
 /// What the browser shows.
@@ -97,6 +100,8 @@ pub struct BrowserView {
     /// The `seq` of the latest [`BrowserEdit::Search`] or [`BrowserEdit::Sort`] this view
     /// reflects (0 before any).
     pub seq: u64,
+    /// The library id of the playlist the list shows; `None` for a folder's list.
+    pub playlist: Option<i64>,
 }
 
 /// What every list is filtered and ordered by, whichever tree entry it belongs to.
@@ -437,6 +442,10 @@ impl Browser {
             search: self.query.text.clone(),
             sort: self.query.sort.map(|s| (s.key, s.descending)),
             seq: self.seq,
+            playlist: match self.list.items {
+                Items::Playlist { id, .. } => Some(id),
+                _ => None,
+            },
         }
     }
 
@@ -598,6 +607,7 @@ fn page(reader: &Reader, items: &Items, offset: usize) -> Result<Vec<ListRow>, L
                 path: path.clone(),
                 track: tracks.get(path).cloned(),
                 file_name: file_name(path),
+                position: None,
             })
             .collect(),
         Items::Playlist { id, query } => reader
@@ -609,10 +619,11 @@ fn page(reader: &Reader, items: &Items, offset: usize) -> Result<Vec<ListRow>, L
                 BROWSER_PAGE_ROWS,
             )?
             .into_iter()
-            .map(|(path, track)| ListRow {
+            .map(|(path, track, position)| ListRow {
                 file_name: file_name(&path),
                 path,
                 track: Some(track),
+                position: Some(position),
             })
             .collect(),
     })

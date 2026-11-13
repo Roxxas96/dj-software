@@ -1062,3 +1062,40 @@ fn waveform_reads_the_stored_overview() {
         .unwrap();
     assert_eq!(reader.waveform(id).unwrap(), None);
 }
+
+#[test]
+fn a_playlist_list_names_its_playlist_and_each_rows_position() {
+    let s = searchable();
+    let mut b = browser(&s.lib, Vec::new());
+    let view = scroll(&mut b, 1);
+    // The tree's playlist rows carry their ids; the Playlists node has none.
+    let ids: Vec<_> = view.tree.iter().map(|r| r.playlist).collect();
+    let mix = ids[1].expect("Mix has an id");
+    assert_eq!(ids[0], None);
+    assert!(ids[2].is_some_and(|other| other != mix));
+    assert_eq!(view.playlist, Some(mix));
+    let positions: Vec<_> = view.list.iter().map(|r| r.position).collect();
+    assert_eq!(positions, [Some(0), Some(1), Some(2), Some(3)]);
+    // Searched and sorted, each row keeps its place in the playlist.
+    search(&mut b, Some("deep"), 1);
+    let view = sort(&mut b, Some(TrackSortKey::Title), false, 2);
+    assert_eq!(titles(&view), ["Bassline", "Deep Night", "Sunrise"]);
+    let positions: Vec<_> = view.list.iter().map(|r| r.position).collect();
+    assert_eq!(positions, [Some(2), Some(1), Some(3)]);
+    // The Playlists node's list is no playlist.
+    let view = scroll(&mut b, -1);
+    assert_eq!(view.playlist, None);
+}
+
+#[test]
+fn a_folder_list_has_no_playlist_or_positions() {
+    let (_lib_dir, lib) = open();
+    let (_d, root) = disk();
+    let mut b = browser(&lib, vec![drive("root", &root)]);
+    toggle_folder(&mut b);
+    let view = scroll(&mut b, 1);
+    assert_eq!(view.path, "root ▸ A");
+    assert!(!view.list.is_empty());
+    assert_eq!(view.playlist, None);
+    assert!(view.list.iter().all(|r| r.position.is_none()));
+}
