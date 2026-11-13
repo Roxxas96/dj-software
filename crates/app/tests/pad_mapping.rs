@@ -5,10 +5,12 @@ use actions::{Action, ActionKind, HardwarePadMode, PadMode, Side, Target, window
 use controller::mapping::{InputBinding, MidiSource, parse_mapping};
 use engine::HotcueSlot;
 
-/// The pad notes: the HOT CUE bank, the same shifted, and the SAMPLER bank.
+/// The pad notes: the HOT CUE bank, the same shifted, the SAMPLER bank and the same
+/// shifted.
 const HOT_CUE: u8 = 0x00;
 const HOT_CUE_SHIFT: u8 = 0x08;
 const SAMPLER: u8 = 0x30;
+const SAMPLER_SHIFT: u8 = 0x38;
 
 /// The action the SB3 mapping binds to pad `slot`'s note `bank + slot index` on `side`
 /// while its pads are in `mode`, with the deck the side drives being its main one.
@@ -58,6 +60,19 @@ fn the_windows_pads_send_what_the_sb3_mapping_binds() {
                     Some(HardwarePadMode::Trans),
                     false,
                     SAMPLER,
+                ),
+                // SHIFT + a sampler pad stops its slot.
+                (
+                    PadMode::Hardware,
+                    Some(HardwarePadMode::Sampler),
+                    true,
+                    SAMPLER_SHIFT,
+                ),
+                (
+                    PadMode::Hardware,
+                    Some(HardwarePadMode::Trans),
+                    true,
+                    SAMPLER_SHIFT,
                 ),
                 (PadMode::BeatJump, None, false, HOT_CUE),
                 (PadMode::BeatJump, None, true, HOT_CUE_SHIFT),
