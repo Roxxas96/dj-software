@@ -24,6 +24,7 @@ pub use command::{
     XfaderAssign,
 };
 pub use controller::{CommandQueueFull, EngineController};
+pub use deck::PLATTER_SECONDS_PER_TURN;
 pub use dsp::fx::EffectKind;
 #[doc(hidden)]
 pub use dsp::fx::{EffectForTests, effect_for_tests};

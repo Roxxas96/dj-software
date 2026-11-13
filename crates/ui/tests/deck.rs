@@ -8,7 +8,7 @@ use actions::{Action, Input, PadMode, Side};
 use analysis::Waveform;
 
 use egui::accesskit::Role;
-use egui::{Event, Key, Modifiers, PointerButton, Pos2, vec2};
+use egui::{Event, Key, Modifiers, PointerButton, Pos2, pos2, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use egui_kittest::kittest::{AccessKitNode, NodeT};
@@ -1121,4 +1121,108 @@ fn the_click_that_closes_the_editor_plays_no_pad() {
         received.try_iter().collect::<Vec<_>>(),
         press_release(Action::Hotcue(DeckId::new(0).unwrap(), slot(5)))
     );
+}
+
+/// Drags the pointer from `from` to each of `path`, a frame apart, and lets go.
+fn drag_through<S>(harness: &mut Harness<'_, S>, from: Pos2, path: &[Pos2]) {
+    harness.event(Event::PointerMoved(from));
+    harness.run_steps(1);
+    harness.event(pointer(true, from));
+    harness.run_steps(2);
+    for &at in path {
+        harness.event(Event::PointerMoved(at));
+        harness.run_steps(1);
+    }
+    let end = path.last().copied().unwrap_or(from);
+    harness.event(pointer(false, end));
+    harness.run_steps(2);
+}
+
+#[test]
+fn jog_drag_touches_scratches_and_releases() {
+    let (snapshot, frame) = loaded_plain();
+    let view = view(&snapshot, &frame);
+    let (mut harness, received) = sending(view);
+    let rect = harness.get_by_label("jog").rect();
+    let (centre, radius) = (rect.center(), rect.width() * 0.4);
+    // A quarter turn clockwise, from twelve o'clock to three.
+    let arc: Vec<Pos2> = (1..=10)
+        .map(|i| {
+            let angle = std::f32::consts::FRAC_PI_2 * i as f32 / 10.0;
+            centre + vec2(angle.sin(), -angle.cos()) * radius
+        })
+        .collect();
+    drag_through(&mut harness, centre + vec2(0.0, -radius), &arc);
+    let sent: Vec<UiCommand> = received.try_iter().collect();
+    let id = DeckId::new(0).unwrap();
+    assert_eq!(
+        sent.first(),
+        Some(&UiCommand::Action(Action::JogTouch(id), Input::Press))
+    );
+    assert_eq!(
+        sent.last(),
+        Some(&UiCommand::Action(Action::JogTouch(id), Input::Release))
+    );
+    let steps: i32 = sent
+        .iter()
+        .filter_map(|command| match command {
+            UiCommand::Action(Action::JogScratch(d), Input::Relative(steps)) if *d == id => {
+                Some(*steps)
+            }
+            _ => None,
+        })
+        .sum();
+    // A quarter of 720 steps per turn.
+    assert!((steps - 180).abs() <= 2, "{steps} steps: {sent:?}");
+    assert_eq!(
+        sent.len(),
+        2 + sent
+            .iter()
+            .filter(|c| matches!(c, UiCommand::Action(Action::JogScratch(_), _)))
+            .count()
+    );
+}
+
+#[test]
+fn overview_click_seeks() {
+    let (snapshot, frame) = loaded_plain();
+    let view = view(&snapshot, &frame);
+    let (mut harness, received) = sending(view);
+    let rect = harness.get_by_label("overview").rect();
+    let at = pos2(rect.left() + rect.width() * 0.25, rect.center().y);
+    press_and_release(&mut harness, at);
+    let sent: Vec<UiCommand> = received.try_iter().collect();
+    let seeks: Vec<f32> = sent
+        .iter()
+        .filter_map(|command| match command {
+            UiCommand::Action(Action::Seek(_), Input::Absolute(x)) => Some(*x),
+            _ => None,
+        })
+        .collect();
+    assert!(!seeks.is_empty(), "{sent:?}");
+    assert!(seeks.iter().all(|x| (x - 0.25).abs() <= 0.01), "{seeks:?}");
+    assert!(
+        sent.iter()
+            .all(|c| matches!(c, UiCommand::Action(Action::Seek(_), _)))
+    );
+}
+
+#[test]
+fn drag_on_an_empty_deck_sends_nothing() {
+    let snapshot = DeckSnapshot::default();
+    let frame = ControlFrame::default();
+    let view = view(&snapshot, &frame);
+    let (mut harness, received) = sending(view);
+    let jog = harness.get_by_label("jog").rect();
+    let overview = harness.get_by_label("overview").rect();
+    for rect in [jog, overview] {
+        let from = rect.center();
+        drag_through(
+            &mut harness,
+            from,
+            &[from + vec2(10.0, 0.0), from + vec2(20.0, 5.0)],
+        );
+    }
+    let sent: Vec<UiCommand> = received.try_iter().collect();
+    assert!(sent.is_empty(), "{sent:?}");
 }

@@ -7,7 +7,7 @@ use super::slip::SlipOwner;
 use crate::JogSurface;
 
 /// Track seconds per platter turn while scratching or moving a paused deck (33⅓ rpm).
-pub(super) const PLATTER_SECONDS_PER_TURN: f64 = 1.8;
+pub const PLATTER_SECONDS_PER_TURN: f64 = 1.8;
 /// Speed bend a nudge turn adds to a playing deck, as a fraction of its normal speed.
 pub(super) const NUDGE_RATE_PER_TURN: f64 = 2.0;
 /// Largest speed bend, up or down, as a fraction of the deck's normal speed. Keeps the speed

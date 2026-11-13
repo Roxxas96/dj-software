@@ -214,7 +214,8 @@ pub fn root_with_reads(
         let height = drags.sizes.lanes * window.y;
         let (drag, top) = row_panel(ui, "waveform_lanes", height, &p, |ui| {
             landmark_rect(ui, ui.max_rect(), "lanes");
-            screen.lanes.show(ui, frame, reads, &screen.commands)
+            let mut sink = controls::Sink::new(&screen.commands, &mut screen.held);
+            screen.lanes.show(ui, frame, reads, &mut sink)
         });
         drags.place(drag, top, |sizes, share| sizes.lanes = share);
     };

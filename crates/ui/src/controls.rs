@@ -11,7 +11,7 @@
 use std::sync::mpsc::Sender;
 
 use actions::{Action, Input};
-use egui::{Id, PointerButton, Rect, Response, Ui, Vec2};
+use egui::{Id, PointerButton, Pos2, Rect, Response, Ui, Vec2};
 
 use crate::UiCommand;
 
@@ -44,6 +44,44 @@ pub fn knob_input(response: &Response, value: f32, reset: f32, ui: &Ui) -> Optio
         delta += scrolled / POINTS_PER_NOTCH * WHEEL_STEP;
     }
     (delta != 0.0).then(|| Input::Absolute((value + delta).clamp(0.0, 1.0)))
+}
+
+/// Where the primary-button drag of `response` went since the last frame, as the pointer's
+/// previous and present positions, or `None` when it did not move or is not a drag. A
+/// drag starts a few points after the press, so the first leg runs from the press itself:
+/// the points that told it from a click are not lost.
+pub fn drag_path(response: &Response) -> Option<(Pos2, Pos2)> {
+    let key = response.id.with("drag_last");
+    let held =
+        response.is_pointer_button_down_on() && response.ctx.input(|i| i.pointer.primary_down());
+    let pos = response.interact_pointer_pos().filter(|_| held);
+    let Some(pos) = pos else {
+        response.ctx.data_mut(|d| d.remove::<Pos2>(key));
+        return None;
+    };
+    let last = response
+        .ctx
+        .data_mut(|d| *d.get_temp_mut_or_insert_with(key, || pos));
+    if !response.dragged_by(PointerButton::Primary) {
+        return None;
+    }
+    response.ctx.data_mut(|d| d.insert_temp(key, pos));
+    Some((last, pos))
+}
+
+/// The whole steps of a drag that moved `amount` steps this frame, the fraction left
+/// over carried to the next frame under `id`. Not `dragging`: nothing, and the carry is
+/// dropped, so the next drag starts clean.
+pub fn carry_steps(ctx: &egui::Context, id: Id, amount: f32, dragging: bool) -> i32 {
+    let carry = id.with("steps_carry");
+    if !dragging {
+        ctx.data_mut(|d| d.remove::<f32>(carry));
+        return 0;
+    }
+    let total = amount + ctx.data(|d| d.get_temp::<f32>(carry)).unwrap_or(0.0);
+    let steps = total.round();
+    ctx.data_mut(|d| d.insert_temp(carry, total - steps));
+    steps as i32
 }
 
 /// How long a knob goes on from the value it last sent rather than the frame's: the
