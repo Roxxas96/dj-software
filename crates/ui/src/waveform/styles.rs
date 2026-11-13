@@ -120,10 +120,11 @@ pub(super) fn bars(
     };
     let mut out = [none; MAX_BARS];
     let [peak, low, mid, high] = bucket;
+    let bucket_bands = [low, mid, high];
     let low = BandScale::apply(low, scale.low);
     let mid = BandScale::apply(mid, scale.mid);
     let high = BandScale::apply(high, scale.high);
-    let peak = BandScale::apply(peak, scale.loudest());
+    let peak = one_colour_level(peak, [low, mid, high], bucket_bands, scale);
     let [low_colour, mid_colour, high_colour] = bands;
     match style {
         // Three layers over the same centre, the low band at the back; the front two
@@ -166,6 +167,18 @@ pub(super) fn bars(
             (out, count)
         }
     }
+}
+
+/// The level of a one-colour style's bar: `peak` as far down as the loudest band has gone,
+/// the scaled `bands` over the raw `raw` ones. With no raw band to compare, the largest scale.
+fn one_colour_level(peak: u8, scaled: [u8; 3], raw: [u8; 3], scale: BandScale) -> u8 {
+    let scaled_max = scaled.into_iter().max().unwrap_or(0);
+    let raw_max = raw.into_iter().max().unwrap_or(0);
+    if raw_max == 0 {
+        return BandScale::apply(peak, scale.loudest());
+    }
+    let level = f32::from(peak) * f32::from(scaled_max) / f32::from(raw_max);
+    level.round().clamp(0.0, 255.0) as u8
 }
 
 /// A bar mirrored around `centre`, reaching `level / 255` of `half` each way.
@@ -424,27 +437,46 @@ mod tests {
     }
 
     #[test]
-    fn a_one_colour_style_follows_its_loudest_band() {
+    fn a_one_colour_style_shrinks_with_any_killed_band() {
         let p = Palette::DARK;
-        let all_down = band_scale(0.5, 0.0, 0.0, 0.0);
+        // Each bucket is heavy in one band; that band's knob is killed.
+        let cases = [
+            ([255, 200, 10, 10], band_scale(0.5, 0.5, 0.5, 0.0)),
+            ([255, 10, 200, 10], band_scale(0.5, 0.5, 0.0, 0.5)),
+            ([255, 10, 10, 200], band_scale(0.5, 0.0, 0.5, 0.5)),
+        ];
+        for style in [WaveformStyle::DeckColour, WaveformStyle::Overlaid] {
+            for (bucket, scale) in cases {
+                let bars = column(style, bucket, deck(0), &p, rgb_bands(), scale);
+                let reach = reach(&bars).first().copied().unwrap_or(0.0);
+                assert!(reach < 0.2, "{style:?} {bucket:?} {reach}");
+                let flat = column(style, bucket, deck(0), &p, rgb_bands(), BandScale::UNITY);
+                assert!((reach_of(&flat) - 1.0).abs() < 1e-6, "{flat:?}");
+            }
+        }
+        // All bands killed: nothing shows.
         let bars = column(
             WaveformStyle::DeckColour,
             [255, 200, 200, 200],
             deck(0),
             &p,
             rgb_bands(),
-            all_down,
+            band_scale(0.5, 0.0, 0.0, 0.0),
         );
         assert!(bars.is_empty() || reach(&bars)[0] == 0.0, "{bars:?}");
-        let bass_only = band_scale(0.5, 0.0, 0.0, 0.5);
+        // A bass-only boost still shows the bar in full.
         let bars = column(
             WaveformStyle::Overlaid,
             [255, 200, 200, 200],
             deck(0),
             &p,
             rgb_bands(),
-            bass_only,
+            band_scale(0.5, 0.0, 0.0, 0.5),
         );
         assert!((reach(&bars)[0] - 1.0).abs() < 1e-6, "{bars:?}");
+    }
+
+    fn reach_of(bars: &[Bar]) -> f32 {
+        reach(bars)[0]
     }
 }
