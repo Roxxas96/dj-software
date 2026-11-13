@@ -3,10 +3,13 @@
 use std::path::PathBuf;
 
 use analysis::KeyNotation;
+use egui::{Event, Modifiers, MouseWheelUnit, PointerButton, Pos2, pos2, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
-use library::{BrowserView, Focus, ListRow, TrackRow, TreeKind, TreeRow};
-use ui::browser::{Arrangement, COLUMNS};
+use engine::DeckId;
+use library::{BrowserEdit, BrowserView, Focus, ListRow, TrackRow, TreeKind, TreeRow};
+use ui::LibraryStep;
+use ui::browser::{Arrangement, COLUMNS, Decks};
 use ui::cover::Covers;
 use ui::theme;
 
@@ -73,7 +76,10 @@ fn draw(view: &BrowserView) -> Harness<'_> {
             ui::browser::show(
                 ui,
                 view,
-                [None; 4],
+                Decks {
+                    loaded: [None; 4],
+                    ..Decks::default()
+                },
                 KeyNotation::default(),
                 &mut covers,
                 &Arrangement::default(),
@@ -122,7 +128,10 @@ fn non_latin_text_draws_without_panicking() {
             ui::browser::show(
                 ui,
                 view,
-                [None; 4],
+                Decks {
+                    loaded: [None; 4],
+                    ..Decks::default()
+                },
                 KeyNotation::default(),
                 &mut covers,
                 &Arrangement::default(),
@@ -158,7 +167,10 @@ fn painted(view: &BrowserView, loaded: [Option<i64>; 4]) -> Vec<(egui::Rect, egu
             ui::browser::show(
                 ui,
                 view,
-                loaded,
+                Decks {
+                    loaded,
+                    ..Decks::default()
+                },
                 KeyNotation::default(),
                 &mut covers,
                 &Arrangement::default(),
@@ -203,7 +215,10 @@ fn tree_labels_are_left_aligned() {
                 ui::browser::show(
                     ui,
                     view,
-                    [None; 4],
+                    Decks {
+                        loaded: [None; 4],
+                        ..Decks::default()
+                    },
                     KeyNotation::default(),
                     &mut covers,
                     &Arrangement::default(),
@@ -239,7 +254,10 @@ fn list_has_column_headers() {
             ui::browser::show(
                 ui,
                 view,
-                [None; 4],
+                Decks {
+                    loaded: [None; 4],
+                    ..Decks::default()
+                },
                 KeyNotation::default(),
                 &mut covers,
                 &arrangement,
@@ -352,7 +370,10 @@ fn painted_text_rects(view: &BrowserView, loaded: [Option<i64>; 4]) -> Vec<(Stri
             ui::browser::show(
                 ui,
                 view,
-                loaded,
+                Decks {
+                    loaded,
+                    ..Decks::default()
+                },
                 KeyNotation::default(),
                 &mut covers,
                 &Arrangement::default(),
@@ -388,7 +409,10 @@ fn long_names_are_cut_and_left_aligned() {
             ui::browser::show(
                 ui,
                 view,
-                [None; 4],
+                Decks {
+                    loaded: [None; 4],
+                    ..Decks::default()
+                },
                 KeyNotation::default(),
                 &mut covers,
                 &Arrangement::default(),
@@ -440,7 +464,10 @@ fn painted_text(view: &BrowserView) -> Vec<String> {
             ui::browser::show(
                 ui,
                 view,
-                [None; 4],
+                Decks {
+                    loaded: [None; 4],
+                    ..Decks::default()
+                },
                 KeyNotation::default(),
                 &mut covers,
                 &Arrangement::default(),
@@ -461,4 +488,276 @@ fn painted_text(view: &BrowserView) -> Vec<String> {
         }
     }
     texts
+}
+
+/// What a browser driven by the mouse is shown, and what it asked of the library.
+struct Clicking {
+    view: BrowserView,
+    decks: Decks,
+    covers: Covers,
+    steps: Vec<LibraryStep>,
+}
+
+/// `count` library tracks titled "Song N" by their row in the whole list, the page at
+/// `offset` of a list `total` long, with the cursor on its first row.
+fn numbered(offset: usize, count: usize, total: usize) -> BrowserView {
+    let mut view = view();
+    let template = view.list[0].clone();
+    view.list = (offset..offset + count)
+        .map(|i| {
+            let mut row = template.clone();
+            let track = row.track.as_mut().unwrap();
+            track.id = 1000 + i as i64;
+            track.title = Some(format!("Song {i}"));
+            row.file_name = format!("song-{i}.mp3");
+            row
+        })
+        .collect();
+    view.list_offset = offset;
+    view.list_count = total;
+    view.list_cursor = offset;
+    view
+}
+
+/// Draws `view` without its info panel (which repeats the cursor's title), collecting
+/// the library steps. Short steps, so two clicks in a row make a double-click.
+fn clicking(view: BrowserView, decks: Decks) -> Harness<'static, Clicking> {
+    let state = Clicking {
+        view,
+        decks,
+        covers: Covers::default(),
+        steps: Vec::new(),
+    };
+    let arrangement = Arrangement {
+        info: false,
+        ..Arrangement::default()
+    };
+    let mut harness = Harness::builder()
+        .with_size([1000.0, 300.0])
+        .with_step_dt(0.01)
+        .build_ui_state(
+            move |ui, state: &mut Clicking| {
+                let changes = ui::browser::show(
+                    ui,
+                    &state.view,
+                    state.decks,
+                    KeyNotation::default(),
+                    &mut state.covers,
+                    &arrangement,
+                    |_| {},
+                );
+                state.steps.extend(changes.library);
+            },
+            state,
+        );
+    harness.run_steps(3);
+    harness
+}
+
+fn button(button: PointerButton, pressed: bool, at: Pos2) -> Event {
+    Event::PointerButton {
+        pos: at,
+        button,
+        pressed,
+        modifiers: Modifiers::NONE,
+    }
+}
+
+fn click_with<S>(harness: &mut Harness<'_, S>, which: PointerButton, at: Pos2) {
+    harness.event(Event::PointerMoved(at));
+    harness.run_steps(1);
+    harness.event(button(which, true, at));
+    harness.run_steps(1);
+    harness.event(button(which, false, at));
+    harness.run_steps(1);
+}
+
+fn click<S>(harness: &mut Harness<'_, S>, at: Pos2) {
+    click_with(harness, PointerButton::Primary, at);
+}
+
+fn double_click<S>(harness: &mut Harness<'_, S>, at: Pos2) {
+    click(harness, at);
+    click(harness, at);
+    harness.run_steps(2);
+}
+
+fn at_label(harness: &Harness<'_, Clicking>, label: &str) -> Pos2 {
+    harness.get_by_label(label).rect().center()
+}
+
+fn browse(edit: BrowserEdit) -> LibraryStep {
+    LibraryStep::Browse(edit)
+}
+
+fn load(number: usize, track: i64) -> LibraryStep {
+    LibraryStep::Load {
+        deck: DeckId::new(number - 1).unwrap(),
+        track,
+    }
+}
+
+fn loads(steps: &[LibraryStep]) -> Vec<&LibraryStep> {
+    steps
+        .iter()
+        .filter(|s| matches!(s, LibraryStep::Load { .. }))
+        .collect()
+}
+
+#[test]
+fn clicking_a_row_selects_it() {
+    // The row's index in the whole list, not in the page.
+    let mut harness = clicking(numbered(100, 50, 1000), Decks::default());
+    let at = at_label(&harness, "Song 103");
+    click(&mut harness, at);
+    assert_eq!(harness.state().steps, [browse(BrowserEdit::SelectRow(103))]);
+}
+
+#[test]
+fn clicking_the_tree_selects_and_opens() {
+    let mut harness = clicking(view(), Decks::default());
+    let house = at_label(&harness, "House");
+    click(&mut harness, house);
+    assert_eq!(harness.state().steps, [browse(BrowserEdit::SelectTree(1))]);
+
+    // The arrow opens the drive, without selecting it.
+    harness.state_mut().steps.clear();
+    let drive = harness.get_by_label("Macintosh HD").rect();
+    // The label starts 28 points right of the arrow's row inset; the arrow sits 4 in.
+    let arrow = pos2(drive.min.x - 24.0, drive.center().y);
+    click(&mut harness, arrow);
+    assert_eq!(
+        harness.state().steps,
+        [browse(BrowserEdit::ToggleTreeAt(0))]
+    );
+
+    // A double-click on a folder opens it too.
+    harness.state_mut().steps.clear();
+    harness.run_steps(60);
+    double_click(&mut harness, house);
+    assert!(
+        harness
+            .state()
+            .steps
+            .contains(&browse(BrowserEdit::ToggleTreeAt(1))),
+        "{:?}",
+        harness.state().steps
+    );
+}
+
+#[test]
+fn double_click_loads_on_the_first_free_deck() {
+    let decks = Decks {
+        playing: [true, false, false, false],
+        ..Decks::default()
+    };
+    let mut harness = clicking(numbered(0, 20, 20), decks);
+    let at = at_label(&harness, "Song 4");
+    double_click(&mut harness, at);
+    assert_eq!(loads(&harness.state().steps), [&load(2, 1004)]);
+
+    // In the four-deck view decks 3 and 4 come after 1 and 2.
+    let decks = Decks {
+        playing: [true, true, false, false],
+        four: true,
+        ..Decks::default()
+    };
+    let mut harness = clicking(numbered(0, 20, 20), decks);
+    let at = at_label(&harness, "Song 4");
+    double_click(&mut harness, at);
+    assert_eq!(loads(&harness.state().steps), [&load(3, 1004)]);
+}
+
+#[test]
+fn double_click_with_every_deck_playing_sends_nothing() {
+    // Decks 3 and 4 are free but not shown.
+    let decks = Decks {
+        playing: [true, true, false, false],
+        ..Decks::default()
+    };
+    let mut harness = clicking(numbered(0, 20, 20), decks);
+    assert_eq!(ui::browser::notice(&harness.ctx), None);
+    let at = at_label(&harness, "Song 4");
+    double_click(&mut harness, at);
+    assert!(loads(&harness.state().steps).is_empty());
+    let notice = ui::browser::notice(&harness.ctx).map(|(_, text)| text);
+    assert_eq!(notice, Some("Every deck is playing"));
+}
+
+#[test]
+fn context_menu_loads_on_the_chosen_deck() {
+    let mut harness = clicking(numbered(0, 20, 20), Decks::default());
+    let at = at_label(&harness, "Song 3");
+    click_with(&mut harness, PointerButton::Secondary, at);
+    harness.run_steps(2);
+    // The two-deck view offers decks 1 and 2.
+    harness.get_by_label("Load on deck 1");
+    assert!(harness.query_by_label("Load on deck 3").is_none());
+    let item = at_label(&harness, "Load on deck 2");
+    click(&mut harness, item);
+    harness.run_steps(2);
+    assert_eq!(loads(&harness.state().steps), [&load(2, 1003)]);
+    assert!(harness.query_by_label("Load on deck 1").is_none());
+
+    let decks = Decks {
+        four: true,
+        ..Decks::default()
+    };
+    let mut harness = clicking(numbered(0, 20, 20), decks);
+    let at = at_label(&harness, "Song 3");
+    click_with(&mut harness, PointerButton::Secondary, at);
+    harness.run_steps(2);
+    harness.get_by_label("Load on deck 4");
+}
+
+fn wheel<S>(harness: &mut Harness<'_, S>, at: Pos2, lines: f32) {
+    harness.event(Event::PointerMoved(at));
+    harness.run_steps(1);
+    harness.event(Event::MouseWheel {
+        unit: MouseWheelUnit::Line,
+        delta: vec2(0.0, lines),
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Unknown,
+        modifiers: Modifiers::NONE,
+    });
+    harness.run_steps(30);
+}
+
+#[test]
+fn wheel_scrolls_the_list() {
+    // Inside the loaded page the window scrolls on its own and sends nothing.
+    let mut harness = clicking(numbered(0, 200, 200), Decks::default());
+    let at = at_label(&harness, "Song 2");
+    assert!(harness.query_by_label("Song 30").is_none());
+    wheel(&mut harness, at, -15.0);
+    assert!(harness.query_by_label("Song 0").is_none());
+    assert!(harness.query_by_label("Song 30").is_some());
+    assert!(
+        harness.state().steps.is_empty(),
+        "{:?}",
+        harness.state().steps
+    );
+    // And back up.
+    wheel(&mut harness, at, 30.0);
+    assert!(harness.query_by_label("Song 0").is_some());
+
+    // Past the loaded page it asks the session for the next row, once.
+    let mut harness = clicking(numbered(0, 200, 1000), Decks::default());
+    let at = at_label(&harness, "Song 2");
+    for _ in 0..10 {
+        wheel(&mut harness, at, -30.0);
+    }
+    assert_eq!(harness.state().steps, [browse(BrowserEdit::SelectRow(200))]);
+
+    // The tree scrolls too, and asks nothing.
+    let mut view = numbered(0, 20, 20);
+    view.tree_cursor = 0;
+    view.tree = (0..60)
+        .map(|i| tree_row(&format!("Folder {i}"), 0, TreeKind::Folder))
+        .collect();
+    let mut harness = clicking(view, Decks::default());
+    let at = at_label(&harness, "Folder 1");
+    wheel(&mut harness, at, -10.0);
+    assert!(harness.query_by_label("Folder 0").is_none());
+    assert!(harness.state().steps.is_empty());
 }

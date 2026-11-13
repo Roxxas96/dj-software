@@ -75,8 +75,8 @@ pub(super) fn drain(commands: &Receiver<UiCommand>, parts: &mut FrameParts, mut 
                 }
             }
             UiCommand::Library(step) => {
-                if let Some((_, _, Some(library))) = control.as_mut() {
-                    library_step(step, parts, library);
+                if let Some((_, engine, Some(library))) = control.as_mut() {
+                    library_step(step, parts, engine, library);
                 }
             }
         }
@@ -110,7 +110,12 @@ pub(super) fn drain(commands: &Receiver<UiCommand>, parts: &mut FrameParts, mut 
 
 /// Makes the library change `step` asks for through `library`; what is refused is an
 /// event.
-fn library_step(step: LibraryStep, parts: &mut FrameParts, library: &mut LibraryMode) {
+fn library_step(
+    step: LibraryStep,
+    parts: &mut FrameParts,
+    engine: &EngineController,
+    library: &mut LibraryMode,
+) {
     match step {
         LibraryStep::HotcueLabel {
             deck,
@@ -123,6 +128,20 @@ fn library_step(step: LibraryStep, parts: &mut FrameParts, library: &mut Library
             Ok(()) => parts.show_mark(track, slot, HotcueMark::new(color, name)),
             Err(why) => parts.event(why),
         },
+        LibraryStep::Browse(edit) => {
+            if let Err(why) = library.browse(edit) {
+                parts.event(why);
+            }
+        }
+        // The window saw the deck stopped; it may have started since.
+        LibraryStep::Load { deck, .. } if engine.deck(deck).playing => {
+            parts.event(format!("Deck {} is playing", deck.index() + 1));
+        }
+        LibraryStep::Load { deck, track } => {
+            if let Err(why) = library.load_track(deck, track) {
+                parts.event(why);
+            }
+        }
     }
 }
 
@@ -709,6 +728,136 @@ mod tests {
         assert_eq!(decks.marks(&mut parts)[0], None);
         std::thread::sleep(std::time::Duration::from_millis(200));
         assert_eq!(decks.marks(&mut parts)[0], None);
+        drop(decks.renderer);
+    }
+
+    /// Renders and polls `library` until `done` holds, for at most 10 s.
+    fn poll_until(
+        decks: &mut Labelled,
+        mut done: impl FnMut(&LibraryMode, &EngineController) -> bool,
+    ) {
+        let (printer, _events) = Printer::capturing();
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
+        let (mut master, mut headphones) = (vec![0.0; 1024], vec![0.0; 1024]);
+        while !done(&decks.library, &decks.engine) {
+            assert!(Instant::now() < deadline, "not done within 10 s");
+            decks.renderer.render(&mut master, &mut headphones);
+            decks
+                .library
+                .poll(Instant::now(), &mut decks.engine, &printer);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        printer.finish();
+    }
+
+    fn load(deck: usize, track: i64) -> UiCommand {
+        UiCommand::Library(ui::LibraryStep::Load {
+            deck: DeckId::new(deck).unwrap(),
+            track,
+        })
+    }
+
+    #[test]
+    fn load_by_id_loads_the_track() {
+        let mut decks = labelled();
+        let fixture = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../decode/tests/fixtures/sine440.wav"
+        );
+        let wav = decks._dir.path().join("sine440.wav");
+        std::fs::copy(fixture, &wav).unwrap();
+        decks
+            .library
+            .library()
+            .writer()
+            .submit_wait(library::WriteOp::Raw(vec![library::RawStatement {
+                sql: format!(
+                    "INSERT INTO tracks(id, path, fingerprint, title, added_at) \
+                     VALUES (9, '{}', x'01', 'Sine', 0)",
+                    wav.to_str().unwrap().replace('\'', "''")
+                ),
+                params: vec![],
+            }]))
+            .unwrap();
+        let mut parts = FrameParts::new(&Config::default());
+        let (tx, rx) = channel();
+        tx.send(load(1, 9)).unwrap();
+        decks.drain(&rx, &mut parts);
+        assert!(parts.events.is_empty(), "{:?}", parts.events);
+        let deck = DeckId::new(1).unwrap();
+        poll_until(&mut decks, |library, engine| {
+            engine.deck(deck).loaded
+                && library
+                    .deck_view(deck, &engine.deck(deck))
+                    .is_some_and(|view| view.row.id == 9)
+        });
+        drop(decks.renderer);
+    }
+
+    #[test]
+    fn load_onto_a_deck_that_started_playing_is_refused() {
+        let mut decks = labelled();
+        // Deck 1 holds track 7 and starts playing after the window saw it stopped.
+        let deck = DeckId::new(0).unwrap();
+        decks
+            .engine
+            .send(Command::Deck(deck, engine::DeckCommand::Play))
+            .unwrap();
+        let (mut master, mut headphones) = (vec![0.0; 1024], vec![0.0; 1024]);
+        decks.renderer.render(&mut master, &mut headphones);
+        assert!(decks.engine.deck(deck).playing);
+        let mut parts = FrameParts::new(&Config::default());
+        let (tx, rx) = channel();
+        tx.send(load(0, 7)).unwrap();
+        decks.drain(&rx, &mut parts);
+        let events: Vec<&str> = parts.events.iter().map(|(_, text)| text.as_str()).collect();
+        assert_eq!(events, ["Deck 1 is playing"]);
+        drop(decks.renderer);
+    }
+
+    #[test]
+    fn browse_steps_reach_the_library_worker() {
+        let mut decks = labelled();
+        let lib = decks.library.library();
+        let playlist = match lib
+            .writer()
+            .submit_wait(library::WriteOp::CreatePlaylist {
+                name: "Peak".into(),
+            })
+            .unwrap()
+        {
+            library::WriteOutcome::Created { id } => id,
+            other => panic!("unexpected outcome {other:?}"),
+        };
+        lib.writer()
+            .submit_wait(library::WriteOp::AddToPlaylist {
+                playlist,
+                track: 7,
+                at: None,
+            })
+            .unwrap();
+        decks
+            .library
+            .changed_flag()
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        poll_until(&mut decks, |library, _| {
+            library.browser().is_some_and(|view| view.tree.len() == 2)
+        });
+        let mut parts = FrameParts::new(&Config::default());
+        let (tx, rx) = channel();
+        let browse = |edit| UiCommand::Library(ui::LibraryStep::Browse(edit));
+        tx.send(browse(library::BrowserEdit::SelectTree(1)))
+            .unwrap();
+        tx.send(browse(library::BrowserEdit::SelectRow(0))).unwrap();
+        decks.drain(&rx, &mut parts);
+        assert!(parts.events.is_empty(), "{:?}", parts.events);
+        poll_until(&mut decks, |library, _| {
+            library.browser().is_some_and(|view| {
+                view.path == "Playlists ▸ Peak"
+                    && view.focus == library::Focus::List
+                    && view.track.as_ref().map(|t| t.id) == Some(7)
+            })
+        });
         drop(decks.renderer);
     }
 }

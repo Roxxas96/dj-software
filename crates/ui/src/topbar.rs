@@ -53,7 +53,10 @@ pub fn show(
             ui.separator();
             let status = match &frame.error {
                 Some(error) => RichText::new(error.as_str()).color(p.error).strong(),
-                None => RichText::new(frame.status_line(Instant::now())),
+                None => {
+                    let own = crate::browser::notice(ui.ctx());
+                    RichText::new(frame.status_line_with(Instant::now(), own))
+                }
             };
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 ui.add(egui::Label::new(status).truncate());

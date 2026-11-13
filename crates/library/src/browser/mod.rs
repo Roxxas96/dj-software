@@ -18,7 +18,7 @@ pub use drives::{Drive, drives};
 pub use tree::{TreeKind, TreeRow};
 
 use crate::scan::{is_hidden, is_supported, normalize_path};
-use crate::{LibraryError, Reader, TrackFilter, TrackRow};
+use crate::{LibraryError, Reader, TrackFilter, TrackRow, TrackSortKey};
 use tree::{Target, Tree};
 
 /// How many rows of a list the browser holds at once: one page around the cursor.
@@ -32,6 +32,29 @@ pub enum Focus {
     Tree,
     /// The highlighted tree entry's files or tracks.
     List,
+}
+
+/// A change to the browser that names its target, as a click in the window does (the
+/// BROWSE knob's [`BrowserRequest`]s move from where the cursor is instead).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BrowserEdit {
+    /// Highlights tree row `0..` (the last row past the end) and focuses the tree.
+    SelectTree(usize),
+    /// Puts the list cursor on row `0..` of the whole list (the last row past the end),
+    /// loading its page, and focuses the list.
+    SelectRow(usize),
+    /// Opens or closes the drive or folder at tree row `0..`; the highlight stays on its
+    /// entry, or moves to the folder when the folder closes over it.
+    ToggleTreeAt(usize),
+    /// Filters the list by `text` (`None`: no filter). `seq` grows with each query, so the
+    /// window can drop views of older ones.
+    Search { text: Option<String>, seq: u64 },
+    /// Orders the list by `key`. `seq` as for [`BrowserEdit::Search`].
+    Sort {
+        key: TrackSortKey,
+        descending: bool,
+        seq: u64,
+    },
 }
 
 /// One row of the list: an audio file, with its library track when it has one.
@@ -228,6 +251,52 @@ impl Browser {
             }
         }
         Ok(self.view())
+    }
+
+    /// Makes `edit` and returns the new view. Search and sort leave the view as it is for
+    /// now.
+    ///
+    /// # Errors
+    ///
+    /// Any database error; the browser is then unchanged.
+    pub fn edit(&mut self, edit: BrowserEdit) -> Result<BrowserView, LibraryError> {
+        match edit {
+            BrowserEdit::SelectTree(at) => {
+                let to = at.min(self.tree.len() - 1);
+                if to != self.tree_cursor {
+                    self.list = List::open(&self.reader, self.tree.target(to))?;
+                    self.tree_cursor = to;
+                }
+                self.focus = Focus::Tree;
+            }
+            BrowserEdit::SelectRow(at) => {
+                self.list.seek(&self.reader, at)?;
+                self.focus = Focus::List;
+            }
+            BrowserEdit::ToggleTreeAt(at) if at < self.tree.len() => self.toggle_at(at)?,
+            BrowserEdit::ToggleTreeAt(_)
+            | BrowserEdit::Search { .. }
+            | BrowserEdit::Sort { .. } => {}
+        }
+        Ok(self.view())
+    }
+
+    /// Opens or closes tree row `at`, keeping the highlight on its entry: below the
+    /// row it moves by the rows added or removed, and inside a branch that closes it
+    /// moves to the closed folder, whose list is then read.
+    fn toggle_at(&mut self, at: usize) -> Result<(), LibraryError> {
+        let cursor = self.tree_cursor;
+        let end = self.tree.subtree_end(at);
+        let mut tree = self.tree.clone();
+        tree.toggle(at);
+        if cursor > at && cursor < end {
+            self.list = List::open(&self.reader, tree.target(at))?;
+            self.tree_cursor = at;
+        } else if cursor > at {
+            self.tree_cursor = (cursor + tree.len()).saturating_sub(self.tree.len());
+        }
+        self.tree = tree;
+        Ok(())
     }
 
     /// Reads the drives, the playlists and the highlighted list again, to see library and

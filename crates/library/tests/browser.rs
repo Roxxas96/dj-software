@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use library::{
-    BROWSER_PAGE_ROWS, Browser, BrowserRequest, BrowserView, Drive, Focus, Library, RawStatement,
-    TreeKind, WriteOp, WriteOutcome,
+    BROWSER_PAGE_ROWS, Browser, BrowserEdit, BrowserRequest, BrowserView, Drive, Focus, Library,
+    RawStatement, TrackSortKey, TreeKind, WriteOp, WriteOutcome,
 };
 use rusqlite::types::Value;
 
@@ -297,6 +297,113 @@ fn big_folder_pages() {
         let name = &view.list[i - view.list_offset].file_name;
         assert_eq!(name, &format!("{i:04}.mp3"));
     }
+}
+
+#[test]
+fn select_tree_reads_that_entry() {
+    let (_lib_dir, lib) = open();
+    let (_d, root) = disk();
+    let one = add_file_track(&lib, &root.join("A").join("a1.mp3"), "One");
+    create_playlist(&lib, "Peak", &[one]);
+    let mut b = browser(&lib, vec![drive("root", &root)]);
+    toggle_folder(&mut b);
+    // From the list pane: a click on a tree row focuses the tree.
+    toggle(&mut b);
+    let view = b.edit(BrowserEdit::SelectTree(1)).unwrap();
+    assert_eq!(view.path, "root ▸ A");
+    assert_eq!((view.tree_cursor, view.focus), (1, Focus::Tree));
+    assert_eq!(file_names(&view), ["a1.mp3", "a2.wav"]);
+    assert_eq!(view.track.map(|t| t.id), Some(one));
+
+    let view = b.edit(BrowserEdit::SelectTree(4)).unwrap();
+    assert_eq!(view.path, "Playlists ▸ Peak");
+    assert_eq!(file_names(&view), ["a1.mp3"]);
+    // Past the last row: the last row.
+    assert_eq!(b.edit(BrowserEdit::SelectTree(99)).unwrap().tree_cursor, 4);
+}
+
+#[test]
+fn select_row_moves_the_list_cursor() {
+    let (_lib_dir, lib) = open();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(dir.path()).unwrap();
+    for i in 0..1_000 {
+        fs::write(root.join(format!("{i:04}.mp3")), b"").unwrap();
+    }
+    let mut b = browser(&lib, vec![drive("big", &root)]);
+    let view = b.edit(BrowserEdit::SelectRow(3)).unwrap();
+    assert_eq!(
+        (view.focus, view.list_cursor, view.index),
+        (Focus::List, 3, 3)
+    );
+    assert_eq!(view.list_offset, 0);
+
+    // Beyond the loaded page: its page loads around it.
+    let view = b.edit(BrowserEdit::SelectRow(700)).unwrap();
+    assert_eq!(view.list_cursor, 700);
+    assert!(view.list_offset <= 700 && 700 < view.list_offset + view.list.len());
+    assert_eq!(view.list[700 - view.list_offset].file_name, "0700.mp3");
+    // Past the end: the last row.
+    assert_eq!(
+        b.edit(BrowserEdit::SelectRow(5_000)).unwrap().list_cursor,
+        999
+    );
+}
+
+#[test]
+fn toggle_tree_at_opens_a_folder() {
+    let (_lib_dir, lib) = open();
+    let (_d, root) = disk();
+    create_playlist(&lib, "Peak", &[]);
+    let mut b = browser(&lib, vec![drive("root", &root)]);
+    // The cursor stays on its entry while rows open above it.
+    b.edit(BrowserEdit::SelectTree(2)).unwrap();
+    let view = b.edit(BrowserEdit::ToggleTreeAt(0)).unwrap();
+    assert_eq!(labels(&view), ["root", "A", "B", "Playlists", "Peak"]);
+    assert_eq!(
+        (view.tree_cursor, view.path.as_str()),
+        (4, "Playlists ▸ Peak")
+    );
+
+    // A row below the cursor opens without moving it.
+    b.edit(BrowserEdit::SelectTree(0)).unwrap();
+    let view = b.edit(BrowserEdit::ToggleTreeAt(1)).unwrap();
+    assert_eq!(
+        labels(&view),
+        ["root", "A", "sub", "B", "Playlists", "Peak"]
+    );
+    assert_eq!(view.tree_cursor, 0);
+
+    // Closing a folder the cursor is inside moves the cursor to it.
+    b.edit(BrowserEdit::SelectTree(2)).unwrap();
+    let view = b.edit(BrowserEdit::ToggleTreeAt(1)).unwrap();
+    assert_eq!(labels(&view), ["root", "A", "B", "Playlists", "Peak"]);
+    assert_eq!((view.tree_cursor, view.path.as_str()), (1, "root ▸ A"));
+    assert_eq!(file_names(&view), ["a1.mp3", "a2.wav"]);
+
+    // A playlist, or a row past the end, is left alone.
+    let before = b.view();
+    assert_eq!(b.edit(BrowserEdit::ToggleTreeAt(4)).unwrap(), before);
+    assert_eq!(b.edit(BrowserEdit::ToggleTreeAt(99)).unwrap(), before);
+}
+
+#[test]
+fn search_and_sort_leave_the_view_for_now() {
+    let (_lib_dir, lib) = open();
+    let (_d, root) = disk();
+    let mut b = browser(&lib, vec![drive("root", &root)]);
+    let before = b.view();
+    let search = BrowserEdit::Search {
+        text: Some("a1".into()),
+        seq: 1,
+    };
+    assert_eq!(b.edit(search).unwrap(), before);
+    let sort = BrowserEdit::Sort {
+        key: TrackSortKey::Bpm,
+        descending: true,
+        seq: 2,
+    };
+    assert_eq!(b.edit(sort).unwrap(), before);
 }
 
 #[test]

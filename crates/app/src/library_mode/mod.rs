@@ -28,8 +28,8 @@ use engine::{
     TrackBuffer,
 };
 use library::{
-    Analyzer, BrowserView, FailedWrite, GridEdit, KEY_NOTATION, Library, PendingTrack, TrackRow,
-    WatchHealth, Watcher, WriteOp, Writer, default_threads,
+    Analyzer, BrowserEdit, BrowserView, FailedWrite, GridEdit, KEY_NOTATION, Library, PendingTrack,
+    TrackRow, WatchHealth, Watcher, WriteOp, Writer, default_threads,
 };
 
 use crate::console::ConsoleCommand;
@@ -291,13 +291,43 @@ impl LibraryMode {
     }
 
     fn send_job(&self, job: Job, printer: &Printer) {
+        if let Err(why) = self.try_send_job(job) {
+            printer.event(why);
+        }
+    }
+
+    /// Hands `job` to the worker, or says why it cannot.
+    fn try_send_job(&self, job: Job) -> Result<(), String> {
         let sent = self
             .jobs
             .as_ref()
             .is_some_and(|jobs| jobs.send(job).is_ok());
-        if !sent {
-            printer.event("warning: the library worker stopped; library actions do nothing".into());
+        if sent {
+            Ok(())
+        } else {
+            Err("warning: the library worker stopped; library actions do nothing".into())
         }
+    }
+
+    /// Loads library track `track` on `deck`, as the console's `load` does: the decode,
+    /// the remembered cues and hotcues, the analysis and the stems follow the same way.
+    ///
+    /// # Errors
+    ///
+    /// Why the load cannot be asked for (the worker stopped).
+    pub fn load_track(&mut self, deck: DeckId, track: i64) -> Result<(), String> {
+        let seq = self.next_seq(deck);
+        self.try_send_job(Job::LoadTrack { deck, track, seq })
+    }
+
+    /// Changes the browser as `edit` asks; the new view arrives with a later
+    /// [`poll`](Self::poll).
+    ///
+    /// # Errors
+    ///
+    /// Why the change cannot be asked for (the worker stopped).
+    pub fn browse(&mut self, edit: BrowserEdit) -> Result<(), String> {
+        self.try_send_job(Job::Edit(edit))
     }
 
     /// Performs a request from a controller action.
@@ -328,8 +358,9 @@ impl LibraryMode {
         match command {
             ConsoleCommand::Grid { deck, edit } => self.grid(deck, edit, engine, printer),
             ConsoleCommand::Load { deck, track } => {
-                let seq = self.next_seq(deck);
-                self.send_job(Job::LoadTrack { deck, track, seq }, printer);
+                if let Err(why) = self.load_track(deck, track) {
+                    printer.event(why);
+                }
             }
             ConsoleCommand::Reconnect | ConsoleCommand::Help => {}
         }
