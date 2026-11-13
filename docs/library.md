@@ -359,7 +359,8 @@ track, depending on the CPU.
 
 `library list` prints id, artist, title, BPM, key, length, a bullet for tracks with
 cues, and `missing` for missing files. Filters: `--playlist NAME`, `--folder DIR`,
-`--search TEXT` (title or artist, case-insensitive); `--sort title|artist|bpm|key|added`
+`--search TEXT` (title or artist, or the file name of a track without a title;
+case-insensitive); `--sort title|artist|bpm|key|added`
 (default artist) and `--limit N` (default 100).
 
 ## Library mode: `play --library`

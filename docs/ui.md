@@ -53,27 +53,32 @@ knob is turned; the soft takeover waits until the knob reaches the value on scre
 | Control | Gesture |
 |---|---|
 | Knobs (gain, EQ, filter, HEADPHONE level, MIX) | Drag up or down; hold Shift for a fine move (a quarter of the speed); scroll over it; double-click to reset: gain, EQ and filter to centre, HEADPHONE to 0.8, MIX to 0.0 (cue only) |
-| Channel faders | Click or drag; no double-click reset |
-| Crossfader, pitch slider | Click or drag; double-click resets them (the crossfader to the centre, the pitch slider to 0 %) |
-| Master level | A bar: click or drag; double-click resets it to 0.8, its default |
+| Channel faders | Click the track to jump there, or drag; a press on the handle takes it where it is (no jump); no double-click reset |
+| Crossfader, pitch slider | As a channel fader; double-click resets them (the crossfader to the centre, the pitch slider to 0 %) |
+| Master level | A bar: click or drag; a press on the level's edge takes it where it is; double-click resets it to 0.8, its default |
 | Auto-loop size button | Click to set a loop of that many beats |
-| Buttons (PLAY, CUE, SYNC, PFL, LOOP IN and OUT, the loop arrows, VINYL, SLIP, KEYLOCK, the pad-mode arrows) | Click; a button that the controller holds (CUE, a loop roll) is held while the mouse button is down |
-| Pads | Click to play; Shift-click for the shifted action (beat jump shift); right-click a hotcue pad to name and colour it |
-| Hotcue flags on a waveform | Right-click to open the same editor |
-| Jog | Drag round it to scratch (clockwise goes forward) |
-| Waveform lane | Drag sideways to scratch; scroll or pinch to zoom |
-| Overview waveform | Click to seek |
+| Buttons (PLAY, CUE, SYNC, PFL, LOOP IN and OUT, the loop arrows, VINYL, SLIP, KEYLOCK, the pad-mode arrows) | Click (a trackpad tap too); a button that the controller holds (CUE, a loop roll) is held while the mouse button is down, and let go if the window loses focus |
+| Pads | Click to play; Shift-click for the shifted action (beat jump shift; in the SAMPLER and TRANS modes, stop the sample); right-click a hotcue pad (on macOS, Ctrl-click too) to name and colour it |
+| Hotcue flags on a waveform | Right-click (on macOS, Ctrl-click too) to open the same editor |
+| Jog | Drag round it: on a playing deck it nudges (bends the pitch, as the jog's ring does); on a paused deck it scrubs (clockwise goes forward) |
+| Waveform lane | Drag sideways to scratch, playing or not; scroll or pinch to zoom |
+| Overview waveform | Click to seek, or drag; a press held still seeks once |
 | Time under the BPM | Click to cycle remaining, total and elapsed |
-| FX slots | Click a slot's name to toggle that effect on or off; its arrow opens the effect list; the FX level bar takes a click or drag |
+| FX slots | Click a slot's name to toggle that effect on or off; its arrow opens the effect list; the FX level bar takes a click or drag, and shows a pickup marker like the other levels |
 | Pad mode | Pick from the dropdown, or step through the modes with the ◀ ▶ arrows beside it (they wrap round) |
 | Browser tree | Click to select; the arrow, or a double-click, opens a drive or folder; right-click a playlist for Rename and Delete, and the Playlists node for New playlist |
-| Browser list | Click to select; Shift-click for a range, Cmd/Ctrl-click to add or remove a row; double-click loads on the first free deck; right-click for the track menu; scroll to move |
-| Search box and column headers | Type to search; Escape clears it; click a header to sort, again to reverse |
+| Browser list | Click to select; Shift-click for a range, Cmd/Ctrl-click to add or remove a row; double-click loads on the first free deck; right-click for the track menu; scroll to look through the list (the selection, and so what LOAD loads, stays) |
+| Search box and column headers | Type to search; Escape clears it; click a header to sort, again to reverse, a third time to go back to the list's own order |
 | Tracks | Drag onto a deck to load it, onto a playlist in the tree to add it (in list order), or inside an open playlist to reorder it |
 
 The track menu loads on a deck ("Load on deck N"), adds the selected tracks to a playlist
 ("Add to playlist") and, in a playlist, removes them ("Remove from playlist"). The tracks
 stay in the library. Dropping a playlist's own rows back on its tree row does nothing.
+
+The search covers the title, the artist, and the file name of a track without a title (the
+name the list shows); it ignores ASCII case. Sorting by title puts such a track by its file
+name too. The search and the sort stay set as you move to other folders and playlists,
+until you clear or change them.
 
 ### Playlists from the tree
 
@@ -92,13 +97,15 @@ already has (the same letters, capitals included), is refused with a message in 
 - **Closing a menu or dialog never triggers what is under it.** The press that closes the
   hotcue editor or a playlist dialog by clicking outside is used up by the close: it plays no
   pad, selects no row and moves no control.
-- **A plain click on the jog or on a waveform does nothing.** Only a drag touches the
-  platter, so a stray click never stops or nudges a playing track. (Clicking the overview
-  seeks, on purpose.)
+- **A plain click on the jog or on a waveform does nothing.** Only a drag that moves (6
+  points or more) touches the platter, so a stray click, even a slow one, never stops or
+  nudges a playing track. On a playing deck the jog only nudges, never holds it. (Clicking
+  the overview seeks, on purpose.)
 - **Deleting is never one click.** A hotcue is deleted from its own menu item, and a
   playlist after a question.
-- **Playlist edits check the view they were made from.** A drop, a reorder or a removal
-  names the tracks the window saw and where. If the playlist changed since (another window,
+- **Playlist edits check the view they were made from.** A reorder or a removal names the
+  tracks the window saw and where (a drop onto a playlist in the tree appends, so it checks
+  nothing). If the playlist changed since (another window,
   the CLI, an import), nothing is written and the events say "The playlist changed; try
   again".
 
@@ -129,8 +136,8 @@ already has (the same letters, capitals included), is refused with a message in 
   still load.
 - **Deck panels:** cover, title, artist and remix, the overview waveform, BPM, a row under
   it with the stems state (`stems`, or `stems 40%` while they are made), the key and the
-  bar.beat counter, two times, the FX slots (each a dropdown that puts another effect in that
-  deck's slot), the jog, the pitch fader with its pickup marker, VINYL, SLIP and KEYLOCK, the
+  bar.beat counter, two times, the FX slots (a click on a slot's name turns its effect on or
+  off, and its arrow opens the list that puts another effect in that deck's slot), the jog, the pitch fader with its pickup marker, VINYL, SLIP and KEYLOCK, the
   pad mode dropdown and the 8 pads (a set hotcue pad reads `<n> <name>`, or `<n> loop` for a
   saved loop with no name), the loop size, and CUE, PLAY and SYNC. SYNC is never lit:
   sync is one-shot here, and there is no MASTER badge. Which of these a panel shows depends
@@ -144,8 +151,10 @@ already has (the same letters, capitals included), is refused with a message in 
     when the LAYOUT menu's Beat Counter is on and the track has a grid.
   - **Jog:** the Info jogwheel display is the default: the wheel shows the BPM, the pitch and
     both the elapsed and the remaining time inside it, and its marker moves to the rim.
-- **Mixer:** one strip per deck, compact and in VirtualDJ's order: the master level on top,
-  each channel's knobs (the three EQ knobs and FILTER) outside, in the columns next to the
+- **Mixer:** one strip per deck, compact and in VirtualDJ's order: the master level on top
+  (a bar 60 to 80 points wide where the row has room: the headphone knobs' captions turn to
+  HP and MX, then the bar's caption to MST, to keep it so beside the decks' names), each
+  channel's knobs (the three EQ knobs and FILTER) outside, in the columns next to the
   decks, GAIN over the channel fader in the middle, PFL under it, the level meters beside the
   faders (the live level, with a line marking the highest peak of the last second), and the
   crossfader at the bottom. With four decks the strips are narrower and the knobs carry
@@ -275,10 +284,10 @@ FADE, SAMPLER, TRANS) are set by the controller itself, and only its own buttons
 them: the app only learns which button was pressed. A choice does what the mapped pad mode
 button does (the `pads.mode_*` actions).
 
-## The FX dropdowns
+## The FX slots
 
-Each of a deck panel's FX slots is a dropdown of the effects (echo, reverb, flanger,
-filter). A choice changes that deck's effect at once and saves the deck's three effects as
+A click on an FX slot's name turns its effect on or off. The arrow beside it opens the list
+of effects (echo, reverb, flanger, filter). A choice changes that deck's effect at once and saves the deck's three effects as
 `fx.deck1` to `fx.deck4` in `config.toml` ([config.md](config.md)); the other decks keep
 theirs.
 

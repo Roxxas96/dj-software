@@ -245,7 +245,7 @@ constructed, never in `process`, `seek` or `reset`.
 amount (`ChannelCommand::FxAmount`); the effect in each slot is set per channel
 (`ChannelCommand::FxSlot`, an `EffectKind`) or for every channel at once
 (`MasterCommand::FxSlot`). `play` sends each deck's at startup from `[fx]` in
-`config.toml` (`fx.deckN`, else `fx.slots`), and the window's FX dropdowns send them while
+`config.toml` (`fx.deckN`, else `fx.slots`), and the effect lists of the window's FX slots send them while
 playing and save them as that deck's `fx.deckN`. Echo and reverb follow a DJ mixer's dry/wet curve (dry
 `min(1, 2(1 − a))`, wet `min(1, 2a)`: the dry stays at unity up to mid amount), the
 flanger crossfades by the amount, and the filter's amount is its cutoff. The actions

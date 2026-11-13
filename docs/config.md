@@ -22,7 +22,7 @@ instead (and then the file must exist).
 | -------------------- | -------------------------------------------- | ------- |
 | `mixer.crossfader`   | `true`                                       | `false`: the crossfader is ignored and every channel plays at full level |
 | `fx.slots`           | `["echo", "reverb", "flanger"]`            | The effect in each of the 3 effect slots (FX 1, 2 and 3 on the controller); exactly 3 of `echo`, `reverb`, `flanger`, `filter`. Every deck without its own `fx.deckN` has these 3 slots |
-| `fx.deck1` to `fx.deck4` | none (the deck uses `fx.slots`)        | That deck's own 3 effects, in place of `fx.slots`; exactly 3 effect ids, as for `fx.slots`. The deck panel's FX dropdowns change a deck's effects while playing and save them here |
+| `fx.deck1` to `fx.deck4` | none (the deck uses `fx.slots`)        | That deck's own 3 effects, in place of `fx.slots`; exactly 3 effect ids, as for `fx.slots`. The effect lists of the deck panel's FX slots change a deck's effects while playing and save them here |
 | `sampler.volume`     | `1.0`                                        | Sampler level, 0 to 1, on the same curve as the master level (0.5 is about −12 dB) |
 | `sampler.pads`       | none (all pads empty)                        | Up to 8 entries for pads 1 to 8, each `{ file = "..." }` (an absolute path, or one starting with `~/`) or `{ track = <library track id> }` or `{}` (an empty pad, so a later pad can be set alone); fewer entries leave the other pads empty |
 | `beat_jump.pads`     | `[-4, 4, -8, 8, -16, 16, -32, 32]`           | Beats the beat jump pads move the playhead; exactly 8, each non-zero with `abs <= 512` |
