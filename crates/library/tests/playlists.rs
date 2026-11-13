@@ -778,3 +778,49 @@ fn create_playlist_with_tracks_in_one_op() {
     assert!(matches!(err, LibraryError::NoSuchTrack(9999)), "{err:?}");
     assert_eq!(playlists(&lib).len(), 1, "a failed create leaves nothing");
 }
+
+#[test]
+fn expected_entries_guard_the_edit_in_the_same_transaction() {
+    let (_d, lib) = open();
+    let t = n_tracks(&lib, 3);
+    let p = create(&lib, "Set");
+    for id in [t[0], t[1], t[0], t[2]] {
+        add(&lib, p, id, None);
+    }
+    // The entries hold: the removal after the check goes through.
+    submit(
+        &lib,
+        WriteOp::Batch(vec![
+            WriteOp::ExpectPlaylistEntries {
+                playlist: p,
+                entries: vec![(2, t[0]), (1, t[1])],
+            },
+            WriteOp::RemoveFromPlaylist {
+                playlist: p,
+                position: 2,
+            },
+        ]),
+    );
+    assert_eq!(order(&lib, p), [t[0], t[1], t[2]]);
+    // Position 2 now holds another track (or none): nothing is written.
+    for entries in [vec![(2, t[0])], vec![(7, t[2])]] {
+        let err = lib
+            .writer()
+            .submit_wait(WriteOp::Batch(vec![
+                WriteOp::ExpectPlaylistEntries {
+                    playlist: p,
+                    entries,
+                },
+                WriteOp::RemoveFromPlaylist {
+                    playlist: p,
+                    position: 0,
+                },
+            ]))
+            .unwrap_err();
+        assert!(
+            matches!(err, LibraryError::PlaylistChanged(id) if id == p),
+            "{err:?}"
+        );
+        assert_eq!(order(&lib, p), [t[0], t[1], t[2]]);
+    }
+}

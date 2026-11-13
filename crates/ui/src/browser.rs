@@ -226,10 +226,13 @@ pub fn selected_rows(ctx: &egui::Context) -> Vec<usize> {
 
 /// What dragging `rows` of `view` carries; `None` when none of them is a library track.
 fn track_drag(view: &BrowserView, rows: &[usize]) -> Option<TrackDrag> {
+    // In a playlist every row has its position; the check keeps tracks and positions
+    // paired whatever the rows hold.
     let entries: Vec<&ListRow> = rows
         .iter()
         .filter_map(|&at| view.list.get(at.checked_sub(view.list_offset)?))
         .filter(|entry| entry.track.is_some())
+        .filter(|entry| view.playlist.is_none() || entry.position.is_some())
         .collect();
     if entries.is_empty() {
         return None;
@@ -245,6 +248,16 @@ fn track_drag(view: &BrowserView, rows: &[usize]) -> Option<TrackDrag> {
         tracks,
         from_playlist,
     })
+}
+
+impl TrackDrag {
+    /// The playlist the rows came from and each one's position and track, for an edit
+    /// checked against what the playlist holds.
+    fn entries(&self) -> Option<(i64, Vec<(usize, i64)>)> {
+        let (playlist, positions) = self.from_playlist.as_ref()?;
+        let entries = positions.iter().copied().zip(self.tracks.iter().copied());
+        Some((*playlist, entries.collect()))
+    }
 }
 
 /// The window's own event when a double-click finds every deck shown playing.
@@ -587,8 +600,16 @@ fn tree_pane(ui: &mut Ui, view: &BrowserView, steps: &mut Vec<LibraryStep>) {
         let rect = row(ui, highlight(&p, at == view.tree_cursor, focused));
         let response = ui.interact(rect, Id::NULL.with(("browser tree", at)), Sense::click());
         let arrow = tree_row(ui, rect, entry);
-        // Tracks dropped on a playlist go at its end.
-        if let Some(playlist) = entry.playlist
+        // Tracks dropped on a playlist go at its end; rows of that same playlist dropped
+        // back on it overshot a move, and do nothing.
+        let own = |playlist| {
+            DragAndDrop::payload::<TrackDrag>(ui.ctx()).is_some_and(|drag| {
+                drag.from_playlist
+                    .as_ref()
+                    .is_some_and(|(id, _)| *id == playlist)
+            })
+        };
+        if let Some(playlist) = entry.playlist.filter(|&id| !own(id))
             && let Some(drag) = track_drop(ui, &response, rect, p.text_dim)
         {
             steps.push(LibraryStep::AddToPlaylist {
@@ -888,7 +909,7 @@ fn list_pane(
     // Rows dragged within the playlist shown move in it; a search or a sort shows rows
     // out of their playlist order, so there they do not.
     let reorder = DragAndDrop::payload::<TrackDrag>(ui.ctx())
-        .and_then(|drag| drag.from_playlist.clone())
+        .and_then(|drag| drag.entries())
         .filter(|(id, _)| Some(*id) == view.playlist)
         .filter(|_| view.search.is_none() && view.sort.is_none());
     let pointer = ui.input(|i| i.pointer.latest_pos());
@@ -1023,10 +1044,8 @@ fn track_menu(
         return;
     };
     if ui.button("Remove from playlist").clicked()
-        && let Some(TrackDrag {
-            from_playlist: Some((_, positions)),
-            ..
-        }) = track_drag(view, &selection.acting_on(at))
+        && let Some((_, positions)) =
+            track_drag(view, &selection.acting_on(at)).and_then(|drag| drag.entries())
     {
         steps.push(LibraryStep::RemoveFromPlaylist {
             playlist,

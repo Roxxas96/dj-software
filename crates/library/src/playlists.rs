@@ -647,6 +647,17 @@ pub(crate) fn apply(tx: &Transaction<'_>, op: &WriteOp) -> Result<WriteOutcome, 
             rewrite(tx, *playlist, &entries)?;
             Ok(WriteOutcome::Done)
         }
+        WriteOp::ExpectPlaylistEntries { playlist, entries } => {
+            let held = self::entries(tx, *playlist)?;
+            if entries
+                .iter()
+                .all(|&(position, track)| held.get(position) == Some(&track))
+            {
+                Ok(WriteOutcome::Done)
+            } else {
+                Err(LibraryError::PlaylistChanged(*playlist))
+            }
+        }
         _ => unreachable!("only playlist ops are routed here"),
     }
 }
