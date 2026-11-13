@@ -27,6 +27,11 @@ fn out_dir() -> PathBuf {
 fn render(name: &str, layout: Layout, four_decks: bool, size: Vec2, scheme: ColourScheme) {
     let (mut frame, reads) = support::loaded(layout, four_decks);
     frame.view.colour_scheme = scheme;
+    render_with(name, frame, reads, size);
+}
+
+/// Renders `frame` and `reads` at `size` to `<name>.png`, checking it as [`render`] does.
+fn render_with(name: &str, frame: ui::ControlFrame, reads: ui::deck::DeckReads, size: Vec2) {
     let image = support::render(frame, reads, size);
     assert_eq!(
         (image.width(), image.height()),
@@ -64,4 +69,18 @@ fn render_every_layout() {
         ColourScheme::Dark,
     );
     render("pro-light", Layout::Pro, false, WINDOW, ColourScheme::Light);
+}
+
+#[test]
+#[ignore = "needs a GPU; writes target/ui-render/*.png"]
+fn render_a_held_roll() {
+    let (frame, mut reads) = support::loaded(Layout::Pro, false);
+    // Deck 1 holds a 4-beat roll while slipping: the track would be 5 beats on.
+    let deck = &mut reads.decks[0].0;
+    let period = deck.grid.unwrap().beat_period_frames;
+    deck.slip = true;
+    deck.roll_active = true;
+    deck.ghost_frames = Some(deck.position_frames + 5.0 * period);
+    deck.slicer_block_beat = Some(8.0 * (deck.position_frames / period / 8.0).floor());
+    render_with("pro-roll", frame, reads, WINDOW);
 }
