@@ -26,15 +26,18 @@ pub const WHEEL_STEP: f32 = 0.02;
 /// (`InputOptions::line_scroll_speed`); a trackpad reports smaller steps that add up.
 const POINTS_PER_NOTCH: f32 = 40.0;
 
-/// The knob's new value for a drag, a wheel move or a double-click on it, or `None` when
-/// nothing happened. Dragging up raises the value; Shift drags a quarter as fast. A
-/// double-click gives `reset`. The result is clamped to `0..=1`.
+/// The knob's new value for a drag, a wheel move, a double-click or a right-click on it,
+/// or `None` when nothing happened. Dragging up raises the value; Shift drags a quarter as
+/// fast. A double-click or a right-click (on macOS, Ctrl + click too: that press turns
+/// nothing) gives `reset`. The result is clamped to `0..=1`. Call it every frame the knob
+/// is shown.
 pub fn knob_input(response: &Response, value: f32, reset: f32, ui: &Ui) -> Option<Input> {
-    if response.double_clicked_by(PointerButton::Primary) {
+    let press = context_press(response);
+    if press.opened || response.double_clicked_by(PointerButton::Primary) {
         return Some(Input::Absolute(reset.clamp(0.0, 1.0)));
     }
     let mut delta = 0.0;
-    if response.dragged_by(PointerButton::Primary) {
+    if response.dragged_by(PointerButton::Primary) && !press.right_click {
         let fine = ui.input(|i| i.modifiers.shift);
         let divisor = if fine { FINE_DIVISOR } else { 1.0 };
         delta -= response.drag_delta().y / (KNOB_DRAG_POINTS * divisor);
@@ -164,9 +167,11 @@ struct FaderPress {
 /// The fader's value for a click or a drag at the pointer, mapped along `track` (the
 /// handle's travel): a click jumps there, a drag follows. A vertical fader has 1 at the
 /// top, a horizontal one at the right; a control that runs the other way inverts the
-/// value. A double-click gives `reset` when there is one. `None` when the pointer is not
-/// pressing the fader, or the value is the one it sent last in this press: a press held
-/// still sends once. A tap (the press and the release in one frame) sets the value too.
+/// value. A double-click or a right-click gives `reset` when there is one; a fader without
+/// one ignores a right-click. On macOS Ctrl + click is a right-click: that press moves
+/// nothing. `None` when the pointer is not pressing the fader, or the value is the one it
+/// sent last in this press: a press held still sends once. A tap (the press and the
+/// release in one frame) sets the value too. Call it every frame the fader is shown.
 pub fn fader_input(
     response: &Response,
     track: Rect,
@@ -198,11 +203,16 @@ fn fader_press(
 ) -> Option<Input> {
     let ctx = &response.ctx;
     let key = response.id.with("fader_press");
+    let context = context_press(response);
     if let Some(reset) = reset
-        && response.double_clicked_by(PointerButton::Primary)
+        && (context.opened || response.double_clicked_by(PointerButton::Primary))
     {
         ctx.data_mut(|d| d.remove::<FaderPress>(key));
         return Some(Input::Absolute(reset.clamp(0.0, 1.0)));
+    }
+    if context.right_click {
+        ctx.data_mut(|d| d.remove::<FaderPress>(key));
+        return None;
     }
     let pressing = response.dragged_by(PointerButton::Primary)
         || (response.is_pointer_button_down_on() && ctx.input(|i| i.pointer.primary_down()));
@@ -298,12 +308,13 @@ pub struct ContextPress {
 /// How the press on `response` counts. On macOS Ctrl + click is a right-click, as the
 /// system has it: decided when the press begins, and kept until it ends, whatever Ctrl
 /// does meanwhile. Call it every frame the control is shown.
-pub fn context_press(response: &Response, ui: &Ui) -> ContextPress {
+pub fn context_press(response: &Response) -> ContextPress {
+    let ctx = &response.ctx;
     let key = response.id.with("ctrl_right_click");
-    let latched = ui.data(|d| d.get_temp::<bool>(key));
+    let latched = ctx.data(|d| d.get_temp::<bool>(key));
     let right_click =
-        latched.unwrap_or_else(|| cfg!(target_os = "macos") && ui.input(|i| i.modifiers.ctrl));
-    ui.data_mut(|d| {
+        latched.unwrap_or_else(|| cfg!(target_os = "macos") && ctx.input(|i| i.modifiers.ctrl));
+    ctx.data_mut(|d| {
         if response.is_pointer_button_down_on() {
             d.insert_temp(key, right_click);
         } else {

@@ -698,6 +698,57 @@ fn double_click_resets_pitch_to_zero() {
 }
 
 #[test]
+fn right_click_resets_pitch_to_zero() {
+    let (snapshot, mut frame) = loaded_plain();
+    frame.control.decks[0].tempo = 0.8;
+    let (mut harness, received) = sending(view(&snapshot, &frame));
+    let label = harness.get_by_label("+0.0%").rect();
+    right_click(&mut harness, label.center_top() - vec2(0.0, 30.0));
+    let sent: Vec<UiCommand> = received.try_iter().collect();
+    let tempo = Action::Tempo(DeckId::new(0).unwrap());
+    assert_eq!(sent, [UiCommand::Action(tempo, Input::Absolute(0.5))]);
+}
+
+#[test]
+fn ctrl_click_on_the_pitch_resets_it_on_macos() {
+    let (snapshot, mut frame) = loaded_plain();
+    frame.control.decks[0].tempo = 0.8;
+    let (mut harness, received) = sending(view(&snapshot, &frame));
+    let label = harness.get_by_label("+0.0%").rect();
+    let at = label.center_top() - vec2(0.0, 30.0);
+    harness.event(Event::PointerMoved(at));
+    harness.run_steps(1);
+    for pressed in [true, false] {
+        let event = Event::PointerButton {
+            pos: at,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::CTRL,
+        };
+        harness.event_modifiers(event, Modifiers::CTRL);
+        harness.run_steps(1);
+    }
+    harness.run_steps(1);
+    let sent: Vec<UiCommand> = received.try_iter().collect();
+    let tempo = Action::Tempo(DeckId::new(0).unwrap());
+    if cfg!(target_os = "macos") {
+        assert_eq!(sent, [UiCommand::Action(tempo, Input::Absolute(0.5))]);
+    } else {
+        assert!(!sent.contains(&UiCommand::Action(tempo, Input::Absolute(0.5))));
+    }
+}
+
+#[test]
+fn right_click_on_the_fx_level_sends_nothing() {
+    let (snapshot, frame) = loaded_plain();
+    let (mut harness, received) = sending(view(&snapshot, &frame));
+    let at = harness.get_by_label("FX 50%").rect().center_top() - vec2(0.0, 6.0);
+    right_click(&mut harness, at);
+    let sent: Vec<UiCommand> = received.try_iter().collect();
+    assert_eq!(sent, []);
+}
+
+#[test]
 fn loop_arrows_halve_and_double() {
     let (mut snapshot, frame) = loaded_plain();
     snapshot.loop_beats = 0.5;
