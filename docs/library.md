@@ -230,7 +230,9 @@ appear in the browser tree in library mode.
 ## Covers found online
 
 A track whose file has no picture of its own gets a cover looked up online, in the
-background, by the window (`open-jockey`; the command line looks nothing up). The lookups
+background, by the window (`open-jockey`; the command line looks nothing up). Before any
+request the file is read on your computer: a track with an embedded picture is never
+looked up, and nothing about it is sent. The lookups
 never slow the app down, and a cover found shows on the deck and in the info panel within
 about a second.
 
@@ -243,21 +245,25 @@ identifier of you or your computer. Every request names the app in its User-Agen
 1. to Deezer's public search (`api.deezer.com`, no account), and its image server for the
    picture;
 2. when Deezer has none, to MusicBrainz's recording search (`musicbrainz.org`), then the
-   Cover Art Archive (`coverartarchive.org`, which may send the picture from
-   `archive.org`) for the front cover of the matching releases.
+   Cover Art Archive (`coverartarchive.org`) for the front cover of the matching releases.
 
 MusicBrainz and the Cover Art Archive get at most one request a second, Deezer at most five.
-Only `https` is used, and answers are size-capped and checked before use.
+Only `https` is used, and answers are size-capped and checked before use. A request may
+follow up to 3 `https` redirects: the Cover Art Archive, for one, sends its pictures from
+`archive.org`.
 
 **Turning it off.** Untick `library.cover_lookup` in Settings → Library (or set
 `cover_lookup = false` under `[library]` in [config.md](config.md)). It applies at once:
-no request is made after the one under way, if any.
+a request already sent finishes (in at most 10 seconds) and its answer is not kept, and no
+further request is made, not even the next one of the same lookup.
 
 **What is kept.** A cover is kept as a JPEG of at most 512 pixels a side in the `covers`
-folder next to the library database (`covers/<track id>.jpg`), and recorded in the
-library. A track's own embedded picture always wins over it. A track whose lookup found
-nothing is not looked up again; "Retry missing covers" in Settings → Library looks all of
-them up once more. When the network is down or a service fails, nothing is recorded:
+folder next to the library database (`covers/<track id>.jpg`, or
+`covers/<track id>-2.jpg` after "Find another cover": the new picture takes the other name
+and the old one is deleted), and recorded in the library. A track's own embedded picture
+always wins over it. A track whose lookup found nothing, or whose file has a picture, is not
+looked up again; "Retry missing covers" in Settings → Library looks them all up once more
+(a file with a picture is only read again, on your computer). When the network is down or a service fails, nothing is recorded:
 lookups pause for a minute and the track is tried again later, so a laptop offline does
 not end up with every track "not found".
 
@@ -267,7 +273,13 @@ not end up with every track "not found".
   looks it up now and takes the first picture that differs from the one it has; when there
   is none, the events say so and the cover stays.
 - "Remove cover" (for a track with a cover found online) deletes it: the track shows its own
-  picture or the plain tile again, and it is never looked up again.
+  picture or the plain tile again, and it is not looked up again on its own.
+- "Find a cover" (for a track whose cover was removed) forgets the removal and looks it up
+  now, as "Find another cover" does. A "Find another cover" still under way when you remove
+  the cover is dropped: the removal stands.
+
+A track whose file has a picture of its own is not looked up from the menu either: the
+events say so.
 
 ## Importing from VirtualDJ
 
