@@ -228,6 +228,8 @@ fn run(
         }
     };
     let _ = events.send(Event::Browser(browser.view()));
+    // What a delete never takes: Open Jockey's own folders.
+    let own = delete::own_folders(lib.path());
     let adder = FolderAdder::start(lib, events);
     adder.offer(&browser);
     let (load_tx, load_rx) = channel::<LoadJob>();
@@ -412,7 +414,7 @@ fn run(
             }
             Job::AskDelete { seq, target, decks } => {
                 let loaded = loaded_files(&decks, &in_flight);
-                let answer = delete::ask(&target, &browser, &reader, &loaded);
+                let answer = delete::ask(&target, &browser, &reader, &loaded, &own);
                 let check = ui::DeleteCheck {
                     seq,
                     target,
@@ -428,6 +430,7 @@ fn run(
                     writer: &writer,
                     browser: &browser,
                     trash,
+                    own: &own,
                 };
                 let done = deleter.delete(&target, &loaded);
                 // The library first, then the browser read again, then the event.

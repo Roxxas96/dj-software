@@ -35,6 +35,7 @@ stems = { path = "../stems" }
 toml.workspace = true
 toml_edit.workspace = true
 trash.workspace = true
+same-file.workspace = true
 analysis = { path = "../analysis" }
 ui = { path = "../ui" }
 # Looks covers up online: the same build as the stems download (native TLS, the OS trust
