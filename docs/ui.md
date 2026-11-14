@@ -76,8 +76,9 @@ The track menu loads on a deck ("Load on deck N"), adds the selected tracks to a
 the library) and deletes them after asking ("Delete…", see [Deleting](#deleting)). For a
 track whose cover was looked up online it also has "Find another cover" (when a cover was
 found, or the lookup found none), "Find a cover" (when it was removed) and "Remove cover"
-(when one was found); see
-[Covers found online](library.md#covers-found-online). Dropping a playlist's own rows back
+(when one was found), except for a missing track; see
+[Covers found online](library.md#covers-found-online). "Add to playlist" says "No other
+playlist" when the only playlist is the one the whole list comes from. Dropping a playlist's own rows back
 on its tree row does nothing.
 
 The search covers the title, the artist, and the file name of a track without a title (the
@@ -119,14 +120,17 @@ already has (the same letters, capitals included), is refused with a message in 
 
 The browser takes the keyboard once you click in its tree or its list, and keeps it until
 you click elsewhere or a text field (the search box, a dialog's name) has the focus. The pane
-that has the keyboard draws its highlighted row brighter than the other's. Keys do nothing
-while a menu or a dialog is open: they go to it.
+that has the keyboard draws its highlighted row brighter than the other's; once the browser
+has lost the keyboard (a click on a deck or a knob), both are dim. Keys do nothing while a
+menu or a dialog is open: they go to it. Answering a dialog the browser opened (Delete then
+Enter, Escape or a click on its buttons) leaves the browser the keyboard, so you can go on
+with the arrows.
 
 | Key | In the tree | In the list |
 |---|---|---|
 | Up, Down, Page Up, Page Down, Home, End | Move the highlight | Move the highlight |
 | Left, Right | Close or open a drive or folder | — |
-| Enter | Open or close a drive or folder; show a playlist | Load the highlighted track on the first free deck (refused when every deck plays, as a double-click is) |
+| Enter | Open or close a drive or folder; on a playlist (or Playlists), go to its list | Load the highlighted track on the first free deck (refused when every deck plays, as a double-click is) |
 | Tab, Shift-Tab | Go to the list | Go to the tree |
 | Cmd-A (Ctrl-A on Windows and Linux) | Select the whole list | Select the whole list |
 | Letters and digits | Start a search | Start a search |
@@ -146,20 +150,25 @@ before it was ready cannot land on it. What it asks depends on what is selected:
 | Selected | Question | What happens |
 |---|---|---|
 | Rows of a playlist | "Remove N tracks from <playlist>? The files stay." | The entries leave the playlist; the files and the tracks stay |
-| Rows of a folder | "Move <file> to the Trash?" or "Move N files to the Trash?" | The files go to the system's Trash (the Recycle Bin on Windows); the tracks are marked missing, keeping their hotcues |
+| Rows of a folder | "Move <file> to the Trash?" or "Move N files to the Trash?" | The files go to the system's Trash (the Recycle Bin on Windows), whether the library has them or not; its tracks among them are marked missing, keeping their hotcues and covers |
 | A playlist in the tree | "Delete the playlist <name>? Its tracks stay in the library." | The playlist goes; its tracks stay |
 | A folder in the tree | "Move the folder <name> and its N files to the Trash?" | The folder goes to the Trash |
 
-With the whole list selected (Cmd-A), all of it is what is deleted; if the list changed
-since, nothing is deleted. A file only ever goes to the Trash, from where you can put it
-back: nothing is deleted for good, and if the Trash move fails (a drive without a Trash, a
-file in use) nothing is deleted at all and the events say why. Only files and folders inside
-the library's folders can go, compared as real paths so a link cannot point elsewhere. These
-are refused, with the reason and OK in place of the buttons:
+With the whole list selected (Cmd-A), all of it is what is deleted. The selection stays
+while the list stays the same (Tab, opening a folder, a track analysed or loaded meanwhile);
+if the list changed since, nothing is deleted. A file only ever goes to the Trash, from
+where you can put it back: if a Trash move fails (a drive without a Trash, a file in use),
+nothing else is moved and nothing is ever deleted for good; the events say what went and
+why. Only files and folders inside the library's folders can go, compared as real paths so
+a link cannot point elsewhere, and as the same file or folder on disk, so a name typed in
+another case on a drive that ignores case is still recognised. These are refused, with the
+reason and OK in place of the buttons:
 
 - "<file> is loaded on deck N: unload it first."
 - "<folder> is a library folder: remove it from the library first."
 - "<folder> holds a library folder: remove it from the library first."
+- "<folder> holds Open Jockey's library: it can't be deleted from here." (the folder of the
+  library database, its backups and covers, or of the configuration, or one holding it)
 - "<path> is outside the library folders."
 
 Everything is checked again when you confirm: anything refused by then is said in the events
@@ -185,7 +194,7 @@ and nothing is deleted.
   or shrink; the drawing never leaves the lane. With SLIP on, a held loop roll or slicer
   shows where the track will land when it is let go: a triangle in the deck's accent at the
   lane's top with a faint line through the lane, and the same triangle over the overview.
-  A loop, a held loop roll and the slicer's current block are shaded on the lane.
+  A loop, and a held loop roll or slice, are shaded on the lane and the overview.
 - **Zoom:** scroll (or pinch) over the waveforms, or click the `-` and `+` buttons at their
   top right. Each step is 1.25 times, between `ui.waveform_min_beats` and
   `ui.waveform_max_beats` (4 and 64 beats by default). Both lanes always share the zoom, so

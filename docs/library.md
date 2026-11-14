@@ -52,6 +52,19 @@ not a database at all is refused on any open.
 3. Delete `library.sqlite3-wal` and `library.sqlite3-shm` next to it, if they exist. They
    belong to the old database and must not be applied to the restored one.
 
+### Going back to an older version
+
+A newer version may migrate the library to a schema an older one does not know: the older
+one then refuses to open it ("too new"). The backup taken just before the migration is in
+`backups/` (the newest one from before the update). To go back:
+
+1. Restore that backup as described above. Changes made since the update are lost.
+2. If the newer version saved a `[library]` table in `config.toml` (the
+   `library.cover_lookup` switch), remove that table: older versions refuse a key they do
+   not know.
+
+The `covers` folder next to the database can stay; older versions ignore it.
+
 ## What a scan does
 
 `library add-folder <DIR>` registers a folder and scans it. `library scan` scans every
@@ -232,15 +245,19 @@ appear in the browser tree in library mode.
 A track whose file has no picture of its own gets a cover looked up online, in the
 background, by the window (`open-jockey`; the command line looks nothing up). Before any
 request the file is read on your computer: a track with an embedded picture is never
-looked up, and nothing about it is sent. The lookups
+looked up, and nothing about it is sent. A track whose file cannot be read (its drive
+unplugged) is not looked up either, and nothing is recorded: it is tried again once it can
+be read. A missing track (its file moved to the Trash, say) is not looked up; like its
+hotcues, its cover is kept, and comes back with the file. The lookups
 never slow the app down, and a cover found shows on the deck and in the info panel within
 about a second.
 
 **What is sent, and to whom.** For each track, one search with the track's artist and title
 tags (the title alone when there is no artist; the file name without its folder or
-extension when there is no title), and nothing else: no path, no account, no cookie, no
-identifier of you or your computer. Every request names the app in its User-Agent,
-`OpenJockey/<version> ( https://github.com/Roxxas96/open-jockey )`. It goes:
+extension when there is no title), and nothing else: no path, no account, no cookie. The
+services see your IP address, as any website you visit does. Every request names the app
+in its User-Agent, `OpenJockey/<version> ( https://github.com/Roxxas96/open-jockey )`: the
+same for every copy, naming the project, not you. It goes:
 
 1. to Deezer's public search (`api.deezer.com`, no account), and its image server for the
    picture;
@@ -263,9 +280,13 @@ folder next to the library database (`covers/<track id>.jpg`, or
 and the old one is deleted), and recorded in the library. A track's own embedded picture
 always wins over it. A track whose lookup found nothing, or whose file has a picture, is not
 looked up again; "Retry missing covers" in Settings → Library looks them all up once more
-(a file with a picture is only read again, on your computer). When the network is down or a service fails, nothing is recorded:
-lookups pause for a minute and the track is tried again later, so a laptop offline does
-not end up with every track "not found".
+(a file with a picture is only read again, on your computer). When a service cannot be
+reached (the network is down, a timeout, a server error, or it asks to slow down), nothing
+is recorded: lookups pause for a minute and the track is tried again later, so a laptop
+offline does not end up with every track "not found"; a "Retry missing covers" under way
+goes on from that track. Any other answer that is not a cover (the service refusing the
+query, an answer it cannot read) counts as "found nothing" for that service: asking again
+would not change it.
 
 **From the track menu** (right-click a track in the browser):
 
