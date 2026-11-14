@@ -1699,6 +1699,24 @@ fn overview_marks(snapshot: &DeckSnapshot, frame: &ControlFrame) -> (Vec<Pos2>, 
 }
 
 #[test]
+fn the_overview_shades_a_normal_loop() {
+    let (mut snapshot, frame) = loaded_plain();
+    assert_eq!(view(&snapshot, &frame).loop_span, None);
+    snapshot.loop_in = Some(1_000_000.0);
+    snapshot.loop_out = Some(1_441_000.0);
+    // A set loop that is not playing is not shaded.
+    assert_eq!(view(&snapshot, &frame).loop_span, None);
+    snapshot.loop_active = true;
+    let span = view(&snapshot, &frame).loop_span.expect("a span");
+    assert!((span.0 - 1_000_000.0 / 14_508_900.0).abs() < 1e-4);
+    assert!((span.1 - 1_441_000.0 / 14_508_900.0).abs() < 1e-4);
+    // A held roll wins over the loop under it.
+    snapshot.roll_span = Some((2_518_110.0, 2_518_110.0 + 441_000.0));
+    let span = view(&snapshot, &frame).loop_span.expect("a span");
+    assert!((span.0 - 2_518_110.0 / 14_508_900.0).abs() < 1e-4);
+}
+
+#[test]
 fn the_overview_shows_the_landing_point() {
     let (mut snapshot, mut frame) = loaded_plain();
     frame.decks[0].as_mut().unwrap().overview = Some(Arc::new(Waveform {
@@ -1722,7 +1740,7 @@ fn the_overview_shows_the_landing_point() {
 
     // The held roll's span is shaded in the overview, in the loop colour.
     snapshot.roll_span = Some((2_518_110.0, 2_518_110.0 + 441_000.0));
-    let span = view(&snapshot, &frame).roll_span.expect("a span");
+    let span = view(&snapshot, &frame).loop_span.expect("a span");
     assert!((span.0 - 2_518_110.0 / 14_508_900.0).abs() < 1e-4);
     assert!((span.1 - 2_959_110.0 / 14_508_900.0).abs() < 1e-4);
 

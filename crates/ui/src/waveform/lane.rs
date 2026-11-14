@@ -586,8 +586,8 @@ fn columns(
 }
 
 /// The span in track frames to shade as a loop: the held roll's or slice's, else the
-/// active loop.
-fn shaded_loop(snapshot: &DeckSnapshot) -> Option<(f64, f64)> {
+/// active loop. The deck's overview shades the same span.
+pub(crate) fn shaded_loop(snapshot: &DeckSnapshot) -> Option<(f64, f64)> {
     let span = snapshot.roll_span.or_else(|| {
         snapshot
             .loop_in

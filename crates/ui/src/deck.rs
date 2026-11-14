@@ -160,8 +160,9 @@ pub struct DeckView {
     pub progress: Option<f32>,
     /// Where the track would be while a held roll or slice slips, 0 to 1 like `progress`.
     pub landing: Option<f32>,
-    /// The held roll's or slice's loop, as fractions of the track like `progress`.
-    pub roll_span: Option<(f32, f32)>,
+    /// The loop to shade, as fractions of the track like `progress`: the held roll's or
+    /// slice's, else the active loop (the lanes' rule).
+    pub loop_span: Option<(f32, f32)>,
     /// How far the jog's marker has turned, 0 to 1 clockwise from the top.
     pub jog_turn: f32,
     pub keylock: bool,
@@ -285,8 +286,7 @@ impl DeckView {
                 .ghost_frames
                 .filter(|_| loaded && duration > 0.0)
                 .map(|ghost| (ghost / duration).clamp(0.0, 1.0) as f32),
-            roll_span: snapshot
-                .roll_span
+            loop_span: crate::waveform::shaded_loop(snapshot)
                 .filter(|_| loaded && duration > 0.0)
                 .map(|(a, b)| {
                     let at = |frames: f64| (frames / duration).clamp(0.0, 1.0) as f32;
@@ -1023,7 +1023,7 @@ fn overview_strip(ui: &Ui, view: &DeckView, rect: Rect, sink: &mut Sink<'_>) {
             view.band_scale,
         );
     }
-    if let Some((start, end)) = view.roll_span {
+    if let Some((start, end)) = view.loop_span {
         let at = |v: f32| rect.left() + rect.width() * v;
         let band = Rect::from_x_y_ranges(at(start)..=at(end), rect.y_range());
         mesh.add_colored_rect(band, p.loop_band);

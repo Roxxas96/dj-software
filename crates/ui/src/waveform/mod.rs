@@ -9,6 +9,7 @@ mod ticks;
 mod zoom;
 
 pub use colour::band_colours;
+pub(crate) use lane::shaded_loop;
 pub use lane::{Lane, Lanes, lanes};
 pub use playhead::Playhead;
 pub use styles::{BandScale, Bar, band_scale, column, layers, loudest};
