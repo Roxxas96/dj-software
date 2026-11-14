@@ -6,7 +6,9 @@
 //! Only artist and title (or the file name without its extension) are sent. The control
 //! and window threads never wait for a lookup: they set flags and queue requests without
 //! blocking. A network failure records nothing (the track is looked up again later) and
-//! pauses the lookups; only a clean "no cover" from every service records a miss.
+//! pauses the lookups; any other answer that is not a cover, from every service, records a
+//! miss. A track whose file cannot be read (its drive unplugged) is not looked up: nothing
+//! can say whether it has a picture of its own.
 
 pub mod service;
 
@@ -45,7 +47,8 @@ pub struct Timing {
     pub offline_pause: Duration,
     /// With nothing to look up, before the library is asked again for new tracks.
     pub idle_poll: Duration,
-    /// Before a track whose lookup failed is looked up again.
+    /// Before a track whose file could not be read, or whose lookup could not reach the
+    /// services, is looked up again.
     pub retry_later: Duration,
 }
 
@@ -233,7 +236,8 @@ struct Lookups {
     requests: Receiver<Request>,
     events: Sender<String>,
     timing: Timing,
-    /// The tracks whose lookup failed, and when they may be looked up again.
+    /// The tracks whose file could not be read or whose lookup failed on the network, and
+    /// when they may be looked up again.
     later: HashMap<i64, Instant>,
     /// After a network failure: no request before this.
     paused_until: Option<Instant>,
@@ -249,8 +253,18 @@ struct Pass {
     retrying: bool,
     /// How many lookups the pass made.
     looked_up: usize,
-    /// A lookup failed on the network: a retry is not done.
-    failed: bool,
+}
+
+/// What a track's file says before any request.
+enum Picture {
+    /// It has a picture of its own: nothing is sent.
+    Own,
+    /// It has none: it may be looked up.
+    None,
+    /// It cannot be read (its drive unplugged): nothing is sent, nothing recorded.
+    Unknown,
+    /// The track is missing (its file went to the Trash since it was read): nothing.
+    Gone,
 }
 
 /// How a lookup ended.
@@ -313,7 +327,12 @@ impl Lookups {
                 }
                 pass.looked_up += 1;
                 if !self.look_up(&query) {
-                    pass.failed = true;
+                    // A retry goes on from this track once the pause is over, not from the
+                    // first missed track again.
+                    if pass.retrying {
+                        self.later.remove(&query.track);
+                        pass.after = before;
+                    }
                     break;
                 }
                 // Turned off midway: this track is looked up again when they are back on.
@@ -362,10 +381,10 @@ impl Lookups {
         }
     }
 
-    /// A pass that retried the missed tracks without a network failure clears the retry
-    /// flag: they were all looked up again.
+    /// A pass that retried the missed tracks clears the retry flag: they were all looked up
+    /// again (a network failure holds the pass at its track until the pause is over).
     fn end_pass(&self, pass: &Pass) {
-        if pass.retrying && !pass.failed {
+        if pass.retrying {
             let _ = self.writer.submit_wait(WriteOp::SetSetting {
                 key: COVERS_RETRY_MISSED.to_owned(),
                 value: Some("0".to_owned()),
@@ -409,17 +428,28 @@ impl Lookups {
     /// Looks `query` up and records what was found, or the miss. Returns `false` after a
     /// network failure (lookups then pause).
     fn look_up(&mut self, query: &CoverQuery) -> bool {
-        // A file with a picture of its own shows it: nothing is sent, and the miss keeps
-        // it from being checked again (a retry checks the file again, locally).
-        if self.has_own_picture(query.track) {
-            let _ = self
-                .writer
-                .submit_wait(WriteOp::MissCover { track: query.track });
-            return true;
+        match self.own_picture(query.track) {
+            // A file with a picture of its own shows it: nothing is sent, and the miss
+            // keeps it from being checked again (a retry checks the file again, locally).
+            Picture::Own => {
+                let _ = self
+                    .writer
+                    .submit_wait(WriteOp::MissCover { track: query.track });
+                return true;
+            }
+            Picture::None => {}
+            // Nothing is known of the file: nothing is sent or recorded, and the file is
+            // read again later (the drive may be back).
+            Picture::Unknown => {
+                let later = Instant::now() + self.timing.retry_later;
+                self.later.insert(query.track, later);
+                return true;
+            }
+            Picture::Gone => return true,
         }
         match self.ask(query, None) {
             Outcome::Found(jpeg) => {
-                self.keep(query.track, &jpeg, false);
+                self.keep(query.track, &jpeg, None);
                 true
             }
             Outcome::Nothing => {
@@ -434,13 +464,20 @@ impl Lookups {
         }
     }
 
-    /// Whether `track`'s file has a picture of its own, read as the window reads it.
-    fn has_own_picture(&self, track: i64) -> bool {
-        self.reader
-            .track(track)
-            .ok()
-            .flatten()
-            .is_some_and(|details| ui::cover::has_picture(&details.path))
+    /// What `track`'s file says of a picture of its own, read as the window reads it, and
+    /// whether the track is still there (the library is read again here: the batch may be
+    /// older than a delete).
+    fn own_picture(&self, track: i64) -> Picture {
+        match self.reader.track(track) {
+            Ok(Some(details)) if details.row.missing => Picture::Gone,
+            Ok(Some(details)) => match ui::cover::own_picture(&details.path) {
+                Some(true) => Picture::Own,
+                Some(false) => Picture::None,
+                None => Picture::Unknown,
+            },
+            Ok(None) => Picture::Gone,
+            Err(_) => Picture::Unknown,
+        }
     }
 
     /// Whether the lookups may go on: on, and not stopping.
@@ -451,7 +488,8 @@ impl Lookups {
     /// "Find another cover" for `track`: a cover other than the one it has replaces it,
     /// even a removed one, unless the cover was removed again since it was asked for
     /// (`removed` is the track's removal count then); none is said, and a track without a
-    /// cover records the miss. A file with a picture of its own is not looked up.
+    /// cover records the miss. A file with a picture of its own, a file that cannot be read
+    /// and a missing track are not looked up.
     fn find_another(&mut self, track: i64, removed: u64) {
         if !self.go_on() {
             return;
@@ -460,10 +498,16 @@ impl Lookups {
             return;
         };
         let name = service::query_text(&query);
-        if self.has_own_picture(track) {
-            let _ = self.events.send(format!(
-                "{name} has a picture of its own: no cover was looked up"
-            ));
+        let refused = match self.own_picture(track) {
+            Picture::None => None,
+            Picture::Own => Some("has a picture of its own"),
+            Picture::Unknown => Some("cannot be read"),
+            Picture::Gone => Some("is missing"),
+        };
+        if let Some(why) = refused {
+            let _ = self
+                .events
+                .send(format!("{name} {why}: no cover was looked up"));
             return;
         }
         let current = self.reader.cover(track).ok().flatten();
@@ -476,7 +520,7 @@ impl Lookups {
         match self.ask(&query, had.as_deref()) {
             // Removed again while it was looked up: the removal stands.
             Outcome::Found(_) if removals_of(&self.removals, track) != removed => {}
-            Outcome::Found(jpeg) => self.keep(track, &jpeg, true),
+            Outcome::Found(jpeg) => self.keep(track, &jpeg, Some(removed)),
             Outcome::Nothing if found.is_some() => {
                 let _ = self.events.send(format!("No other cover found for {name}"));
             }
@@ -508,13 +552,16 @@ impl Lookups {
         let go_on = || self.go_on();
         match self.service.find_other(query, &accept, &go_on) {
             Ok(Some(_)) => kept.into_inner().map_or(Outcome::Nothing, Outcome::Found),
-            Ok(None) => Outcome::Nothing,
+            // A service that failed for good (not on the network) has no cover for it:
+            // asking again would change nothing.
+            Ok(None) | Err(LookupError::Failed(_)) => Outcome::Nothing,
             Err(e) => Outcome::Failed(e),
         }
     }
 
-    /// A failed lookup records nothing: the track is looked up again later. A network
-    /// failure also pauses the lookups. Returns whether the failure was not the network's.
+    /// A lookup that could not reach the services records nothing: the track is looked up
+    /// again later, and the lookups pause. Returns whether the failure was not the
+    /// network's (a cancel).
     fn failed(&mut self, track: i64, e: &LookupError) -> bool {
         if *e == LookupError::Cancelled {
             return true;
@@ -529,10 +576,12 @@ impl Lookups {
     }
 
     /// Saves `jpeg` as `track`'s cover and records it. A new cover for a track that has
-    /// one goes to its other file (see [`library::cover_files`]). `force` replaces even a
-    /// removed cover, for the user's own request.
-    fn keep(&self, track: i64, jpeg: &[u8], force: bool) {
-        if self.stopped() {
+    /// one goes to its other file (see [`library::cover_files`]). `removed`, for the user's
+    /// own request, replaces even a removed cover, unless the track's removal count is no
+    /// longer `removed` when it is recorded (it was removed again meanwhile). Nothing is
+    /// kept once the lookups were turned off or are stopping.
+    fn keep(&self, track: i64, jpeg: &[u8], removed: Option<u64>) {
+        if !self.go_on() {
             return;
         }
         let [first, second] = library::cover_files(&self.db, track);
@@ -548,7 +597,13 @@ impl Lookups {
             first
         };
         match save(&file, jpeg) {
+            // Removed again while it was saved: the removal stands, and the file it was
+            // saved to (not the track's cover) goes.
+            Ok(()) if removed.is_some_and(|r| removals_of(&self.removals, track) != r) => {
+                let _ = std::fs::remove_file(&file);
+            }
             Ok(()) => {
+                let force = removed.is_some();
                 let _ = self
                     .writer
                     .submit_wait(WriteOp::SetCover { track, file, force });
@@ -733,6 +788,15 @@ pub(crate) mod tests {
             .unwrap();
     }
 
+    /// An empty file `name` in `dir` (a file with no picture of its own), as a path for
+    /// [`add_track`]: a track whose file cannot be read is never looked up.
+    pub(crate) fn song(dir: &tempfile::TempDir, name: &str) -> String {
+        let path = dir.path().join("music").join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"").unwrap();
+        path.to_str().unwrap().to_owned()
+    }
+
     pub(crate) fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
         let deadline = Instant::now() + Duration::from_secs(10);
         while !done() {
@@ -781,7 +845,7 @@ pub(crate) mod tests {
             &lib,
             1,
             Some(("Daft Punk", "Da Funk")),
-            "/music/da funk.mp3",
+            &song(&dir, "da funk.mp3"),
         );
         let (service, fake) = FakeService::boxed(
             Answer::Pictures(vec![png(2000, [200, 0, 0])]),
@@ -816,13 +880,13 @@ pub(crate) mod tests {
             &lib,
             1,
             Some(("Artist", "Title")),
-            "/Users/someone/Private Folder/my song.flac",
+            &song(&dir, "Private Folder/my song.flac"),
         );
         add_track(
             &lib,
             2,
             None,
-            "/Users/someone/Private Folder/Untagged One.wav",
+            &song(&dir, "Private Folder/Untagged One.wav"),
         );
         let (service, fake) = FakeService::boxed(Answer::Nothing, Duration::ZERO);
         let _worker = CoverWorker::start_with(&lib, service, on(), fast()).unwrap();
@@ -840,7 +904,7 @@ pub(crate) mod tests {
     fn a_clean_no_result_records_a_miss() {
         let dir = tempfile::tempdir().unwrap();
         let lib = open(&dir);
-        add_track(&lib, 1, Some(("A", "T")), "/music/a.mp3");
+        add_track(&lib, 1, Some(("A", "T")), &song(&dir, "a.mp3"));
         let (service, fake) = FakeService::boxed(Answer::Nothing, Duration::ZERO);
         let _worker = CoverWorker::start_with(&lib, service, on(), fast()).unwrap();
         wait_until("the miss", || state(&lib, 1) == Some(CoverState::Missed));
@@ -853,8 +917,8 @@ pub(crate) mod tests {
     fn an_unreachable_service_records_nothing_and_never_blocks() {
         let dir = tempfile::tempdir().unwrap();
         let lib = open(&dir);
-        add_track(&lib, 1, Some(("A", "T")), "/music/a.mp3");
-        add_track(&lib, 2, Some(("B", "U")), "/music/b.mp3");
+        add_track(&lib, 1, Some(("A", "T")), &song(&dir, "a.mp3"));
+        add_track(&lib, 2, Some(("B", "U")), &song(&dir, "b.mp3"));
         let offline = Answer::Fail(LookupError::Unreachable("offline".into()));
         let (service, fake) = FakeService::boxed(offline, Duration::from_millis(500));
         let worker = CoverWorker::start_with(&lib, service, on(), fast()).unwrap();
@@ -885,7 +949,12 @@ pub(crate) mod tests {
         let dir = tempfile::tempdir().unwrap();
         let lib = open(&dir);
         for id in 1..=10 {
-            add_track(&lib, id, Some(("A", "T")), &format!("/music/{id}.mp3"));
+            add_track(
+                &lib,
+                id,
+                Some(("A", "T")),
+                &song(&dir, &format!("{id}.mp3")),
+            );
         }
         let setting = on();
         let (service, fake) = FakeService::boxed(Answer::Nothing, Duration::from_millis(100));
@@ -908,7 +977,7 @@ pub(crate) mod tests {
     fn find_another_cover_retries_a_miss() {
         let dir = tempfile::tempdir().unwrap();
         let lib = open(&dir);
-        add_track(&lib, 1, Some(("A", "T")), "/music/a.mp3");
+        add_track(&lib, 1, Some(("A", "T")), &song(&dir, "a.mp3"));
         lib.writer()
             .submit_wait(WriteOp::MissCover { track: 1 })
             .unwrap();
@@ -952,7 +1021,7 @@ pub(crate) mod tests {
     fn retry_missing_covers_looks_them_up_once() {
         let dir = tempfile::tempdir().unwrap();
         let lib = open(&dir);
-        add_track(&lib, 1, Some(("A", "T")), "/music/a.mp3");
+        add_track(&lib, 1, Some(("A", "T")), &song(&dir, "a.mp3"));
         lib.writer()
             .submit_wait(WriteOp::MissCover { track: 1 })
             .unwrap();
@@ -980,6 +1049,13 @@ pub(crate) mod tests {
         let mode = crate::library_mode::testing::start(&path);
         crate::library_mode::testing::add_track_7(&mode);
         let lib = mode.library();
+        // Its file, readable and without a picture.
+        lib.writer()
+            .submit_wait(WriteOp::Raw(vec![RawStatement {
+                sql: "UPDATE tracks SET path = ?1 WHERE id = 7".into(),
+                params: vec![Value::Text(song(&dir, "7.wav"))],
+            }]))
+            .unwrap();
         let (service, fake) = FakeService::boxed(
             Answer::Pictures(vec![png(100, [0, 255, 0])]),
             Duration::ZERO,
@@ -1091,10 +1167,202 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_service_that_fails_for_good_is_a_miss() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = open(&dir);
+        add_track(&lib, 1, Some(("A", "T")), &song(&dir, "a.mp3"));
+        let broken = Answer::Fail(LookupError::Failed("Deezer: invalid query".into()));
+        let (service, fake) = FakeService::boxed(broken, Duration::ZERO);
+        let timing = Timing {
+            retry_later: Duration::from_millis(100),
+            ..fast()
+        };
+        let _worker = CoverWorker::start_with(&lib, service, on(), timing).unwrap();
+        wait_until("the miss", || state(&lib, 1) == Some(CoverState::Missed));
+        // Recorded once, and not asked again, even past the wait after a failure.
+        std::thread::sleep(Duration::from_millis(400));
+        assert_eq!(fake.calls(), 1);
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_read_sends_nothing() {
+        use service::tests::RecordingHttp;
+        use service::{Chain, DeezerService, Http, MusicBrainzService};
+        let dir = tempfile::tempdir().unwrap();
+        let lib = open(&dir);
+        // On a drive that is not plugged in.
+        let away = dir.path().join("Unplugged/song.mp3");
+        add_track(&lib, 1, Some(("Away", "Song")), away.to_str().unwrap());
+        let http = Arc::new(RecordingHttp::default());
+        let shared = Arc::clone(&http) as Arc<dyn Http>;
+        let chain = Chain(vec![
+            Box::new(DeezerService::new(Arc::clone(&shared), Duration::ZERO)),
+            Box::new(MusicBrainzService::new(shared, Duration::ZERO)),
+        ]);
+        let worker = CoverWorker::start_with(&lib, Box::new(chain), on(), fast()).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(http.asked().is_empty());
+        assert_eq!(state(&lib, 1), None);
+        // Asked for by hand, the same, and the events say why.
+        worker.find_now(1).unwrap();
+        let mut events = Vec::new();
+        wait_until("the event", || {
+            events.extend(worker.take_events());
+            !events.is_empty()
+        });
+        assert_eq!(events, ["Away Song cannot be read: no cover was looked up"]);
+        assert!(http.asked().is_empty());
+        assert_eq!(state(&lib, 1), None);
+    }
+
+    #[test]
+    fn a_missing_track_is_not_looked_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = open(&dir);
+        add_track(&lib, 1, Some(("A", "T")), &song(&dir, "a.mp3"));
+        lib.writer()
+            .submit_wait(WriteOp::MissCover { track: 1 })
+            .unwrap();
+        lib.writer()
+            .submit_wait(WriteOp::MarkMissing(vec![1]))
+            .unwrap();
+        let (service, fake) = FakeService::boxed(Answer::Nothing, Duration::ZERO);
+        let worker = CoverWorker::start_with(&lib, service, on(), fast()).unwrap();
+        worker.find_now(1).unwrap();
+        let mut events = Vec::new();
+        wait_until("the event", || {
+            events.extend(worker.take_events());
+            !events.is_empty()
+        });
+        assert_eq!(events, ["A T is missing: no cover was looked up"]);
+        assert_eq!(fake.calls(), 0);
+    }
+
+    /// A service with no cover for anything, unreachable the first time it is asked about
+    /// the title `flaky`.
+    struct FlakyOnce {
+        flaky: &'static str,
+        failed: AtomicBool,
+        asked: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl CoverService for FlakyOnce {
+        fn find_other(
+            &self,
+            query: &CoverQuery,
+            _accept: &dyn Fn(&[u8]) -> bool,
+            _go_on: &dyn Fn() -> bool,
+        ) -> Result<Option<Vec<u8>>, LookupError> {
+            let title = query.title.clone().unwrap_or_default();
+            self.asked.lock().unwrap().push(title.clone());
+            if title == self.flaky && !self.failed.swap(true, Ordering::Relaxed) {
+                return Err(LookupError::Unreachable("offline".into()));
+            }
+            Ok(None)
+        }
+    }
+
+    #[test]
+    fn a_retry_goes_on_from_where_the_network_failed() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = open(&dir);
+        for id in 1..=4 {
+            let title = id.to_string();
+            add_track(
+                &lib,
+                id,
+                Some(("A", &title)),
+                &song(&dir, &format!("{id}.mp3")),
+            );
+            lib.writer()
+                .submit_wait(WriteOp::MissCover { track: id })
+                .unwrap();
+        }
+        lib.writer()
+            .submit_wait(WriteOp::SetSetting {
+                key: COVERS_RETRY_MISSED.to_owned(),
+                value: Some("1".to_owned()),
+            })
+            .unwrap();
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let service = FlakyOnce {
+            flaky: "3",
+            failed: AtomicBool::new(false),
+            asked: Arc::clone(&asked),
+        };
+        let timing = Timing {
+            offline_pause: Duration::from_millis(200),
+            ..fast()
+        };
+        let _worker = CoverWorker::start_with(&lib, Box::new(service), on(), timing).unwrap();
+        let reader = lib.reader().unwrap();
+        wait_until("the retry done", || {
+            reader.setting(COVERS_RETRY_MISSED).unwrap().as_deref() == Some("0")
+        });
+        std::thread::sleep(Duration::from_millis(300));
+        // Track 3 again after the pause, then 4: the tracks before it once each.
+        assert_eq!(*asked.lock().unwrap(), ["1", "2", "3", "3", "4"]);
+    }
+
+    #[test]
+    fn a_cover_in_flight_is_dropped_once_lookups_are_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = open(&dir);
+        add_track(&lib, 1, Some(("A", "T")), &song(&dir, "a.mp3"));
+        let setting = on();
+        let (service, fake) = FakeService::boxed(
+            Answer::Pictures(vec![png(64, [0, 200, 0])]),
+            Duration::from_millis(400),
+        );
+        let worker = CoverWorker::start_with(&lib, service, Arc::clone(&setting), fast()).unwrap();
+        wait_until("the lookup under way", || fake.calls() == 1);
+        worker.set_enabled(false);
+        std::thread::sleep(Duration::from_millis(700));
+        assert_eq!(state(&lib, 1), None);
+        let [first, second] = library::cover_files(&db(&dir), 1);
+        assert!(!first.exists() && !second.exists());
+    }
+
+    #[test]
+    fn a_removal_just_before_a_found_cover_is_recorded_stands() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = open(&dir);
+        add_track(&lib, 1, Some(("A", "T")), &song(&dir, "a.mp3"));
+        let (service, _fake) = FakeService::boxed(Answer::Nothing, Duration::ZERO);
+        let (_requests, incoming) = std::sync::mpsc::sync_channel(1);
+        let (events, _events) = std::sync::mpsc::channel();
+        let lookups = Lookups {
+            reader: lib.reader().unwrap(),
+            writer: lib.writer(),
+            db: db(&dir),
+            service,
+            enabled: on(),
+            stop: Arc::new(AtomicBool::new(false)),
+            requests: incoming,
+            events,
+            timing: fast(),
+            later: HashMap::new(),
+            paused_until: None,
+            removals: Removals::default(),
+        };
+        // "Find another cover" asked with no removal yet; a removal lands as the picture
+        // is saved, before it is recorded.
+        lookups.removals.lock().unwrap().insert(1, 1);
+        let jpeg = shrink(&png(64, [0, 0, 200])).unwrap();
+        lookups.keep(1, &jpeg, Some(0));
+        assert_eq!(state(&lib, 1), None);
+        let [first, second] = library::cover_files(&db(&dir), 1);
+        assert!(!first.exists() && !second.exists());
+        // Without the removal, it is kept.
+        lookups.keep(1, &jpeg, Some(1));
+        assert_eq!(state(&lib, 1), Some(CoverState::Found));
+    }
+
+    #[test]
     fn a_removal_after_find_another_stands() {
         let dir = tempfile::tempdir().unwrap();
         let lib = open(&dir);
-        add_track(&lib, 1, Some(("A", "T")), "/music/a.mp3");
+        add_track(&lib, 1, Some(("A", "T")), &song(&dir, "a.mp3"));
         lib.writer()
             .submit_wait(WriteOp::MissCover { track: 1 })
             .unwrap();

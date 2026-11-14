@@ -14,6 +14,7 @@ mod playlist_edits;
 mod stem_jobs;
 mod worker;
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1467,6 +1468,9 @@ struct CoverShared {
 struct CoverFiles {
     shared: Arc<Mutex<CoverShared>>,
     wanted: Option<std::sync::mpsc::SyncSender<i64>>,
+    /// Per track, the cover file last given out: what is given while the reader holds the
+    /// map, so a cover never flickers off for a frame. Only the caller's thread uses it.
+    given: RefCell<HashMap<i64, Option<PathBuf>>>,
 }
 
 impl CoverFiles {
@@ -1508,14 +1512,18 @@ impl CoverFiles {
         Self {
             shared,
             wanted: spawned.ok().map(|_| wanted),
+            given: RefCell::default(),
         }
     }
 
     /// `track`'s cover file as last read; never waits for the reader thread or the
-    /// database. `None` when it is not known (yet).
+    /// database. `None` when it is not known (yet). While the reader holds the map, the
+    /// file last given for `track`.
     fn get(&self, track: i64, now: Instant) -> Option<PathBuf> {
         // The reader holds the lock only to insert a row, but whoever has it, don't wait.
-        let mut shared = self.shared.try_lock().ok()?;
+        let Ok(mut shared) = self.shared.try_lock() else {
+            return self.given.borrow().get(&track).cloned().flatten();
+        };
         let known = shared.files.get(&track);
         let file = known.and_then(|(_, f)| f.clone());
         let fresh = known.is_some_and(|(read, _)| now.duration_since(*read) < COVER_TTL);
@@ -1526,6 +1534,14 @@ impl CoverFiles {
             && wanted.try_send(track).is_err()
         {
             shared.pending.remove(&track);
+        }
+        drop(shared);
+        let mut given = self.given.borrow_mut();
+        if given.get(&track) != Some(&file) {
+            if given.len() >= COVER_TRACKS {
+                given.clear();
+            }
+            given.insert(track, file.clone());
         }
         file
     }
@@ -3323,6 +3339,26 @@ mod tests {
         // A track not known yet is asked for, and the number asked for stays bounded.
         assert_eq!(mode.cover_file(1), None);
         assert!(mode.covers.shared.lock().unwrap().pending.len() <= COVER_TRACKS);
+    }
+
+    #[test]
+    fn a_cover_stays_while_the_reader_holds_the_map() {
+        let dir = tempfile::tempdir().unwrap();
+        let mode = start(&dir.path().join("library.sqlite3"));
+        let file = dir.path().join("covers/5.jpg");
+        let fresh = Instant::now() + Duration::from_secs(3600);
+        mode.covers
+            .shared
+            .lock()
+            .unwrap()
+            .files
+            .insert(5, (fresh, Some(file.clone())));
+        assert_eq!(mode.cover_file(5), Some(file.clone()));
+        // The reader is busy with the map: the frame still shows the cover it showed.
+        let held = mode.covers.shared.lock().unwrap();
+        assert_eq!(mode.cover_file(5), Some(file));
+        assert_eq!(mode.cover_file(6), None);
+        drop(held);
     }
 
     #[test]

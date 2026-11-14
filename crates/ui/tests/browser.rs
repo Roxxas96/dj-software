@@ -803,6 +803,9 @@ fn the_track_menu_finds_and_removes_looked_up_covers() {
     view.list[1].cover = Some(CoverState::Found);
     view.list[2].cover = Some(CoverState::Missed);
     view.list[3].cover = Some(CoverState::Removed);
+    // A missing track (its file in the Trash) keeps its cover, but is not looked up.
+    view.list[5].cover = Some(CoverState::Found);
+    view.list[5].track.as_mut().unwrap().missing = true;
     let mut harness = clicking(view, Decks::default());
     let menu = |harness: &mut Harness<'_, Clicking>, song: &str| {
         let at = at_label(harness, song);
@@ -848,11 +851,15 @@ fn the_track_menu_finds_and_removes_looked_up_covers() {
         harness.state().steps,
         [LibraryStep::FindCover { track: 1003 }]
     );
-    // Never looked up: none of them.
-    menu(&mut harness, "Song 4");
-    harness.get_by_label("Load on deck 1");
-    for label in ["Find another cover", "Find a cover", "Remove cover"] {
-        assert!(harness.query_by_label(label).is_none(), "{label}");
+    // Never looked up, or missing: none of them.
+    for song in ["Song 4", "Song 5"] {
+        menu(&mut harness, song);
+        harness.get_by_label("Load on deck 1");
+        for label in ["Find another cover", "Find a cover", "Remove cover"] {
+            assert!(harness.query_by_label(label).is_none(), "{song}: {label}");
+        }
+        harness.key_press(Key::Escape);
+        harness.run_steps(2);
     }
 }
 

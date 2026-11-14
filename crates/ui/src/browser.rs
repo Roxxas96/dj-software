@@ -1440,8 +1440,13 @@ fn track_menu(
         delete_dialog::open(ui.ctx(), target, steps);
     }
     // A cover looked up online, a lookup that found none, or a removed cover: this row's
-    // track alone.
-    let cover = view.list.get(at - view.list_offset).and_then(|e| e.cover);
+    // track alone. A missing track (its file in the Trash) keeps its cover but is not
+    // looked up.
+    let cover = view
+        .list
+        .get(at - view.list_offset)
+        .and_then(|e| e.cover)
+        .filter(|_| !track.missing);
     let find = match cover {
         Some(CoverState::Found | CoverState::Missed) => Some("Find another cover"),
         Some(CoverState::Removed) => Some("Find a cover"),

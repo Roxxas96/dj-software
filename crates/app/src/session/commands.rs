@@ -481,7 +481,7 @@ mod tests {
 
     #[test]
     fn a_cover_lookup_never_holds_up_the_control_loop() {
-        use crate::covers::tests::{Answer, FakeService, add_track, wait_until};
+        use crate::covers::tests::{Answer, FakeService, add_track, song, wait_until};
         use std::sync::Arc;
         use std::sync::atomic::AtomicBool;
         use std::time::Duration;
@@ -491,7 +491,7 @@ mod tests {
         let config = Config::default();
         let mut library = testing::start(&dir.path().join("library.sqlite3"));
         let lib = library.library();
-        add_track(&lib, 1, Some(("A", "T")), "/music/a.mp3");
+        add_track(&lib, 1, Some(("A", "T")), &song(&dir, "a.mp3"));
         // A service that hangs, then fails as an offline laptop does.
         let offline = Answer::Fail(crate::covers::LookupError::Unreachable("offline".into()));
         let (service, fake) = FakeService::boxed(offline, Duration::from_secs(2));
