@@ -75,7 +75,8 @@ The track menu loads on a deck ("Load on deck N"), adds the selected tracks to a
 ("Add to playlist"), in a playlist removes them ("Remove from playlist"; the tracks stay in
 the library) and deletes them after asking ("Delete…", see [Deleting](#deleting)). For a
 track whose cover was looked up online it also has "Find another cover" (when a cover was
-found, or the lookup found none) and "Remove cover" (when one was found); see
+found, or the lookup found none), "Find a cover" (when it was removed) and "Remove cover"
+(when one was found); see
 [Covers found online](library.md#covers-found-online). Dropping a playlist's own rows back
 on its tree row does nothing.
 
