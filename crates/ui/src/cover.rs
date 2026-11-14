@@ -190,6 +190,14 @@ pub fn has_picture(path: &Path) -> bool {
     })
 }
 
+/// Whether `path` has a picture of its own, as [`has_picture`] says; `None` when the file
+/// cannot be opened (its drive unplugged, the file gone or out of reach), which says
+/// nothing either way.
+pub fn own_picture(path: &Path) -> Option<bool> {
+    std::fs::File::open(path).ok()?;
+    Some(has_picture(path))
+}
+
 /// The bytes of `path`'s front cover, else of its first picture.
 fn picture(path: &Path) -> Option<Vec<u8>> {
     let options = ParseOptions::new().read_properties(false);

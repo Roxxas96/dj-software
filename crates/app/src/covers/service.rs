@@ -121,13 +121,16 @@ impl Http for UreqHttp {
     }
 }
 
-/// Why a lookup gave no answer. Neither is a "no cover": the track is looked up again later.
+/// Why a lookup gave no answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LookupError {
     /// The service could not be reached, timed out, failed (5xx) or asked to slow down:
-    /// lookups pause for a while.
+    /// nothing is recorded, the track is looked up again later and lookups pause for a
+    /// while.
     Unreachable(String),
-    /// The service answered something unusable.
+    /// The service answered something unusable that asking again will not change (a 4xx,
+    /// an error of its own, an answer that does not parse): for this track it counts as
+    /// "no cover".
     Failed(String),
     /// The lookups were turned off, or the app is quitting: no further request was made.
     Cancelled,
@@ -181,8 +184,9 @@ pub trait CoverService: Send {
     ) -> Result<Option<Vec<u8>>, LookupError>;
 }
 
-/// Several services, asked in order. A cover from one is the answer. "None" is the answer
-/// only when every service cleanly said so; otherwise it is the first error met.
+/// Several services, asked in order. A cover from one is the answer. A service that could
+/// not be reached makes the answer that error (the track is looked up again later);
+/// otherwise it is "none", a service's [`LookupError::Failed`] counting as its "none".
 pub struct Chain(pub Vec<Box<dyn CoverService>>);
 
 impl CoverService for Chain {
@@ -192,18 +196,18 @@ impl CoverService for Chain {
         accept: &dyn Fn(&[u8]) -> bool,
         go_on: &dyn Fn() -> bool,
     ) -> Result<Option<Vec<u8>>, LookupError> {
-        let mut error = None;
+        let mut unreachable = None;
         for service in &self.0 {
             match service.find_other(query, accept, go_on) {
                 Ok(Some(bytes)) => return Ok(Some(bytes)),
-                Ok(None) => {}
+                Ok(None) | Err(LookupError::Failed(_)) => {}
                 Err(LookupError::Cancelled) => return Err(LookupError::Cancelled),
-                Err(e) => {
-                    error.get_or_insert(e);
+                Err(e @ LookupError::Unreachable(_)) => {
+                    unreachable.get_or_insert(e);
                 }
             }
         }
-        error.map_or(Ok(None), Err)
+        unreachable.map_or(Ok(None), Err)
     }
 }
 
@@ -349,8 +353,8 @@ impl DeezerService {
     ///
     /// # Errors
     ///
-    /// An answer that is not a search result, or Deezer's error (its quota error is
-    /// [`LookupError::Unreachable`]).
+    /// An answer that is not a search result, or Deezer's error (its quota and busy errors
+    /// are [`LookupError::Unreachable`]; its "no data" is no error, just no cover).
     pub fn covers(answer: &[u8]) -> Result<Vec<String>, LookupError> {
         #[derive(Deserialize)]
         struct Answer {
@@ -376,12 +380,13 @@ impl DeezerService {
             .map_err(|e| LookupError::Failed(format!("Deezer: {e}")))?;
         if let Some(error) = answer.error {
             let why = format!("Deezer: {}", error.message.as_deref().unwrap_or("an error"));
-            // Code 4 is "quota limit exceeded": too many requests for now.
-            return Err(if error.code == Some(4) {
-                LookupError::Unreachable(why)
-            } else {
-                LookupError::Failed(why)
-            });
+            return match error.code {
+                // "Quota limit exceeded" and "service busy": too many requests for now.
+                Some(4 | 700) => Err(LookupError::Unreachable(why)),
+                // "Data not found": no cover.
+                Some(800) => Ok(Vec::new()),
+                _ => Err(LookupError::Failed(why)),
+            };
         }
         let Some(tracks) = answer.data else {
             return Err(LookupError::Failed(
@@ -808,7 +813,28 @@ pub(crate) mod tests {
             let error = deezer(&http).find(&q).unwrap_err();
             assert_eq!(error.is_unreachable(), unreachable, "{error}");
         }
-        // One service failing and the other finding nothing is a failure, not a miss.
+        // Deezer's busy error pauses the lookups; its "no data" is no cover; another of its
+        // errors fails for good.
+        let deezer_error = |code: i64| {
+            let answer = format!(r#"{{"error":{{"type":"X","message":"m","code":{code}}}}}"#);
+            DeezerService::covers(answer.as_bytes())
+        };
+        assert!(deezer_error(700).unwrap_err().is_unreachable());
+        assert_eq!(deezer_error(800), Ok(Vec::new()));
+        assert!(matches!(deezer_error(600), Err(LookupError::Failed(_))));
+        // A service failing for good and the other finding nothing is no cover: asking
+        // again would change nothing.
+        let http = Arc::new(
+            RecordingHttp::default()
+                .answer("https://api.deezer.com/", Err(HttpError::Status(400)))
+                .answer(
+                    "https://musicbrainz.org/",
+                    Ok(fixture("musicbrainz_empty.json")),
+                ),
+        );
+        let chain = Chain(vec![Box::new(deezer(&http)), Box::new(musicbrainz(&http))]);
+        assert_eq!(chain.find(&q), Ok(None));
+        // One service unreachable and the other finding nothing is a failure, not a miss.
         let http = Arc::new(
             RecordingHttp::default()
                 .answer(
