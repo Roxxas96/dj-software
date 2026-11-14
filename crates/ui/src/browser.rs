@@ -99,10 +99,6 @@ pub struct Changes {
     pub unfold: Option<ViewChange>,
     /// What the clicks, double-clicks, menus and wheel asked of the library, in order.
     pub library: Vec<LibraryStep>,
-    /// A Delete key was pressed while the browser had the keyboard: the pane to delete
-    /// from (the tracks of the list, or the playlist of the tree). The window opens its
-    /// confirmation; nothing is deleted here.
-    pub delete_requested: Option<Focus>,
 }
 
 /// What the browser knows of the decks.
@@ -464,6 +460,9 @@ fn owner_id() -> Id {
 /// the browser has the keyboard and no text field wants it.
 #[derive(Debug, Default)]
 struct Keys {
+    /// The browser has the keyboard (the last press was in its tree or list), even when
+    /// a text field or a dialog takes this frame's keys: its focused pane looks focused.
+    owned: bool,
     /// Presses of each this frame (key repeats can come several to a frame).
     up: usize,
     down: usize,
@@ -486,7 +485,12 @@ impl Keys {
     /// browser has it. `inside` tells whether a point is in the tree or the list.
     fn read(ui: &Ui, inside: impl Fn(Pos2) -> bool) -> Self {
         let ctx = ui.ctx();
-        if let Some(at) = ui.input(|i| i.pointer.any_pressed().then(|| i.pointer.interact_pos())) {
+        // A dialog the browser opened (a delete question, a playlist's name) is answered
+        // with its own presses: they leave the keyboard where it was, so the keys work on
+        // once it closes.
+        let dialog = playlist_dialog::is_open(ctx) || delete_dialog::is_open(ctx);
+        let pressed = ui.input(|i| i.pointer.any_pressed().then(|| i.pointer.interact_pos()));
+        if let Some(at) = pressed.filter(|_| !dialog) {
             // A press that reached another layer (a window, a modal over the list) is not
             // the browser's.
             let ours = at.is_some_and(|at| ctx.layer_id_at(at) == Some(ui.layer_id()));
@@ -496,12 +500,15 @@ impl Keys {
         let owned = ctx.data(|d| d.get_temp(owner_id())).unwrap_or(false);
         // A text field (the search box, a dialog's name) keeps its keys, and so does a
         // dialog's button or a menu.
-        let dialog = playlist_dialog::is_open(ctx) || delete_dialog::is_open(ctx);
+        let unowned = Self {
+            owned,
+            ..Self::default()
+        };
         if !owned || ctx.text_edit_focused() || dialog {
-            return Self::default();
+            return unowned;
         }
         if egui::Popup::is_any_open(ctx) {
-            return Self::default();
+            return unowned;
         }
         // The browser draws no widget that takes the keyboard focus; whatever has it (Tab
         // gave it to a button elsewhere) lets go, so Enter is the browser's.
@@ -524,6 +531,7 @@ impl Keys {
             let select_all = key(Modifiers::COMMAND, Key::A);
             let mut count = |key| i.count_and_consume_key(Modifiers::NONE, key);
             Self {
+                owned,
                 up: count(Key::ArrowUp),
                 down: count(Key::ArrowDown),
                 page_up: count(Key::PageUp),
@@ -655,10 +663,13 @@ pub fn show(
     crate::landmark_rect(ui, tree, "tree");
     crate::landmark_rect(ui, list, "list");
     let keys = Keys::read(ui, |at| tree.contains(at) || list.contains(at));
-    changes.delete_requested = keys.delete.then_some(view.focus);
     let steps = &mut changes.library;
     if keys.select_all {
-        // From either pane: the list is what is selected.
+        // From either pane: the list is what is selected, and a pick made with the mouse
+        // is replaced, not kept for when the whole-list selection goes.
+        let mut selection = Selection::take(ui.ctx(), view);
+        selection.clear();
+        selection.put(ui.ctx());
         steps.push(LibraryStep::Browse(BrowserEdit::SelectAll));
     }
     if keys.tab {
@@ -766,7 +777,7 @@ fn tree_pane(ui: &mut Ui, view: &BrowserView, keys: &Keys, steps: &mut Vec<Libra
     let follow = visible_window(view.tree_cursor, count, rows);
     let seen = (view.tree_cursor, 0, count);
     let (window, _) = scroll(ui, "tree_scroll", seen, 0..count, count, follow);
-    let focused = view.focus == Focus::Tree;
+    let focused = view.focus == Focus::Tree && keys.owned;
     let p = theme::palette(ui.ctx());
     for (at, entry) in view
         .tree
@@ -876,8 +887,9 @@ fn tree_target(entry: &TreeRow) -> Option<DeleteTarget> {
     }
 }
 
-/// What the keys do in the tree: move the highlight, and open or close the highlighted
-/// drive or folder.
+/// What the keys do in the tree: move the highlight, open or close the highlighted drive
+/// or folder, and Enter on a playlist (or the Playlists node), whose list shows already,
+/// moves into that list.
 fn tree_keys(view: &BrowserView, keys: &Keys, rows: usize, steps: &mut Vec<LibraryStep>) {
     let at = view.tree_cursor;
     if let Some(to) = keys.cursor(at, view.tree.len(), rows) {
@@ -891,7 +903,9 @@ fn tree_keys(view: &BrowserView, keys: &Keys, rows: usize, steps: &mut Vec<Libra
     if opens && (toggle || keys.enter && !keys.left && !keys.right) {
         steps.push(LibraryStep::Browse(BrowserEdit::ToggleTreeAt(at)));
     } else if keys.enter && !opens {
-        steps.push(LibraryStep::Browse(BrowserEdit::SelectTree(at)));
+        steps.push(LibraryStep::Browse(BrowserEdit::SelectRow(
+            view.list_cursor,
+        )));
     }
 }
 
@@ -1204,7 +1218,7 @@ fn list_pane(
     }
     query.put(ui.ctx());
     let rows = rows_fitting(ui.available_height());
-    let focused = view.focus == Focus::List;
+    let focused = view.focus == Focus::List && keys.owned;
     let page = view.list_offset..view.list_offset + view.list.len();
     let seen = (view.list_cursor, view.list_offset, view.list_count);
     let follow = page_window(view, rows);
@@ -1368,11 +1382,12 @@ fn track_menu(
     if playlists.clone().next().is_some() {
         // egui draws the submenu's ▸.
         ui.menu_button("Add to playlist", |ui| {
-            for (playlist, label) in playlists {
-                // The list's own playlist is no target for the whole of it.
-                if view.all_selected && view.playlist == Some(playlist) {
-                    continue;
-                }
+            // The list's own playlist is no target for the whole of it.
+            let targets = playlists
+                .filter(|&(playlist, _)| !(view.all_selected && view.playlist == Some(playlist)));
+            let mut any = false;
+            for (playlist, label) in targets {
+                any = true;
                 if !ui.button(label.as_str()).clicked() {
                     continue;
                 }
@@ -1387,6 +1402,9 @@ fn track_menu(
                         tracks: drag.tracks,
                     });
                 }
+            }
+            if !any {
+                ui.add_enabled(false, Button::new("No other playlist"));
             }
         });
     }

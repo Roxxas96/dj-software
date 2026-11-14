@@ -1143,8 +1143,9 @@ mod tests {
         jobs.send(Job::Edit(BrowserEdit::SelectAll)).unwrap();
         let again = view(&events);
         add("Dst", again.identity());
-        // The browser is read again once the write is done, and the selection with it.
-        assert!(!view(&events).all_selected);
+        // The browser is read again once the write is done; the list it shows did not
+        // change, so the whole of it is still selected.
+        assert!(view(&events).all_selected);
         let added = reader.playlist_tracks(id("Dst"), 0, 100).unwrap();
         assert_eq!(added.iter().map(|t| t.id).collect::<Vec<_>>(), ids);
     }
