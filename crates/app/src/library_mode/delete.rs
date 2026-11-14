@@ -888,7 +888,11 @@ mod tests {
         /// The library track of `file` (under `music`).
         fn track(&self, file: &str) -> i64 {
             let reader = self.lib.reader().unwrap();
-            reader.tracks_under(&self.music.join(file)).unwrap()[0]
+            // One join per part: "sub/a.wav" joined whole keeps its "/" on Windows.
+            let path = file
+                .split('/')
+                .fold(self.music.clone(), |p, part| p.join(part));
+            reader.tracks_under(&path).unwrap()[0]
         }
 
         fn missing(&self, track: i64) -> bool {
