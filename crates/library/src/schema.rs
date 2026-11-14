@@ -107,5 +107,20 @@ const V3: &str = "
 ALTER TABLE hotcues ADD COLUMN loop_frames REAL;
 ";
 
+/// Version 4: covers found online, one row per track that was looked up. `state` is
+/// `found` (`file` holds the picture), `missed` (nothing was found; not asked again unless
+/// a retry is wanted) or `removed` (the user dropped it; never looked up again).
+///
+/// Tracks are never deleted from the library (scans only flag them missing), so their ids
+/// are not reused and a row here can never end up on another track.
+const V4: &str = "
+CREATE TABLE covers (
+    track_id INTEGER PRIMARY KEY REFERENCES tracks(id),
+    state TEXT NOT NULL CHECK (state IN ('found', 'missed', 'removed')),
+    file TEXT,
+    updated_at INTEGER NOT NULL
+);
+";
+
 /// Every migration, in order. The latest schema version is `MIGRATIONS.len()`.
-pub const MIGRATIONS: &[&str] = &[V1, V2, V3];
+pub const MIGRATIONS: &[&str] = &[V1, V2, V3, V4];

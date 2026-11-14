@@ -98,6 +98,7 @@ fn open_creates_the_latest_schema() {
         "playlist_tracks",
         "settings",
         "stems",
+        "covers",
     ] {
         assert!(table_exists(conn, table), "missing table {table}");
     }

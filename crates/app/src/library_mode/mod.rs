@@ -16,9 +16,9 @@ mod worker;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -151,6 +151,10 @@ pub struct LibraryMode {
     refresh_wanted: bool,
     /// Set from another thread that changed the library: a refresh is wanted.
     changed_elsewhere: Arc<AtomicBool>,
+    /// The covers kept for the tracks on the decks and the browser's highlighted row.
+    /// Cover writes (a lookup finishing in the background) never ask for a refresh: it
+    /// would drop the browser's whole-list selection. The window reads them from here.
+    covers: Mutex<CoverFiles>,
     /// The hotcues deleted in the latest round, as (track, slot): their colour and name
     /// are gone from the library.
     deleted_hotcues: Vec<(i64, HotcueSlot)>,
@@ -276,6 +280,7 @@ impl LibraryMode {
             last_poll: Instant::now(),
             refresh_wanted: false,
             changed_elsewhere: Arc::default(),
+            covers: Mutex::default(),
             deleted_hotcues: Vec::new(),
             failed_labels: Vec::new(),
             last_refresh: None,
@@ -1288,6 +1293,26 @@ impl LibraryMode {
             .map_err(|e| format!("warning: could not {what}: {}", safe(e)))
     }
 
+    /// The cover file the library kept for `track`, when its cover was found. Read from
+    /// the library at most once a second per track, so a lookup that finishes while the
+    /// track is shown reaches the window without any browser refresh.
+    pub fn cover_file(&self, track: i64) -> Option<PathBuf> {
+        let mut covers = self.covers.lock().unwrap_or_else(PoisonError::into_inner);
+        covers.get(&self.lib, track, Instant::now())
+    }
+
+    /// `view` with the cover file of the row at its cursor filled in, for the window's
+    /// info pane.
+    pub fn with_cover(&self, mut view: BrowserView) -> BrowserView {
+        let at = view.list_cursor.checked_sub(view.list_offset);
+        if let Some(row) = at.and_then(|at| view.list.get_mut(at))
+            && let Some(track) = row.track.as_ref().map(|t| t.id)
+        {
+            row.cover_file = self.cover_file(track);
+        }
+        view
+    }
+
     /// What the browser shows, once read.
     pub fn browser(&self) -> Option<&BrowserView> {
         self.browser.as_ref()
@@ -1309,6 +1334,7 @@ impl LibraryMode {
             load_seq: track.load_seq,
             audio: &track.audio,
             stems: self.stems_text(Some(track), snap),
+            cover_file: self.cover_file(track.row.id),
         })
     }
 
@@ -1378,6 +1404,44 @@ impl LibraryMode {
     }
 }
 
+/// How long a track's cover file is trusted before the library is asked again.
+const COVER_TTL: Duration = Duration::from_secs(1);
+/// How many tracks' cover files are kept; more clears them all.
+const COVER_TRACKS: usize = 64;
+
+/// The cover files of the tracks the window shows, as the library last said.
+#[derive(Default)]
+struct CoverFiles {
+    reader: Option<library::Reader>,
+    rows: HashMap<i64, (Instant, Option<PathBuf>)>,
+}
+
+impl CoverFiles {
+    fn get(&mut self, lib: &Library, track: i64, now: Instant) -> Option<PathBuf> {
+        if let Some((read, file)) = self.rows.get(&track)
+            && now.duration_since(*read) < COVER_TTL
+        {
+            return file.clone();
+        }
+        if self.reader.is_none() {
+            self.reader = lib.reader().ok();
+        }
+        // A failed read keeps what was known.
+        let found = self.reader.as_ref().and_then(|reader| {
+            reader.cover(track).ok().map(|row| {
+                row.filter(|row| row.state == library::CoverState::Found)
+                    .and_then(|row| row.file)
+            })
+        });
+        let file = found.unwrap_or_else(|| self.rows.get(&track).and_then(|(_, f)| f.clone()));
+        if self.rows.len() >= COVER_TRACKS {
+            self.rows.clear();
+        }
+        self.rows.insert(track, (now, file.clone()));
+        file
+    }
+}
+
 /// A library track on a deck, as [`LibraryMode::deck_view`] shows it.
 pub struct DeckView<'a> {
     pub row: &'a TrackRow,
@@ -1388,6 +1452,8 @@ pub struct DeckView<'a> {
     pub audio: &'a Arc<TrackBuffer>,
     /// The stems' state: `stems`, `stems 40%`, `no stems (too long)`.
     pub stems: Option<String>,
+    /// The cover the library kept for the track, when one was found.
+    pub cover_file: Option<PathBuf>,
 }
 
 /// A cue point or one hotcue slot of a track.
@@ -3057,6 +3123,82 @@ mod tests {
         assert_eq!(
             mode.reader().unwrap().folders().unwrap(),
             Vec::<std::path::PathBuf>::new()
+        );
+        mode.shutdown(&mut engine, &printer);
+        printer.finish();
+    }
+
+    #[test]
+    fn a_cover_write_keeps_the_whole_list_selected() {
+        let dir = tempfile::tempdir().unwrap();
+        let music = dunce::canonicalize(dir.path()).unwrap().join("music");
+        std::fs::create_dir_all(&music).unwrap();
+        let fixtures = concat!(env!("CARGO_MANIFEST_DIR"), "/../decode/tests/fixtures/");
+        std::fs::copy(format!("{fixtures}sine440.wav"), music.join("a.wav")).unwrap();
+        std::fs::copy(format!("{fixtures}sine440_mono.wav"), music.join("b.wav")).unwrap();
+        let drives = vec![library::Drive {
+            name: "music".into(),
+            path: music,
+        }];
+        let db = dir.path().join("library.sqlite3");
+        let mut mode =
+            LibraryMode::start_browsing(Some(&db), None, Some(drives), super::unused_trash())
+                .unwrap();
+        let (mut engine, mut renderer) = engine::engine(engine::EngineConfig {
+            sample_rate: 44_100,
+            max_block_frames: 512,
+        });
+        let printer = Printer::spawn();
+        run_until(&mut mode, &mut engine, &mut renderer, &printer, |m, _| {
+            m.browser
+                .as_ref()
+                .is_some_and(|b| b.list.len() == 2 && b.list.iter().all(|r| r.track.is_some()))
+        });
+        // Let the analysis of the two files finish and its refreshes land: they are what
+        // legitimately clears a selection, and this test is about the cover write alone.
+        run_until(&mut mode, &mut engine, &mut renderer, &printer, |m, _| {
+            m.last_done >= m.queued_total
+        });
+        for round in 0..40u32 {
+            mode.poll(
+                Instant::now() + POLL_EVERY * (round + 2),
+                &mut engine,
+                &printer,
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        mode.send_job(Job::Edit(BrowserEdit::SelectAll), &printer);
+        run_until(&mut mode, &mut engine, &mut renderer, &printer, |m, _| {
+            m.browser.as_ref().is_some_and(|b| b.all_selected)
+        });
+        let track = mode.browser.as_ref().unwrap().list[0]
+            .track
+            .as_ref()
+            .unwrap()
+            .id;
+        let file = dir.path().join("covers").join(format!("{track}.jpg"));
+        mode.library()
+            .writer()
+            .submit_wait(WriteOp::SetCover {
+                track,
+                file: file.clone(),
+            })
+            .unwrap();
+        // Rounds well past the poll interval: a refresh would be asked for and sent.
+        for round in 0..5u64 {
+            let now = Instant::now() + POLL_EVERY * (round as u32 + 100);
+            mode.poll(now, &mut engine, &printer);
+            assert!(!mode.refresh_wanted, "a cover write asked for a refresh");
+            std::thread::sleep(Duration::from_millis(40));
+        }
+        run_until(&mut mode, &mut engine, &mut renderer, &printer, |_, _| true);
+        assert!(mode.browser.as_ref().unwrap().all_selected);
+        // The window still learns of the cover, without a refresh.
+        assert_eq!(mode.cover_file(track), Some(file.clone()));
+        let view = mode.with_cover(mode.browser.clone().unwrap());
+        assert_eq!(
+            view.list[view.list_cursor - view.list_offset].cover_file,
+            Some(file)
         );
         mode.shutdown(&mut engine, &printer);
         printer.finish();

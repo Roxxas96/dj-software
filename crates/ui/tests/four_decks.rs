@@ -46,6 +46,7 @@ fn info(title: &str) -> DeckInfo {
             missing: false,
         },
         path: PathBuf::from(format!("/music/{title}.mp3")),
+        cover_file: None,
         overview: None,
         detail: None,
         stems: None,

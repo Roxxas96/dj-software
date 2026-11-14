@@ -149,7 +149,7 @@ fn a_v2_database_migrates_keeping_hotcues() {
         .connection()
         .pragma_query_value(None, "user_version", |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 3);
+    assert_eq!(version, library::schema::MIGRATIONS.len() as i64);
     assert_eq!(
         lib.reader().unwrap().hotcue_points(1).unwrap()[1],
         Some(HotcuePoint {

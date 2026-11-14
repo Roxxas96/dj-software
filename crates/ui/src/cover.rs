@@ -1,5 +1,6 @@
-//! Cover art: a track's embedded picture, read and decoded on a background thread and kept
-//! as a texture for the [`COVERS_KEPT`] tracks last asked for.
+//! Cover art: a track's embedded picture, else the cover file the library kept for it, read
+//! and decoded on a background thread and kept as a texture for the [`COVERS_KEPT`] tracks
+//! last asked for.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -25,7 +26,7 @@ pub const COVER_PIXELS: u32 = 256;
 /// first request and ends once this is dropped.
 #[derive(Default)]
 pub struct Covers {
-    entries: HashMap<PathBuf, Entry>,
+    entries: HashMap<PathBuf, Slot>,
     /// The paths in `entries`, least recently asked for first.
     recent: VecDeque<PathBuf>,
     worker: Option<Worker>,
@@ -39,36 +40,68 @@ impl std::fmt::Debug for Covers {
     }
 }
 
+/// What is known of one track's cover, and the library cover file it was asked for with.
+struct Slot {
+    /// The track's `cover_file` when it was loaded: a lookup that finishes while the track
+    /// is shown changes it, and the cover is then loaded again.
+    file: Option<PathBuf>,
+    entry: Entry,
+}
+
 enum Entry {
     Loading,
     /// `None`: the file has no picture that decodes.
     Loaded(Option<TextureHandle>),
 }
 
+/// A track's file and its library cover file.
+type Request = (PathBuf, Option<PathBuf>);
+
 struct Worker {
-    requests: Sender<PathBuf>,
-    results: Receiver<(PathBuf, Option<ColorImage>)>,
+    requests: Sender<Request>,
+    results: Receiver<(Request, Option<ColorImage>)>,
 }
 
 impl Covers {
-    /// The cover of the track at `path`: `None` while it loads and when it has none. The
-    /// first call for a path starts loading it.
-    pub fn get(&mut self, ctx: &Context, path: &Path) -> Option<TextureHandle> {
+    /// The cover of the track at `path`: its embedded picture, else `cover_file` (the
+    /// library's cover for it); `None` while it loads and when it has none. The first call
+    /// for a path starts loading it, and so does a call whose `cover_file` differs from the
+    /// last one's (a lookup that finished while the track was shown).
+    pub fn get(
+        &mut self,
+        ctx: &Context,
+        path: &Path,
+        cover_file: Option<&Path>,
+    ) -> Option<TextureHandle> {
         self.collect(ctx);
-        if let Some(entry) = self.entries.get(path) {
-            let texture = match entry {
-                Entry::Loading => None,
+        if let Some(slot) = self.entries.get(path) {
+            if slot.file.as_deref() == cover_file {
+                let texture = match &slot.entry {
+                    Entry::Loading => None,
+                    Entry::Loaded(texture) => texture.clone(),
+                };
+                self.touch(path);
+                return texture;
+            }
+            // The file changed: the old picture stays until the new one is read.
+            let old = match &slot.entry {
                 Entry::Loaded(texture) => texture.clone(),
+                Entry::Loading => None,
             };
+            let entry = self.request(path, cover_file);
+            if let Some(slot) = self.entries.get_mut(path) {
+                slot.file = cover_file.map(Path::to_owned);
+                slot.entry = entry;
+            }
             self.touch(path);
-            return texture;
+            return old;
         }
-        let entry = match self.worker() {
-            Some(worker) if worker.requests.send(path.to_owned()).is_ok() => Entry::Loading,
-            // Without the thread no cover can load: show the plain tile.
-            _ => Entry::Loaded(None),
+        let entry = self.request(path, cover_file);
+        let slot = Slot {
+            file: cover_file.map(Path::to_owned),
+            entry,
         };
-        self.entries.insert(path.to_owned(), entry);
+        self.entries.insert(path.to_owned(), slot);
         self.recent.push_back(path.to_owned());
         while self.recent.len() > COVERS_KEPT {
             if let Some(oldest) = self.recent.pop_front() {
@@ -78,16 +111,30 @@ impl Covers {
         None
     }
 
+    /// Asks the thread for the cover of `path` with `cover_file`: `Loading`, or a plain
+    /// tile when there is no thread.
+    fn request(&mut self, path: &Path, cover_file: Option<&Path>) -> Entry {
+        let request = (path.to_owned(), cover_file.map(Path::to_owned));
+        match self.worker() {
+            Some(worker) if worker.requests.send(request).is_ok() => Entry::Loading,
+            // Without the thread no cover can load: show the plain tile.
+            _ => Entry::Loaded(None),
+        }
+    }
+
     /// Turns the pictures the thread has decoded into textures. A picture whose path was
-    /// dropped meanwhile is discarded.
+    /// dropped meanwhile, or asked for again with another cover file, is discarded.
     fn collect(&mut self, ctx: &Context) {
         let Some(worker) = &self.worker else { return };
-        for (path, image) in worker.results.try_iter() {
-            if let Some(entry @ Entry::Loading) = self.entries.get_mut(&path) {
+        for ((path, file), image) in worker.results.try_iter() {
+            if let Some(slot) = self.entries.get_mut(&path)
+                && slot.file == file
+                && matches!(slot.entry, Entry::Loading)
+            {
                 let name = format!("cover {}", path.display());
                 let texture =
                     image.map(|image| ctx.load_texture(name, image, TextureOptions::LINEAR));
-                *entry = Entry::Loaded(texture);
+                slot.entry = Entry::Loaded(texture);
             }
         }
     }
@@ -104,14 +151,14 @@ impl Covers {
     /// The loading thread, started on first use; `None` if it could not start.
     fn worker(&mut self) -> Option<&Worker> {
         if self.worker.is_none() {
-            let (requests, incoming) = mpsc::channel::<PathBuf>();
+            let (requests, incoming) = mpsc::channel::<Request>();
             let (done, results) = mpsc::channel();
             let spawned = thread::Builder::new()
                 .name("covers".to_owned())
                 .spawn(move || {
-                    for path in incoming {
-                        let image = read(&path);
-                        if done.send((path, image)).is_err() {
+                    for (path, file) in incoming {
+                        let image = read(&path).or_else(|| file.as_deref().and_then(read_file));
+                        if done.send(((path, file), image)).is_err() {
                             break;
                         }
                     }
@@ -135,6 +182,11 @@ pub fn read(path: &Path) -> Option<ColorImage> {
         .find(|p| p.pic_type() == PictureType::CoverFront)
         .or_else(|| pictures().next())?;
     decode(picture.data())
+}
+
+/// The picture file at `path` (a JPEG or PNG), decoded and scaled like [`read`]'s.
+pub fn read_file(path: &Path) -> Option<ColorImage> {
+    decode(&std::fs::read(path).ok()?)
 }
 
 /// An encoded JPEG or PNG as an image of at most [`COVER_PIXELS`] a side.
@@ -207,18 +259,21 @@ mod tests {
         let ctx = Context::default();
         let mut covers = Covers::default();
         let path = Path::new("/nonexistent/open-jockey/track.mp3");
-        assert!(covers.get(&ctx, path).is_none());
+        assert!(covers.get(&ctx, path, None).is_none());
         let deadline = Instant::now() + Duration::from_secs(5);
-        while matches!(covers.entries.get(path), Some(Entry::Loading)) {
+        while matches!(
+            covers.entries.get(path).map(|s| &s.entry),
+            Some(Entry::Loading)
+        ) {
             assert!(Instant::now() < deadline, "the cover never loaded");
             thread::sleep(Duration::from_millis(5));
             covers.collect(&ctx);
         }
         assert!(matches!(
-            covers.entries.get(path),
+            covers.entries.get(path).map(|s| &s.entry),
             Some(Entry::Loaded(None))
         ));
-        assert!(covers.get(&ctx, path).is_none());
+        assert!(covers.get(&ctx, path, None).is_none());
     }
 
     #[test]
@@ -226,15 +281,134 @@ mod tests {
         let ctx = Context::default();
         let mut covers = Covers::default();
         let path = |n: usize| PathBuf::from(format!("/nonexistent/{n}.mp3"));
-        covers.get(&ctx, &path(0));
+        covers.get(&ctx, &path(0), None);
         for n in 1..=COVERS_KEPT {
             // Asking for the first again keeps it the most recent.
-            covers.get(&ctx, &path(0));
-            covers.get(&ctx, &path(n));
+            covers.get(&ctx, &path(0), None);
+            covers.get(&ctx, &path(n), None);
         }
         assert_eq!(covers.entries.len(), COVERS_KEPT);
         assert!(covers.entries.contains_key(&path(0)));
         assert!(!covers.entries.contains_key(&path(1)));
         assert!(covers.entries.contains_key(&path(COVERS_KEPT)));
+    }
+
+    /// A scratch folder for this test, removed with `Scratch`.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(name: &str) -> Self {
+            let dir =
+                std::env::temp_dir().join(format!("open-jockey-{name}-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn solid(rgb: [u8; 3], side: u32) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        image::RgbaImage::from_pixel(side, side, image::Rgba([rgb[0], rgb[1], rgb[2], 255]))
+            .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)
+            .unwrap();
+        bytes
+    }
+
+    /// A short silent WAV at `path`, with `picture` as its ID3 front cover when given.
+    fn wav(path: &Path, picture: Option<Vec<u8>>) {
+        use lofty::config::{ParseOptions, WriteOptions};
+        use lofty::file::AudioFile;
+        use lofty::id3::v2::{AttachedPictureFrame, Frame, Id3v2Tag};
+        use lofty::iff::wav::WavFile;
+        use lofty::picture::{MimeType, Picture};
+        let frames = 441u32;
+        let mut bytes = b"RIFF".to_vec();
+        bytes.extend_from_slice(&(36 + frames * 2).to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&44_100u32.to_le_bytes());
+        bytes.extend_from_slice(&88_200u32.to_le_bytes());
+        bytes.extend_from_slice(&2u16.to_le_bytes());
+        bytes.extend_from_slice(&16u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&(frames * 2).to_le_bytes());
+        bytes.resize(bytes.len() + (frames * 2) as usize, 0);
+        std::fs::write(path, bytes).unwrap();
+        let Some(png) = picture else { return };
+        let mut tag = Id3v2Tag::new();
+        tag.insert(Frame::Picture(AttachedPictureFrame::new(
+            lofty::TextEncoding::Latin1,
+            Picture::unchecked(png)
+                .pic_type(PictureType::CoverFront)
+                .mime_type(MimeType::Png)
+                .build(),
+        )));
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap();
+        let mut wav = WavFile::read_from(&mut file, ParseOptions::new()).unwrap();
+        wav.set_id3v2(tag);
+        wav.save_to(&mut file, WriteOptions::default()).unwrap();
+    }
+
+    /// Asks for the cover until it is no longer loading; returns it and its first pixel.
+    fn settled(
+        covers: &mut Covers,
+        ctx: &Context,
+        path: &Path,
+        file: Option<&Path>,
+    ) -> Option<TextureHandle> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let texture = covers.get(ctx, path, file);
+            let loading = matches!(
+                covers.entries.get(path).map(|s| &s.entry),
+                Some(Entry::Loading)
+            );
+            if !loading {
+                return texture;
+            }
+            assert!(Instant::now() < deadline, "the cover never loaded");
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn the_window_shows_a_stored_cover_when_the_file_has_none() {
+        let dir = Scratch::new("cover-stored");
+        let track = dir.0.join("plain.wav");
+        wav(&track, None);
+        let stored = dir.0.join("1.jpg");
+        std::fs::write(&stored, solid([0, 0, 255], 8)).unwrap();
+        let ctx = Context::default();
+        let mut covers = Covers::default();
+        assert!(settled(&mut covers, &ctx, &track, None).is_none());
+        // The lookup finished while the track was shown: the same track, now with a file.
+        let texture = settled(&mut covers, &ctx, &track, Some(&stored)).unwrap();
+        assert_eq!(texture.size(), [8, 8]);
+        // A file that cannot be read stays a plain tile.
+        assert!(settled(&mut covers, &ctx, &track, Some(&dir.0.join("none.jpg"))).is_none());
+    }
+
+    #[test]
+    fn an_embedded_picture_wins_over_a_stored_one() {
+        let dir = Scratch::new("cover-embedded");
+        let track = dir.0.join("tagged.wav");
+        wav(&track, Some(solid([255, 0, 0], 16)));
+        let stored = dir.0.join("1.jpg");
+        std::fs::write(&stored, solid([0, 0, 255], 8)).unwrap();
+        let ctx = Context::default();
+        let mut covers = Covers::default();
+        let texture = settled(&mut covers, &ctx, &track, Some(&stored)).unwrap();
+        assert_eq!(texture.size(), [16, 16]);
     }
 }

@@ -50,6 +50,7 @@ fn loaded() -> (DeckSnapshot, ControlFrame) {
             missing: false,
         },
         path: PathBuf::from("/music/just-us.mp3"),
+        cover_file: None,
         overview: None,
         detail: None,
         stems: None,

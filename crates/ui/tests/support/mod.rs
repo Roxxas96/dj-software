@@ -159,6 +159,7 @@ fn info(deck: usize, overview: &Arc<Waveform>, detail: &Arc<Waveform>) -> DeckIn
         load_seq: 1,
         row: track_row(deck),
         path: PathBuf::from(format!("/music/track-{deck}.mp3")),
+        cover_file: None,
         overview: Some(Arc::clone(overview)),
         detail: Some(Arc::clone(detail)),
         stems: Some("stems 40%".into()),
@@ -210,6 +211,7 @@ fn browser() -> BrowserView {
             track: Some(track_row(n)),
             file_name: format!("track-{n}.mp3"),
             position: Some(n),
+            cover_file: None,
         })
         .collect();
     let mut tree = vec![

@@ -8,6 +8,7 @@
 
 use std::collections::VecDeque;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
@@ -174,6 +175,14 @@ pub enum WriteOp {
     /// otherwise. Put first in a [`WriteOp::Batch`] with a create or a rename, it checks
     /// the name in the same transaction as the write.
     ExpectNoPlaylistNamed { name: String, except: Option<i64> },
+    /// Keeps `file` as `track`'s cover (state `found`), replacing what was there.
+    SetCover { track: i64, file: PathBuf },
+    /// Remembers that no cover was found for `track`. A track that has a cover, or whose
+    /// cover was removed, keeps its state.
+    MissCover { track: i64 },
+    /// Marks `track`'s cover removed and deletes `<library folder>/covers/<track>.jpg`
+    /// (a missing file is fine). Never deletes a stored path.
+    ClearCover { track: i64 },
     /// Applies several ops in one transaction: all of them or none. Reports the outcome of
     /// the last op that reports something ([`WriteOutcome::Done`] when none does). Its
     /// playlist entry edits are made in memory and each playlist is written once, from its
@@ -391,19 +400,25 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 /// Starts the writer thread on `conn`, which must already be migrated.
-pub(crate) fn spawn(conn: Connection) -> Result<(Writer, JoinHandle<()>), LibraryError> {
+pub(crate) fn spawn(
+    conn: Connection,
+    folder: PathBuf,
+) -> Result<(Writer, JoinHandle<()>), LibraryError> {
     let (tx, rx) = mpsc::sync_channel(QUEUE_CAPACITY);
     let shared = Arc::new(Shared::default());
     let thread_shared = Arc::clone(&shared);
     let handle = std::thread::Builder::new()
         .name("library-writer".into())
-        .spawn(move || run(conn, &rx, &thread_shared))?;
+        .spawn(move || run(conn, &rx, &thread_shared, &folder))?;
     Ok((Writer { tx, shared }, handle))
 }
 
-fn run(mut conn: Connection, rx: &Receiver<Message>, shared: &Shared) {
+fn run(mut conn: Connection, rx: &Receiver<Message>, shared: &Shared, folder: &Path) {
     while let Ok(Message::Op { op, reply }) = rx.recv() {
         let result = apply_guarded(&mut conn, &op);
+        if result.is_ok() {
+            crate::covers::delete_cleared_files(folder, &op);
+        }
         match (reply, result) {
             // The waiter may have gone away; the outcome stands regardless.
             (Some(reply), result) => {
@@ -632,6 +647,9 @@ fn apply(tx: &Transaction<'_>, op: &WriteOp) -> Result<WriteOutcome, LibraryErro
         WriteOp::RemoveFolder(path) => {
             tx.execute("DELETE FROM folders WHERE path = ?1", [path])?;
             Ok(WriteOutcome::Done)
+        }
+        WriteOp::SetCover { .. } | WriteOp::MissCover { .. } | WriteOp::ClearCover { .. } => {
+            crate::covers::apply(tx, op)
         }
         WriteOp::CreatePlaylist { .. }
         | WriteOp::CreatePlaylistWith { .. }
