@@ -81,6 +81,14 @@ pub(super) fn drain(commands: &Receiver<UiCommand>, parts: &mut FrameParts, mut 
             }
         }
     }
+    for text in parts
+        .covers
+        .as_ref()
+        .map(crate::covers::CoverWorker::take_events)
+        .unwrap_or_default()
+    {
+        parts.event(text);
+    }
     if let Some((_, _, Some(library))) = control.as_mut() {
         for (track, slot) in library.take_failed_labels() {
             parts.forget_failed_mark(track, slot);
@@ -190,6 +198,28 @@ fn library_step(
                 parts.event(why);
             }
         }
+        LibraryStep::FindCover { track } => {
+            let found = parts.covers.as_ref().map_or_else(
+                || Err("Cover lookups are not running".to_owned()),
+                |covers| covers.find_now(track),
+            );
+            if let Err(why) = found {
+                parts.event(why);
+            }
+        }
+        LibraryStep::RemoveCover { track } => {
+            if let Err(why) = library.remove_cover(track) {
+                parts.event(why);
+            }
+        }
+        LibraryStep::RetryMissingCovers => match library.retry_missing_covers() {
+            Ok(()) => {
+                if let Some(covers) = &parts.covers {
+                    covers.wake();
+                }
+            }
+            Err(why) => parts.event(why),
+        },
     }
 }
 
@@ -274,6 +304,10 @@ fn adopt(parts: &mut FrameParts, before: &UiConfig, config: Config, now: Instant
     if ui != before {
         let beats = (ui.waveform_beats != before.waveform_beats).then_some(ui.waveform_beats);
         parts.view.set_zoom_range(ui.zoom_range(), beats, now);
+    }
+    // The lookups' thread reads the switch: setting it never waits.
+    if let Some(covers) = &parts.covers {
+        covers.set_enabled(config.cover_lookup);
     }
     parts.unapplied = Some(config);
 }
@@ -442,6 +476,66 @@ mod tests {
     }
 
     #[test]
+    fn a_cover_lookup_never_holds_up_the_control_loop() {
+        use crate::covers::tests::{Answer, FakeService, add_track, wait_until};
+        use std::sync::Arc;
+        use std::sync::atomic::AtomicBool;
+        use std::time::Duration;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "").unwrap();
+        let config = Config::default();
+        let mut library = testing::start(&dir.path().join("library.sqlite3"));
+        let lib = library.library();
+        add_track(&lib, 1, Some(("A", "T")), "/music/a.mp3");
+        // A service that hangs, then fails as an offline laptop does.
+        let offline = Answer::Fail(crate::covers::LookupError::Unreachable("offline".into()));
+        let (service, fake) = FakeService::boxed(offline, Duration::from_secs(2));
+        let setting = Arc::new(AtomicBool::new(true));
+        let mut parts = FrameParts::new(&config);
+        parts.set_settings(Settings::load(path, &config));
+        parts.covers =
+            Some(crate::covers::CoverWorker::start(&lib, service, Arc::clone(&setting)).unwrap());
+        wait_until("the lookup under way", || fake.calls() == 1);
+        let mapping = controller::builtin::load_mapping_from("ddj-sb3", None).unwrap();
+        let mut runtime = Runtime::new(mapping);
+        let (mut engine, _renderer) = engine::engine(engine::EngineConfig {
+            sample_rate: 44_100,
+            max_block_frames: 512,
+        });
+        let (tx, rx) = channel();
+        for step in [
+            LibraryStep::FindCover { track: 1 },
+            LibraryStep::RemoveCover { track: 1 },
+            LibraryStep::RetryMissingCovers,
+        ] {
+            tx.send(UiCommand::Library(step)).unwrap();
+        }
+        tx.send(UiCommand::SetSetting {
+            key: "library.cover_lookup".into(),
+            value: "false".into(),
+        })
+        .unwrap();
+        let began = Instant::now();
+        drain(
+            &rx,
+            &mut parts,
+            Some((&mut runtime, &mut engine, Some(&mut library))),
+        );
+        assert!(
+            began.elapsed() < Duration::from_millis(200),
+            "{:?}",
+            began.elapsed()
+        );
+        // The switch reached the lookups.
+        assert!(!setting.load(std::sync::atomic::Ordering::Relaxed));
+        // Quitting does not wait for the service either.
+        let began = Instant::now();
+        parts.covers = None;
+        assert!(began.elapsed() < Duration::from_millis(1500));
+    }
+
+    #[test]
     fn settings_are_saved_and_the_live_ones_applied() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
@@ -456,7 +550,7 @@ mod tests {
         });
         let mut parts = FrameParts::new(&config);
         parts.set_settings(Settings::load(path.clone(), &config));
-        assert_eq!(parts.idle().settings.len(), 25);
+        assert_eq!(parts.idle().settings.len(), 26);
         let (tx, rx) = channel();
         for (key, value) in [
             ("stems.knobs", "\"raw\""),

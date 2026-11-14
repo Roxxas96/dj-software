@@ -54,6 +54,8 @@ pub(super) struct FrameParts {
     pub import: Option<Import>,
     /// The export to a USB stick; none until the library is open.
     pub export: Option<Export>,
+    /// The covers looked up online; none until the library is open.
+    pub covers: Option<crate::covers::CoverWorker>,
 }
 
 impl FrameParts {
@@ -77,6 +79,7 @@ impl FrameParts {
             detail: None,
             import: None,
             export: None,
+            covers: None,
         }
     }
 

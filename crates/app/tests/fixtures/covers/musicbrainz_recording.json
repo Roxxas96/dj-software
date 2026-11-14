@@ -1,0 +1,61 @@
+{
+  "created": "2026-11-14T10:00:00.000Z",
+  "count": 2,
+  "offset": 0,
+  "recordings": [
+    {
+      "id": "b8e3ea2e-1b4a-4c35-9f1e-5d7a2f9b6c11",
+      "score": 100,
+      "title": "Harder, Better, Faster, Stronger",
+      "length": 224693,
+      "video": null,
+      "artist-credit": [
+        {
+          "name": "Daft Punk",
+          "artist": {
+            "id": "056e4f3e-d505-4dad-8ec1-d04f521cbb56",
+            "name": "Daft Punk",
+            "sort-name": "Daft Punk"
+          }
+        }
+      ],
+      "first-release-date": "2001-03-07",
+      "releases": [
+        {
+          "id": "48140466-cff6-3222-bd55-63c27e43190d",
+          "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+          "count": 1,
+          "title": "Discovery",
+          "status": "Official",
+          "release-group": {
+            "id": "48117b82-7cc1-3a91-8d0e-0e6b4b6a3c2a",
+            "primary-type": "Album"
+          },
+          "date": "2001-03-07",
+          "country": "FR"
+        },
+        {
+          "id": "not-a-release-id/../../admin",
+          "title": "Broken",
+          "status": "Official"
+        },
+        {
+          "id": "7a1f4c2d-0e2b-4f8a-9c3d-1b2e3f4a5b6c",
+          "title": "Harder, Better, Faster, Stronger",
+          "status": "Official"
+        }
+      ]
+    },
+    {
+      "id": "0f2c1a9e-6d8b-4e7a-b3c5-9a8d7e6f5a4b",
+      "score": 40,
+      "title": "Something Else",
+      "releases": [
+        {
+          "id": "11111111-2222-3333-4444-555555555555",
+          "title": "Unrelated"
+        }
+      ]
+    }
+  ]
+}

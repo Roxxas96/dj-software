@@ -1,0 +1,82 @@
+{
+  "data": [
+    {
+      "id": 3135556,
+      "readable": true,
+      "title": "Harder, Better, Faster, Stronger",
+      "title_short": "Harder, Better, Faster, Stronger",
+      "link": "https://www.deezer.com/track/3135556",
+      "duration": 224,
+      "rank": 905442,
+      "explicit_lyrics": false,
+      "preview": "https://cdns-preview-d.dzcdn.net/stream/c-deda7fa9316d9e9e880d2c6207e92260-8.mp3",
+      "md5_image": "2e018122cb56986277102d2041a592c8",
+      "artist": {
+        "id": 27,
+        "name": "Daft Punk",
+        "link": "https://www.deezer.com/artist/27",
+        "picture": "https://api.deezer.com/artist/27/image",
+        "type": "artist"
+      },
+      "album": {
+        "id": 302127,
+        "title": "Discovery",
+        "cover": "https://api.deezer.com/album/302127/image",
+        "cover_small": "https://e-cdns-images.dzcdn.net/images/cover/2e018122cb56986277102d2041a592c8/56x56-000000-80-0-0.jpg",
+        "cover_medium": "https://e-cdns-images.dzcdn.net/images/cover/2e018122cb56986277102d2041a592c8/250x250-000000-80-0-0.jpg",
+        "cover_big": "https://e-cdns-images.dzcdn.net/images/cover/2e018122cb56986277102d2041a592c8/500x500-000000-80-0-0.jpg",
+        "cover_xl": "https://e-cdns-images.dzcdn.net/images/cover/2e018122cb56986277102d2041a592c8/1000x1000-000000-80-0-0.jpg",
+        "md5_image": "2e018122cb56986277102d2041a592c8",
+        "tracklist": "https://api.deezer.com/album/302127/tracks",
+        "type": "album"
+      },
+      "type": "track"
+    },
+    {
+      "id": 3135557,
+      "readable": true,
+      "title": "Harder, Better, Faster, Stronger (Live)",
+      "link": "https://www.deezer.com/track/3135557",
+      "duration": 340,
+      "artist": { "id": 27, "name": "Daft Punk", "type": "artist" },
+      "album": {
+        "id": 302128,
+        "title": "Alive 2007",
+        "cover_medium": "https://e-cdns-images.dzcdn.net/images/cover/5718f7c81c27e0b2417e2a4c45224f8a/250x250-000000-80-0-0.jpg",
+        "cover_big": "https://e-cdns-images.dzcdn.net/images/cover/5718f7c81c27e0b2417e2a4c45224f8a/500x500-000000-80-0-0.jpg",
+        "type": "album"
+      },
+      "type": "track"
+    },
+    {
+      "id": 3135558,
+      "readable": true,
+      "title": "Harder, Better, Faster, Stronger (Remix)",
+      "duration": 300,
+      "artist": { "id": 27, "name": "Daft Punk", "type": "artist" },
+      "album": {
+        "id": 302129,
+        "title": "Plain text",
+        "cover_big": "http://e-cdns-images.dzcdn.net/images/cover/0000/500x500-000000-80-0-0.jpg",
+        "type": "album"
+      },
+      "type": "track"
+    },
+    {
+      "id": 3135559,
+      "readable": true,
+      "title": "Harder, Better, Faster, Stronger (Edit)",
+      "duration": 210,
+      "artist": { "id": 27, "name": "Daft Punk", "type": "artist" },
+      "album": {
+        "id": 302130,
+        "title": "Elsewhere",
+        "cover_big": "https://192.168.1.1/admin/500x500.jpg",
+        "type": "album"
+      },
+      "type": "track"
+    }
+  ],
+  "total": 4,
+  "next": "https://api.deezer.com/search?q=artist%3A%22Daft%20Punk%22&index=25"
+}

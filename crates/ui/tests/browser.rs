@@ -13,7 +13,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use engine::DeckId;
 use library::{
-    BrowserEdit, BrowserView, Focus, ListRow, TrackRow, TrackSortKey, TreeKind, TreeRow,
+    BrowserEdit, BrowserView, CoverState, Focus, ListRow, TrackRow, TrackSortKey, TreeKind, TreeRow,
 };
 use ui::browser::{Arrangement, COLUMNS, Decks};
 use ui::cover::Covers;
@@ -66,6 +66,7 @@ fn view() -> BrowserView {
                 file_name: "just-us.mp3".into(),
                 position: None,
                 cover_file: None,
+                cover: None,
             },
             ListRow {
                 path: PathBuf::from("/music/lost.mp3"),
@@ -73,6 +74,7 @@ fn view() -> BrowserView {
                 file_name: "lost.mp3".into(),
                 position: None,
                 cover_file: None,
+                cover: None,
             },
         ],
         list_offset: 0,
@@ -778,6 +780,54 @@ fn context_menu_loads_on_the_chosen_deck() {
     click_with(&mut harness, PointerButton::Secondary, at);
     harness.run_steps(2);
     harness.get_by_label("Load on deck 4");
+}
+
+#[test]
+fn the_track_menu_finds_and_removes_looked_up_covers() {
+    let mut view = numbered(0, 20, 20);
+    view.list[1].cover = Some(CoverState::Found);
+    view.list[2].cover = Some(CoverState::Missed);
+    view.list[3].cover = Some(CoverState::Removed);
+    let mut harness = clicking(view, Decks::default());
+    let menu = |harness: &mut Harness<'_, Clicking>, song: &str| {
+        let at = at_label(harness, song);
+        click_with(harness, PointerButton::Secondary, at);
+        harness.run_steps(2);
+    };
+    // A found cover can be replaced or removed.
+    menu(&mut harness, "Song 1");
+    let item = at_label(&harness, "Find another cover");
+    click(&mut harness, item);
+    harness.run_steps(2);
+    menu(&mut harness, "Song 1");
+    let item = at_label(&harness, "Remove cover");
+    click(&mut harness, item);
+    harness.run_steps(2);
+    assert_eq!(
+        harness.state().steps,
+        [
+            LibraryStep::FindCover { track: 1001 },
+            LibraryStep::RemoveCover { track: 1001 },
+        ]
+    );
+    // A miss can be looked up again, and has nothing to remove.
+    harness.state_mut().steps.clear();
+    menu(&mut harness, "Song 2");
+    assert!(harness.query_by_label("Remove cover").is_none());
+    let item = at_label(&harness, "Find another cover");
+    click(&mut harness, item);
+    harness.run_steps(2);
+    assert_eq!(
+        harness.state().steps,
+        [LibraryStep::FindCover { track: 1002 }]
+    );
+    // Never looked up, or removed: neither.
+    for song in ["Song 4", "Song 3"] {
+        menu(&mut harness, song);
+        harness.get_by_label("Load on deck 1");
+        assert!(harness.query_by_label("Find another cover").is_none());
+        assert!(harness.query_by_label("Remove cover").is_none());
+    }
 }
 
 fn wheel<S>(harness: &mut Harness<'_, S>, at: Pos2, lines: f32) {

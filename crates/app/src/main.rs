@@ -2,6 +2,7 @@
 
 mod config;
 mod console;
+mod covers;
 mod format;
 mod led_scan;
 mod legacy_dirs;

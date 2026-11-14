@@ -8,8 +8,8 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use ui::{
     ControlFrame, ExportChoice, ExportStep, ExportSummary, ExportView, ImportStep, ImportSummary,
-    ImportView, Layout, PlaylistLabel, Resolution, SettingRow, StickLabel, TrackLabel, UiCommand,
-    ViewChange,
+    ImportView, Layout, LibraryStep, PlaylistLabel, Resolution, SettingRow, StickLabel, TrackLabel,
+    UiCommand, ViewChange,
 };
 
 fn row(key: &str, category: &'static str, value: &str, default: &str) -> SettingRow {
@@ -311,6 +311,35 @@ fn the_library_page_starts_the_import() {
     assert_eq!(
         asked.try_iter().collect::<Vec<_>>(),
         [UiCommand::Import(ImportStep::Scan)]
+    );
+}
+
+#[test]
+fn the_library_page_switches_cover_lookups_and_retries_misses() {
+    let mut settings = rows();
+    settings.push(row("library.cover_lookup", "Library", "true", "true"));
+    let frame = frame(settings);
+    let (mut harness, asked) = library_page(&frame);
+    // What is sent, and to whom, is said on the page.
+    harness.get_by_label_contains("Only the artist and title");
+    harness.get_by_label_contains("Deezer and to MusicBrainz");
+    harness
+        .get_by(|node: &egui_kittest::kittest::AccessKitNode<'_>| {
+            node.role() == egui::accesskit::Role::CheckBox
+        })
+        .click();
+    harness.run_steps(3);
+    harness.get_by_label("Retry missing covers").click();
+    harness.run_steps(3);
+    assert_eq!(
+        asked.try_iter().collect::<Vec<_>>(),
+        [
+            UiCommand::SetSetting {
+                key: "library.cover_lookup".into(),
+                value: "false".into(),
+            },
+            UiCommand::Library(LibraryStep::RetryMissingCovers),
+        ]
     );
 }
 

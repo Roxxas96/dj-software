@@ -123,7 +123,10 @@ fn page(
         Page::Controllers => controllers(ui, frame, state, commands),
         Page::Options if rows.is_empty() => unavailable(ui, frame),
         Page::Options => options::show(ui, rows, &mut state.options, &mut state.drafts, commands),
-        Page::Library => library::show(ui, &frame.import, &mut state.import_rest, commands),
+        Page::Library => {
+            library::covers(ui, rows, &mut state.drafts, commands);
+            library::show(ui, &frame.import, &mut state.import_rest, commands);
+        }
         Page::Export => export::show(ui, &frame.export, &mut state.export, commands),
         Page::Later => later(ui),
     }

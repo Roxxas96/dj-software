@@ -3744,14 +3744,20 @@ dependencies = [
  "directories",
  "dunce",
  "engine",
+ "image",
  "interop",
  "library",
+ "percent-encoding",
+ "rusqlite",
+ "serde",
+ "serde_json",
  "stems",
  "tempfile",
  "toml",
  "toml_edit",
  "trash",
  "ui",
+ "ureq",
 ]
 
 [[package]]

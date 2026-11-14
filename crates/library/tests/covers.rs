@@ -243,3 +243,62 @@ fn a_removed_cover_stays_removed_unless_forced() {
         Some(elsewhere)
     );
 }
+
+#[test]
+fn a_new_cover_takes_the_other_file_and_the_old_one_goes() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib = open(&dir);
+    add_track(&lib, 1, Some("A"), Some("T"));
+    let [first, second] = library::cover_files(lib.path(), 1);
+    assert_eq!(first, dir.path().join("lib").join("covers").join("1.jpg"));
+    assert_eq!(
+        second,
+        dir.path().join("lib").join("covers").join("1-2.jpg")
+    );
+    std::fs::create_dir_all(first.parent().unwrap()).unwrap();
+    std::fs::write(&first, b"one").unwrap();
+    let w = lib.writer();
+    w.submit_wait(WriteOp::SetCover {
+        track: 1,
+        file: first.clone(),
+        force: false,
+    })
+    .unwrap();
+    std::fs::write(&second, b"two").unwrap();
+    w.submit_wait(WriteOp::SetCover {
+        track: 1,
+        file: second.clone(),
+        force: true,
+    })
+    .unwrap();
+    assert!(!first.exists());
+    assert!(second.exists());
+    // Removing deletes either file.
+    w.submit_wait(WriteOp::ClearCover { track: 1 }).unwrap();
+    assert!(!second.exists());
+}
+
+#[test]
+fn lookups_walk_the_library_and_ask_for_one_track() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib = open(&dir);
+    for id in 1..=3 {
+        add_track(&lib, id, Some("A"), Some("T"));
+    }
+    let reader = lib.reader().unwrap();
+    let after: Vec<i64> = reader
+        .tracks_needing_covers_after(1, 10)
+        .unwrap()
+        .iter()
+        .map(|q| q.track)
+        .collect();
+    assert_eq!(after, [2, 3]);
+    lib.writer()
+        .submit_wait(WriteOp::ClearCover { track: 2 })
+        .unwrap();
+    // Asked for by id whatever its cover's state, with the file's stem only.
+    let query = reader.cover_query(2).unwrap().unwrap();
+    assert_eq!(query.file_stem, "song 2");
+    assert_eq!(query.artist.as_deref(), Some("A"));
+    assert_eq!(reader.cover_query(99).unwrap(), None);
+}

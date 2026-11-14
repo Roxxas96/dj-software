@@ -1294,6 +1294,39 @@ impl LibraryMode {
             .map_err(|e| format!("warning: could not {what}: {}", safe(e)))
     }
 
+    /// Removes `track`'s cover found online: its file is deleted and it is never looked
+    /// up again, unless asked ("Find another cover"). The window shows the track's own
+    /// picture or the plain tile within a second. The write does not wait.
+    ///
+    /// # Errors
+    ///
+    /// The library is closed.
+    pub fn remove_cover(&self, track: i64) -> Result<(), String> {
+        self.submit_now(WriteOp::ClearCover { track })
+    }
+
+    /// Asks for the covers whose lookup found nothing to be looked up again, once (the
+    /// cover lookups clear the flag when they are done). The write does not wait.
+    ///
+    /// # Errors
+    ///
+    /// The library is closed.
+    pub fn retry_missing_covers(&self) -> Result<(), String> {
+        self.submit_now(WriteOp::SetSetting {
+            key: library::COVERS_RETRY_MISSED.to_owned(),
+            value: Some("1".to_owned()),
+        })
+    }
+
+    /// Queues `op` without waiting for it; a failure is reported with the other failed
+    /// writes.
+    fn submit_now(&self, op: WriteOp) -> Result<(), String> {
+        let what = write_text(&op);
+        self.writer
+            .submit(op)
+            .map_err(|e| format!("warning: could not {what}: {}", safe(e)))
+    }
+
     /// The cover file the library kept for `track`, when its cover was found, as a thread
     /// of its own last read it (see [`CoverFiles`]): never a database query on the
     /// caller's thread, and a lookup that finishes while the track is shown reaches the
@@ -1303,13 +1336,17 @@ impl LibraryMode {
     }
 
     /// `view` with the cover file of the row at its cursor filled in, for the window's
-    /// info pane.
+    /// info pane, and its cover's state as last read (the list's is as old as the list),
+    /// for the track menu.
     pub fn with_cover(&self, mut view: BrowserView) -> BrowserView {
         let at = view.list_cursor.checked_sub(view.list_offset);
         if let Some(row) = at.and_then(|at| view.list.get_mut(at))
             && let Some(track) = row.track.as_ref().map(|t| t.id)
         {
             row.cover_file = self.cover_file(track);
+            if let Some(state) = self.covers.state(track) {
+                row.cover = state;
+            }
         }
         view
     }
@@ -1415,6 +1452,8 @@ const COVER_TRACKS: usize = 64;
 struct CoverShared {
     /// Per track, when its cover file was read and what it is (`None`: no cover found).
     files: HashMap<i64, (Instant, Option<PathBuf>)>,
+    /// Per track read, its cover's state (`None`: never looked up).
+    states: HashMap<i64, Option<library::CoverState>>,
     /// The tracks asked for and not read yet.
     pending: HashSet<i64>,
 }
@@ -1449,15 +1488,20 @@ impl CoverFiles {
                     let mut shared = fill.lock().unwrap_or_else(PoisonError::into_inner);
                     shared.pending.remove(&track);
                     let known = shared.files.get(&track).and_then(|(_, f)| f.clone());
-                    let file = match read {
-                        Some(row) => row
-                            .filter(|row| row.state == library::CoverState::Found)
-                            .and_then(|row| row.file),
-                        None => known,
-                    };
                     if shared.files.len() >= COVER_TRACKS {
                         shared.files.clear();
+                        shared.states.clear();
                     }
+                    let file = match read {
+                        Some(row) => {
+                            shared
+                                .states
+                                .insert(track, row.as_ref().map(|row| row.state));
+                            row.filter(|row| row.state == library::CoverState::Found)
+                                .and_then(|row| row.file)
+                        }
+                        None => known,
+                    };
                     shared.files.insert(track, (Instant::now(), file));
                 }
             });
@@ -1484,6 +1528,12 @@ impl CoverFiles {
             shared.pending.remove(&track);
         }
         file
+    }
+
+    /// `track`'s cover state as last read (`Some(None)`: never looked up); `None` when it
+    /// is not known (yet). Asks for nothing: [`CoverFiles::get`] does.
+    fn state(&self, track: i64) -> Option<Option<library::CoverState>> {
+        self.shared.try_lock().ok()?.states.get(&track).copied()
     }
 }
 
@@ -1552,6 +1602,7 @@ fn write_text(op: &WriteOp) -> String {
         WriteOp::SetHotcueLabel { slot, .. } => format!("name hotcue {slot}"),
         WriteOp::EditGrid { .. } => "save the beatgrid".to_owned(),
         WriteOp::StoreAnalysis(_) => "save the analysis".to_owned(),
+        WriteOp::ClearCover { .. } => "remove the cover".to_owned(),
         _ => "save a library change".to_owned(),
     }
 }

@@ -1,13 +1,44 @@
-//! The Library page: the import from VirtualDJ, one step at a time as the session
+//! The Library page: the covers looked up online (`library.cover_lookup` and "Retry
+//! missing covers"), and the import from VirtualDJ, one step at a time as the session
 //! publishes it ([`ImportView`]).
 
 use std::sync::mpsc::Sender;
 
 use egui::{RichText, Ui};
 
-use crate::command::{ImportStep, Resolution, UiCommand};
-use crate::model::{ImportSummary, ImportView};
+use crate::command::{ImportStep, LibraryStep, Resolution, UiCommand};
+use crate::model::{ImportSummary, ImportView, SettingRow};
 use crate::theme;
+
+use super::options;
+
+/// The covers' part of the page: the `library.cover_lookup` switch, what it sends, and
+/// "Retry missing covers".
+pub(super) fn covers(
+    ui: &mut Ui,
+    rows: &[SettingRow],
+    drafts: &mut options::Drafts,
+    commands: &Sender<UiCommand>,
+) {
+    let p = theme::palette(ui.ctx());
+    ui.label(RichText::new("Covers").strong());
+    ui.label(
+        RichText::new(
+            "Covers are looked up online for tracks without a picture of their own. Only \
+             the artist and title (or the file name without its extension) are sent, to \
+             Deezer and to MusicBrainz with the Cover Art Archive.",
+        )
+        .color(p.text_dim),
+    );
+    ui.add_space(6.0);
+    if let Some(row) = rows.iter().find(|row| row.key == "library.cover_lookup") {
+        options::show_row(ui, row, rows, drafts, commands);
+    }
+    if ui.button("Retry missing covers").clicked() {
+        let _ = commands.send(UiCommand::Library(LibraryStep::RetryMissingCovers));
+    }
+    ui.separator();
+}
 
 const IMPORT: &str = "Import from VirtualDJ…";
 const DECKS_BUSY: &str = "Unload the decks to import: a loaded track would keep its old hotcues.";
