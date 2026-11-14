@@ -227,6 +227,48 @@ open-jockey library playlist delete "Peak time"
 Positions start at 1. Deleting a playlist keeps its tracks in the library. Playlists
 appear in the browser tree in library mode.
 
+## Covers found online
+
+A track whose file has no picture of its own gets a cover looked up online, in the
+background, by the window (`open-jockey`; the command line looks nothing up). The lookups
+never slow the app down, and a cover found shows on the deck and in the info panel within
+about a second.
+
+**What is sent, and to whom.** For each track, one search with the track's artist and title
+tags (the title alone when there is no artist; the file name without its folder or
+extension when there is no title), and nothing else: no path, no account, no cookie, no
+identifier of you or your computer. Every request names the app in its User-Agent,
+`OpenJockey/<version> ( https://github.com/Roxxas96/open-jockey )`. It goes:
+
+1. to Deezer's public search (`api.deezer.com`, no account), and its image server for the
+   picture;
+2. when Deezer has none, to MusicBrainz's recording search (`musicbrainz.org`), then the
+   Cover Art Archive (`coverartarchive.org`, which may send the picture from
+   `archive.org`) for the front cover of the matching releases.
+
+MusicBrainz and the Cover Art Archive get at most one request a second, Deezer at most five.
+Only `https` is used, and answers are size-capped and checked before use.
+
+**Turning it off.** Untick `library.cover_lookup` in Settings → Library (or set
+`cover_lookup = false` under `[library]` in [config.md](config.md)). It applies at once:
+no request is made after the one under way, if any.
+
+**What is kept.** A cover is kept as a JPEG of at most 512 pixels a side in the `covers`
+folder next to the library database (`covers/<track id>.jpg`), and recorded in the
+library. A track's own embedded picture always wins over it. A track whose lookup found
+nothing is not looked up again; "Retry missing covers" in Settings → Library looks all of
+them up once more. When the network is down or a service fails, nothing is recorded:
+lookups pause for a minute and the track is tried again later, so a laptop offline does
+not end up with every track "not found".
+
+**From the track menu** (right-click a track in the browser):
+
+- "Find another cover" (for a track with a cover found online, or whose lookup found none)
+  looks it up now and takes the first picture that differs from the one it has; when there
+  is none, the events say so and the cover stays.
+- "Remove cover" (for a track with a cover found online) deletes it: the track shows its own
+  picture or the plain tile again, and it is never looked up again.
+
 ## Importing from VirtualDJ
 
 A one-time import of your VirtualDJ hotcues, saved loops and playlists. VirtualDJ's files

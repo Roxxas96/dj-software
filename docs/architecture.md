@@ -47,10 +47,12 @@ Each plan that adds or changes a crate updates this page. The full design is in
   decks, browser, status lines and events) at most every 10 ms by swapping one pointer, and
   never waits on the window. The window reads the deck and meter snapshots through an
   `EngineMonitor` and never sends the engine anything itself: what it asks for goes to the
-  session as a `UiCommand` (below). Two more threads serve the window:
+  session as a `UiCommand` (below). More threads serve the window:
   a **detail-waveform thread** (session) that decodes the loaded tracks and computes their
-  scrolling waveforms off the control loop, and a **cover thread** (`ui`) that reads and
-  decodes cover art. The session waits for the audio
+  scrolling waveforms off the control loop, a **cover thread** (`ui`) that reads and
+  decodes cover art, and a **cover lookup thread** (`app::covers`) that looks covers up
+  online and records them through the library writer; the control loop only sets its
+  switch and queues requests, never waiting on it. The session waits for the audio
   device (retrying every 2 s), and closing the window ends the loop, which saves the last
   cues and hotcues. A session that cannot run (a bad configuration file or mapping) leaves
   the window open with the error shown, until the window is closed.

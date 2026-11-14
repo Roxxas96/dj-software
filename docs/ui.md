@@ -72,8 +72,12 @@ knob is turned; the soft takeover waits until the knob reaches the value on scre
 | Tracks | Drag onto a deck to load it, onto a playlist in the tree to add it (in list order), or inside an open playlist to reorder it |
 
 The track menu loads on a deck ("Load on deck N"), adds the selected tracks to a playlist
-("Add to playlist") and, in a playlist, removes them ("Remove from playlist"). The tracks
-stay in the library. Dropping a playlist's own rows back on its tree row does nothing.
+("Add to playlist"), in a playlist removes them ("Remove from playlist"; the tracks stay in
+the library) and deletes them after asking ("Delete…", see [Deleting](#deleting)). For a
+track whose cover was looked up online it also has "Find another cover" (when a cover was
+found, or the lookup found none) and "Remove cover" (when one was found); see
+[Covers found online](library.md#covers-found-online). Dropping a playlist's own rows back
+on its tree row does nothing.
 
 The search covers the title, the artist, and the file name of a track without a title (the
 name the list shows); it ignores ASCII case. Sorting by title puts such a track by its file
@@ -101,13 +105,64 @@ already has (the same letters, capitals included), is refused with a message in 
   points or more) touches the platter, so a stray click, even a slow one, never stops or
   nudges a playing track. On a playing deck the jog only nudges, never holds it. (Clicking
   the overview seeks, on purpose.)
-- **Deleting is never one click.** A hotcue is deleted from its own menu item, and a
-  playlist after a question.
+- **Deleting is never one click.** A hotcue is deleted from its own menu item; anything
+  else in the browser after a question (see [Deleting](#deleting)), and a file only ever
+  goes to the Trash.
 - **Playlist edits check the view they were made from.** A reorder or a removal names the
   tracks the window saw and where (a drop onto a playlist in the tree appends, so it checks
   nothing). If the playlist changed since (another window,
   the CLI, an import), nothing is written and the events say "The playlist changed; try
   again".
+
+## Keyboard
+
+The browser takes the keyboard once you click in its tree or its list, and keeps it until
+you click elsewhere or a text field (the search box, a dialog's name) has the focus. The pane
+that has the keyboard draws its highlighted row brighter than the other's. Keys do nothing
+while a menu or a dialog is open: they go to it.
+
+| Key | In the tree | In the list |
+|---|---|---|
+| Up, Down, Page Up, Page Down, Home, End | Move the highlight | Move the highlight |
+| Left, Right | Close or open a drive or folder | — |
+| Enter | Open or close a drive or folder; show a playlist | Load the highlighted track on the first free deck (refused when every deck plays, as a double-click is) |
+| Tab, Shift-Tab | Go to the list | Go to the tree |
+| Cmd-A (Ctrl-A on Windows and Linux) | Select the whole list | Select the whole list |
+| Letters and digits | Start a search | Start a search |
+| Delete or Backspace (Cmd-Backspace too) | Delete the highlighted playlist or folder, after asking | Delete the selected rows (or the highlighted one), after asking |
+
+Typing a letter puts it in the search box, which then takes the keyboard; Escape clears the
+search. The window's other keys are unchanged: the browser only takes these while it has the
+keyboard.
+
+## Deleting
+
+The Delete key, or "Delete…" in a menu, never deletes at once. It asks first, in a dialog
+with Cancel focused (so Enter alone never deletes); a click outside it or Escape cancels.
+The delete button takes clicks only a moment after it shows, so a click aimed at the dialog
+before it was ready cannot land on it. What it asks depends on what is selected:
+
+| Selected | Question | What happens |
+|---|---|---|
+| Rows of a playlist | "Remove N tracks from <playlist>? The files stay." | The entries leave the playlist; the files and the tracks stay |
+| Rows of a folder | "Move <file> to the Trash?" or "Move N files to the Trash?" | The files go to the system's Trash (the Recycle Bin on Windows); the tracks are marked missing, keeping their hotcues |
+| A playlist in the tree | "Delete the playlist <name>? Its tracks stay in the library." | The playlist goes; its tracks stay |
+| A folder in the tree | "Move the folder <name> and its N files to the Trash?" | The folder goes to the Trash |
+
+With the whole list selected (Cmd-A), all of it is what is deleted; if the list changed
+since, nothing is deleted. A file only ever goes to the Trash, from where you can put it
+back: nothing is deleted for good, and if the Trash move fails (a drive without a Trash, a
+file in use) nothing is deleted at all and the events say why. Only files and folders inside
+the library's folders can go, compared as real paths so a link cannot point elsewhere. These
+are refused, with the reason and OK in place of the buttons:
+
+- "<file> is loaded on deck N: unload it first."
+- "<folder> is a library folder: remove it from the library first."
+- "<folder> holds a library folder: remove it from the library first."
+- "<path> is outside the library folders."
+
+Everything is checked again when you confirm: anything refused by then is said in the events
+and nothing is deleted.
 
 ## What each area shows
 
@@ -123,7 +178,13 @@ already has (the same letters, capitals included), is refused with a message in 
   the lane; a hotcue shows its colour, and its name cut at 14 characters when it has one.
   The playhead is fixed at the centre. Each lane blends three layers, low, mid and high, one
   colour per band (see [Waveform colours](#waveform-colours)), so where the bands overlap
-  the colours mix as they do in VirtualDJ.
+  the colours mix as they do in VirtualDJ. The bands follow the channel's knobs, on the
+  lanes and the deck's overview: turning LOW, MID or HIGH (or, in stems mode, the stem
+  knobs) down shrinks that band and a kill makes it vanish, and GAIN makes all three grow
+  or shrink; the drawing never leaves the lane. With SLIP on, a held loop roll or slicer
+  shows where the track will land when it is let go: a triangle in the deck's accent at the
+  lane's top with a faint line through the lane, and the same triangle over the overview.
+  A loop, a held loop roll and the slicer's current block are shaded on the lane.
 - **Zoom:** scroll (or pinch) over the waveforms, or click the `-` and `+` buttons at their
   top right. Each step is 1.25 times, between `ui.waveform_min_beats` and
   `ui.waveform_max_beats` (4 and 64 beats by default). Both lanes always share the zoom, so
@@ -328,7 +389,10 @@ closable) with a sidebar, as in VirtualDJ:
   "Reset all" the file cannot take says why in the events). Text typed and not yet sent is
   dropped when the window closes. Before the session has read the settings the page says so
   (or shows the error that stopped it).
-- **Library:** "Import from VirtualDJ…", a one-time import of hotcues, saved loops and
+- **Library:** the cover lookups: what they send and to whom, the
+  `library.cover_lookup` switch, and "Retry missing covers", which looks up once more the
+  tracks whose lookup found nothing (see
+  [library.md](library.md#covers-found-online)). Then "Import from VirtualDJ…", a one-time import of hotcues, saved loops and
   playlists (see [library.md](library.md#importing-from-virtualdj)). It reads VirtualDJ's data
   and shows the counts, then Import asks track by track what to do with a track that has
   hotcues here too (Keep mine, Use VirtualDJ's or Merge, with a "for all remaining" box), takes
@@ -346,7 +410,7 @@ closable) with a sidebar, as in VirtualDJ:
 - **Later:** what will come (recording, broadcast, automix); nothing to set yet.
 
 Some settings apply at once: the crossfader, the effects, the sampler volume, the pad
-tables, the backspin times, `stems.knobs` and the `ui.*` zoom settings (and `stems.eq_mode`
+tables, the backspin times, `stems.knobs`, `library.cover_lookup` and the `ui.*` zoom settings (and `stems.eq_mode`
 when stems were enabled at launch). The others wait for the next launch: the audio device and
 channels, the controller mapping, the sampler pads, `stems.enabled`, `stems.kicks_hz` and
 `stems.cache_gb`.
@@ -360,7 +424,8 @@ window's change is added to the file as it now is. See [config.md](config.md).
 - One audio device: master and headphones must be channels of the same device. Two devices
   come in a later plan.
 - The USER buttons are not built.
-- There are no keyboard shortcuts: everything is the mouse, or the controller.
+- Only the browser takes keys (see [Keyboard](#keyboard)); the decks and the mixer are the
+  mouse, or the controller.
 - The PAD SCRATCH mode's pads are not clickable; the controller's pads do the scratch
   routine, and the on-screen pads of that mode are not its pads.
 - The SB3's LOAD button still loads onto a playing deck (the refusal covers the window's
