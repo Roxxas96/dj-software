@@ -791,10 +791,13 @@ fn page(reader: &Reader, items: &Items, offset: usize) -> Result<Vec<ListRow>, L
             })
             .collect(),
     };
+    let tracks: Vec<i64> = rows
+        .iter()
+        .filter_map(|r| r.track.as_ref().map(|t| t.id))
+        .collect();
+    let states = crate::covers::cover_states(reader, &tracks)?;
     for row in &mut rows {
-        if let Some(track) = &row.track {
-            row.cover = reader.cover(track.id)?.map(|cover| cover.state);
-        }
+        row.cover = row.track.as_ref().and_then(|t| states.get(&t.id).copied());
     }
     Ok(rows)
 }

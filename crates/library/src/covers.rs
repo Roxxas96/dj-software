@@ -58,11 +58,7 @@ impl Reader {
                 let state: String = r.get(0)?;
                 let file: Option<String> = r.get(1)?;
                 Ok(CoverRow {
-                    state: match state.as_str() {
-                        "found" => CoverState::Found,
-                        "missed" => CoverState::Missed,
-                        _ => CoverState::Removed,
-                    },
+                    state: state_of(&state),
                     file: file.map(PathBuf::from),
                     updated_at: r.get(2)?,
                 })
@@ -78,11 +74,14 @@ impl Reader {
     ///
     /// Any database error.
     pub fn tracks_needing_covers(&self, limit: usize) -> Result<Vec<CoverQuery>, LibraryError> {
-        self.tracks_needing_covers_after(i64::MIN, limit)
+        let retry = self.setting(COVERS_RETRY_MISSED)?.as_deref() == Some("1");
+        self.tracks_needing_covers_after(i64::MIN, limit, retry)
     }
 
-    /// [`Reader::tracks_needing_covers`] from the track after `after` on, by id: a lookup
-    /// walks the library a batch at a time, past the tracks it could not look up yet.
+    /// [`Reader::tracks_needing_covers`] from the track after `after` on, by id, with the
+    /// missed tracks when `retry` (the [`COVERS_RETRY_MISSED`] flag as the caller read it
+    /// once for its whole walk): a lookup walks the library a batch at a time, past the
+    /// tracks it could not look up yet.
     ///
     /// # Errors
     ///
@@ -91,8 +90,8 @@ impl Reader {
         &self,
         after: i64,
         limit: usize,
+        retry: bool,
     ) -> Result<Vec<CoverQuery>, LibraryError> {
-        let retry = self.setting(COVERS_RETRY_MISSED)?.as_deref() == Some("1");
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         let mut stmt = self.connection().prepare_cached(
             "SELECT t.id, t.artist, t.title, t.path FROM tracks t \
@@ -117,6 +116,33 @@ impl Reader {
             .prepare_cached("SELECT id, artist, title, path FROM tracks WHERE id = ?1")?
             .query_row([track], cover_query)
             .optional()?)
+    }
+}
+
+/// The cover state of each of `tracks` that has a cover row, in one query.
+pub(crate) fn cover_states(
+    reader: &Reader,
+    tracks: &[i64],
+) -> Result<std::collections::HashMap<i64, CoverState>, LibraryError> {
+    if tracks.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let marks = vec!["?"; tracks.len()].join(", ");
+    let sql = format!("SELECT track_id, state FROM covers WHERE track_id IN ({marks})");
+    let mut stmt = reader.connection().prepare(&sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(tracks), |r| {
+        let state: String = r.get(1)?;
+        Ok((r.get(0)?, state_of(&state)))
+    })?;
+    Ok(rows.collect::<Result<_, _>>()?)
+}
+
+/// A stored state as a [`CoverState`].
+fn state_of(state: &str) -> CoverState {
+    match state {
+        "found" => CoverState::Found,
+        "missed" => CoverState::Missed,
+        _ => CoverState::Removed,
     }
 }
 

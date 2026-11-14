@@ -1336,8 +1336,8 @@ fn list_keys(
 
 /// The menu of a library track's row `at`: load it on a deck, add it (or the rows picked,
 /// when it is one of them) to a playlist, take them out of the playlist shown, or delete
-/// them (asking first); and for its track's cover looked up online, find another or
-/// remove it.
+/// them (asking first); and for its track's cover looked up online, find another (or
+/// one again, after a removal) or remove it.
 fn track_menu(
     ui: &mut Ui,
     view: &BrowserView,
@@ -1408,11 +1408,17 @@ fn track_menu(
     {
         delete_dialog::open(ui.ctx(), target, steps);
     }
-    // A cover looked up online, or a lookup that found none: this row's track alone.
+    // A cover looked up online, a lookup that found none, or a removed cover: this row's
+    // track alone.
     let cover = view.list.get(at - view.list_offset).and_then(|e| e.cover);
-    if matches!(cover, Some(CoverState::Found | CoverState::Missed)) {
+    let find = match cover {
+        Some(CoverState::Found | CoverState::Missed) => Some("Find another cover"),
+        Some(CoverState::Removed) => Some("Find a cover"),
+        None => None,
+    };
+    if let Some(label) = find {
         ui.separator();
-        if ui.button("Find another cover").clicked() {
+        if ui.button(label).clicked() {
             steps.push(LibraryStep::FindCover { track: track.id });
         }
     }

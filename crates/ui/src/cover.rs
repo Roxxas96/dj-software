@@ -175,13 +175,30 @@ impl Covers {
 /// [`COVER_PIXELS`] a side. `None` when the file can't be read or has no picture that
 /// decodes.
 pub fn read(path: &Path) -> Option<ColorImage> {
+    decode(&picture(path)?)
+}
+
+/// Whether `path` has a picture of its own that [`read`] shows: its front cover, else its
+/// first picture, a JPEG or PNG whose size reads. Only the picture's header is decoded.
+pub fn has_picture(path: &Path) -> bool {
+    picture(path).is_some_and(|bytes| {
+        image::ImageReader::new(std::io::Cursor::new(bytes))
+            .with_guessed_format()
+            .ok()
+            .and_then(|reader| reader.into_dimensions().ok())
+            .is_some()
+    })
+}
+
+/// The bytes of `path`'s front cover, else of its first picture.
+fn picture(path: &Path) -> Option<Vec<u8>> {
     let options = ParseOptions::new().read_properties(false);
     let file = Probe::open(path).ok()?.options(options).read().ok()?;
     let pictures = || file.tags().iter().flat_map(|tag| tag.pictures());
     let picture = pictures()
         .find(|p| p.pic_type() == PictureType::CoverFront)
         .or_else(|| pictures().next())?;
-    decode(picture.data())
+    Some(picture.data().to_vec())
 }
 
 /// The picture file at `path` (a JPEG or PNG), decoded and scaled like [`read`]'s.
@@ -317,6 +334,18 @@ mod tests {
             .write_to(&mut Cursor::new(&mut bytes), image::ImageFormat::Png)
             .unwrap();
         bytes
+    }
+
+    #[test]
+    fn has_picture_reads_only_the_header() {
+        let dir = Scratch::new("has-picture");
+        let with = dir.0.join("with.wav");
+        let without = dir.0.join("without.wav");
+        wav(&with, Some(solid([1, 2, 3], 8)));
+        wav(&without, None);
+        assert!(has_picture(&with));
+        assert!(!has_picture(&without));
+        assert!(!has_picture(&dir.0.join("gone.wav")));
     }
 
     /// A short silent WAV at `path`, with `picture` as its ID3 front cover when given.

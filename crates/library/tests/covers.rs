@@ -287,7 +287,7 @@ fn lookups_walk_the_library_and_ask_for_one_track() {
     }
     let reader = lib.reader().unwrap();
     let after: Vec<i64> = reader
-        .tracks_needing_covers_after(1, 10)
+        .tracks_needing_covers_after(1, 10, false)
         .unwrap()
         .iter()
         .map(|q| q.track)

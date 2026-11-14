@@ -14,9 +14,9 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, SyncSender, TrySendError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use library::{COVERS_RETRY_MISSED, CoverQuery, CoverState, Library, Reader, WriteOp, Writer};
@@ -62,8 +62,8 @@ impl Default for Timing {
 /// What the thread is asked for besides its own walk through the library.
 enum Request {
     /// Look this track up now, for another cover than the one it has ("Find another
-    /// cover").
-    Find(i64),
+    /// cover"); the track's removal count when it was asked, see [`CoverWorker::removed`].
+    Find(i64, u64),
     /// Something changed (the switch, the retry flag, a stop): look again at once.
     Wake,
 }
@@ -77,6 +77,21 @@ pub struct CoverWorker {
     events: Receiver<String>,
     /// Disconnected once the thread has ended.
     ended: Receiver<()>,
+    /// Per track, how many times its cover was removed while this worker ran.
+    removals: Removals,
+}
+
+/// Per track, how many times its cover was removed: a "Find another cover" asked before a
+/// removal is not written after it.
+type Removals = Arc<Mutex<HashMap<i64, u64>>>;
+
+fn removals_of(removals: &Removals, track: i64) -> u64 {
+    removals
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(&track)
+        .copied()
+        .unwrap_or(0)
 }
 
 impl CoverWorker {
@@ -109,7 +124,9 @@ impl CoverWorker {
         let (events_tx, events) = std::sync::mpsc::channel();
         let (ended_tx, ended) = std::sync::mpsc::channel::<()>();
         let stop = Arc::new(AtomicBool::new(false));
+        let removals = Removals::default();
         let mut lookups = Lookups {
+            removals: Arc::clone(&removals),
             reader,
             writer: lib.writer(),
             db: lib.path().to_owned(),
@@ -135,6 +152,7 @@ impl CoverWorker {
             requests,
             events,
             ended,
+            removals,
         })
     }
 
@@ -159,7 +177,8 @@ impl CoverWorker {
                     .to_owned(),
             );
         }
-        match self.requests.try_send(Request::Find(track)) {
+        let removed = removals_of(&self.removals, track);
+        match self.requests.try_send(Request::Find(track, removed)) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => {
                 Err("Too many cover lookups are waiting: try again in a moment".to_owned())
@@ -173,6 +192,17 @@ impl CoverWorker {
     pub fn wake(&self) {
         // A full queue wakes the thread anyway.
         let _ = self.requests.try_send(Request::Wake);
+    }
+
+    /// Says that `track`'s cover was just removed: a "Find another cover" asked for it
+    /// before is dropped instead of bringing the cover back.
+    pub fn removed(&self, track: i64) {
+        *self
+            .removals
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(track)
+            .or_default() += 1;
     }
 
     /// What the lookups asked for have to say since the last call.
@@ -207,6 +237,7 @@ struct Lookups {
     later: HashMap<i64, Instant>,
     /// After a network failure: no request before this.
     paused_until: Option<Instant>,
+    removals: Removals,
 }
 
 /// One walk through the tracks needing a cover, by id.
@@ -231,6 +262,7 @@ enum Outcome {
 
 impl Lookups {
     fn run(&mut self) {
+        self.sweep_parts();
         let mut pass = self.new_pass();
         while !self.stopped() {
             if !self.enabled.load(Ordering::Relaxed) {
@@ -245,10 +277,11 @@ impl Lookups {
                 }
                 self.paused_until = None;
             }
-            let batch = match self
-                .reader
-                .tracks_needing_covers_after(pass.after.unwrap_or(i64::MIN), BATCH)
-            {
+            let batch = match self.reader.tracks_needing_covers_after(
+                pass.after.unwrap_or(i64::MIN),
+                BATCH,
+                pass.retrying,
+            ) {
                 Ok(batch) => batch,
                 Err(_) => {
                     // The library is busy or gone: try again later.
@@ -269,6 +302,7 @@ impl Lookups {
                     break;
                 }
                 self.answer_requests();
+                let before = pass.after;
                 pass.after = Some(query.track);
                 if self
                     .later
@@ -282,6 +316,11 @@ impl Lookups {
                     pass.failed = true;
                     break;
                 }
+                // Turned off midway: this track is looked up again when they are back on.
+                if !self.go_on() {
+                    pass.after = before;
+                    break;
+                }
             }
         }
     }
@@ -290,7 +329,27 @@ impl Lookups {
         self.stop.load(Ordering::Relaxed)
     }
 
-    fn new_pass(&self) -> Pass {
+    /// Removes the temporary files a save that never finished left in the covers folder.
+    fn sweep_parts(&self) {
+        let [file, _] = library::cover_files(&self.db, 0);
+        let Some(folder) = file.parent() else { return };
+        let Ok(entries) = std::fs::read_dir(folder) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with('.') && name.ends_with(".part") {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+
+    /// A new walk through the library, which retries the missed tracks if the retry flag
+    /// is set now; the tracks whose wait after a failure is over are forgotten.
+    fn new_pass(&mut self) -> Pass {
+        let now = Instant::now();
+        self.later.retain(|_, at| *at > now);
         Pass {
             retrying: self
                 .reader
@@ -321,7 +380,7 @@ impl Lookups {
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
             match self.requests.recv_timeout(left) {
-                Ok(Request::Find(track)) => self.find_another(track),
+                Ok(Request::Find(track, removed)) => self.find_another(track, removed),
                 Ok(Request::Wake) => return,
                 Err(RecvTimeoutError::Timeout) => return,
                 Err(RecvTimeoutError::Disconnected) => {
@@ -338,8 +397,8 @@ impl Lookups {
     /// Answers the "Find another cover" requests waiting, between two lookups.
     fn answer_requests(&mut self) {
         while let Ok(request) = self.requests.try_recv() {
-            if let Request::Find(track) = request {
-                self.find_another(track);
+            if let Request::Find(track, removed) = request {
+                self.find_another(track, removed);
             }
             if self.stopped() {
                 return;
@@ -350,6 +409,14 @@ impl Lookups {
     /// Looks `query` up and records what was found, or the miss. Returns `false` after a
     /// network failure (lookups then pause).
     fn look_up(&mut self, query: &CoverQuery) -> bool {
+        // A file with a picture of its own shows it: nothing is sent, and the miss keeps
+        // it from being checked again (a retry checks the file again, locally).
+        if self.has_own_picture(query.track) {
+            let _ = self
+                .writer
+                .submit_wait(WriteOp::MissCover { track: query.track });
+            return true;
+        }
         match self.ask(query, None) {
             Outcome::Found(jpeg) => {
                 self.keep(query.track, &jpeg, false);
@@ -367,15 +434,38 @@ impl Lookups {
         }
     }
 
+    /// Whether `track`'s file has a picture of its own, read as the window reads it.
+    fn has_own_picture(&self, track: i64) -> bool {
+        self.reader
+            .track(track)
+            .ok()
+            .flatten()
+            .is_some_and(|details| ui::cover::has_picture(&details.path))
+    }
+
+    /// Whether the lookups may go on: on, and not stopping.
+    fn go_on(&self) -> bool {
+        self.enabled.load(Ordering::Relaxed) && !self.stopped()
+    }
+
     /// "Find another cover" for `track`: a cover other than the one it has replaces it,
-    /// even a removed one; none is said, and a track without a cover records the miss.
-    fn find_another(&mut self, track: i64) {
-        if !self.enabled.load(Ordering::Relaxed) {
+    /// even a removed one, unless the cover was removed again since it was asked for
+    /// (`removed` is the track's removal count then); none is said, and a track without a
+    /// cover records the miss. A file with a picture of its own is not looked up.
+    fn find_another(&mut self, track: i64, removed: u64) {
+        if !self.go_on() {
             return;
         }
         let Ok(Some(query)) = self.reader.cover_query(track) else {
             return;
         };
+        let name = service::query_text(&query);
+        if self.has_own_picture(track) {
+            let _ = self.events.send(format!(
+                "{name} has a picture of its own: no cover was looked up"
+            ));
+            return;
+        }
         let current = self.reader.cover(track).ok().flatten();
         let found = current
             .as_ref()
@@ -383,8 +473,9 @@ impl Lookups {
         let had = found
             .and_then(|row| row.file.as_deref())
             .and_then(|file| std::fs::read(file).ok());
-        let name = service::query_text(&query);
         match self.ask(&query, had.as_deref()) {
+            // Removed again while it was looked up: the removal stands.
+            Outcome::Found(_) if removals_of(&self.removals, track) != removed => {}
             Outcome::Found(jpeg) => self.keep(track, &jpeg, true),
             Outcome::Nothing if found.is_some() => {
                 let _ = self.events.send(format!("No other cover found for {name}"));
@@ -393,6 +484,7 @@ impl Lookups {
                 let _ = self.writer.submit_wait(WriteOp::MissCover { track });
                 let _ = self.events.send(format!("No cover found for {name}"));
             }
+            Outcome::Failed(LookupError::Cancelled) => {}
             Outcome::Failed(e) => {
                 let _ = self.events.send(format!(
                     "Cover lookup for {name} failed: {e}; try again later"
@@ -413,7 +505,8 @@ impl Lookups {
             }
             _ => false,
         };
-        match self.service.find_other(query, &accept) {
+        let go_on = || self.go_on();
+        match self.service.find_other(query, &accept, &go_on) {
             Ok(Some(_)) => kept.into_inner().map_or(Outcome::Nothing, Outcome::Found),
             Ok(None) => Outcome::Nothing,
             Err(e) => Outcome::Failed(e),
@@ -423,6 +516,9 @@ impl Lookups {
     /// A failed lookup records nothing: the track is looked up again later. A network
     /// failure also pauses the lookups. Returns whether the failure was not the network's.
     fn failed(&mut self, track: i64, e: &LookupError) -> bool {
+        if *e == LookupError::Cancelled {
+            return true;
+        }
         let now = Instant::now();
         self.later.insert(track, now + self.timing.retry_later);
         if e.is_unreachable() {
@@ -584,6 +680,7 @@ pub(crate) mod tests {
             &self,
             query: &CoverQuery,
             accept: &dyn Fn(&[u8]) -> bool,
+            _go_on: &dyn Fn() -> bool,
         ) -> Result<Option<Vec<u8>>, LookupError> {
             self.0.asked.lock().unwrap().push(query.clone());
             let delay = *self.0.delay.lock().unwrap();
@@ -902,6 +999,140 @@ pub(crate) mod tests {
         assert_eq!(fake.calls(), 1);
         worker.find_now(7).unwrap();
         wait_until("found again", || mode.cover_file(7).is_some());
+    }
+
+    /// A short silent WAV at `path`, with `picture` as its ID3 front cover when given.
+    fn wav(path: &std::path::Path, picture: Option<Vec<u8>>) {
+        use lofty::config::{ParseOptions, WriteOptions};
+        use lofty::file::AudioFile;
+        use lofty::id3::v2::{AttachedPictureFrame, Frame, Id3v2Tag};
+        use lofty::iff::wav::WavFile;
+        use lofty::picture::{MimeType, Picture, PictureType};
+        let frames = 441u32;
+        let mut bytes = b"RIFF".to_vec();
+        bytes.extend_from_slice(&(36 + frames * 2).to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&44_100u32.to_le_bytes());
+        bytes.extend_from_slice(&88_200u32.to_le_bytes());
+        bytes.extend_from_slice(&2u16.to_le_bytes());
+        bytes.extend_from_slice(&16u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&(frames * 2).to_le_bytes());
+        bytes.resize(bytes.len() + (frames * 2) as usize, 0);
+        std::fs::write(path, bytes).unwrap();
+        let Some(png) = picture else { return };
+        let mut tag = Id3v2Tag::new();
+        tag.insert(Frame::Picture(AttachedPictureFrame::new(
+            lofty::TextEncoding::Latin1,
+            Picture::unchecked(png)
+                .pic_type(PictureType::CoverFront)
+                .mime_type(MimeType::Png)
+                .build(),
+        )));
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap();
+        let mut wav = WavFile::read_from(&mut file, ParseOptions::new()).unwrap();
+        wav.set_id3v2(tag);
+        wav.save_to(&mut file, WriteOptions::default()).unwrap();
+    }
+
+    #[test]
+    fn a_track_with_its_own_picture_is_never_sent() {
+        use service::tests::{RecordingHttp, fixture};
+        use service::{Chain, DeezerService, Http, MusicBrainzService};
+        let dir = tempfile::tempdir().unwrap();
+        let lib = open(&dir);
+        let own = dir.path().join("own.wav");
+        let plain = dir.path().join("plain.wav");
+        wav(&own, Some(png(16, [9, 9, 9])));
+        wav(&plain, None);
+        add_track(&lib, 1, Some(("Pictured", "Owner")), own.to_str().unwrap());
+        add_track(&lib, 2, Some(("Bare", "Track")), plain.to_str().unwrap());
+        let http = Arc::new(
+            RecordingHttp::default()
+                .answer("https://api.deezer.com/", Ok(fixture("deezer_empty.json")))
+                .answer(
+                    "https://musicbrainz.org/",
+                    Ok(fixture("musicbrainz_empty.json")),
+                ),
+        );
+        let shared = Arc::clone(&http) as Arc<dyn Http>;
+        let chain = Chain(vec![
+            Box::new(DeezerService::new(Arc::clone(&shared), Duration::ZERO)),
+            Box::new(MusicBrainzService::new(shared, Duration::ZERO)),
+        ]);
+        let worker = CoverWorker::start_with(&lib, Box::new(chain), on(), fast()).unwrap();
+        wait_until("both checked", || {
+            state(&lib, 1) == Some(CoverState::Missed) && state(&lib, 2) == Some(CoverState::Missed)
+        });
+        // The pictured track was checked on disk only; the other one was looked up.
+        let asked = http.asked();
+        assert_eq!(asked.len(), 2, "{asked:?}");
+        assert!(
+            asked
+                .iter()
+                .all(|url| !url.contains("Pictured") && !url.contains("Owner"))
+        );
+        // Asked for by hand, it still sends nothing.
+        worker.find_now(1).unwrap();
+        let mut events = Vec::new();
+        wait_until("the event", || {
+            events.extend(worker.take_events());
+            !events.is_empty()
+        });
+        assert!(events[0].contains("picture of its own"), "{events:?}");
+        assert_eq!(http.asked().len(), 2);
+    }
+
+    #[test]
+    fn a_removal_after_find_another_stands() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = open(&dir);
+        add_track(&lib, 1, Some(("A", "T")), "/music/a.mp3");
+        lib.writer()
+            .submit_wait(WriteOp::MissCover { track: 1 })
+            .unwrap();
+        let (service, fake) = FakeService::boxed(
+            Answer::Pictures(vec![png(64, [0, 0, 255])]),
+            Duration::from_millis(400),
+        );
+        let worker = CoverWorker::start_with(&lib, service, on(), fast()).unwrap();
+        worker.find_now(1).unwrap();
+        wait_until("the lookup under way", || fake.calls() == 1);
+        // Removed while the find is under way, as the session does it.
+        worker.removed(1);
+        lib.writer()
+            .submit_wait(WriteOp::ClearCover { track: 1 })
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(800));
+        assert_eq!(state(&lib, 1), Some(CoverState::Removed));
+        let [first, second] = library::cover_files(&db(&dir), 1);
+        assert!(!first.exists() && !second.exists());
+        // A find asked after the removal is written.
+        worker.find_now(1).unwrap();
+        wait_until("found", || state(&lib, 1) == Some(CoverState::Found));
+    }
+
+    #[test]
+    fn unfinished_saves_are_swept_at_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib = open(&dir);
+        let [file, _] = library::cover_files(&db(&dir), 1);
+        let folder = file.parent().unwrap();
+        std::fs::create_dir_all(folder).unwrap();
+        let part = folder.join(".1.jpg.4242.part");
+        std::fs::write(&part, b"half").unwrap();
+        std::fs::write(folder.join("7.jpg"), b"kept").unwrap();
+        let (service, _fake) = FakeService::boxed(Answer::Nothing, Duration::ZERO);
+        let _worker = CoverWorker::start_with(&lib, service, on(), fast()).unwrap();
+        wait_until("the part swept", || !part.exists());
+        assert!(folder.join("7.jpg").exists());
     }
 
     #[test]

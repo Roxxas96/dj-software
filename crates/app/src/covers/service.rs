@@ -34,6 +34,8 @@ pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 pub const MUSICBRAINZ_GAP: Duration = Duration::from_millis(1100);
 /// The least time between two requests to Deezer: at most 5 a second.
 pub const DEEZER_GAP: Duration = Duration::from_millis(200);
+/// How often a wait between two requests checks whether the lookups were turned off.
+const PACE_SLICE: Duration = Duration::from_millis(50);
 /// How many pictures one service fetches for one lookup, at most.
 const CANDIDATES: usize = 3;
 /// The lowest MusicBrainz search score a recording is taken at.
@@ -127,6 +129,8 @@ pub enum LookupError {
     Unreachable(String),
     /// The service answered something unusable.
     Failed(String),
+    /// The lookups were turned off, or the app is quitting: no further request was made.
+    Cancelled,
 }
 
 impl LookupError {
@@ -140,6 +144,7 @@ impl std::fmt::Display for LookupError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Unreachable(why) | Self::Failed(why) => f.write_str(why),
+            Self::Cancelled => f.write_str("cancelled"),
         }
     }
 }
@@ -156,12 +161,14 @@ pub trait CoverService: Send {
         reason = "the plain lookup; the worker always says which pictures it takes"
     )]
     fn find(&self, query: &CoverQuery) -> Result<Option<Vec<u8>>, LookupError> {
-        self.find_other(query, &|_| true)
+        self.find_other(query, &|_| true, &|| true)
     }
 
     /// [`CoverService::find`], skipping the pictures `accept` turns down (one that does not
     /// decode, or the cover the track already has): the first picture it accepts, `None`
-    /// when there is no other.
+    /// when there is no other. `go_on` is asked before every request and every wait
+    /// between two: once it says no, no further request is made
+    /// ([`LookupError::Cancelled`]).
     ///
     /// # Errors
     ///
@@ -170,6 +177,7 @@ pub trait CoverService: Send {
         &self,
         query: &CoverQuery,
         accept: &dyn Fn(&[u8]) -> bool,
+        go_on: &dyn Fn() -> bool,
     ) -> Result<Option<Vec<u8>>, LookupError>;
 }
 
@@ -182,12 +190,14 @@ impl CoverService for Chain {
         &self,
         query: &CoverQuery,
         accept: &dyn Fn(&[u8]) -> bool,
+        go_on: &dyn Fn() -> bool,
     ) -> Result<Option<Vec<u8>>, LookupError> {
         let mut error = None;
         for service in &self.0 {
-            match service.find_other(query, accept) {
+            match service.find_other(query, accept, go_on) {
                 Ok(Some(bytes)) => return Ok(Some(bytes)),
                 Ok(None) => {}
+                Err(LookupError::Cancelled) => return Err(LookupError::Cancelled),
                 Err(e) => {
                     error.get_or_insert(e);
                 }
@@ -220,16 +230,23 @@ impl Pace {
         }
     }
 
-    /// Waits until the next request may go, and books the one after.
-    fn wait(&self) {
+    /// Waits until the next request may go, and books the one after. `go_on` is asked
+    /// before, during (every [`PACE_SLICE`]) and after the wait: once it says no, nothing
+    /// is booked and the request must not be made.
+    fn wait(&self, go_on: &dyn Fn() -> bool) -> Result<(), LookupError> {
         let mut next = self.next.lock().unwrap_or_else(PoisonError::into_inner);
-        let now = Instant::now();
-        if let Some(at) = *next
-            && at > now
-        {
-            std::thread::sleep(at - now);
+        loop {
+            if !go_on() {
+                return Err(LookupError::Cancelled);
+            }
+            let now = Instant::now();
+            match *next {
+                Some(at) if at > now => std::thread::sleep((at - now).min(PACE_SLICE)),
+                _ => break,
+            }
         }
         *next = Some(Instant::now() + self.gap);
+        Ok(())
     }
 }
 
@@ -283,9 +300,10 @@ fn first_image(
     pace: &Pace,
     urls: &[String],
     accept: &dyn Fn(&[u8]) -> bool,
+    go_on: &dyn Fn() -> bool,
 ) -> Result<Option<Vec<u8>>, LookupError> {
     for url in urls.iter().take(CANDIDATES) {
-        pace.wait();
+        pace.wait(go_on)?;
         match http.get(url, IMAGE_LIMIT) {
             Ok(bytes) if accept(&bytes) => return Ok(Some(bytes)),
             Ok(_) | Err(HttpError::TooLarge | HttpError::Refused(_)) => {}
@@ -400,17 +418,25 @@ impl CoverService for DeezerService {
         &self,
         query: &CoverQuery,
         accept: &dyn Fn(&[u8]) -> bool,
+        go_on: &dyn Fn() -> bool,
     ) -> Result<Option<Vec<u8>>, LookupError> {
         let Some(url) = Self::search_url(query) else {
             return Ok(None);
         };
-        self.pace.wait();
+        self.pace.wait(go_on)?;
         let answer = self
             .http
             .get(&url, JSON_LIMIT)
             .map_err(|e| json_error("Deezer", e))?;
         let covers = Self::covers(&answer)?;
-        first_image("Deezer", self.http.as_ref(), &self.pace, &covers, accept)
+        first_image(
+            "Deezer",
+            self.http.as_ref(),
+            &self.pace,
+            &covers,
+            accept,
+            go_on,
+        )
     }
 }
 
@@ -495,11 +521,12 @@ impl CoverService for MusicBrainzService {
         &self,
         query: &CoverQuery,
         accept: &dyn Fn(&[u8]) -> bool,
+        go_on: &dyn Fn() -> bool,
     ) -> Result<Option<Vec<u8>>, LookupError> {
         let Some(url) = Self::search_url(query) else {
             return Ok(None);
         };
-        self.pace.wait();
+        self.pace.wait(go_on)?;
         let answer = self
             .http
             .get(&url, JSON_LIMIT)
@@ -511,6 +538,7 @@ impl CoverService for MusicBrainzService {
             &self.pace,
             &covers,
             accept,
+            go_on,
         )
     }
 }
@@ -649,7 +677,7 @@ pub(crate) mod tests {
         // Another than the one it has.
         assert_eq!(
             deezer(&http)
-                .find_other(&q, &|bytes| bytes != b"discovery")
+                .find_other(&q, &|bytes| bytes != b"discovery", &|| true)
                 .unwrap(),
             Some(b"alive".to_vec())
         );
@@ -807,6 +835,48 @@ pub(crate) mod tests {
                 .answer(DISCOVERY, Err(HttpError::Status(404))),
         );
         assert_eq!(deezer(&http).find(&q).unwrap(), None);
+    }
+
+    #[test]
+    fn turning_lookups_off_stops_the_next_request() {
+        let http = Arc::new(
+            RecordingHttp::default()
+                .answer("https://api.deezer.com/", Ok(fixture("deezer_search.json")))
+                .answer(
+                    "https://musicbrainz.org/",
+                    Ok(fixture("musicbrainz_recording.json")),
+                ),
+        );
+        let chain = Chain(vec![Box::new(deezer(&http)), Box::new(musicbrainz(&http))]);
+        let q = query(Some("A"), Some("T"), "x");
+        // Turned off right after the first request: not one more, from any service.
+        let asked = Arc::clone(&http);
+        let error = chain
+            .find_other(&q, &|_| true, &|| asked.asked().is_empty())
+            .unwrap_err();
+        assert_eq!(error, LookupError::Cancelled);
+        assert_eq!(http.asked().len(), 1);
+        // Turned off during the wait between two MusicBrainz requests: it ends at once.
+        let http = Arc::new(RecordingHttp::default().answer(
+            "https://musicbrainz.org/",
+            Ok(fixture("musicbrainz_recording.json")),
+        ));
+        let service = MusicBrainzService::new(Arc::clone(&http) as Arc<dyn Http>, MUSICBRAINZ_GAP);
+        let on = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let switch = Arc::clone(&on);
+        let off = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            switch.store(false, std::sync::atomic::Ordering::Relaxed);
+        });
+        let began = Instant::now();
+        let go_on = || on.load(std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(
+            service.find_other(&q, &|_| true, &go_on),
+            Err(LookupError::Cancelled)
+        );
+        off.join().unwrap();
+        assert!(began.elapsed() < Duration::from_millis(600));
+        assert_eq!(http.asked().len(), 1);
     }
 
     #[test]
