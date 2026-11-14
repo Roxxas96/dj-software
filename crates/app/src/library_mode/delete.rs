@@ -300,20 +300,27 @@ pub fn check_delete(
     // The same places by identity, opened once: the library folders, the folders holding
     // one, Open Jockey's own folders and the folders holding them, and each loaded file
     // with the folders holding it. A delete is only checked with all of them: one that
-    // cannot be identified refuses every delete rather than fall back to names.
+    // cannot be identified refuses every delete rather than fall back to names. One that
+    // is not on disk at all (a library folder's drive unplugged, a loaded file gone) is
+    // left out: no target can be it or hold it.
     let root_ids = identities(roots.iter().map(PathBuf::as_path));
     let above_roots = identities(roots.iter().flat_map(|r| r.ancestors().skip(1)));
     let own_self = identities(own.iter().map(PathBuf::as_path));
     let own_ids = identities(own.iter().flat_map(|o| o.ancestors()));
     let loaded_ids: Option<Vec<Loaded<'_>>> = loaded
         .iter()
-        .map(|(deck, file)| {
-            Some(Loaded {
+        .filter_map(|(deck, file)| {
+            let id = match identity(file) {
+                Ok(Some(id)) => id,
+                Ok(None) => return None,
+                Err(()) => return Some(None),
+            };
+            Some(Some(Loaded {
                 deck: *deck,
                 file,
-                id: Handle::from_path(file).ok()?,
+                id,
                 within: identities(file.ancestors().skip(1))?,
-            })
+            }))
         })
         .collect();
     let ids = (|| Some((root_ids?, above_roots?, own_self?, own_ids?, loaded_ids?)))();
@@ -436,12 +443,22 @@ struct Loaded<'a> {
     within: HashSet<Handle>,
 }
 
-/// The identities of `paths`, each once; `None` when one cannot be opened.
+/// The identities of `paths` on disk, each once, leaving out those not on disk; `None`
+/// when one is on disk but cannot be opened.
 fn identities<'a>(mut paths: impl Iterator<Item = &'a Path>) -> Option<HashSet<Handle>> {
     paths.try_fold(HashSet::new(), |mut ids, path| {
-        ids.insert(Handle::from_path(path).ok()?);
+        ids.extend(identity(path).ok()?);
         Some(ids)
     })
+}
+
+/// What `path` is on disk: `Ok(None)` when nothing is there, `Err` when it cannot be opened.
+fn identity(path: &Path) -> Result<Option<Handle>, ()> {
+    match Handle::from_path(path) {
+        Ok(id) => Ok(Some(id)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(_) => Err(()),
+    }
 }
 
 /// The folders Open Jockey keeps its own data in, which a delete never takes: the library
@@ -1419,6 +1436,17 @@ mod tests {
         assert_eq!(refusal, Err(Refusal::Unchecked(s.music.join("b.wav"))));
         // Once it can be read again, the delete goes on.
         assert!(check_delete(&doomed, &folders, &[], &[]).is_ok());
+    }
+
+    #[test]
+    fn an_unplugged_library_folder_or_a_gone_loaded_file_blocks_nothing() {
+        let s = setup(&["b.wav"]);
+        // A library folder whose drive is not plugged in, and a loaded file since gone.
+        let unplugged = s.dir.path().join("unplugged/Music");
+        let folders = [s.music.clone(), unplugged.clone()];
+        let loaded = [(deck(1), unplugged.join("gone.wav"))];
+        let doomed = Doomed::Files(vec![s.music.join("b.wav")]);
+        assert!(check_delete(&doomed, &folders, &loaded, &[]).is_ok());
     }
 
     /// Whether the folder `dir` is on a drive that ignores case.
