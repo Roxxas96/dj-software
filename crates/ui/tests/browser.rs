@@ -164,6 +164,15 @@ fn non_latin_text_draws_without_panicking() {
 
 /// Draws `view` in a plain context and returns the filled rectangles it painted.
 fn painted(view: &BrowserView, loaded: [Option<i64>; 4]) -> Vec<(egui::Rect, egui::Color32)> {
+    painted_with(view, loaded, None)
+}
+
+/// [`painted`], with a press at `press` first (in the browser, it gets the keyboard).
+fn painted_with(
+    view: &BrowserView,
+    loaded: [Option<i64>; 4],
+    press: Option<Pos2>,
+) -> Vec<(egui::Rect, egui::Color32)> {
     fn collect(shape: &egui::Shape, out: &mut Vec<(egui::Rect, egui::Color32)>) {
         match shape {
             egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, out)),
@@ -174,13 +183,22 @@ fn painted(view: &BrowserView, loaded: [Option<i64>; 4]) -> Vec<(egui::Rect, egu
     let ctx = egui::Context::default();
     let mut covers = Covers::default();
     let mut out = Vec::new();
-    for _ in 0..3 {
+    for frame in 0..4 {
         out.clear();
+        let events = match (press, frame) {
+            (Some(at), 1) => vec![
+                Event::PointerMoved(at),
+                button(PointerButton::Primary, true, at),
+            ],
+            (Some(at), 2) => vec![button(PointerButton::Primary, false, at)],
+            _ => Vec::new(),
+        };
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
                 egui::vec2(1000.0, 300.0),
             )),
+            events,
             ..Default::default()
         };
         let output = ctx.run_ui(input, |ui| {
@@ -519,8 +537,6 @@ struct Clicking {
     decks: Decks,
     covers: Covers,
     steps: Vec<LibraryStep>,
-    /// The panes a Delete key asked to delete from.
-    deletes: Vec<Focus>,
     /// The session's answer to the latest delete question, as the frame carries it.
     answer: Option<DeleteCheck>,
     /// A window floats over the list.
@@ -569,7 +585,6 @@ fn clicking_in(
         decks,
         covers: Covers::default(),
         steps: Vec::new(),
-        deletes: Vec::new(),
         answer: None,
         window: false,
     };
@@ -597,7 +612,6 @@ fn clicking_in(
                         });
                 }
                 state.steps.extend(changes.library);
-                state.deletes.extend(changes.delete_requested);
             },
             state,
         );
@@ -1897,15 +1911,17 @@ fn left_and_right_close_and_open_a_folder() {
 }
 
 #[test]
-fn enter_in_the_tree_selects_a_playlist() {
+fn enter_on_a_playlist_moves_into_its_list() {
     let view = with_playlists(numbered(0, 20, 20));
     let at = view.tree.len() - 1;
     let mut view = view;
     view.tree_cursor = at;
     view.focus = Focus::Tree;
+    view.list_cursor = 3;
     let mut harness = owning(view, Decks::default());
+    // Its list shows already: Enter moves into it, its cursor where it was.
     press(&mut harness, Key::Enter);
-    assert_eq!(harness.state().steps, [browse(BrowserEdit::SelectTree(at))]);
+    assert_eq!(harness.state().steps, [browse(BrowserEdit::SelectRow(3))]);
 }
 
 #[test]
@@ -1952,9 +1968,15 @@ fn enter_loads_the_highlighted_track() {
 #[test]
 fn cmd_a_selects_the_whole_list() {
     let mut harness = owning(numbered(0, 20, 5000), Decks::default());
+    // A pick made with the mouse first: Cmd+A replaces it.
+    let fourth = at_label(&harness, "Song 3");
+    click_holding(&mut harness, fourth, Modifiers::COMMAND);
+    assert_eq!(ui::browser::selected_rows(&harness.ctx), [0, 3]);
+    harness.state_mut().steps.clear();
     harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
     harness.run_steps(2);
     assert_eq!(harness.state().steps, [browse(BrowserEdit::SelectAll)]);
+    assert!(ui::browser::selected_rows(&harness.ctx).is_empty());
     assert!(
         !painted_text(&harness.state().view)
             .iter()
@@ -2014,14 +2036,51 @@ fn delete_asks_for_the_focused_pane() {
         let mut harness = owning(numbered(0, 20, 20), Decks::default());
         harness.key_press_modifiers(modifiers, key);
         harness.run_steps(2);
-        assert_eq!(harness.state().deletes, [Focus::List]);
+        assert!(matches!(
+            deleting(&harness.state().steps)[..],
+            [LibraryStep::AskDelete(DeleteTarget::Files { .. })]
+        ));
         harness.get_by_label("Move to the Trash");
     }
-    let view = with_tree(numbered(0, 20, 20), 4, 1, Focus::Tree);
+    // In the tree, the highlighted folder (these test folders have no path: nothing).
+    let mut view = with_tree(numbered(0, 20, 20), 4, 1, Focus::Tree);
+    view.tree[1].path = Some(PathBuf::from("/music/House"));
     let mut harness = owning(view, Decks::default());
     press(&mut harness, Key::Delete);
-    assert_eq!(harness.state().deletes, [Focus::Tree]);
-    assert_eq!(harness.state().steps, []);
+    assert!(matches!(
+        deleting(&harness.state().steps)[..],
+        [LibraryStep::AskDelete(DeleteTarget::Folder { .. })]
+    ));
+}
+
+#[test]
+fn the_keys_work_on_after_a_dialog_they_opened() {
+    let mut harness = owning(numbered(0, 20, 20), Decks::default());
+    // Delete, then Cancel clicked: the next arrow still moves the cursor.
+    press(&mut harness, Key::Delete);
+    let cancel = at_label(&harness, "Cancel");
+    click(&mut harness, cancel);
+    harness.run_steps(3);
+    assert!(harness.query_by_label("Move to the Trash").is_none());
+    harness.state_mut().steps.clear();
+    press(&mut harness, Key::ArrowDown);
+    assert_eq!(harness.state().steps, [browse(BrowserEdit::SelectRow(1))]);
+    // Delete, then Escape: the same.
+    press(&mut harness, Key::Delete);
+    press(&mut harness, Key::Escape);
+    harness.run_steps(2);
+    assert!(harness.query_by_label("Move to the Trash").is_none());
+    harness.state_mut().steps.clear();
+    press(&mut harness, Key::ArrowDown);
+    assert_eq!(harness.state().steps, [browse(BrowserEdit::SelectRow(1))]);
+    // A click outside the dialog cancels it, and is not a press elsewhere either.
+    press(&mut harness, Key::Delete);
+    click(&mut harness, pos2(960.0, 280.0));
+    harness.run_steps(3);
+    assert!(harness.query_by_label("Move to the Trash").is_none());
+    harness.state_mut().steps.clear();
+    press(&mut harness, Key::ArrowDown);
+    assert_eq!(harness.state().steps, [browse(BrowserEdit::SelectRow(1))]);
 }
 
 #[test]
@@ -2034,7 +2093,8 @@ fn delete_in_the_search_box_edits_text() {
     harness.run_steps(2);
     // No confirmation asked for; the keys edited the text (and Cmd+A, ArrowDown and Enter
     // stayed in the box too).
-    assert!(harness.state().deletes.is_empty());
+    assert!(deleting(&harness.state().steps).is_empty());
+    assert!(harness.query_by_label("Move to the Trash").is_none());
     let last = harness.state().steps.last().cloned();
     assert!(
         matches!(&last, Some(LibraryStep::Browse(BrowserEdit::Search { text, .. }))
@@ -2065,7 +2125,7 @@ fn keys_do_nothing_until_the_browser_is_clicked() {
     };
     keys(&mut harness);
     assert_eq!(harness.state().steps, []);
-    assert!(harness.state().deletes.is_empty());
+    assert!(harness.query_by_label("Move to the Trash").is_none());
 
     // A click in the browser gives it the keyboard.
     click_row(&mut harness, "Song 0");
@@ -2092,13 +2152,16 @@ fn keys_do_nothing_until_the_browser_is_clicked() {
 #[test]
 fn the_focused_pane_looks_focused() {
     let p = theme::Palette::default();
-    let fills = |view: &BrowserView| -> Vec<egui::Color32> {
-        painted(view, [None; 4])
+    // A press in the tree gives the browser the keyboard.
+    let owned = Some(pos2(100.0, 200.0));
+    let fills_with = |view: &BrowserView, press| -> Vec<egui::Color32> {
+        painted_with(view, [None; 4], press)
             .into_iter()
             .filter(|(rect, _)| rect.height() > 10.0 && rect.height() < 30.0)
             .map(|(_, fill)| fill)
             .collect()
     };
+    let fills = |view: &BrowserView| fills_with(view, owned);
     let mut view = with_tree(numbered(0, 20, 20), 4, 1, Focus::List);
     let list = fills(&view);
     assert!(list.contains(&p.highlight), "the list's cursor is bright");
@@ -2110,6 +2173,27 @@ fn the_focused_pane_looks_focused() {
     assert_eq!(bright(&tree, p.highlight), 1);
     assert_eq!(bright(&tree, p.highlight_dim), 1);
     assert_ne!(list, tree);
+    // Without the keyboard (never clicked, or a deck clicked since) no pane looks focused.
+    let unowned = fills_with(&view, None);
+    assert_eq!(bright(&unowned, p.highlight), 0);
+    assert_eq!(bright(&unowned, p.highlight_dim), 2);
+}
+
+#[test]
+fn a_whole_list_with_no_other_playlist_says_so() {
+    // The list is "Peak", the only playlist, all selected: no target, said in the menu.
+    let mut view = in_playlist(0, 20);
+    view.tree.retain(|row| row.playlist != Some(40));
+    view.all_selected = true;
+    let mut harness = clicking(view, Decks::default());
+    let at = at_label(&harness, "Song 2");
+    click_with(&mut harness, PointerButton::Secondary, at);
+    harness.run_steps(2);
+    let item = at_label(&harness, "Add to playlist");
+    harness.event(Event::PointerMoved(item));
+    harness.run_steps(10);
+    let none = harness.get_by_label("No other playlist");
+    assert!(none.accesskit_node().is_disabled());
 }
 
 #[test]
@@ -2124,7 +2208,7 @@ fn a_window_over_the_list_does_not_take_the_keys() {
     press(&mut harness, Key::ArrowDown);
     press(&mut harness, Key::Delete);
     assert_eq!(harness.state().steps, []);
-    assert!(harness.state().deletes.is_empty());
+    assert!(harness.query_by_label("Move to the Trash").is_none());
     // The browser clicked first, then the window: the keys go back.
     click(&mut harness, pos2(100.0, 150.0));
     harness.state_mut().steps.clear();

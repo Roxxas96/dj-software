@@ -1328,7 +1328,69 @@ fn select_all_marks_the_whole_list_until_another_pick() {
     assert!(b.edit(BrowserEdit::SelectAll).unwrap().all_selected);
     assert!(!b.edit(BrowserEdit::SelectTree(2)).unwrap().all_selected);
     assert!(b.edit(BrowserEdit::SelectAll).unwrap().all_selected);
+    // Moving the focus is not a new pick: Tab to the tree and back keeps it.
+    b.edit(BrowserEdit::SelectTree(1)).unwrap();
+    assert!(b.edit(BrowserEdit::SelectAll).unwrap().all_selected);
+    let view = b.view();
+    assert!(
+        b.edit(BrowserEdit::SelectTree(view.tree_cursor))
+            .unwrap()
+            .all_selected
+    );
+    assert!(
+        b.edit(BrowserEdit::SelectRow(view.list_cursor))
+            .unwrap()
+            .all_selected
+    );
+    assert!(
+        !b.edit(BrowserEdit::SelectRow(view.list_cursor + 1))
+            .unwrap()
+            .all_selected
+    );
+}
+
+#[test]
+fn a_refresh_keeps_the_whole_list_selected_while_the_list_is_the_same() {
+    let f = fixture();
+    let mut b = browser(&f.lib, Vec::new());
+    scroll(&mut b, 1);
+    let before = b.edit(BrowserEdit::SelectAll).unwrap().identity();
+    // A refresh that finds nothing new (an analysis, a deck load) keeps the pick.
+    let view = b.refresh().unwrap();
+    assert!(view.all_selected);
+    assert_eq!(view.identity(), before);
+    // A list that changed under it does not.
+    f.lib
+        .writer()
+        .submit_wait(WriteOp::AddToPlaylist {
+            playlist: view.playlist.unwrap(),
+            track: f.ids[2],
+            at: None,
+        })
+        .unwrap();
     assert!(!b.refresh().unwrap().all_selected);
+}
+
+#[test]
+fn opening_a_folder_keeps_the_whole_list_selected_when_the_list_stays() {
+    let (_lib_dir, lib) = open();
+    let (_d, root) = disk();
+    let mut b = browser(&lib, vec![drive("root", &root)]);
+    toggle_folder(&mut b);
+    // On A, whose files are listed.
+    scroll(&mut b, 1);
+    assert!(b.edit(BrowserEdit::SelectAll).unwrap().all_selected);
+    // Opening A, or B below it, changes neither the list nor where it is.
+    assert!(b.edit(BrowserEdit::ToggleTreeAt(1)).unwrap().all_selected);
+    assert!(b.edit(BrowserEdit::ToggleTreeAt(1)).unwrap().all_selected);
+    let below = b.view().tree.len() - 2;
+    assert!(
+        b.edit(BrowserEdit::ToggleTreeAt(below))
+            .unwrap()
+            .all_selected
+    );
+    // Closing the drive above moves the highlight to it and reads its list.
+    assert!(!b.edit(BrowserEdit::ToggleTreeAt(0)).unwrap().all_selected);
 }
 
 #[test]

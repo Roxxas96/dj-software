@@ -379,9 +379,26 @@ impl Browser {
     /// Any database error; the browser is then unchanged, except that a failed search or
     /// sort still takes its `seq`.
     pub fn edit(&mut self, edit: BrowserEdit) -> Result<BrowserView, LibraryError> {
-        if !matches!(edit, BrowserEdit::SelectAll | BrowserEdit::ShowPage { .. }) {
+        // A whole-list selection stays through paging, through a move of the focus (Tab
+        // sends the cursor the other pane already has) and through opening or closing a
+        // folder, as long as the list and its cursor are the same: those are not a pick.
+        let before = (self.identity(), self.list.cursor);
+        let keeps = match edit {
+            BrowserEdit::SelectAll | BrowserEdit::ShowPage { .. } => true,
+            BrowserEdit::SelectTree(_)
+            | BrowserEdit::SelectRow(_)
+            | BrowserEdit::ToggleTreeAt(_) => self.all_selected,
+            BrowserEdit::Search { .. } | BrowserEdit::Sort { .. } => false,
+        };
+        let edited = self.apply_edit(edit);
+        if !keeps || (self.identity(), self.list.cursor) != before {
             self.all_selected = false;
         }
+        edited.map(|()| self.view())
+    }
+
+    /// Makes `edit`, leaving `all_selected` to [`Browser::edit`].
+    fn apply_edit(&mut self, edit: BrowserEdit) -> Result<(), LibraryError> {
         match edit {
             BrowserEdit::SelectAll => {
                 self.all_selected = self.list.count > 0;
@@ -423,7 +440,7 @@ impl Browser {
                 self.requery(query, seq)?;
             }
         }
-        Ok(self.view())
+        Ok(())
     }
 
     /// Reads the highlighted entry's list again under `query`, the latest one (`seq`).
@@ -492,10 +509,15 @@ impl Browser {
             }
         };
         list.seek(&self.reader, list_cursor)?;
-        self.all_selected = false;
+        // The same entry's list, as long as before: a whole-list selection still stands
+        // for it (a delete or a drop checks the list again anyway).
+        let before = self.identity();
         self.tree = tree;
         self.tree_cursor = tree_cursor;
         self.list = list;
+        if found.is_none() || self.identity() != before {
+            self.all_selected = false;
+        }
         Ok(self.view())
     }
 
