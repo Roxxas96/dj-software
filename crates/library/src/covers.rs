@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use rusqlite::{OptionalExtension, Transaction};
+use rusqlite::{Connection, OptionalExtension, Transaction};
 
 use crate::writer::{WriteOp, WriteOutcome, unix_now};
 use crate::{LibraryError, Reader};
@@ -106,40 +106,13 @@ fn cover_file(folder: &Path, track: i64) -> PathBuf {
     folder.join("covers").join(format!("{track}.jpg"))
 }
 
-/// Applies a cover op's row change. Its file is deleted by [`delete_cleared_files`] once
+/// Applies a cover op's row change. Its file is deleted by [`delete_after_commit`] once
 /// the transaction has committed.
 pub(crate) fn apply(tx: &Transaction<'_>, op: &WriteOp) -> Result<WriteOutcome, LibraryError> {
-    let (track, sql, file) = match op {
-        WriteOp::SetCover { track, file } => {
-            let file = file
-                .to_str()
-                .ok_or_else(|| LibraryError::NonUtf8Path(file.clone()))?;
-            (
-                *track,
-                "INSERT INTO covers(track_id, state, file, updated_at) \
-                 SELECT id, 'found', ?2, ?3 FROM tracks WHERE id = ?1 \
-                 ON CONFLICT(track_id) DO UPDATE SET state = 'found', \
-                     file = excluded.file, updated_at = excluded.updated_at",
-                Some(file),
-            )
-        }
-        // A miss never undoes a cover that was found or removed.
-        WriteOp::MissCover { track } => (
-            *track,
-            "INSERT INTO covers(track_id, state, file, updated_at) \
-             SELECT id, 'missed', ?2, ?3 FROM tracks WHERE id = ?1 \
-             ON CONFLICT(track_id) DO UPDATE SET updated_at = excluded.updated_at \
-             WHERE covers.state = 'missed'",
-            None,
-        ),
-        WriteOp::ClearCover { track } => (
-            *track,
-            "INSERT INTO covers(track_id, state, file, updated_at) \
-             SELECT id, 'removed', ?2, ?3 FROM tracks WHERE id = ?1 \
-             ON CONFLICT(track_id) DO UPDATE SET state = 'removed', file = NULL, \
-                 updated_at = excluded.updated_at",
-            None,
-        ),
+    let track = match op {
+        WriteOp::SetCover { track, .. }
+        | WriteOp::MissCover { track }
+        | WriteOp::ClearCover { track } => *track,
         _ => return Ok(WriteOutcome::Done),
     };
     let exists: bool = tx.query_row(
@@ -150,20 +123,77 @@ pub(crate) fn apply(tx: &Transaction<'_>, op: &WriteOp) -> Result<WriteOutcome, 
     if !exists {
         return Err(LibraryError::NoSuchTrack(track));
     }
-    tx.execute(sql, rusqlite::params![track, file, unix_now()])?;
+    let now = unix_now();
+    match op {
+        // Without `force`, a removed cover stays removed: a lookup that was in flight when
+        // the user removed it must not bring it back.
+        WriteOp::SetCover { file, force, .. } => {
+            let file = file
+                .to_str()
+                .ok_or_else(|| LibraryError::NonUtf8Path(file.clone()))?;
+            tx.execute(
+                "INSERT INTO covers(track_id, state, file, updated_at) \
+                 VALUES (?1, 'found', ?2, ?3) \
+                 ON CONFLICT(track_id) DO UPDATE SET state = 'found', \
+                     file = excluded.file, updated_at = excluded.updated_at \
+                 WHERE ?4 OR covers.state <> 'removed'",
+                rusqlite::params![track, file, now, force],
+            )?;
+        }
+        // A miss never undoes a cover that was found or removed.
+        WriteOp::MissCover { .. } => {
+            tx.execute(
+                "INSERT INTO covers(track_id, state, file, updated_at) \
+                 VALUES (?1, 'missed', NULL, ?2) \
+                 ON CONFLICT(track_id) DO UPDATE SET updated_at = excluded.updated_at \
+                 WHERE covers.state = 'missed'",
+                rusqlite::params![track, now],
+            )?;
+        }
+        _ => {
+            tx.execute(
+                "INSERT INTO covers(track_id, state, file, updated_at) \
+                 VALUES (?1, 'removed', NULL, ?2) \
+                 ON CONFLICT(track_id) DO UPDATE SET state = 'removed', file = NULL, \
+                     updated_at = excluded.updated_at",
+                rusqlite::params![track, now],
+            )?;
+        }
+    }
     Ok(WriteOutcome::Done)
 }
 
-/// Deletes the picture of each [`WriteOp::ClearCover`] in a committed `op`. Only
-/// `<folder>/covers/<id>.jpg` is touched, whatever the row said; a missing file is fine.
-pub(crate) fn delete_cleared_files(folder: &Path, op: &WriteOp) {
+/// After a committed `op`: deletes the picture of each [`WriteOp::ClearCover`], and the
+/// picture of a [`WriteOp::SetCover`] without `force` that was refused because the cover
+/// is removed, when it sits at the track's own `<folder>/covers/<id>.jpg`. Only that file is
+/// ever touched, whatever the row said; a missing file is fine.
+pub(crate) fn delete_after_commit(conn: &Connection, folder: &Path, op: &WriteOp) {
     match op {
         WriteOp::ClearCover { track } => {
             let _ = std::fs::remove_file(cover_file(folder, *track));
         }
+        WriteOp::SetCover {
+            track,
+            file,
+            force: false,
+        } if *file == cover_file(folder, *track) => {
+            let removed = conn
+                .query_row(
+                    "SELECT state = 'removed' FROM covers WHERE track_id = ?1",
+                    [track],
+                    |r| r.get::<_, bool>(0),
+                )
+                .optional()
+                .ok()
+                .flatten()
+                .unwrap_or(false);
+            if removed {
+                let _ = std::fs::remove_file(file);
+            }
+        }
         WriteOp::Batch(ops) => {
             for op in ops {
-                delete_cleared_files(folder, op);
+                delete_after_commit(conn, folder, op);
             }
         }
         _ => {}

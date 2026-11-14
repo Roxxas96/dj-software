@@ -154,7 +154,7 @@ pub struct LibraryMode {
     /// The covers kept for the tracks on the decks and the browser's highlighted row.
     /// Cover writes (a lookup finishing in the background) never ask for a refresh: it
     /// would drop the browser's whole-list selection. The window reads them from here.
-    covers: Mutex<CoverFiles>,
+    covers: CoverFiles,
     /// The hotcues deleted in the latest round, as (track, slot): their colour and name
     /// are gone from the library.
     deleted_hotcues: Vec<(i64, HotcueSlot)>,
@@ -248,6 +248,7 @@ impl LibraryMode {
             .map(|setup| StemsControl::start(Arc::clone(&lib), setup))
             .transpose()
             .context("starting the stems thread")?;
+        let covers = CoverFiles::new(&lib);
         let mut mode = Self {
             writer: lib.writer(),
             lib,
@@ -280,7 +281,7 @@ impl LibraryMode {
             last_poll: Instant::now(),
             refresh_wanted: false,
             changed_elsewhere: Arc::default(),
-            covers: Mutex::default(),
+            covers,
             deleted_hotcues: Vec::new(),
             failed_labels: Vec::new(),
             last_refresh: None,
@@ -1293,12 +1294,12 @@ impl LibraryMode {
             .map_err(|e| format!("warning: could not {what}: {}", safe(e)))
     }
 
-    /// The cover file the library kept for `track`, when its cover was found. Read from
-    /// the library at most once a second per track, so a lookup that finishes while the
-    /// track is shown reaches the window without any browser refresh.
+    /// The cover file the library kept for `track`, when its cover was found, as a thread
+    /// of its own last read it (see [`CoverFiles`]): never a database query on the
+    /// caller's thread, and a lookup that finishes while the track is shown reaches the
+    /// window without any browser refresh.
     pub fn cover_file(&self, track: i64) -> Option<PathBuf> {
-        let mut covers = self.covers.lock().unwrap_or_else(PoisonError::into_inner);
-        covers.get(&self.lib, track, Instant::now())
+        self.covers.get(track, Instant::now())
     }
 
     /// `view` with the cover file of the row at its cursor filled in, for the window's
@@ -1404,40 +1405,84 @@ impl LibraryMode {
     }
 }
 
-/// How long a track's cover file is trusted before the library is asked again.
+/// How long a track's cover file is trusted before it is read again.
 const COVER_TTL: Duration = Duration::from_secs(1);
-/// How many tracks' cover files are kept; more clears them all.
+/// How many tracks' cover files are kept (and asked for at once); more clears them all.
 const COVER_TRACKS: usize = 64;
 
-/// The cover files of the tracks the window shows, as the library last said.
+/// What the control thread and the cover reader share.
 #[derive(Default)]
+struct CoverShared {
+    /// Per track, when its cover file was read and what it is (`None`: no cover found).
+    files: HashMap<i64, (Instant, Option<PathBuf>)>,
+    /// The tracks asked for and not read yet.
+    pending: HashSet<i64>,
+}
+
+/// The cover files of the tracks the window shows (Ruling R6). The control thread never
+/// queries the database for them: it reads a shared map without waiting, and a thread of
+/// its own reads the library and fills the map. A track not in the map yet shows no cover
+/// and is asked for; one older than [`COVER_TTL`] keeps its file while it is read again,
+/// so a cover written in the background reaches the window within a second or two without
+/// the browser being refreshed.
 struct CoverFiles {
-    reader: Option<library::Reader>,
-    rows: HashMap<i64, (Instant, Option<PathBuf>)>,
+    shared: Arc<Mutex<CoverShared>>,
+    wanted: Option<std::sync::mpsc::SyncSender<i64>>,
 }
 
 impl CoverFiles {
-    fn get(&mut self, lib: &Library, track: i64, now: Instant) -> Option<PathBuf> {
-        if let Some((read, file)) = self.rows.get(&track)
-            && now.duration_since(*read) < COVER_TTL
+    fn new(lib: &Arc<Library>) -> Self {
+        let shared = Arc::new(Mutex::new(CoverShared::default()));
+        let (wanted, asked) = std::sync::mpsc::sync_channel::<i64>(COVER_TRACKS);
+        let lib = Arc::downgrade(lib);
+        let fill = Arc::clone(&shared);
+        let spawned = std::thread::Builder::new()
+            .name("cover-files".to_owned())
+            .spawn(move || {
+                let mut reader = None;
+                for track in asked {
+                    if reader.is_none() {
+                        reader = lib.upgrade().and_then(|lib| lib.reader().ok());
+                    }
+                    // A failed read keeps what was known.
+                    let read = reader.as_ref().and_then(|reader| reader.cover(track).ok());
+                    let mut shared = fill.lock().unwrap_or_else(PoisonError::into_inner);
+                    shared.pending.remove(&track);
+                    let known = shared.files.get(&track).and_then(|(_, f)| f.clone());
+                    let file = match read {
+                        Some(row) => row
+                            .filter(|row| row.state == library::CoverState::Found)
+                            .and_then(|row| row.file),
+                        None => known,
+                    };
+                    if shared.files.len() >= COVER_TRACKS {
+                        shared.files.clear();
+                    }
+                    shared.files.insert(track, (Instant::now(), file));
+                }
+            });
+        Self {
+            shared,
+            wanted: spawned.ok().map(|_| wanted),
+        }
+    }
+
+    /// `track`'s cover file as last read; never waits for the reader thread or the
+    /// database. `None` when it is not known (yet).
+    fn get(&self, track: i64, now: Instant) -> Option<PathBuf> {
+        // The reader holds the lock only to insert a row, but whoever has it, don't wait.
+        let mut shared = self.shared.try_lock().ok()?;
+        let known = shared.files.get(&track);
+        let file = known.and_then(|(_, f)| f.clone());
+        let fresh = known.is_some_and(|(read, _)| now.duration_since(*read) < COVER_TTL);
+        if !fresh
+            && shared.pending.len() < COVER_TRACKS
+            && let Some(wanted) = &self.wanted
+            && shared.pending.insert(track)
+            && wanted.try_send(track).is_err()
         {
-            return file.clone();
+            shared.pending.remove(&track);
         }
-        if self.reader.is_none() {
-            self.reader = lib.reader().ok();
-        }
-        // A failed read keeps what was known.
-        let found = self.reader.as_ref().and_then(|reader| {
-            reader.cover(track).ok().map(|row| {
-                row.filter(|row| row.state == library::CoverState::Found)
-                    .and_then(|row| row.file)
-            })
-        });
-        let file = found.unwrap_or_else(|| self.rows.get(&track).and_then(|(_, f)| f.clone()));
-        if self.rows.len() >= COVER_TRACKS {
-            self.rows.clear();
-        }
-        self.rows.insert(track, (now, file.clone()));
         file
     }
 }
@@ -3182,6 +3227,7 @@ mod tests {
             .submit_wait(WriteOp::SetCover {
                 track,
                 file: file.clone(),
+                force: false,
             })
             .unwrap();
         // Rounds well past the poll interval: a refresh would be asked for and sent.
@@ -3193,7 +3239,13 @@ mod tests {
         }
         run_until(&mut mode, &mut engine, &mut renderer, &printer, |_, _| true);
         assert!(mode.browser.as_ref().unwrap().all_selected);
-        // The window still learns of the cover, without a refresh.
+        // The window still learns of the cover, without a refresh: the committed write
+        // reaches the shared map through the cover thread.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while mode.cover_file(track).is_none() {
+            assert!(Instant::now() < deadline, "the cover never reached the map");
+            std::thread::sleep(Duration::from_millis(10));
+        }
         assert_eq!(mode.cover_file(track), Some(file.clone()));
         let view = mode.with_cover(mode.browser.clone().unwrap());
         assert_eq!(
@@ -3202,6 +3254,24 @@ mod tests {
         );
         mode.shutdown(&mut engine, &printer);
         printer.finish();
+    }
+
+    #[test]
+    fn cover_files_are_read_without_waiting() {
+        let dir = tempfile::tempdir().unwrap();
+        let mode = start(&dir.path().join("library.sqlite3"));
+        // The cover thread is busy (here: holding the shared map): a frame still builds,
+        // the track just shows no cover yet.
+        let held = mode.covers.shared.lock().unwrap();
+        let began = Instant::now();
+        for track in 0..200 {
+            assert_eq!(mode.cover_file(track), None);
+        }
+        assert!(began.elapsed() < Duration::from_millis(500));
+        drop(held);
+        // A track not known yet is asked for, and the number asked for stays bounded.
+        assert_eq!(mode.cover_file(1), None);
+        assert!(mode.covers.shared.lock().unwrap().pending.len() <= COVER_TRACKS);
     }
 
     #[test]

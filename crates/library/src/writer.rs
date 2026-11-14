@@ -175,8 +175,16 @@ pub enum WriteOp {
     /// otherwise. Put first in a [`WriteOp::Batch`] with a create or a rename, it checks
     /// the name in the same transaction as the write.
     ExpectNoPlaylistNamed { name: String, except: Option<i64> },
-    /// Keeps `file` as `track`'s cover (state `found`), replacing what was there.
-    SetCover { track: i64, file: PathBuf },
+    /// Keeps `file` as `track`'s cover (state `found`), replacing what was there. Unless
+    /// `force`, a removed cover stays removed (a lookup in flight when the user removed it
+    /// must not bring it back) and the write does nothing; if `file` is then the track's
+    /// own `<library folder>/covers/<id>.jpg`, it is deleted. `force` is for the user
+    /// asking for another cover.
+    SetCover {
+        track: i64,
+        file: PathBuf,
+        force: bool,
+    },
     /// Remembers that no cover was found for `track`. A track that has a cover, or whose
     /// cover was removed, keeps its state.
     MissCover { track: i64 },
@@ -417,7 +425,7 @@ fn run(mut conn: Connection, rx: &Receiver<Message>, shared: &Shared, folder: &P
     while let Ok(Message::Op { op, reply }) = rx.recv() {
         let result = apply_guarded(&mut conn, &op);
         if result.is_ok() {
-            crate::covers::delete_cleared_files(folder, &op);
+            crate::covers::delete_after_commit(&conn, folder, &op);
         }
         match (reply, result) {
             // The waiter may have gone away; the outcome stands regardless.
