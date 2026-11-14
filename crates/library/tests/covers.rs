@@ -48,6 +48,7 @@ fn set_and_read_a_cover() {
         .submit_wait(WriteOp::SetCover {
             track: 1,
             file: file.clone(),
+            force: false,
         })
         .unwrap();
     let row = lib.reader().unwrap().cover(1).unwrap().unwrap();
@@ -58,6 +59,7 @@ fn set_and_read_a_cover() {
         .submit_wait(WriteOp::SetCover {
             track: 9,
             file: "/x.jpg".into(),
+            force: false,
         })
         .unwrap_err();
     assert!(matches!(err, LibraryError::NoSuchTrack(9)));
@@ -95,6 +97,7 @@ fn removed_is_never_looked_up_again() {
         .submit_wait(WriteOp::SetCover {
             track: 1,
             file: outside.clone(),
+            force: false,
         })
         .unwrap();
     lib.writer()
@@ -139,6 +142,7 @@ fn tracks_needing_covers_skips_found_and_missed() {
     w.submit_wait(WriteOp::SetCover {
         track: 1,
         file: "/c/1.jpg".into(),
+        force: false,
     })
     .unwrap();
     w.submit_wait(WriteOp::MissCover { track: 2 }).unwrap();
@@ -178,4 +182,64 @@ fn a_version_3_library_opens_and_gains_the_table() {
     let lib = Library::open(&path).unwrap();
     assert_eq!(lib.reader().unwrap().cover(1).unwrap(), None);
     assert_eq!(needing(&lib), vec![1]);
+}
+
+#[test]
+fn a_removed_cover_stays_removed_unless_forced() {
+    let dir = tempfile::tempdir().unwrap();
+    let lib = open(&dir);
+    add_track(&lib, 1, None, None);
+    let covers = dir.path().join("lib").join("covers");
+    std::fs::create_dir_all(&covers).unwrap();
+    let own = covers.join("1.jpg");
+    let w = lib.writer();
+    w.submit_wait(WriteOp::ClearCover { track: 1 }).unwrap();
+    // A lookup that finished after the removal: refused, and its new file goes.
+    std::fs::write(&own, b"jpg").unwrap();
+    w.submit_wait(WriteOp::SetCover {
+        track: 1,
+        file: own.clone(),
+        force: false,
+    })
+    .unwrap();
+    let row = lib.reader().unwrap().cover(1).unwrap().unwrap();
+    assert_eq!(row.state, CoverState::Removed);
+    assert!(!own.exists());
+    // A refused file elsewhere is left alone.
+    let elsewhere = dir.path().join("keep.jpg");
+    std::fs::write(&elsewhere, b"jpg").unwrap();
+    w.submit_wait(WriteOp::SetCover {
+        track: 1,
+        file: elsewhere.clone(),
+        force: false,
+    })
+    .unwrap();
+    assert!(elsewhere.exists());
+    assert_eq!(
+        lib.reader().unwrap().cover(1).unwrap().unwrap().state,
+        CoverState::Removed
+    );
+    // "Find another cover" forces it.
+    std::fs::write(&own, b"jpg").unwrap();
+    w.submit_wait(WriteOp::SetCover {
+        track: 1,
+        file: own.clone(),
+        force: true,
+    })
+    .unwrap();
+    let row = lib.reader().unwrap().cover(1).unwrap().unwrap();
+    assert_eq!(row.state, CoverState::Found);
+    assert_eq!(row.file, Some(own.clone()));
+    assert!(own.exists());
+    // Without force a found or missed cover is replaced as before.
+    w.submit_wait(WriteOp::SetCover {
+        track: 1,
+        file: elsewhere.clone(),
+        force: false,
+    })
+    .unwrap();
+    assert_eq!(
+        lib.reader().unwrap().cover(1).unwrap().unwrap().file,
+        Some(elsewhere)
+    );
 }
