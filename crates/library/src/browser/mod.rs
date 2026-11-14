@@ -77,6 +77,10 @@ pub struct ListRow {
     /// The row's position in its playlist, from 0, whatever the list's search and sort;
     /// `None` outside a playlist.
     pub position: Option<usize>,
+    /// The cover the library kept for the track (found by an online lookup). The browser
+    /// leaves it `None`: a lookup is no reason to read the list again, so the app fills it
+    /// in for the row it shows.
+    pub cover_file: Option<PathBuf>,
 }
 
 /// Which list the browser shows: a whole-list selection is only good for the list it was
@@ -761,6 +765,7 @@ fn page(reader: &Reader, items: &Items, offset: usize) -> Result<Vec<ListRow>, L
                 track: tracks.get(path).cloned(),
                 file_name: file_name(path),
                 position: None,
+                cover_file: None,
             })
             .collect(),
         Items::Playlist { id, query } => reader
@@ -777,6 +782,7 @@ fn page(reader: &Reader, items: &Items, offset: usize) -> Result<Vec<ListRow>, L
                 path,
                 track: Some(track),
                 position: Some(position),
+                cover_file: None,
             })
             .collect(),
     })

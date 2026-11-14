@@ -191,6 +191,8 @@ pub struct DeckView {
     pub stems: Option<String>,
     /// The track's file, for its cover.
     pub path: Option<PathBuf>,
+    /// The cover the library kept for the track, shown when its file has no picture.
+    pub cover_file: Option<PathBuf>,
     pub overview: Option<Arc<Waveform>>,
     /// The colours the overview draws its bands in.
     pub waveform_palette: WaveformPalette,
@@ -320,6 +322,7 @@ impl DeckView {
             ),
             stems: info.and_then(|i| i.stems.clone()),
             path: info.map(|i| i.path.clone()),
+            cover_file: info.and_then(|i| i.cover_file.clone()),
             overview: info.and_then(|i| i.overview.clone()),
             waveform_palette: frame.view.waveform_palette,
             band_scale: {
@@ -572,7 +575,7 @@ impl DeckPanels {
             let cover = view
                 .path
                 .as_deref()
-                .and_then(|path| covers.get(ui.ctx(), path));
+                .and_then(|path| covers.get(ui.ctx(), path, view.cover_file.as_deref()));
             let area = crate::landmark_rect(ui, rect, PANEL_NAMES[deck.index()]);
             ui.scope_builder(UiBuilder::new().max_rect(rect), |ui| {
                 // Nothing a panel draws reaches its neighbours.
@@ -1661,6 +1664,7 @@ mod tests {
                 missing: false,
             },
             path: PathBuf::from("/music/just-us.mp3"),
+            cover_file: None,
             overview: None,
             detail: None,
             stems: None,

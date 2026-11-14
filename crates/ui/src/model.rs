@@ -109,6 +109,9 @@ pub struct DeckInfo {
     pub load_seq: u64,
     pub row: TrackRow,
     pub path: PathBuf,
+    /// The cover the library kept for the track (`Reader::cover`, when found); shown when
+    /// the file has no picture of its own.
+    pub cover_file: Option<PathBuf>,
     pub overview: Option<Arc<Waveform>>,
     pub detail: Option<Arc<Waveform>>,
     /// The stems' state (`stems`, `stems 40%`, ...), when there is one to show.
@@ -132,6 +135,7 @@ impl PartialEq for DeckInfo {
         self.load_seq == other.load_seq
             && self.row == other.row
             && self.path == other.path
+            && self.cover_file == other.cover_file
             && same(&self.overview, &other.overview)
             && same(&self.detail, &other.detail)
             && self.stems == other.stems

@@ -74,7 +74,8 @@ impl Library {
         let mut conn = Connection::open(path)?;
         configure_writer(&conn)?;
         migrate(&mut conn, migrations)?;
-        let (writer, thread) = writer::spawn(conn)?;
+        let (writer, thread) =
+            writer::spawn(conn, path.parent().unwrap_or(Path::new(".")).to_owned())?;
         Ok(Self {
             path: path.to_owned(),
             writer,

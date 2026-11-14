@@ -1512,7 +1512,11 @@ fn info_pane(ui: &mut Ui, view: &BrowserView, notation: KeyNotation, covers: &mu
     let cover = if fields.missing {
         None
     } else {
-        covers.get(ui.ctx(), Path::new(&entry.path))
+        covers.get(
+            ui.ctx(),
+            Path::new(&entry.path),
+            entry.cover_file.as_deref(),
+        )
     };
     cover::tile(ui, cover.as_ref(), side);
     ui.add_space(6.0);
@@ -1553,6 +1557,7 @@ mod tests {
             track: None,
             file_name: String::new(),
             position: None,
+            cover_file: None,
         };
         BrowserView {
             path: String::new(),

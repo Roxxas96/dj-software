@@ -238,6 +238,7 @@ impl FrameParts {
                 load_seq: view.load_seq,
                 row: view.row.clone(),
                 path: view.path.to_owned(),
+                cover_file: view.cover_file,
                 overview,
                 detail,
                 stems: view.stems,
@@ -253,7 +254,9 @@ impl FrameParts {
             ghosts: pass.ghosts,
             global_ghosts: pass.global_ghosts,
             decks,
-            browser: pass.library.and_then(|l| l.browser().cloned()),
+            browser: pass
+                .library
+                .and_then(|l| l.browser().cloned().map(|view| l.with_cover(view))),
             delete_check: pass.library.and_then(|l| l.delete_check().cloned()),
             controller: pass.controller.map(str::to_owned),
             key_notation: pass.library.map(LibraryMode::notation).unwrap_or_default(),
