@@ -121,8 +121,9 @@ pub enum DeleteTarget {
     /// Every entry of the playlist list `list` the window selected whole: refused if the
     /// browser no longer shows it with every row selected.
     AllEntries { list: library::ListIdentity },
-    /// The files of library tracks `tracks`, moved to the Trash.
-    Files { tracks: Vec<i64> },
+    /// The files `paths` of a folder's list (library tracks or not), moved to the Trash;
+    /// the session checks each again before anything moves.
+    Files { paths: Vec<std::path::PathBuf> },
     /// Every file of the folder list `list` the window selected whole, moved to the Trash;
     /// refused as [`DeleteTarget::AllEntries`] is.
     AllFiles { list: library::ListIdentity },

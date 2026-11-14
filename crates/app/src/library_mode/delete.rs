@@ -5,12 +5,18 @@
 //! Every file or folder is checked by [`check_delete`] when the window asks and again on
 //! the worker just before it moves: only what lies inside a library folder (compared as
 //! canonical paths, so a link cannot point a delete outside), never a library folder
-//! itself or a folder holding one, and nothing loaded on a deck. A failed Trash move
+//! itself or a folder holding one, never a folder holding Open Jockey's own data, and
+//! nothing loaded on a deck. Folders and files are also compared by identity (device and
+//! inode, volume and file index), so a name typed in another case on a drive that ignores
+//! case is still recognised. A failed Trash move
 //! deletes nothing more: there is no fallback to deleting for good. The library tracks
 //! whose files went are marked missing, as a rescan would; their hotcues stay.
 
+use std::collections::HashSet;
 use std::fmt;
 use std::path::{Path, PathBuf};
+
+use same_file::Handle;
 
 use engine::DeckId;
 use library::{Browser, LibraryError, Reader, WriteOp, Writer};
@@ -47,23 +53,26 @@ pub enum TrashError {
 }
 
 impl TrashError {
-    /// The error the system described as `description`: [`TrashError::NoTrash`] when it
-    /// says the drive has no Trash or Recycle Bin.
-    pub fn from_description(description: String) -> Self {
-        // macOS: `trashItemAtURL` fails with NSFeatureUnsupportedError (3328) on a volume
-        // without a Trash. freedesktop: no home trash nor a usable one on the mount.
-        // Windows: the copy engine's Recycle Bin errors.
-        const NO_TRASH: [&str; 7] = [
-            "3328",
-            "feature unsupported",
-            "not supported",
-            "valid 'home trash'",
-            "recycle bin is not available",
-            "recycle bin could not be found",
-            "no trash",
-        ];
-        let lower = description.to_lowercase();
-        if NO_TRASH.iter().any(|sign| lower.contains(sign)) {
+    /// The error the system gave moving `path`: [`TrashError::NoTrash`] when its code says
+    /// the drive has no Trash or Recycle Bin. Only the code (or, where the system gives no
+    /// code, its own words with every part of `path` taken out) is looked at, so a file
+    /// whose name reads like such an error is not taken for one.
+    pub fn from_trash(error: &trash::Error, path: &Path) -> Self {
+        let description = error.to_string();
+        let no_trash = match error {
+            // Windows: the copy engine's "the Recycle Bin is not available on this drive"
+            // (COPYENGINE_E_RECYCLE_FORCE_NUKE) and "could not be found"
+            // (COPYENGINE_E_RECYCLE_BIN_NOT_FOUND).
+            trash::Error::Os { code, .. } => {
+                matches!(*code as u32, 0x8027_0036 | 0x8027_003A)
+            }
+            // macOS: `trashItemAtURL` gives NSFeatureUnsupportedError (3328) on a volume
+            // without a Trash, in words only. freedesktop: no home trash nor a usable one
+            // on the mount, in fixed words.
+            trash::Error::Unknown { description } => no_trash_words(description, path),
+            _ => false,
+        };
+        if no_trash {
             Self::NoTrash(description)
         } else {
             Self::Other(description)
@@ -76,6 +85,35 @@ impl TrashError {
             Self::NoTrash(reason) | Self::Other(reason) => reason,
         }
     }
+}
+
+/// Whether the system's own words in `description` say the drive has no Trash. Only the
+/// part after the crate's "failed:" is the system's (the crate puts the path before it),
+/// and every part of `path` is taken out of it first.
+fn no_trash_words(description: &str, path: &Path) -> bool {
+    const NO_TRASH: [&str; 5] = [
+        "3328",
+        "feature unsupported",
+        "not supported",
+        "valid 'home trash'",
+        "no trash",
+    ];
+    let system = description
+        .rsplit_once("failed:")
+        .map_or(description, |(_, words)| words);
+    let mut words = system.to_lowercase();
+    let mut parts: Vec<String> = path
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy().to_lowercase())
+        .filter(|part| part.len() > 1)
+        .collect();
+    parts.push(path.to_string_lossy().to_lowercase());
+    // Longest first, so a whole path goes before its parts.
+    parts.sort_by_key(|part| std::cmp::Reverse(part.len()));
+    for part in &parts {
+        words = words.replace(part.as_str(), " ");
+    }
+    NO_TRASH.iter().any(|sign| words.contains(sign))
 }
 
 /// The system's Trash (the Recycle Bin on Windows), through the `trash` crate.
@@ -97,7 +135,7 @@ impl Trash for SystemTrash {
         for path in paths {
             context
                 .delete(path)
-                .map_err(|e| TrashError::from_description(e.to_string()))?;
+                .map_err(|e| TrashError::from_trash(&e, path))?;
         }
         Ok(())
     }
@@ -156,6 +194,9 @@ pub enum Refusal {
     IsRoot(PathBuf),
     /// The folder `.0` holds a library folder.
     HoldsRoot(PathBuf),
+    /// The folder `.0` is or holds the folder of the library's database or of the
+    /// configuration.
+    HoldsOwn(PathBuf),
     /// `.0` is not inside any library folder.
     Outside(PathBuf),
     /// `.0` is not on disk.
@@ -185,6 +226,11 @@ impl fmt::Display for Refusal {
                 "{} holds a library folder: remove it from the library first.",
                 name_of(folder)
             ),
+            Self::HoldsOwn(folder) => write!(
+                f,
+                "{} holds Open Jockey's library: it can't be deleted from here.",
+                name_of(folder)
+            ),
             Self::Outside(path) => {
                 write!(
                     f,
@@ -210,52 +256,85 @@ pub enum Doomed {
     Folder(PathBuf),
 }
 
-/// Whether moving `doomed` to the Trash is allowed with `folders` the library folders and
-/// `loaded` the files on the decks, and if so what moves. Reads the disk (to resolve the
-/// paths and count a folder's files) but changes nothing.
+/// Whether moving `doomed` to the Trash is allowed with `folders` the library folders,
+/// `loaded` the files on the decks and `own` the folders of Open Jockey's own data (the
+/// library database's and the configuration's), and if so what moves. Reads the disk (to
+/// resolve the paths, compare them by identity and count a folder's files) but changes
+/// nothing.
 ///
 /// # Errors
 ///
 /// Why it is refused: a path outside the library folders, a library folder or a folder
-/// holding one, a loaded file or a folder holding one, a path no longer on disk.
+/// holding one, a folder holding Open Jockey's own data, a loaded file or a folder holding
+/// one, a path no longer on disk.
 pub fn check_delete(
     doomed: &Doomed,
     folders: &[PathBuf],
     loaded: &[(DeckId, PathBuf)],
+    own: &[PathBuf],
 ) -> Result<Plan, Refusal> {
     let roots: Vec<PathBuf> = folders.iter().map(|f| canonical(f)).collect();
+    let own: Vec<PathBuf> = own.iter().map(|f| canonical(f)).collect();
     let loaded: Vec<(DeckId, PathBuf)> = loaded
         .iter()
         .map(|(deck, path)| (*deck, canonical(path)))
         .collect();
+    // The same places by identity, opened once: the library folders, the folders holding
+    // one, the folders holding (or being) Open Jockey's own, and each loaded file with the
+    // folders holding it.
+    let root_ids = identities(roots.iter().map(PathBuf::as_path));
+    let above_roots = identities(roots.iter().flat_map(|r| r.ancestors().skip(1)));
+    let own_ids = identities(own.iter().flat_map(|o| o.ancestors()));
+    let loaded_ids: Vec<Loaded<'_>> = loaded
+        .iter()
+        .map(|(deck, file)| Loaded {
+            deck: *deck,
+            file,
+            id: Handle::from_path(file).ok(),
+            within: identities(file.ancestors().skip(1)),
+        })
+        .collect();
     let inside = |path: &Path| roots.iter().any(|r| path.starts_with(r) && path != r);
-    // Where `path` is (what moves) and what it resolves to: both inside a library folder,
-    // so a link can neither be moved from outside nor point a delete outside.
-    let place = |path: &Path| -> Result<(PathBuf, bool), Refusal> {
+    // Where `path` is (what moves), what it resolves to, both inside a library folder so a
+    // link can neither be moved from outside nor point a delete outside, and what it is on
+    // disk: nothing for a link, which moves alone.
+    let place = |path: &Path| -> Result<Place, Refusal> {
         let at = location(path).ok_or_else(|| Refusal::Gone(path.to_owned()))?;
         let resolved = dunce::canonicalize(&at).map_err(|_| Refusal::Gone(path.to_owned()))?;
-        if roots.contains(&at) {
+        let link = std::fs::symlink_metadata(&at).is_ok_and(|m| m.file_type().is_symlink());
+        let id = if link {
+            None
+        } else {
+            Handle::from_path(&at).ok()
+        };
+        let known = |ids: &HashSet<Handle>| id.as_ref().is_some_and(|id| ids.contains(id));
+        if roots.contains(&at) || known(&root_ids) {
             return Err(Refusal::IsRoot(at));
         }
-        if roots.iter().any(|r| r.starts_with(&at)) {
+        if roots.iter().any(|r| r.starts_with(&at)) || known(&above_roots) {
             return Err(Refusal::HoldsRoot(at));
+        }
+        if own.iter().any(|o| o.starts_with(&at)) || known(&own_ids) {
+            return Err(Refusal::HoldsOwn(at));
         }
         if !inside(&at) || !inside(&resolved) {
             return Err(Refusal::Outside(path.to_owned()));
         }
-        let link = std::fs::symlink_metadata(&at).is_ok_and(|m| m.file_type().is_symlink());
-        Ok((at, link))
+        Ok(Place { at, link, id })
     };
     match doomed {
         Doomed::Files(files) => {
             let mut paths: Vec<PathBuf> = Vec::with_capacity(files.len());
             for file in files {
-                let (at, _) = place(file)?;
+                let Place { at, id, .. } = place(file)?;
                 if std::fs::symlink_metadata(&at).is_ok_and(|m| m.is_dir()) {
                     return Err(Refusal::Folder(at));
                 }
-                if let Some((deck, _)) = loaded.iter().find(|(_, l)| *l == at) {
-                    return Err(Refusal::Loaded(at, *deck));
+                let is_loaded = |l: &&Loaded<'_>| {
+                    *l.file == at || (id.is_some() && l.id.is_some() && id == l.id)
+                };
+                if let Some(l) = loaded_ids.iter().find(is_loaded) {
+                    return Err(Refusal::Loaded(at, l.deck));
                 }
                 if !paths.contains(&at) {
                     paths.push(at);
@@ -271,9 +350,12 @@ pub fn check_delete(
             })
         }
         Doomed::Folder(folder) => {
-            let (at, link) = place(folder)?;
-            if let Some((deck, file)) = loaded.iter().find(|(_, l)| l.starts_with(&at)) {
-                return Err(Refusal::Loaded(file.clone(), *deck));
+            let Place { at, link, id } = place(folder)?;
+            let holds = |l: &&Loaded<'_>| {
+                l.file.starts_with(&at) || id.as_ref().is_some_and(|id| l.within.contains(id))
+            };
+            if let Some(l) = loaded_ids.iter().find(holds) {
+                return Err(Refusal::Loaded(l.file.clone(), l.deck));
             }
             let (files, what) = if link {
                 (1, What::Link(name_of(&at)))
@@ -287,6 +369,44 @@ pub fn check_delete(
             })
         }
     }
+}
+
+/// A path checked by [`check_delete`].
+struct Place {
+    /// Where it is: its folder resolved, then its own name.
+    at: PathBuf,
+    /// It is a link (which moves alone).
+    link: bool,
+    /// What it is on disk; `None` for a link, or when it cannot be opened.
+    id: Option<Handle>,
+}
+
+/// A file loaded on a deck, for [`check_delete`].
+struct Loaded<'a> {
+    deck: DeckId,
+    /// Resolved.
+    file: &'a PathBuf,
+    /// What it is on disk, when it can be opened.
+    id: Option<Handle>,
+    /// What each folder holding it is on disk.
+    within: HashSet<Handle>,
+}
+
+/// The identities of the `paths` that can be opened, each once.
+fn identities<'a>(paths: impl Iterator<Item = &'a Path>) -> HashSet<Handle> {
+    paths
+        .filter_map(|path| Handle::from_path(path).ok())
+        .collect()
+}
+
+/// The folders Open Jockey keeps its own data in, which a delete never takes: the library
+/// database's (with its backups and covers) and the configuration's.
+pub(super) fn own_folders(db: &Path) -> Vec<PathBuf> {
+    db.parent()
+        .map(Path::to_owned)
+        .into_iter()
+        .chain(controller::builtin::config_dir())
+        .collect()
 }
 
 /// Where `path` is on disk: its folder with links resolved, then its own name, which may
@@ -396,15 +516,7 @@ fn resolve(target: &DeleteTarget, browser: &Browser, reader: &Reader) -> Result<
                 entries: browser.list_entries().map_err(warn)?,
             }
         }
-        DeleteTarget::Files { tracks } => {
-            let mut paths = Vec::with_capacity(tracks.len());
-            for &track in tracks {
-                if let Some(details) = reader.track(track).map_err(warn)? {
-                    paths.push(details.path);
-                }
-            }
-            Resolved::Disk(Doomed::Files(paths))
-        }
+        DeleteTarget::Files { paths } => Resolved::Disk(Doomed::Files(paths.clone())),
         DeleteTarget::AllFiles { list } => {
             if !whole(list, false) {
                 return Err(LIST_CHANGED.to_owned());
@@ -420,12 +532,13 @@ fn resolve(target: &DeleteTarget, browser: &Browser, reader: &Reader) -> Result<
 }
 
 /// The question to ask before deleting `target`, or why it cannot be deleted, with
-/// `loaded` the files on the decks.
+/// `loaded` the files on the decks and `own` Open Jockey's own folders.
 pub(super) fn ask(
     target: &DeleteTarget,
     browser: &Browser,
     reader: &Reader,
     loaded: &[(DeckId, PathBuf)],
+    own: &[PathBuf],
 ) -> Result<String, String> {
     match resolve(target, browser, reader)? {
         Resolved::Entries { name, entries, .. } => Ok(format!(
@@ -439,7 +552,7 @@ pub(super) fn ask(
         )),
         Resolved::Disk(doomed) => {
             let folders = reader.folders().map_err(safe)?;
-            check_delete(&doomed, &folders, loaded)
+            check_delete(&doomed, &folders, loaded, own)
                 .map(|plan| plan.question())
                 .map_err(|refusal| refusal.to_string())
         }
@@ -455,12 +568,13 @@ pub(super) struct Done {
 }
 
 /// Where the worker deletes: the library, the browser (for whole lists and drive names)
-/// and the Trash.
+/// and the Trash, never in Open Jockey's own folders (`own`).
 pub(super) struct Deleter<'a> {
     pub reader: &'a Reader,
     pub writer: &'a Writer,
     pub browser: &'a Browser,
     pub trash: &'a dyn Trash,
+    pub own: &'a [PathBuf],
 }
 
 impl Deleter<'_> {
@@ -484,7 +598,7 @@ impl Deleter<'_> {
                     Ok(folders) => folders,
                     Err(e) => return refused(format!("warning: {}", safe(e))),
                 };
-                return match check_delete(&doomed, &folders, loaded) {
+                return match check_delete(&doomed, &folders, loaded, self.own) {
                     Ok(plan) => self.to_trash(&plan),
                     Err(refusal) => refused(refusal.to_string()),
                 };
@@ -815,7 +929,9 @@ mod tests {
                 loop_frames: None,
             })
             .unwrap();
-        let target = DeleteTarget::Files { tracks: vec![a] };
+        let target = DeleteTarget::Files {
+            paths: vec![s.music.join("a.wav")],
+        };
         assert_eq!(s.ask(target.clone()), Ok("Move a.wav to the Trash?".into()));
         // Asking moved nothing.
         assert!(s.music.join("a.wav").exists());
@@ -980,7 +1096,9 @@ mod tests {
             loaded: vec![(deck(4), s.music.join("a.wav"))],
             taken: [0; 4],
         };
-        let target = DeleteTarget::Files { tracks: vec![a] };
+        let target = DeleteTarget::Files {
+            paths: vec![s.music.join("a.wav")],
+        };
         let refused = "a.wav is loaded on deck 4: unload it first.";
         assert_eq!(s.delete_with(target, decks), (refused.into(), false));
         assert!(s.music.join("a.wav").exists());
@@ -1053,7 +1171,7 @@ mod tests {
         let doomed = Doomed::Files(vec![file_link.clone()]);
         let folders = [s.music.clone()];
         assert_eq!(
-            check_delete(&doomed, &folders, &[]),
+            check_delete(&doomed, &folders, &[], &[]),
             Err(Refusal::Outside(file_link))
         );
         assert!(s.trash.moved().is_empty());
@@ -1065,7 +1183,9 @@ mod tests {
         let s = setup(&["a.wav", "sub/b.wav"]);
         let a = s.track("a.wav");
         s.trash.fail();
-        let (message, reread) = s.delete(DeleteTarget::Files { tracks: vec![a] });
+        let (message, reread) = s.delete(DeleteTarget::Files {
+            paths: vec![s.music.join("a.wav")],
+        });
         assert_eq!(message, "Stick has no Trash: nothing was deleted");
         assert!(!reread);
         // The system's own words are kept, as a warning.
@@ -1092,7 +1212,9 @@ mod tests {
         // Any other failure says what it was, and that nothing was deleted.
         s.trash
             .fail_with(TrashError::Other("permission denied".into()));
-        let (message, reread) = s.delete(DeleteTarget::Files { tracks: vec![a] });
+        let (message, reread) = s.delete(DeleteTarget::Files {
+            paths: vec![s.music.join("a.wav")],
+        });
         assert_eq!(
             message,
             "Could not move a.wav to the Trash (permission denied): nothing was deleted"
@@ -1105,32 +1227,173 @@ mod tests {
 
     #[test]
     fn only_a_missing_trash_is_called_one() {
-        let kind = |text: &str| TrashError::from_description(text.to_owned());
+        let path = Path::new("/Volumes/X/a.mp3");
+        let unknown = |text: &str| {
+            let error = trash::Error::Unknown {
+                description: text.to_owned(),
+            };
+            TrashError::from_trash(&error, path)
+        };
+        let os = |code: u32| {
+            let error = trash::Error::Os {
+                code: code as i32,
+                description: "windows error".into(),
+            };
+            TrashError::from_trash(&error, path)
+        };
         for no_trash in [
-            "While deleting '/Volumes/X/a.mp3', `trashItemAtURL` failed: Error Domain=NSCocoaErrorDomain Code=3328",
+            "While deleting '\"/Volumes/X/a.mp3\"', `trashItemAtURL` failed: Error Domain=NSCocoaErrorDomain Code=3328",
             "Could not find a valid 'home trash' nor valid trashes on other mount points",
-            "windows error: E:\\a.mp3: the Recycle Bin is not available on this drive (0x80270086)",
-            "windows error: E:\\a.mp3: the Recycle Bin could not be found or is unavailable (0x8027009a)",
         ] {
             assert!(
-                matches!(kind(no_trash), TrashError::NoTrash(_)),
+                matches!(unknown(no_trash), TrashError::NoTrash(_)),
                 "{no_trash}"
             );
         }
-        for other in [
-            "Permission denied (os error 13)",
-            "windows error: C:\\a.mp3: the source is in use by another process (0x80270022)",
-            "windows error: C:\\a.mp3: the item is too large for the Recycle Bin (0x80270079)",
-        ] {
-            assert!(matches!(kind(other), TrashError::Other(_)), "{other}");
+        // Windows: the copy engine's codes for a drive without a Recycle Bin.
+        assert!(matches!(os(0x8027_0036), TrashError::NoTrash(_)));
+        assert!(matches!(os(0x8027_003A), TrashError::NoTrash(_)));
+        for other in [0x8027_0022_u32, 0x8027_0037, 0x8007_0005] {
+            assert!(matches!(os(other), TrashError::Other(_)), "{other:#x}");
         }
+        assert!(matches!(
+            unknown("Permission denied (os error 13)"),
+            TrashError::Other(_)
+        ));
+    }
+
+    #[test]
+    fn a_file_name_that_reads_like_a_missing_trash_is_not_one() {
+        // The path is in the crate's text, and the system may name the file too: neither
+        // counts.
+        let path = Path::new("/Music/3328 not supported/no trash 3328.mp3");
+        let error = trash::Error::Unknown {
+            description: format!(
+                "While deleting '{path:?}', `trashItemAtURL` failed: \u{201c}no trash 3328.mp3\u{201d} couldn\u{2019}t be moved because you don\u{2019}t have permission to access \u{201c}3328 not supported\u{201d}."
+            ),
+        };
+        assert!(matches!(
+            TrashError::from_trash(&error, path),
+            TrashError::Other(_)
+        ));
+        let error = trash::Error::Os {
+            code: 0x8027_0022_u32 as i32,
+            description: format!("windows error: {}: not supported 3328", path.display()),
+        };
+        assert!(matches!(
+            TrashError::from_trash(&error, path),
+            TrashError::Other(_)
+        ));
+    }
+
+    #[test]
+    fn a_folder_holding_open_jockeys_own_data_is_refused() {
+        // The library folder is the home folder, which holds the app's data folder.
+        let s = setup(&["a.wav"]);
+        let home = s.music.clone();
+        let data = home.join("Library/Application Support/open-jockey");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(data.join("library.sqlite3"), "db").unwrap();
+        let folders = [home.clone()];
+        let own = [data.clone()];
+        for folder in [home.join("Library"), data.clone()] {
+            let name = folder.file_name().unwrap().to_string_lossy().into_owned();
+            let refusal = check_delete(&Doomed::Folder(folder.clone()), &folders, &[], &own);
+            assert_eq!(refusal, Err(Refusal::HoldsOwn(folder)));
+            assert_eq!(
+                refusal.unwrap_err().to_string(),
+                format!("{name} holds Open Jockey's library: it can't be deleted from here.")
+            );
+        }
+        // Elsewhere in the folder, a delete goes on.
+        let doomed = Doomed::Files(vec![home.join("a.wav")]);
+        assert!(check_delete(&doomed, &folders, &[], &own).is_ok());
+        // The worker knows the library's own folder: the database is next to `music`.
+        let worker_own = own_folders(s.lib.path());
+        assert_eq!(
+            canonical(&worker_own[0]),
+            canonical(s.lib.path().parent().unwrap())
+        );
+    }
+
+    /// Whether the folder `dir` is on a drive that ignores case.
+    fn ignores_case(dir: &Path) -> bool {
+        let probe = dir.join("CaseProbe");
+        std::fs::write(&probe, "").unwrap();
+        let ignores = dir.join("caseprobe").exists();
+        std::fs::remove_file(&probe).unwrap();
+        ignores
+    }
+
+    #[test]
+    fn names_in_another_case_are_the_same_places() {
+        let s = setup(&["House/a.wav", "b.wav"]);
+        if !ignores_case(&s.music) {
+            // Only the comparison by identity can be checked here: names differ.
+            return;
+        }
+        // A library folder inside another, added in the right case: named in another case
+        // it is still a library folder, and its parent still holds one.
+        let nested = s.music.join("House");
+        let folders = [s.music.clone(), nested.clone()];
+        let refusal = check_delete(&Doomed::Folder(s.music.join("house")), &folders, &[], &[]);
+        assert!(matches!(refusal, Err(Refusal::IsRoot(_))), "{refusal:?}");
+        // Added in the wrong case, it is the same.
+        let folders = [s.music.clone(), s.music.join("HOUSE")];
+        let refusal = check_delete(&Doomed::Folder(nested.clone()), &folders, &[], &[]);
+        assert!(matches!(refusal, Err(Refusal::IsRoot(_))), "{refusal:?}");
+        // A loaded file named in another case is still loaded, alone or in its folder.
+        let folders = [s.music.clone()];
+        let loaded = [(deck(2), s.music.join("b.wav"))];
+        let doomed = Doomed::Files(vec![s.music.join("B.WAV")]);
+        let refusal = check_delete(&doomed, &folders, &loaded, &[]);
+        assert!(matches!(refusal, Err(Refusal::Loaded(_, _))), "{refusal:?}");
+        let loaded = [(deck(1), nested.join("a.wav"))];
+        let refusal = check_delete(
+            &Doomed::Folder(s.music.join("hOuSe")),
+            &folders,
+            &loaded,
+            &[],
+        );
+        assert!(matches!(refusal, Err(Refusal::Loaded(_, _))), "{refusal:?}");
+        // Open Jockey's folder too.
+        let own = [nested.clone()];
+        let refusal = check_delete(&Doomed::Folder(s.music.join("house")), &folders, &[], &own);
+        assert!(matches!(refusal, Err(Refusal::HoldsOwn(_))), "{refusal:?}");
+    }
+
+    #[test]
+    fn a_file_the_library_does_not_have_goes_to_the_trash_too() {
+        let s = setup(&["a.wav", "notes.txt"]);
+        let notes = s.music.join("notes.txt");
+        let target = DeleteTarget::Files {
+            paths: vec![notes.clone(), s.music.join("a.wav")],
+        };
+        assert_eq!(
+            s.ask(target.clone()),
+            Ok("Move 2 files to the Trash?".into())
+        );
+        let (message, _) = s.delete(target);
+        assert_eq!(message, "Moved 2 files to the Trash");
+        assert!(!notes.exists());
+        // Still checked as before: a path outside the library is refused.
+        let outside = s.dir.path().join("library.sqlite3");
+        let target = DeleteTarget::Files {
+            paths: vec![outside.clone()],
+        };
+        assert!(
+            s.ask(target)
+                .unwrap_err()
+                .ends_with("is outside the library folders.")
+        );
+        assert!(outside.exists());
     }
 
     #[test]
     fn a_folder_named_as_a_file_is_refused() {
         let s = setup(&["sub/a.wav"]);
         let doomed = Doomed::Files(vec![s.music.join("sub")]);
-        let refusal = check_delete(&doomed, std::slice::from_ref(&s.music), &[]).unwrap_err();
+        let refusal = check_delete(&doomed, std::slice::from_ref(&s.music), &[], &[]).unwrap_err();
         assert_eq!(
             refusal.to_string(),
             "sub is a folder: delete it from the tree."
@@ -1144,11 +1407,12 @@ mod tests {
         let link = s.music.join("alias.wav");
         std::os::unix::fs::symlink(s.music.join("a.wav"), &link).unwrap();
         let folders = [s.music.clone()];
-        let plan = check_delete(&Doomed::Files(vec![link.clone()]), &folders, &[]).unwrap();
+        let plan = check_delete(&Doomed::Files(vec![link.clone()]), &folders, &[], &[]).unwrap();
         assert_eq!(plan.paths, std::slice::from_ref(&link));
         // Even with its target on a deck: the target stays where it is.
         let loaded = [(deck(1), s.music.join("a.wav"))];
-        let plan = check_delete(&Doomed::Files(vec![link.clone()]), &folders, &loaded).unwrap();
+        let plan =
+            check_delete(&Doomed::Files(vec![link.clone()]), &folders, &loaded, &[]).unwrap();
         assert_eq!(plan.paths, std::slice::from_ref(&link));
         let trash = FakeTrash::new(&s.dir.path().join("bin"));
         trash.trash(&plan.paths).unwrap();

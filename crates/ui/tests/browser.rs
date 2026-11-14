@@ -555,6 +555,7 @@ fn numbered(offset: usize, count: usize, total: usize) -> BrowserView {
             track.id = 1000 + i as i64;
             track.title = Some(format!("Song {i}"));
             row.file_name = format!("song-{i}.mp3");
+            row.path = PathBuf::from(format!("/music/song-{i}.mp3"));
             row
         })
         .collect();
@@ -1743,8 +1744,37 @@ fn the_delete_key_picks_what_the_pane_holds() {
     assert_eq!(
         harness.state().steps,
         [LibraryStep::AskDelete(DeleteTarget::Files {
-            tracks: vec![1000]
+            paths: vec![PathBuf::from("/music/song-0.mp3")]
         })]
+    );
+    // A file the library does not have is deleted the same, alone or with others.
+    let mut view = numbered(0, 20, 20);
+    view.list[0].track = None;
+    let trackless = |view: &BrowserView| {
+        let mut harness = clicking(view.clone(), Decks::default());
+        click_row(&mut harness, "song-0.mp3");
+        harness.state_mut().steps.clear();
+        harness
+    };
+    let mut harness = trackless(&view);
+    press(&mut harness, Key::Delete);
+    assert_eq!(
+        harness.state().steps,
+        [LibraryStep::AskDelete(DeleteTarget::Files {
+            paths: vec![PathBuf::from("/music/song-0.mp3")]
+        })]
+    );
+    let mut harness = trackless(&view);
+    let third = at_label(&harness, "Song 2");
+    click_holding(&mut harness, third, Modifiers::SHIFT);
+    harness.state_mut().steps.clear();
+    press(&mut harness, Key::Delete);
+    let paths = (0..3)
+        .map(|i| PathBuf::from(format!("/music/song-{i}.mp3")))
+        .collect();
+    assert_eq!(
+        deleting(&harness.state().steps),
+        [&LibraryStep::AskDelete(DeleteTarget::Files { paths })]
     );
     // The whole list selected: the library resolves it.
     let mut view = numbered(0, 20, 5000);
@@ -1803,10 +1833,26 @@ fn a_track_menu_deletes_the_rows_picked() {
     assert_eq!(
         deleting(&harness.state().steps),
         [&LibraryStep::AskDelete(DeleteTarget::Files {
-            tracks: vec![1004]
+            paths: vec![PathBuf::from("/music/song-4.mp3")]
         })]
     );
     harness.get_by_label("Move to the Trash");
+    // A file the library does not have has a menu with Delete too.
+    let mut view = numbered(0, 20, 20);
+    view.list[6].track = None;
+    let mut harness = clicking(view, Decks::default());
+    let at = at_label(&harness, "song-6.mp3");
+    click_with(&mut harness, PointerButton::Secondary, at);
+    harness.run_steps(2);
+    let item = at_label(&harness, "Delete\u{2026}");
+    click(&mut harness, item);
+    harness.run_steps(3);
+    assert_eq!(
+        deleting(&harness.state().steps),
+        [&LibraryStep::AskDelete(DeleteTarget::Files {
+            paths: vec![PathBuf::from("/music/song-6.mp3")]
+        })]
+    );
 }
 
 // The library from the keyboard.

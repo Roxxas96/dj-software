@@ -3750,6 +3750,7 @@ dependencies = [
  "lofty",
  "percent-encoding",
  "rusqlite",
+ "same-file",
  "serde",
  "serde_json",
  "stems",

@@ -860,7 +860,8 @@ fn focused_target(ctx: &egui::Context, view: &BrowserView) -> Option<DeleteTarge
 }
 
 /// What deleting rows `rows` of `view`'s list deletes: entries of its playlist, or the
-/// files of a folder's library tracks; with the whole list selected, all of it.
+/// files of a folder's rows, in the library or not; with the whole list selected, all of
+/// it.
 fn list_target(view: &BrowserView, rows: &[usize]) -> Option<DeleteTarget> {
     if view.all_selected {
         let list = view.identity();
@@ -869,13 +870,16 @@ fn list_target(view: &BrowserView, rows: &[usize]) -> Option<DeleteTarget> {
             None => DeleteTarget::AllFiles { list },
         });
     }
-    let drag = track_drag(view, rows)?;
-    Some(match drag.entries() {
-        Some((playlist, entries)) => DeleteTarget::Entries { playlist, entries },
-        None => DeleteTarget::Files {
-            tracks: drag.tracks,
-        },
-    })
+    if view.playlist.is_some() {
+        let (playlist, entries) = track_drag(view, rows)?.entries()?;
+        return Some(DeleteTarget::Entries { playlist, entries });
+    }
+    let paths: Vec<std::path::PathBuf> = rows
+        .iter()
+        .filter_map(|&at| view.list.get(at.checked_sub(view.list_offset)?))
+        .map(|row| row.path.clone())
+        .collect();
+    (!paths.is_empty()).then_some(DeleteTarget::Files { paths })
 }
 
 /// What deleting tree row `entry` deletes: a playlist, or a folder (not a drive).
@@ -1279,6 +1283,15 @@ fn list_pane(
         if track.is_some() {
             response.context_menu(|ui| {
                 track_menu(ui, view, decks, &mut selection, at, steps);
+            });
+        } else if view.playlist.is_none() {
+            // A file of the folder the library does not have can only be deleted.
+            response.context_menu(|ui| {
+                if ui.button("Delete\u{2026}").clicked()
+                    && let Some(target) = list_target(view, &selection.acting_on(at))
+                {
+                    delete_dialog::open(ui.ctx(), target, steps);
+                }
             });
         }
         let fields = Fields::of(entry, notation);
