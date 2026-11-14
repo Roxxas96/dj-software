@@ -38,7 +38,45 @@ pub trait Trash: Send + Sync {
 
 /// Why a Trash move failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TrashError(pub String);
+pub enum TrashError {
+    /// The drive has no Trash or Recycle Bin (some USB sticks and network drives), as the
+    /// system said it.
+    NoTrash(String),
+    /// Anything else (a permission, a file in use), as the system said it.
+    Other(String),
+}
+
+impl TrashError {
+    /// The error the system described as `description`: [`TrashError::NoTrash`] when it
+    /// says the drive has no Trash or Recycle Bin.
+    pub fn from_description(description: String) -> Self {
+        // macOS: `trashItemAtURL` fails with NSFeatureUnsupportedError (3328) on a volume
+        // without a Trash. freedesktop: no home trash nor a usable one on the mount.
+        // Windows: the copy engine's Recycle Bin errors.
+        const NO_TRASH: [&str; 7] = [
+            "3328",
+            "feature unsupported",
+            "not supported",
+            "valid 'home trash'",
+            "recycle bin is not available",
+            "recycle bin could not be found",
+            "no trash",
+        ];
+        let lower = description.to_lowercase();
+        if NO_TRASH.iter().any(|sign| lower.contains(sign)) {
+            Self::NoTrash(description)
+        } else {
+            Self::Other(description)
+        }
+    }
+
+    /// What the system said.
+    pub fn reason(&self) -> &str {
+        match self {
+            Self::NoTrash(reason) | Self::Other(reason) => reason,
+        }
+    }
+}
 
 /// The system's Trash (the Recycle Bin on Windows), through the `trash` crate.
 #[derive(Debug, Default, Clone, Copy)]
@@ -59,7 +97,7 @@ impl Trash for SystemTrash {
         for path in paths {
             context
                 .delete(path)
-                .map_err(|e| TrashError(e.to_string()))?;
+                .map_err(|e| TrashError::from_description(e.to_string()))?;
         }
         Ok(())
     }
@@ -74,24 +112,37 @@ impl Trash for SystemTrash {
 /// What a check found would go to the Trash.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Plan {
-    /// The canonical paths to move.
+    /// The paths to move: each in its canonical folder, under its own name, so a link
+    /// moves itself, never what it points to.
     pub paths: Vec<PathBuf>,
     /// How many files go: the files themselves, or every file in the folder.
     pub files: usize,
-    /// The folder's name, for a folder.
-    folder: Option<String>,
+    what: What,
+}
+
+/// What a [`Plan`] moves, for its question.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum What {
+    Files,
+    /// A folder, by name.
+    Folder(String),
+    /// A link to a folder, by name: only the link goes.
+    Link(String),
 }
 
 impl Plan {
     /// The question the window asks before the move.
     pub fn question(&self) -> String {
-        match (&self.folder, self.paths.as_slice()) {
-            (Some(name), _) => format!(
+        match (&self.what, self.paths.as_slice()) {
+            (What::Folder(name), _) => format!(
                 "Move the folder {name} and its {} to the Trash?",
                 count(self.files, "file")
             ),
-            (None, [one]) => format!("Move {} to the Trash?", name_of(one)),
-            (None, _) => format!("Move {} to the Trash?", count(self.files, "file")),
+            (What::Link(name), _) => {
+                format!("Move the link {name} to the Trash? The folder it points to stays.")
+            }
+            (What::Files, [one]) => format!("Move {} to the Trash?", name_of(one)),
+            (What::Files, _) => format!("Move {} to the Trash?", count(self.files, "file")),
         }
     }
 }
@@ -109,6 +160,8 @@ pub enum Refusal {
     Outside(PathBuf),
     /// `.0` is not on disk.
     Gone(PathBuf),
+    /// `.0`, named as a file, is a folder.
+    Folder(PathBuf),
     /// There is nothing to move.
     Nothing,
 }
@@ -140,6 +193,9 @@ impl fmt::Display for Refusal {
                 )
             }
             Self::Gone(path) => write!(f, "{} is not on disk any more.", name_of(path)),
+            Self::Folder(path) => {
+                write!(f, "{} is a folder: delete it from the tree.", name_of(path))
+            }
             Self::Nothing => write!(f, "There is nothing to delete."),
         }
     }
@@ -173,19 +229,36 @@ pub fn check_delete(
         .map(|(deck, path)| (*deck, canonical(path)))
         .collect();
     let inside = |path: &Path| roots.iter().any(|r| path.starts_with(r) && path != r);
+    // Where `path` is (what moves) and what it resolves to: both inside a library folder,
+    // so a link can neither be moved from outside nor point a delete outside.
+    let place = |path: &Path| -> Result<(PathBuf, bool), Refusal> {
+        let at = location(path).ok_or_else(|| Refusal::Gone(path.to_owned()))?;
+        let resolved = dunce::canonicalize(&at).map_err(|_| Refusal::Gone(path.to_owned()))?;
+        if roots.contains(&at) {
+            return Err(Refusal::IsRoot(at));
+        }
+        if roots.iter().any(|r| r.starts_with(&at)) {
+            return Err(Refusal::HoldsRoot(at));
+        }
+        if !inside(&at) || !inside(&resolved) {
+            return Err(Refusal::Outside(path.to_owned()));
+        }
+        let link = std::fs::symlink_metadata(&at).is_ok_and(|m| m.file_type().is_symlink());
+        Ok((at, link))
+    };
     match doomed {
         Doomed::Files(files) => {
             let mut paths: Vec<PathBuf> = Vec::with_capacity(files.len());
             for file in files {
-                let path = dunce::canonicalize(file).map_err(|_| Refusal::Gone(file.clone()))?;
-                if !inside(&path) {
-                    return Err(Refusal::Outside(file.clone()));
+                let (at, _) = place(file)?;
+                if std::fs::symlink_metadata(&at).is_ok_and(|m| m.is_dir()) {
+                    return Err(Refusal::Folder(at));
                 }
-                if let Some((deck, _)) = loaded.iter().find(|(_, l)| *l == path) {
-                    return Err(Refusal::Loaded(path, *deck));
+                if let Some((deck, _)) = loaded.iter().find(|(_, l)| *l == at) {
+                    return Err(Refusal::Loaded(at, *deck));
                 }
-                if !paths.contains(&path) {
-                    paths.push(path);
+                if !paths.contains(&at) {
+                    paths.push(at);
                 }
             }
             if paths.is_empty() {
@@ -194,30 +267,44 @@ pub fn check_delete(
             Ok(Plan {
                 files: paths.len(),
                 paths,
-                folder: None,
+                what: What::Files,
             })
         }
         Doomed::Folder(folder) => {
-            let path = dunce::canonicalize(folder).map_err(|_| Refusal::Gone(folder.clone()))?;
-            if roots.contains(&path) {
-                return Err(Refusal::IsRoot(path));
-            }
-            if roots.iter().any(|r| r.starts_with(&path)) {
-                return Err(Refusal::HoldsRoot(path));
-            }
-            if !inside(&path) {
-                return Err(Refusal::Outside(folder.clone()));
-            }
-            if let Some((deck, file)) = loaded.iter().find(|(_, l)| l.starts_with(&path)) {
+            let (at, link) = place(folder)?;
+            if let Some((deck, file)) = loaded.iter().find(|(_, l)| l.starts_with(&at)) {
                 return Err(Refusal::Loaded(file.clone(), *deck));
             }
+            let (files, what) = if link {
+                (1, What::Link(name_of(&at)))
+            } else {
+                (count_files(&at), What::Folder(name_of(&at)))
+            };
             Ok(Plan {
-                files: count_files(&path),
-                folder: Some(name_of(&path)),
-                paths: vec![path],
+                files,
+                what,
+                paths: vec![at],
             })
         }
     }
+}
+
+/// Where `path` is on disk: its folder with links resolved, then its own name, which may
+/// be a link. `None` unless it is an absolute path without `.` or `..` that is there (a
+/// link counts, even one pointing nowhere).
+fn location(path: &Path) -> Option<PathBuf> {
+    use std::path::Component;
+    let plain = path
+        .components()
+        .all(|c| !matches!(c, Component::CurDir | Component::ParentDir));
+    if !path.is_absolute() || !plain {
+        return None;
+    }
+    let at = dunce::canonicalize(path.parent()?)
+        .ok()?
+        .join(path.file_name()?);
+    std::fs::symlink_metadata(&at).ok()?;
+    Some(at)
 }
 
 /// `path` with links resolved, or as given when it cannot be (it is gone).
@@ -363,8 +450,8 @@ pub(super) fn ask(
 pub(super) struct Done {
     /// The library changed: the browser is to be read again.
     pub refresh: bool,
-    /// The event to show, after the browser is read again.
-    pub message: Option<String>,
+    /// The events to show, in order, after the browser is read again.
+    pub messages: Vec<String>,
 }
 
 /// Where the worker deletes: the library, the browser (for whole lists and drive names)
@@ -381,7 +468,7 @@ impl Deleter<'_> {
     pub(super) fn delete(&self, target: &DeleteTarget, loaded: &[(DeckId, PathBuf)]) -> Done {
         let refused = |message: String| Done {
             refresh: false,
-            message: Some(message),
+            messages: vec![message],
         };
         let resolved = match resolve(target, self.browser, self.reader) {
             Ok(resolved) => resolved,
@@ -415,7 +502,7 @@ impl Deleter<'_> {
         };
         Done {
             refresh: true,
-            message,
+            messages: message.into_iter().collect(),
         }
     }
 
@@ -428,16 +515,30 @@ impl Deleter<'_> {
             Some(_) => plan.paths.iter().filter(|p| is_gone(p)).collect(),
         };
         let marked = self.mark_missing(&gone);
-        let message = match failed {
+        let mut warning = None;
+        let message = match &failed {
             None => format!("Moved {} to the Trash", count(plan.files, "file")),
-            Some(_) => {
+            Some(error) => {
                 let stuck = plan.paths.iter().find(|p| !is_gone(p));
-                let drive = self.drive(stuck.unwrap_or(&plan.paths[0]));
+                let stuck = stuck.unwrap_or(&plan.paths[0]);
+                warning = Some(format!(
+                    "warning: could not move {} to the Trash: {}",
+                    safe(stuck.display()),
+                    safe(error.reason())
+                ));
+                let why = match error {
+                    TrashError::NoTrash(_) => format!("{} has no Trash", self.drive(stuck)),
+                    TrashError::Other(reason) => format!(
+                        "Could not move {} to the Trash ({})",
+                        name_of(stuck),
+                        safe(reason)
+                    ),
+                };
                 if gone.is_empty() {
-                    format!("{drive} has no Trash: nothing was deleted")
+                    format!("{why}: nothing was deleted")
                 } else {
                     format!(
-                        "{drive} has no Trash: moved {} to the Trash, the rest stay",
+                        "{why}: moved {} to the Trash, the rest stay",
                         count(gone.len(), "file")
                     )
                 }
@@ -452,7 +553,7 @@ impl Deleter<'_> {
         };
         Done {
             refresh: !gone.is_empty(),
-            message: Some(message),
+            messages: std::iter::once(message).chain(warning).collect(),
         }
     }
 
@@ -485,7 +586,7 @@ impl Deleter<'_> {
 pub struct FakeTrash {
     bin: PathBuf,
     moved: std::sync::Mutex<Vec<PathBuf>>,
-    fail: std::sync::atomic::AtomicBool,
+    fail: std::sync::Mutex<Option<TrashError>>,
 }
 
 #[cfg(test)]
@@ -495,13 +596,18 @@ impl FakeTrash {
         Self {
             bin: bin.to_owned(),
             moved: std::sync::Mutex::default(),
-            fail: std::sync::atomic::AtomicBool::new(false),
+            fail: std::sync::Mutex::default(),
         }
     }
 
-    /// From now on every move fails, moving nothing.
+    /// From now on every move fails with `error`, moving nothing.
+    pub fn fail_with(&self, error: TrashError) {
+        *self.fail.lock().unwrap() = Some(error);
+    }
+
+    /// From now on every move fails as on a drive without a Trash, moving nothing.
     pub fn fail(&self) {
-        self.fail.store(true, std::sync::atomic::Ordering::Relaxed);
+        self.fail_with(TrashError::NoTrash("no Trash on this drive".into()));
     }
 
     /// What it moved, in order.
@@ -513,14 +619,15 @@ impl FakeTrash {
 #[cfg(test)]
 impl Trash for FakeTrash {
     fn trash(&self, paths: &[PathBuf]) -> Result<(), TrashError> {
-        if self.fail.load(std::sync::atomic::Ordering::Relaxed) {
-            return Err(TrashError("no Trash on this drive".into()));
+        if let Some(error) = self.fail.lock().unwrap().clone() {
+            return Err(error);
         }
         let mut moved = self.moved.lock().unwrap();
-        std::fs::create_dir_all(&self.bin).map_err(|e| TrashError(e.to_string()))?;
+        let other = |e: std::io::Error| TrashError::Other(e.to_string());
+        std::fs::create_dir_all(&self.bin).map_err(other)?;
         for path in paths {
             let to = self.bin.join(format!("{}-{}", moved.len(), name_of(path)));
-            std::fs::rename(path, to).map_err(|e| TrashError(e.to_string()))?;
+            std::fs::rename(path, to).map_err(other)?;
             moved.push(path.clone());
         }
         Ok(())
@@ -650,7 +757,8 @@ mod tests {
         }
 
         /// Deletes `target` with `decks` and returns the event that says how it went, and
-        /// whether the browser was read again before it.
+        /// whether the browser was read again before it. Warnings (which follow the event)
+        /// are skipped.
         fn delete_with(&self, target: DeleteTarget, decks: DeckFiles) -> (String, bool) {
             self.jobs.send(Job::Delete { target, decks }).unwrap();
             let mut reread = false;
@@ -659,10 +767,18 @@ mod tests {
                     reread = true;
                     None
                 }
-                Event::Message(text) => Some(text),
+                Event::Message(text) if !text.starts_with("warning: ") => Some(text),
                 _ => None,
             });
             (message, reread)
+        }
+
+        /// The next warning event.
+        fn warning(&self) -> String {
+            self.wait_for(|e| match e {
+                Event::Message(text) if text.starts_with("warning: ") => Some(text),
+                _ => None,
+            })
         }
 
         fn delete(&self, target: DeleteTarget) -> (String, bool) {
@@ -952,6 +1068,15 @@ mod tests {
         let (message, reread) = s.delete(DeleteTarget::Files { tracks: vec![a] });
         assert_eq!(message, "Stick has no Trash: nothing was deleted");
         assert!(!reread);
+        // The system's own words are kept, as a warning.
+        let a_path = s.music.join("a.wav");
+        assert_eq!(
+            s.warning(),
+            format!(
+                "warning: could not move {} to the Trash: no Trash on this drive",
+                a_path.display()
+            )
+        );
         assert!(s.music.join("a.wav").exists());
         assert!(!s.missing(a));
         let folder = DeleteTarget::Folder {
@@ -963,6 +1088,91 @@ mod tests {
         );
         assert!(s.music.join("sub/b.wav").exists());
         assert!(!s.missing(s.track("sub/b.wav")));
+
+        // Any other failure says what it was, and that nothing was deleted.
+        s.trash
+            .fail_with(TrashError::Other("permission denied".into()));
+        let (message, reread) = s.delete(DeleteTarget::Files { tracks: vec![a] });
+        assert_eq!(
+            message,
+            "Could not move a.wav to the Trash (permission denied): nothing was deleted"
+        );
+        assert!(!reread);
+        assert!(s.warning().ends_with("to the Trash: permission denied"));
+        assert!(s.music.join("a.wav").exists());
+        assert!(!s.missing(a));
+    }
+
+    #[test]
+    fn only_a_missing_trash_is_called_one() {
+        let kind = |text: &str| TrashError::from_description(text.to_owned());
+        for no_trash in [
+            "While deleting '/Volumes/X/a.mp3', `trashItemAtURL` failed: Error Domain=NSCocoaErrorDomain Code=3328",
+            "Could not find a valid 'home trash' nor valid trashes on other mount points",
+            "windows error: E:\\a.mp3: the Recycle Bin is not available on this drive (0x80270086)",
+            "windows error: E:\\a.mp3: the Recycle Bin could not be found or is unavailable (0x8027009a)",
+        ] {
+            assert!(
+                matches!(kind(no_trash), TrashError::NoTrash(_)),
+                "{no_trash}"
+            );
+        }
+        for other in [
+            "Permission denied (os error 13)",
+            "windows error: C:\\a.mp3: the source is in use by another process (0x80270022)",
+            "windows error: C:\\a.mp3: the item is too large for the Recycle Bin (0x80270079)",
+        ] {
+            assert!(matches!(kind(other), TrashError::Other(_)), "{other}");
+        }
+    }
+
+    #[test]
+    fn a_folder_named_as_a_file_is_refused() {
+        let s = setup(&["sub/a.wav"]);
+        let doomed = Doomed::Files(vec![s.music.join("sub")]);
+        let refusal = check_delete(&doomed, std::slice::from_ref(&s.music), &[]).unwrap_err();
+        assert_eq!(
+            refusal.to_string(),
+            "sub is a folder: delete it from the tree."
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_to_a_file_in_the_library_moves_only_the_link() {
+        let s = setup(&["a.wav"]);
+        let link = s.music.join("alias.wav");
+        std::os::unix::fs::symlink(s.music.join("a.wav"), &link).unwrap();
+        let folders = [s.music.clone()];
+        let plan = check_delete(&Doomed::Files(vec![link.clone()]), &folders, &[]).unwrap();
+        assert_eq!(plan.paths, std::slice::from_ref(&link));
+        // Even with its target on a deck: the target stays where it is.
+        let loaded = [(deck(1), s.music.join("a.wav"))];
+        let plan = check_delete(&Doomed::Files(vec![link.clone()]), &folders, &loaded).unwrap();
+        assert_eq!(plan.paths, std::slice::from_ref(&link));
+        let trash = FakeTrash::new(&s.dir.path().join("bin"));
+        trash.trash(&plan.paths).unwrap();
+        assert!(std::fs::symlink_metadata(&link).is_err());
+        assert!(s.music.join("a.wav").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_to_a_folder_in_the_library_moves_only_the_link() {
+        let s = setup(&["real/a.wav", "real/b.wav"]);
+        let link = s.music.join("alias");
+        std::os::unix::fs::symlink(s.music.join("real"), &link).unwrap();
+        let target = DeleteTarget::Folder { path: link.clone() };
+        assert_eq!(
+            s.ask(target.clone()),
+            Ok("Move the link alias to the Trash? The folder it points to stays.".into())
+        );
+        let (message, _) = s.delete(target);
+        assert_eq!(message, "Moved 1 file to the Trash");
+        assert_eq!(s.trash.moved(), std::slice::from_ref(&link));
+        assert!(std::fs::symlink_metadata(&link).is_err());
+        assert!(s.music.join("real/a.wav").exists());
+        assert!(!s.missing(s.track("real/a.wav")));
     }
 
     #[test]
@@ -1038,7 +1248,7 @@ mod tests {
         let plan = |paths: &[&str], files, folder: Option<&str>| Plan {
             paths: paths.iter().map(PathBuf::from).collect(),
             files,
-            folder: folder.map(str::to_owned),
+            what: folder.map_or(What::Files, |name| What::Folder(name.to_owned())),
         };
         assert_eq!(
             plan(&["/m/a.mp3", "/m/b.mp3"], 2, None).question(),

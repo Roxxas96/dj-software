@@ -439,7 +439,7 @@ fn run(
                         Err(e) => say(format!("warning: library browser: {}", safe(e))),
                     }
                 }
-                if let Some(message) = done.message {
+                for message in done.messages {
                     say(message);
                 }
             }
