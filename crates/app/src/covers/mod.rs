@@ -788,12 +788,12 @@ pub(crate) mod tests {
             .unwrap();
     }
 
-    /// An empty file `name` in `dir` (a file with no picture of its own), as a path for
+    /// A short WAV `name` in `dir` with no picture of its own, as a path for
     /// [`add_track`]: a track whose file cannot be read is never looked up.
     pub(crate) fn song(dir: &tempfile::TempDir, name: &str) -> String {
         let path = dir.path().join("music").join(name);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, b"").unwrap();
+        wav(&path, None);
         path.to_str().unwrap().to_owned()
     }
 
@@ -1211,6 +1211,32 @@ pub(crate) mod tests {
             !events.is_empty()
         });
         assert_eq!(events, ["Away Song cannot be read: no cover was looked up"]);
+        assert!(http.asked().is_empty());
+        assert_eq!(state(&lib, 1), None);
+    }
+
+    /// A file that opens but whose reading fails with an I/O error sends nothing: here a
+    /// folder named like a track (opening it works on unix, reading it does not).
+    #[cfg(unix)]
+    #[test]
+    fn a_file_that_fails_to_read_after_opening_sends_nothing() {
+        use service::tests::RecordingHttp;
+        use service::{Chain, DeezerService, Http, MusicBrainzService};
+        let dir = tempfile::tempdir().unwrap();
+        let lib = open(&dir);
+        let cut = dir.path().join("cut.mp3");
+        std::fs::create_dir(&cut).unwrap();
+        assert!(std::fs::File::open(&cut).is_ok());
+        assert_eq!(ui::cover::own_picture(&cut), None);
+        add_track(&lib, 1, Some(("Cut", "Short")), cut.to_str().unwrap());
+        let http = Arc::new(RecordingHttp::default());
+        let shared = Arc::clone(&http) as Arc<dyn Http>;
+        let chain = Chain(vec![
+            Box::new(DeezerService::new(Arc::clone(&shared), Duration::ZERO)),
+            Box::new(MusicBrainzService::new(shared, Duration::ZERO)),
+        ]);
+        let _worker = CoverWorker::start_with(&lib, Box::new(chain), on(), fast()).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
         assert!(http.asked().is_empty());
         assert_eq!(state(&lib, 1), None);
     }

@@ -12,7 +12,8 @@
 //! deletes nothing more: there is no fallback to deleting for good. The library tracks
 //! whose files went are marked missing, as a rescan would; their hotcues stay.
 
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -197,6 +198,11 @@ pub enum Refusal {
     /// The folder `.0` is or holds the folder of the library's database or of the
     /// configuration.
     HoldsOwn(PathBuf),
+    /// `.0` is inside the folder of the library's database or of the configuration.
+    InOwn(PathBuf),
+    /// `.0`, or a place it is compared with, cannot be identified on disk: whether it is
+    /// safe to move cannot be said.
+    Unchecked(PathBuf),
     /// `.0` is not inside any library folder.
     Outside(PathBuf),
     /// `.0` is not on disk.
@@ -231,6 +237,18 @@ impl fmt::Display for Refusal {
                 "{} holds Open Jockey's library: it can't be deleted from here.",
                 name_of(folder)
             ),
+            Self::InOwn(path) => write!(
+                f,
+                "{} is part of Open Jockey's library: it can't be deleted from here.",
+                name_of(path)
+            ),
+            Self::Unchecked(path) => {
+                write!(
+                    f,
+                    "{} can't be checked: nothing was deleted.",
+                    name_of(path)
+                )
+            }
             Self::Outside(path) => {
                 write!(
                     f,
@@ -280,48 +298,76 @@ pub fn check_delete(
         .map(|(deck, path)| (*deck, canonical(path)))
         .collect();
     // The same places by identity, opened once: the library folders, the folders holding
-    // one, the folders holding (or being) Open Jockey's own, and each loaded file with the
-    // folders holding it.
+    // one, Open Jockey's own folders and the folders holding them, and each loaded file
+    // with the folders holding it. A delete is only checked with all of them: one that
+    // cannot be identified refuses every delete rather than fall back to names.
     let root_ids = identities(roots.iter().map(PathBuf::as_path));
     let above_roots = identities(roots.iter().flat_map(|r| r.ancestors().skip(1)));
+    let own_self = identities(own.iter().map(PathBuf::as_path));
     let own_ids = identities(own.iter().flat_map(|o| o.ancestors()));
-    let loaded_ids: Vec<Loaded<'_>> = loaded
+    let loaded_ids: Option<Vec<Loaded<'_>>> = loaded
         .iter()
-        .map(|(deck, file)| Loaded {
-            deck: *deck,
-            file,
-            id: Handle::from_path(file).ok(),
-            within: identities(file.ancestors().skip(1)),
+        .map(|(deck, file)| {
+            Some(Loaded {
+                deck: *deck,
+                file,
+                id: Handle::from_path(file).ok()?,
+                within: identities(file.ancestors().skip(1))?,
+            })
         })
         .collect();
+    let ids = (|| Some((root_ids?, above_roots?, own_self?, own_ids?, loaded_ids?)))();
     let inside = |path: &Path| roots.iter().any(|r| path.starts_with(r) && path != r);
+    // Per folder, whether it is inside one of Open Jockey's own, by identity; `None` when
+    // a folder on the way up cannot be identified.
+    let in_own_folders: RefCell<HashMap<PathBuf, Option<bool>>> = RefCell::default();
+    let in_own = |folder: &Path, own_self: &HashSet<Handle>| -> Option<bool> {
+        if let Some(known) = in_own_folders.borrow().get(folder) {
+            return *known;
+        }
+        let found = folder
+            .ancestors()
+            .map(|up| Handle::from_path(up).ok().map(|id| own_self.contains(&id)))
+            .try_fold(false, |found, up| Some(found || up?));
+        in_own_folders.borrow_mut().insert(folder.to_owned(), found);
+        found
+    };
     // Where `path` is (what moves), what it resolves to, both inside a library folder so a
     // link can neither be moved from outside nor point a delete outside, and what it is on
-    // disk: nothing for a link, which moves alone.
+    // disk: nothing for a link, which moves alone (its own place is checked by name).
     let place = |path: &Path| -> Result<Place, Refusal> {
         let at = location(path).ok_or_else(|| Refusal::Gone(path.to_owned()))?;
         let resolved = dunce::canonicalize(&at).map_err(|_| Refusal::Gone(path.to_owned()))?;
         let link = std::fs::symlink_metadata(&at).is_ok_and(|m| m.file_type().is_symlink());
+        let unchecked = || Refusal::Unchecked(at.clone());
+        let (root_ids, above_roots, own_self, own_ids, _) = ids.as_ref().ok_or_else(unchecked)?;
         let id = if link {
             None
         } else {
-            Handle::from_path(&at).ok()
+            Some(Handle::from_path(&at).map_err(|_| unchecked())?)
         };
         let known = |ids: &HashSet<Handle>| id.as_ref().is_some_and(|id| ids.contains(id));
-        if roots.contains(&at) || known(&root_ids) {
+        if roots.contains(&at) || known(root_ids) {
             return Err(Refusal::IsRoot(at));
         }
-        if roots.iter().any(|r| r.starts_with(&at)) || known(&above_roots) {
+        if roots.iter().any(|r| r.starts_with(&at)) || known(above_roots) {
             return Err(Refusal::HoldsRoot(at));
         }
-        if own.iter().any(|o| o.starts_with(&at)) || known(&own_ids) {
+        if own.iter().any(|o| o.starts_with(&at)) || known(own_ids) {
             return Err(Refusal::HoldsOwn(at));
+        }
+        let folder = at.parent().ok_or_else(unchecked)?;
+        let within = in_own(folder, own_self).ok_or_else(unchecked)?;
+        if own.iter().any(|o| at.starts_with(o)) || within {
+            return Err(Refusal::InOwn(at));
         }
         if !inside(&at) || !inside(&resolved) {
             return Err(Refusal::Outside(path.to_owned()));
         }
         Ok(Place { at, link, id })
     };
+    let no_loaded = Vec::new();
+    let loaded_ids = ids.as_ref().map_or(&no_loaded, |ids| &ids.4);
     match doomed {
         Doomed::Files(files) => {
             let mut paths: Vec<PathBuf> = Vec::with_capacity(files.len());
@@ -330,9 +376,7 @@ pub fn check_delete(
                 if std::fs::symlink_metadata(&at).is_ok_and(|m| m.is_dir()) {
                     return Err(Refusal::Folder(at));
                 }
-                let is_loaded = |l: &&Loaded<'_>| {
-                    *l.file == at || (id.is_some() && l.id.is_some() && id == l.id)
-                };
+                let is_loaded = |l: &&Loaded<'_>| *l.file == at || id.as_ref() == Some(&l.id);
                 if let Some(l) = loaded_ids.iter().find(is_loaded) {
                     return Err(Refusal::Loaded(at, l.deck));
                 }
@@ -377,7 +421,7 @@ struct Place {
     at: PathBuf,
     /// It is a link (which moves alone).
     link: bool,
-    /// What it is on disk; `None` for a link, or when it cannot be opened.
+    /// What it is on disk; `None` for a link.
     id: Option<Handle>,
 }
 
@@ -386,17 +430,18 @@ struct Loaded<'a> {
     deck: DeckId,
     /// Resolved.
     file: &'a PathBuf,
-    /// What it is on disk, when it can be opened.
-    id: Option<Handle>,
+    /// What it is on disk.
+    id: Handle,
     /// What each folder holding it is on disk.
     within: HashSet<Handle>,
 }
 
-/// The identities of the `paths` that can be opened, each once.
-fn identities<'a>(paths: impl Iterator<Item = &'a Path>) -> HashSet<Handle> {
-    paths
-        .filter_map(|path| Handle::from_path(path).ok())
-        .collect()
+/// The identities of `paths`, each once; `None` when one cannot be opened.
+fn identities<'a>(mut paths: impl Iterator<Item = &'a Path>) -> Option<HashSet<Handle>> {
+    paths.try_fold(HashSet::new(), |mut ids, path| {
+        ids.insert(Handle::from_path(path).ok()?);
+        Some(ids)
+    })
 }
 
 /// The folders Open Jockey keeps its own data in, which a delete never takes: the library
@@ -790,7 +835,10 @@ mod tests {
                 std::fs::write(&path, "not music").unwrap();
             }
         }
-        let lib = Library::open(&dir.path().join("library.sqlite3")).unwrap();
+        // The database in a folder of its own, beside `music`: a delete never goes inside
+        // it.
+        std::fs::create_dir_all(dir.path().join("data")).unwrap();
+        let lib = Library::open(&dir.path().join("data/library.sqlite3")).unwrap();
         library::add_folder(&lib, &music).unwrap();
         library::scan_folder(&lib, &music, &mut |_: ScanProgress| {}).unwrap();
         let lib = Arc::new(lib);
@@ -1305,6 +1353,22 @@ mod tests {
                 format!("{name} holds Open Jockey's library: it can't be deleted from here.")
             );
         }
+        // Nor anything inside it: the database, its backups, its covers.
+        std::fs::create_dir_all(data.join("covers")).unwrap();
+        for inside in [data.join("library.sqlite3"), data.join("covers")] {
+            let doomed = match inside.is_dir() {
+                true => Doomed::Folder(inside.clone()),
+                false => Doomed::Files(vec![inside.clone()]),
+            };
+            let refusal = check_delete(&doomed, &folders, &[], &own).unwrap_err();
+            assert_eq!(refusal, Refusal::InOwn(inside.clone()));
+            assert!(
+                refusal
+                    .to_string()
+                    .ends_with("is part of Open Jockey's library: it can't be deleted from here."),
+                "{refusal}"
+            );
+        }
         // Elsewhere in the folder, a delete goes on.
         let doomed = Doomed::Files(vec![home.join("a.wav")]);
         assert!(check_delete(&doomed, &folders, &[], &own).is_ok());
@@ -1314,6 +1378,47 @@ mod tests {
             canonical(&worker_own[0]),
             canonical(s.lib.path().parent().unwrap())
         );
+    }
+
+    /// Sets `path`'s permission bits.
+    #[cfg(unix)]
+    fn chmod(path: &Path, mode: u32) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_target_that_cannot_be_identified_is_refused() {
+        let s = setup(&["sub/a.wav", "b.wav"]);
+        let sub = s.music.join("sub");
+        chmod(&sub, 0o000);
+        let folders = [s.music.clone()];
+        let refusal = check_delete(&Doomed::Folder(sub.clone()), &folders, &[], &[]);
+        chmod(&sub, 0o755);
+        let refusal = refusal.unwrap_err();
+        assert_eq!(refusal, Refusal::Unchecked(sub));
+        assert_eq!(
+            refusal.to_string(),
+            "sub can't be checked: nothing was deleted."
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_library_folder_that_cannot_be_identified_refuses_every_delete() {
+        let s = setup(&["b.wav"]);
+        // A second library folder, now out of reach: a delete could be it or hold it.
+        let locked = s.dir.path().join("locked");
+        std::fs::create_dir_all(&locked).unwrap();
+        let folders = [s.music.clone(), locked.clone()];
+        chmod(&locked, 0o000);
+        let doomed = Doomed::Files(vec![s.music.join("b.wav")]);
+        let refusal = check_delete(&doomed, &folders, &[], &[]);
+        chmod(&locked, 0o755);
+        assert_eq!(refusal, Err(Refusal::Unchecked(s.music.join("b.wav"))));
+        // Once it can be read again, the delete goes on.
+        assert!(check_delete(&doomed, &folders, &[], &[]).is_ok());
     }
 
     /// Whether the folder `dir` is on a drive that ignores case.
@@ -1377,7 +1482,8 @@ mod tests {
         assert_eq!(message, "Moved 2 files to the Trash");
         assert!(!notes.exists());
         // Still checked as before: a path outside the library is refused.
-        let outside = s.dir.path().join("library.sqlite3");
+        let outside = s.dir.path().join("elsewhere.txt");
+        std::fs::write(&outside, "kept").unwrap();
         let target = DeleteTarget::Files {
             paths: vec![outside.clone()],
         };

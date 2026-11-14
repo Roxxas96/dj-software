@@ -175,38 +175,45 @@ impl Covers {
 /// [`COVER_PIXELS`] a side. `None` when the file can't be read or has no picture that
 /// decodes.
 pub fn read(path: &Path) -> Option<ColorImage> {
-    decode(&picture(path)?)
+    decode(&picture(path).flatten()?)
 }
 
 /// Whether `path` has a picture of its own that [`read`] shows: its front cover, else its
 /// first picture, a JPEG or PNG whose size reads. Only the picture's header is decoded.
 pub fn has_picture(path: &Path) -> bool {
-    picture(path).is_some_and(|bytes| {
+    own_picture(path) == Some(true)
+}
+
+/// Whether `path` has a picture of its own, as [`has_picture`] says; `None` when the file
+/// cannot be read whole (its drive unplugged, the file gone, out of reach, cut short or
+/// not read as audio), which says nothing either way.
+pub fn own_picture(path: &Path) -> Option<bool> {
+    Some(picture(path)?.is_some_and(|bytes| {
         image::ImageReader::new(std::io::Cursor::new(bytes))
             .with_guessed_format()
             .ok()
             .and_then(|reader| reader.into_dimensions().ok())
             .is_some()
-    })
+    }))
 }
 
-/// Whether `path` has a picture of its own, as [`has_picture`] says; `None` when the file
-/// cannot be opened (its drive unplugged, the file gone or out of reach), which says
-/// nothing either way.
-pub fn own_picture(path: &Path) -> Option<bool> {
-    std::fs::File::open(path).ok()?;
-    Some(has_picture(path))
-}
-
-/// The bytes of `path`'s front cover, else of its first picture.
-fn picture(path: &Path) -> Option<Vec<u8>> {
+/// The bytes of `path`'s front cover, else of its first picture: `Some(None)` when it has
+/// no tag or no picture, `None` when the file could not be read (any error opening it or
+/// reading its tags, an I/O error or one in its contents).
+fn picture(path: &Path) -> Option<Option<Vec<u8>>> {
     let options = ParseOptions::new().read_properties(false);
-    let file = Probe::open(path).ok()?.options(options).read().ok()?;
+    let file = Probe::open(path)
+        .ok()?
+        .guess_file_type()
+        .ok()?
+        .options(options)
+        .read()
+        .ok()?;
     let pictures = || file.tags().iter().flat_map(|tag| tag.pictures());
     let picture = pictures()
         .find(|p| p.pic_type() == PictureType::CoverFront)
-        .or_else(|| pictures().next())?;
-    Some(picture.data().to_vec())
+        .or_else(|| pictures().next());
+    Some(picture.map(|p| p.data().to_vec()))
 }
 
 /// The picture file at `path` (a JPEG or PNG), decoded and scaled like [`read`]'s.
