@@ -260,6 +260,20 @@ Covers showing as the plain tile is not a bug: the owner's files carry no embedd
 where a held loop roll or slicer returns and for an active loop, stems and gain shown on the
 waveform, keyboard navigation of the library, and VirtualDJ-style covers.
 
+### Hands-on check (plan 12c: waveforms that react, a library keyboard and covers)
+
+Owner, 2026-11-14 (macOS):
+- **Waveforms.** A held loop roll or slicer pad with slip on shades its loop, and a marker
+  shows where the track lands on release. The waveform's bands follow the EQ knobs.
+- **Keyboard.** Every library key works as documented.
+- **Delete.** Removing from a playlist, a file to the Trash, and the refused folder all
+  behaved as expected.
+- **Covers.** Online covers appeared, and "Find another cover", "Remove cover" and the off
+  switch worked.
+
+Asked for next (plan 12d): a footer with the open list's facts, the latest message, and one
+pill per background job, showing done / total and the time left, with Pause / Resume / Stop.
+
 ## The SB3's own pad routines
 
 In FX FADE, PAD SCRATCH and TRANS (SHIFT + SAMPLER) the SB3 runs routines of its own on
