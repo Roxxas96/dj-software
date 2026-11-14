@@ -10,7 +10,7 @@ use analysis::KeyNotation;
 use egui::accesskit::Role;
 use egui::{Event, Key, Modifiers, MouseWheelUnit, PointerButton, Pos2, pos2, vec2};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use engine::DeckId;
 use library::{
     BrowserEdit, BrowserView, Focus, ListRow, TrackRow, TrackSortKey, TreeKind, TreeRow,
@@ -1440,6 +1440,53 @@ fn answer(harness: &mut Harness<'_, Clicking>, seq: u64, target: &DeleteTarget, 
     harness.run_steps(3);
 }
 
+/// Waits out the delete button's [`ARMING`](ui::delete_dialog::ARMING), at the harness's
+/// 10 ms a step.
+fn arm(harness: &mut Harness<'_, Clicking>) {
+    let steps = ui::delete_dialog::ARMING.as_millis() / 10 + 2;
+    harness.run_steps(steps as usize);
+}
+
+#[test]
+fn the_dialog_holds_still_and_the_delete_button_waits() {
+    let mut harness = playlist_harness();
+    tree_menu(&mut harness, "Peak", "Delete\u{2026}");
+    let checking = harness.get_by_label("Cancel").rect();
+    let verb = harness.get_by_label("Delete").rect();
+    // Cancel comes first, left of the button that deletes.
+    assert!(checking.max.x <= verb.min.x);
+    // A long question: nothing moves.
+    let long = "Delete the playlist Peak? Its tracks stay in the library. ".repeat(4);
+    answer(&mut harness, 1, &DELETE_PEAK, &long);
+    assert_eq!(harness.get_by_label("Cancel").rect(), checking);
+    assert_eq!(harness.get_by_label("Delete").rect(), verb);
+    // A click on it as soon as it shows does nothing.
+    click(&mut harness, verb.center());
+    harness.run_steps(2);
+    assert_eq!(harness.state().steps, [LibraryStep::AskDelete(DELETE_PEAK)]);
+    harness.get_by_label("Delete playlist");
+    // Once armed, it deletes.
+    arm(&mut harness);
+    click(&mut harness, verb.center());
+    harness.run_steps(2);
+    assert_eq!(
+        harness.state().steps,
+        [
+            LibraryStep::AskDelete(DELETE_PEAK),
+            LibraryStep::Delete(DELETE_PEAK)
+        ]
+    );
+    // A refusal puts OK where Cancel was.
+    tree_menu(&mut harness, "Peak", "Delete\u{2026}");
+    harness.state_mut().answer = Some(DeleteCheck {
+        seq: 2,
+        target: DELETE_PEAK,
+        answer: Err("No.".to_owned()),
+    });
+    harness.run_steps(3);
+    assert_eq!(harness.get_by_label("OK").rect().min, checking.min);
+}
+
 /// The delete questions and deletes among `steps`.
 fn deleting(steps: &[LibraryStep]) -> Vec<&LibraryStep> {
     steps
@@ -1453,10 +1500,15 @@ fn delete_asks_first_and_cancel_keeps_it() {
     let mut harness = playlist_harness();
     tree_menu(&mut harness, "Peak", "Delete\u{2026}");
     harness.get_by_label("Delete playlist");
-    // Asked of the session; until it answers, only Cancel.
+    // Asked of the session; until it answers, only Cancel does anything.
     assert_eq!(harness.state().steps, [LibraryStep::AskDelete(DELETE_PEAK)]);
     harness.get_by_label("Checking\u{2026}");
-    assert!(harness.query_by_label("Delete").is_none());
+    assert!(
+        harness
+            .get_by_label("Delete")
+            .accesskit_node()
+            .is_disabled()
+    );
     let question = "Delete the playlist Peak? Its tracks stay in the library.";
     answer(&mut harness, 1, &DELETE_PEAK, question);
     harness.get_by_label(question);
@@ -1486,6 +1538,7 @@ fn delete_confirmed_deletes() {
     let mut harness = playlist_harness();
     tree_menu(&mut harness, "Peak", "Delete\u{2026}");
     answer(&mut harness, 1, &DELETE_PEAK, "Delete the playlist Peak?");
+    arm(&mut harness);
     let delete = at_label(&harness, "Delete");
     click(&mut harness, delete);
     harness.run_steps(3);
@@ -1509,7 +1562,12 @@ fn an_answer_to_an_older_question_is_not_shown() {
     // Asked again: the frame still holds the first answer, which is not this question's.
     tree_menu(&mut harness, "Peak", "Delete\u{2026}");
     harness.get_by_label("Checking\u{2026}");
-    assert!(harness.query_by_label("Delete").is_none());
+    assert!(
+        harness
+            .get_by_label("Delete")
+            .accesskit_node()
+            .is_disabled()
+    );
 }
 
 #[test]
@@ -1585,6 +1643,7 @@ fn the_delete_key_in_a_playlist_removes_entries_after_asking() {
     // Asked again and confirmed: the step names the same entries.
     press(&mut harness, Key::Backspace);
     answer(&mut harness, 2, &target, question);
+    arm(&mut harness);
     let remove = at_label(&harness, "Remove");
     click(&mut harness, remove);
     harness.run_steps(3);

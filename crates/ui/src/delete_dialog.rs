@@ -1,16 +1,31 @@
 //! The question before anything is deleted from the browser: the Delete key, or a
 //! "Delete…" menu item, opens it ([`open`]) and asks the session what deleting would do
-//! ([`LibraryStep::AskDelete`]). Until the answer comes ([`answer`]) it shows only Cancel;
-//! then the question with Cancel focused, or why it cannot be deleted with OK. Only the
-//! button beside Cancel sends [`LibraryStep::Delete`].
+//! ([`LibraryStep::AskDelete`]). Until the answer comes ([`answer`]) it says so, with
+//! Cancel and the button that deletes held off; then the question with Cancel focused, or
+//! why it cannot be deleted with OK in Cancel's place. Only the button right of Cancel
+//! sends [`LibraryStep::Delete`].
+//!
+//! Nothing moves under the pointer when the answer comes: the text sits in a box of one
+//! height and the buttons stay where they are, Cancel first. The button that deletes
+//! takes clicks only [`ARMING`] after it is offered, so a click aimed at the dialog
+//! before the answer cannot land on it.
 //!
 //! The dialog is modal: a click outside it cancels and does nothing else, and so does
 //! Escape. The open dialog and the latest answer are kept in egui's memory.
 
-use egui::{Context, Id, Key, Modal, Ui};
+use std::time::Duration;
+
+use egui::{Button, Context, Id, Key, Modal, ScrollArea, Ui};
 
 use crate::command::{DeleteTarget, LibraryStep};
 use crate::model::DeleteCheck;
+
+/// How long the button that deletes ignores clicks once the question shows.
+pub const ARMING: Duration = Duration::from_millis(300);
+
+/// The dialog's width, and the height of its text box, in points.
+const WIDTH: f32 = 320.0;
+const TEXT_HEIGHT: f32 = 72.0;
 
 /// What is shown, to give its first button the keyboard once each time it changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,6 +46,8 @@ struct Open {
     after: u64,
     /// The stage whose button last took the keyboard.
     focused: Option<Stage>,
+    /// When the question first showed (egui's time, in seconds).
+    asked_at: Option<f64>,
 }
 
 fn dialog_id() -> Id {
@@ -66,6 +83,7 @@ pub(crate) fn open(ctx: &Context, target: DeleteTarget, steps: &mut Vec<LibraryS
         target: target.clone(),
         after,
         focused: None,
+        asked_at: None,
     };
     ctx.data_mut(|d| d.insert_temp(dialog_id(), open));
     steps.push(LibraryStep::AskDelete(target));
@@ -116,50 +134,51 @@ fn contents(
     answer: Option<&Result<String, String>>,
     steps: &mut Vec<LibraryStep>,
 ) -> bool {
-    ui.set_width(320.0);
+    ui.set_width(WIDTH);
     let (title, verb) = words(&open.target);
     ui.heading(title);
-    let stage = match answer {
-        None => Stage::Waiting,
-        Some(Ok(_)) => Stage::Asking,
-        Some(Err(_)) => Stage::Refused,
+    let (stage, text) = match answer {
+        None => (Stage::Waiting, "Checking\u{2026}"),
+        Some(Ok(question)) => (Stage::Asking, question.as_str()),
+        Some(Err(reason)) => (Stage::Refused, reason.as_str()),
     };
+    // One height whatever the text: the buttons below never move.
+    ScrollArea::vertical()
+        .max_height(TEXT_HEIGHT)
+        .min_scrolled_height(TEXT_HEIGHT)
+        .auto_shrink([false, false])
+        .show(ui, |ui| ui.label(text));
     // The button that does nothing takes the keyboard: Enter then cancels, and deleting
     // takes a Tab to the other button, or a click.
     let focus = open.focused != Some(stage);
     open.focused = Some(stage);
-    let mut done = false;
-    match answer {
-        None => {
-            ui.label("Checking\u{2026}");
-            let cancel = ui.button("Cancel");
-            if focus {
-                cancel.request_focus();
-            }
-            done = cancel.clicked();
+    let now = ui.input(|i| i.time);
+    let armed = match (stage, open.asked_at) {
+        (Stage::Asking, None) => {
+            open.asked_at = Some(now);
+            false
         }
-        Some(Ok(question)) => {
-            ui.label(question.as_str());
-            ui.horizontal(|ui| {
-                if ui.button(verb).clicked() {
-                    steps.push(LibraryStep::Delete(open.target.clone()));
-                    done = true;
-                }
-                let cancel = ui.button("Cancel");
-                if focus {
-                    cancel.request_focus();
-                }
-                done |= cancel.clicked();
-            });
-        }
-        Some(Err(reason)) => {
-            ui.label(reason.as_str());
-            let ok = ui.button("OK");
-            if focus {
-                ok.request_focus();
-            }
-            done = ok.clicked();
-        }
+        (Stage::Asking, Some(at)) => now - at >= ARMING.as_secs_f64(),
+        _ => false,
+    };
+    if stage == Stage::Asking && !armed {
+        ui.ctx().request_repaint_after(ARMING);
     }
+    let mut done = false;
+    ui.horizontal(|ui| {
+        let first = ui.button(if stage == Stage::Refused {
+            "OK"
+        } else {
+            "Cancel"
+        });
+        if focus {
+            first.request_focus();
+        }
+        done = first.clicked();
+        if stage != Stage::Refused && ui.add_enabled(armed, Button::new(verb)).clicked() {
+            steps.push(LibraryStep::Delete(open.target.clone()));
+            done = true;
+        }
+    });
     done
 }
