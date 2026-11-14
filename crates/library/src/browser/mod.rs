@@ -81,6 +81,9 @@ pub struct ListRow {
     /// leaves it `None`: a lookup is no reason to read the list again, so the app fills it
     /// in for the row it shows.
     pub cover_file: Option<PathBuf>,
+    /// What the library knew of the track's looked-up cover when the list was read
+    /// (`None`: never looked up); the app keeps the row at the cursor up to date.
+    pub cover: Option<crate::CoverState>,
 }
 
 /// Which list the browser shows: a whole-list selection is only good for the list it was
@@ -754,7 +757,7 @@ fn file_name(path: &Path) -> String {
 
 /// The page of `items` starting at `offset`.
 fn page(reader: &Reader, items: &Items, offset: usize) -> Result<Vec<ListRow>, LibraryError> {
-    Ok(match items {
+    let mut rows = match items {
         Items::None => Vec::new(),
         Items::Files { files, tracks, .. } => files
             .iter()
@@ -766,6 +769,7 @@ fn page(reader: &Reader, items: &Items, offset: usize) -> Result<Vec<ListRow>, L
                 file_name: file_name(path),
                 position: None,
                 cover_file: None,
+                cover: None,
             })
             .collect(),
         Items::Playlist { id, query } => reader
@@ -783,9 +787,16 @@ fn page(reader: &Reader, items: &Items, offset: usize) -> Result<Vec<ListRow>, L
                 track: Some(track),
                 position: Some(position),
                 cover_file: None,
+                cover: None,
             })
             .collect(),
-    })
+    };
+    for row in &mut rows {
+        if let Some(track) = &row.track {
+            row.cover = reader.cover(track.id)?.map(|cover| cover.state);
+        }
+    }
+    Ok(rows)
 }
 
 /// Where `row` is in `list`, if it is there: a folder's file by path; in a playlist

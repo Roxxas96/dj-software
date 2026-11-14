@@ -36,6 +36,7 @@ fn browser() -> BrowserView {
             file_name: "just-us.mp3".into(),
             position: None,
             cover_file: None,
+            cover: None,
         }],
         list_offset: 0,
         list_count: 1,

@@ -3,7 +3,8 @@
 //! with the same parser as `play` and saves it on a short-lived thread, atomically. Which
 //! keys apply at once is in [`REGISTRY`]; the others apply at the next launch.
 //!
-//! `library` settings (the key notation) live in the library database, not here.
+//! The library's own settings (the key notation, the BPM range) live in the library
+//! database, not here; `library.cover_lookup` is a `config.toml` key like the others.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -198,6 +199,13 @@ const REGISTRY: &[Entry] = &[
         r#""ddj-sb3""#,
         "The controller mapping: a built-in name or a mapping file path",
         false,
+    ),
+    entry(
+        "library.cover_lookup",
+        "Library",
+        "true",
+        "true: covers are looked up online (Deezer, MusicBrainz) from artist and title, or the file name",
+        true,
     ),
     entry(
         "ui.waveform_beats",

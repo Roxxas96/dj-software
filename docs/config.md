@@ -1,6 +1,6 @@
 # config.toml
 
-Settings for the mixer, the effects, the sampler, the performance pad sizes, the stems and the window (audio output, controller mapping and waveform zoom). Every section and key is
+Settings for the mixer, the effects, the sampler, the performance pad sizes, the stems, the cover lookups and the window (audio output, controller mapping and waveform zoom). Every section and key is
 optional; a key left out keeps its default, and so does a missing file.
 
 ## Location
@@ -39,6 +39,7 @@ instead (and then the file must exist).
 | `audio.master`       | `[1, 2]`                                     | The 1-based output channels carrying the master, left then right |
 | `audio.headphones`   | none (no headphone output)                   | The 1-based output channels carrying the headphones, left then right; must not overlap `audio.master` |
 | `controller.mapping` | `"ddj-sb3"`                                  | The controller mapping: a built-in name or the path of a mapping file |
+| `library.cover_lookup` | `true`                                     | `true`: the window looks covers up online for library tracks without one, sending only artist and title (or the file name without its extension) to Deezer and MusicBrainz; `false`: nothing is sent. See [Covers found online](library.md#covers-found-online) |
 | `ui.waveform_beats`  | `16`                                         | The beats visible across a waveform lane at the first launch, within the zoom range below. After that the window's zoom (scroll over the waveforms) is saved in `ui-state.toml` next to this file and wins; delete that file to come back to this value |
 | `ui.waveform_min_beats` | `4` | The most the waveforms can zoom in: the fewest beats across a lane, from 1 to 512 |
 | `ui.waveform_max_beats` | `64` | The most the waveforms can zoom out: the most beats across a lane, from 1 to 512 and more than `ui.waveform_min_beats` |
@@ -46,7 +47,7 @@ instead (and then the file must exist).
 The window (`open-jockey`) can change these settings and saves them to the file it read,
 keeping its comments and layout; a value the file would not accept is refused and the file
 is left as it was. `mixer.crossfader`, `fx.*`, `sampler.volume`, `beat_jump.*`,
-`loop_roll.pads`, `backspin.*`, `stems.knobs` and `ui.*` apply at once, and so does
+`loop_roll.pads`, `backspin.*`, `stems.knobs`, `library.cover_lookup` and `ui.*` apply at once, and so does
 `stems.eq_mode` when stems were enabled at launch; the others at the next launch. A file
 edited by hand while the window runs keeps that edit: the window's change is added to the
 file as it is now (and if the hand-edited file no longer parses, the window's change is not
@@ -99,6 +100,9 @@ headphones = [3, 4]          # left out, no headphone output
 
 [controller]
 mapping = "ddj-sb3"          # a built-in name or a mapping file path
+
+[library]
+cover_lookup = true          # false: no cover is looked up online
 
 [ui]
 waveform_beats = 16          # beats across a waveform lane at the first launch

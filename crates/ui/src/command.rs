@@ -99,6 +99,14 @@ pub enum LibraryStep {
         name: Option<String>,
         color: Option<u32>,
     },
+    /// Looks `track`'s cover up online now, for one other than the cover it has, or after
+    /// a lookup that found none. A cover found replaces the one it has.
+    FindCover { track: i64 },
+    /// Removes the cover found online for `track` and never looks it up again (until a
+    /// [`LibraryStep::FindCover`]); the track shows its own picture or the plain tile.
+    RemoveCover { track: i64 },
+    /// Looks up again, once, the covers of the tracks whose lookup found none.
+    RetryMissingCovers,
 }
 
 /// What a Delete in the browser deletes, from where the viewer is.

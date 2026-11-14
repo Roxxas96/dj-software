@@ -43,6 +43,9 @@ pub struct Config {
     pub audio: AudioConfig,
     pub controller: ControllerConfig,
     pub ui: UiConfig,
+    /// `library.cover_lookup`: whether covers are looked up online for the library's
+    /// tracks.
+    pub cover_lookup: bool,
 }
 
 impl Default for Config {
@@ -61,6 +64,7 @@ impl Default for Config {
             audio: AudioConfig::default(),
             controller: ControllerConfig::default(),
             ui: UiConfig::default(),
+            cover_lookup: true,
         }
     }
 }
@@ -529,6 +533,18 @@ fn parse(text: &str, file: &str, home: Option<&Path>) -> anyhow::Result<Config> 
                 config.controller = parse_controller(section(file, name, value)?, file)?;
             }
             "ui" => config.ui = parse_ui(section(file, name, value)?, file)?,
+            "library" => {
+                for (key, value) in section(file, name, value)? {
+                    match key.as_str() {
+                        "cover_lookup" => {
+                            config.cover_lookup = value.as_bool().ok_or_else(|| {
+                                invalid(file, "library.cover_lookup", "expected true or false")
+                            })?;
+                        }
+                        _ => return Err(unknown(file, "library", key)),
+                    }
+                }
+            }
             _ => return Err(invalid(file, name, "unknown key")),
         }
     }

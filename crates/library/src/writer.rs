@@ -177,9 +177,10 @@ pub enum WriteOp {
     ExpectNoPlaylistNamed { name: String, except: Option<i64> },
     /// Keeps `file` as `track`'s cover (state `found`), replacing what was there. Unless
     /// `force`, a removed cover stays removed (a lookup in flight when the user removed it
-    /// must not bring it back) and the write does nothing; if `file` is then the track's
-    /// own `<library folder>/covers/<id>.jpg`, it is deleted. `force` is for the user
-    /// asking for another cover.
+    /// must not bring it back) and the write does nothing; if `file` is then one of the
+    /// track's own [`cover_files`](crate::cover_files), it is deleted. Once `file`, one of
+    /// them, is recorded, the other one is deleted. `force` is for the user asking for
+    /// another cover.
     SetCover {
         track: i64,
         file: PathBuf,
@@ -188,8 +189,9 @@ pub enum WriteOp {
     /// Remembers that no cover was found for `track`. A track that has a cover, or whose
     /// cover was removed, keeps its state.
     MissCover { track: i64 },
-    /// Marks `track`'s cover removed and deletes `<library folder>/covers/<track>.jpg`
-    /// (a missing file is fine). Never deletes a stored path.
+    /// Marks `track`'s cover removed and deletes its files, `<library folder>/covers/
+    /// <track>.jpg` and `<track>-2.jpg` (a missing file is fine; see
+    /// [`cover_files`](crate::cover_files)). Never deletes a stored path.
     ClearCover { track: i64 },
     /// Applies several ops in one transaction: all of them or none. Reports the outcome of
     /// the last op that reports something ([`WriteOutcome::Done`] when none does). Its

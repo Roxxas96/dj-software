@@ -1,5 +1,6 @@
 //! Covers found online and kept for tracks: one row per track that was looked up, the
-//! picture a file at `<library folder>/covers/<track id>.jpg`.
+//! picture a file at `<library folder>/covers/<track id>.jpg` (or `<track id>-2.jpg`, see
+//! [`cover_files`]).
 
 use std::path::{Path, PathBuf};
 
@@ -77,33 +78,79 @@ impl Reader {
     ///
     /// Any database error.
     pub fn tracks_needing_covers(&self, limit: usize) -> Result<Vec<CoverQuery>, LibraryError> {
+        self.tracks_needing_covers_after(i64::MIN, limit)
+    }
+
+    /// [`Reader::tracks_needing_covers`] from the track after `after` on, by id: a lookup
+    /// walks the library a batch at a time, past the tracks it could not look up yet.
+    ///
+    /// # Errors
+    ///
+    /// Any database error.
+    pub fn tracks_needing_covers_after(
+        &self,
+        after: i64,
+        limit: usize,
+    ) -> Result<Vec<CoverQuery>, LibraryError> {
         let retry = self.setting(COVERS_RETRY_MISSED)?.as_deref() == Some("1");
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         let mut stmt = self.connection().prepare_cached(
             "SELECT t.id, t.artist, t.title, t.path FROM tracks t \
              LEFT JOIN covers c ON c.track_id = t.id \
-             WHERE t.missing = 0 AND (c.track_id IS NULL OR (c.state = 'missed' AND ?1)) \
+             WHERE t.missing = 0 AND t.id > ?3 \
+                 AND (c.track_id IS NULL OR (c.state = 'missed' AND ?1)) \
              ORDER BY t.id LIMIT ?2",
         )?;
-        let rows = stmt.query_map((retry, limit), |r| {
-            let path: String = r.get(3)?;
-            Ok(CoverQuery {
-                track: r.get(0)?,
-                artist: r.get(1)?,
-                title: r.get(2)?,
-                file_stem: Path::new(&path)
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
-            })
-        })?;
+        let rows = stmt.query_map((retry, limit, after), cover_query)?;
         Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// What a lookup of `track`'s cover would send, whatever its cover's state; `None`
+    /// when there is no such track.
+    ///
+    /// # Errors
+    ///
+    /// Any database error.
+    pub fn cover_query(&self, track: i64) -> Result<Option<CoverQuery>, LibraryError> {
+        Ok(self
+            .connection()
+            .prepare_cached("SELECT id, artist, title, path FROM tracks WHERE id = ?1")?
+            .query_row([track], cover_query)
+            .optional()?)
     }
 }
 
-/// The file [`WriteOp::ClearCover`] deletes for `track`, built from its id alone.
-fn cover_file(folder: &Path, track: i64) -> PathBuf {
-    folder.join("covers").join(format!("{track}.jpg"))
+/// A row of `id, artist, title, path` as the lookup's query: the path is cut to its stem.
+fn cover_query(r: &rusqlite::Row<'_>) -> rusqlite::Result<CoverQuery> {
+    let path: String = r.get(3)?;
+    Ok(CoverQuery {
+        track: r.get(0)?,
+        artist: r.get(1)?,
+        title: r.get(2)?,
+        file_stem: Path::new(&path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    })
+}
+
+/// The two files a looked-up cover of `track` may be kept in, for the library whose
+/// database is `library_db`: `<folder>/covers/<id>.jpg` and `<folder>/covers/<id>-2.jpg`.
+/// A new cover for a track that has one goes to the file not in use, so whoever shows it
+/// sees a new path and reads it again; the other file is deleted once the new one is
+/// recorded.
+#[must_use]
+pub fn cover_files(library_db: &Path, track: i64) -> [PathBuf; 2] {
+    files(library_db.parent().unwrap_or(Path::new(".")), track)
+}
+
+/// [`cover_files`] from the library's folder.
+fn files(folder: &Path, track: i64) -> [PathBuf; 2] {
+    let covers = folder.join("covers");
+    [
+        covers.join(format!("{track}.jpg")),
+        covers.join(format!("{track}-2.jpg")),
+    ]
 }
 
 /// Applies a cover op's row change. Its file is deleted by [`delete_after_commit`] once
@@ -163,32 +210,41 @@ pub(crate) fn apply(tx: &Transaction<'_>, op: &WriteOp) -> Result<WriteOutcome, 
     Ok(WriteOutcome::Done)
 }
 
-/// After a committed `op`: deletes the picture of each [`WriteOp::ClearCover`], and the
+/// After a committed `op`: deletes the pictures of each [`WriteOp::ClearCover`], the
 /// picture of a [`WriteOp::SetCover`] without `force` that was refused because the cover
-/// is removed, when it sits at the track's own `<folder>/covers/<id>.jpg`. Only that file is
-/// ever touched, whatever the row said; a missing file is fine.
+/// is removed, and, once a [`WriteOp::SetCover`] recorded one of the track's two files,
+/// the other one. Only the track's own files ([`cover_files`], built from its id) are ever
+/// touched, whatever the row said; a missing file is fine.
 pub(crate) fn delete_after_commit(conn: &Connection, folder: &Path, op: &WriteOp) {
     match op {
         WriteOp::ClearCover { track } => {
-            let _ = std::fs::remove_file(cover_file(folder, *track));
+            for file in files(folder, *track) {
+                let _ = std::fs::remove_file(file);
+            }
         }
-        WriteOp::SetCover {
-            track,
-            file,
-            force: false,
-        } if *file == cover_file(folder, *track) => {
-            let removed = conn
+        WriteOp::SetCover { track, file, .. } => {
+            let [first, second] = files(folder, *track);
+            let other = if *file == first {
+                second
+            } else if *file == second {
+                first
+            } else {
+                return;
+            };
+            let row = conn
                 .query_row(
-                    "SELECT state = 'removed' FROM covers WHERE track_id = ?1",
+                    "SELECT state, file FROM covers WHERE track_id = ?1",
                     [track],
-                    |r| r.get::<_, bool>(0),
+                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
                 )
                 .optional()
                 .ok()
-                .flatten()
-                .unwrap_or(false);
-            if removed {
+                .flatten();
+            let Some((state, kept)) = row else { return };
+            if state == "removed" {
                 let _ = std::fs::remove_file(file);
+            } else if state == "found" && kept.as_deref() == file.to_str() {
+                let _ = std::fs::remove_file(other);
             }
         }
         WriteOp::Batch(ops) => {

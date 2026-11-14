@@ -20,7 +20,9 @@ use egui::{
     vec2,
 };
 use engine::DeckId;
-use library::{BrowserEdit, BrowserView, Focus, ListRow, TrackSortKey, TreeKind, TreeRow};
+use library::{
+    BrowserEdit, BrowserView, CoverState, Focus, ListRow, TrackSortKey, TreeKind, TreeRow,
+};
 
 use crate::command::DeleteTarget;
 use crate::cover::{self, Covers};
@@ -1334,7 +1336,8 @@ fn list_keys(
 
 /// The menu of a library track's row `at`: load it on a deck, add it (or the rows picked,
 /// when it is one of them) to a playlist, take them out of the playlist shown, or delete
-/// them (asking first).
+/// them (asking first); and for its track's cover looked up online, find another or
+/// remove it.
 fn track_menu(
     ui: &mut Ui,
     view: &BrowserView,
@@ -1404,6 +1407,17 @@ fn track_menu(
         && let Some(target) = list_target(view, &selection.acting_on(at))
     {
         delete_dialog::open(ui.ctx(), target, steps);
+    }
+    // A cover looked up online, or a lookup that found none: this row's track alone.
+    let cover = view.list.get(at - view.list_offset).and_then(|e| e.cover);
+    if matches!(cover, Some(CoverState::Found | CoverState::Missed)) {
+        ui.separator();
+        if ui.button("Find another cover").clicked() {
+            steps.push(LibraryStep::FindCover { track: track.id });
+        }
+    }
+    if cover == Some(CoverState::Found) && ui.button("Remove cover").clicked() {
+        steps.push(LibraryStep::RemoveCover { track: track.id });
     }
 }
 
@@ -1558,6 +1572,7 @@ mod tests {
             file_name: String::new(),
             position: None,
             cover_file: None,
+            cover: None,
         };
         BrowserView {
             path: String::new(),

@@ -247,6 +247,15 @@ fn run_session(
         library.library(),
         crate::sticks::Mounts::usual(),
     ));
+    let lookups = Arc::new(AtomicBool::new(config.cover_lookup));
+    match crate::covers::CoverWorker::start(
+        &library.library(),
+        Box::new(crate::covers::service::online()),
+        lookups,
+    ) {
+        Ok(worker) => parts.covers = Some(worker),
+        Err(why) => parts.event(format!("warning: cover lookups cannot start: {why}")),
+    }
     parts.samples_loaded = start.samples_loaded;
     for text in start.events.drain(..) {
         parts.event(text);

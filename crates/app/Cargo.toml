@@ -25,14 +25,22 @@ decode = { path = "../decode" }
 engine = { path = "../engine" }
 directories.workspace = true
 dunce.workspace = true
+image.workspace = true
 interop = { path = "../interop" }
 library = { path = "../library" }
+percent-encoding.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 stems = { path = "../stems" }
 toml.workspace = true
 toml_edit.workspace = true
 trash.workspace = true
 analysis = { path = "../analysis" }
 ui = { path = "../ui" }
+# Looks covers up online: the same build as the stems download (native TLS, the OS trust
+# store).
+ureq = { version = "3.5.1", default-features = false, features = ["native-tls-no-default"] }
 
 [dev-dependencies]
+rusqlite.workspace = true
 tempfile.workspace = true

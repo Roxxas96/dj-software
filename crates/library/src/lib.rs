@@ -27,7 +27,7 @@ pub use browser::{
     BROWSER_PAGE_ROWS, Browser, BrowserEdit, BrowserRequest, BrowserView, Drive, Focus,
     ListIdentity, ListRow, TreeKind, TreeRow, drives, remix_of,
 };
-pub use covers::{COVERS_RETRY_MISSED, CoverQuery, CoverRow, CoverState};
+pub use covers::{COVERS_RETRY_MISSED, CoverQuery, CoverRow, CoverState, cover_files};
 pub use cues::HotcuePoint;
 pub use db::{Library, Reader};
 pub use grid::{

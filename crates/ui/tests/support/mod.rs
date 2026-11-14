@@ -212,6 +212,7 @@ fn browser() -> BrowserView {
             file_name: format!("track-{n}.mp3"),
             position: Some(n),
             cover_file: None,
+            cover: None,
         })
         .collect();
     let mut tree = vec![
