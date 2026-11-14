@@ -198,22 +198,35 @@ pub fn own_picture(path: &Path) -> Option<bool> {
 }
 
 /// The bytes of `path`'s front cover, else of its first picture: `Some(None)` when it has
-/// no tag or no picture, `None` when the file could not be read (any error opening it or
-/// reading its tags, an I/O error or one in its contents).
+/// no tag or no picture (or tags the reader cannot make sense of), `None` when the file
+/// could not be read (opening it failed, or an I/O error while reading it).
 fn picture(path: &Path) -> Option<Option<Vec<u8>>> {
     let options = ParseOptions::new().read_properties(false);
-    let file = Probe::open(path)
-        .ok()?
-        .guess_file_type()
-        .ok()?
-        .options(options)
-        .read()
-        .ok()?;
+    let probe = Probe::open(path).ok()?.guess_file_type().ok()?;
+    let file = match probe.options(options).read() {
+        Ok(file) => file,
+        Err(e) if read_failed(&e) => return None,
+        Err(_) => return Some(None),
+    };
     let pictures = || file.tags().iter().flat_map(|tag| tag.pictures());
     let picture = pictures()
         .find(|p| p.pic_type() == PictureType::CoverFront)
         .or_else(|| pictures().next());
     Some(picture.map(|p| p.data().to_vec()))
+}
+
+/// Whether `error` comes from the file failing to read (a drive unplugged mid-read, a
+/// placeholder that cannot be fetched), not from what it holds: an I/O error anywhere in
+/// its sources, other than the end of a short file.
+fn read_failed(error: &(dyn std::error::Error + 'static)) -> bool {
+    let mut source = Some(error);
+    while let Some(e) = source {
+        if let Some(io) = e.downcast_ref::<std::io::Error>() {
+            return io.kind() != std::io::ErrorKind::UnexpectedEof;
+        }
+        source = e.source();
+    }
+    false
 }
 
 /// The picture file at `path` (a JPEG or PNG), decoded and scaled like [`read`]'s.
