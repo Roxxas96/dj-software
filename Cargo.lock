@@ -3747,6 +3747,7 @@ dependencies = [
  "image",
  "interop",
  "library",
+ "lofty",
  "percent-encoding",
  "rusqlite",
  "serde",

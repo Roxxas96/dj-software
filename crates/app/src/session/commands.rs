@@ -208,6 +208,10 @@ fn library_step(
             }
         }
         LibraryStep::RemoveCover { track } => {
+            // A "Find another cover" under way must not bring it back.
+            if let Some(covers) = &parts.covers {
+                covers.removed(track);
+            }
             if let Err(why) = library.remove_cover(track) {
                 parts.event(why);
             }

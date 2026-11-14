@@ -42,5 +42,6 @@ ui = { path = "../ui" }
 ureq = { version = "3.5.1", default-features = false, features = ["native-tls-no-default"] }
 
 [dev-dependencies]
+lofty.workspace = true
 rusqlite.workspace = true
 tempfile.workspace = true

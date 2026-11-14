@@ -821,12 +821,23 @@ fn the_track_menu_finds_and_removes_looked_up_covers() {
         harness.state().steps,
         [LibraryStep::FindCover { track: 1002 }]
     );
-    // Never looked up, or removed: neither.
-    for song in ["Song 4", "Song 3"] {
-        menu(&mut harness, song);
-        harness.get_by_label("Load on deck 1");
-        assert!(harness.query_by_label("Find another cover").is_none());
-        assert!(harness.query_by_label("Remove cover").is_none());
+    // A removed cover can be looked up again, and has nothing to remove.
+    harness.state_mut().steps.clear();
+    menu(&mut harness, "Song 3");
+    assert!(harness.query_by_label("Remove cover").is_none());
+    assert!(harness.query_by_label("Find another cover").is_none());
+    let item = at_label(&harness, "Find a cover");
+    click(&mut harness, item);
+    harness.run_steps(2);
+    assert_eq!(
+        harness.state().steps,
+        [LibraryStep::FindCover { track: 1003 }]
+    );
+    // Never looked up: none of them.
+    menu(&mut harness, "Song 4");
+    harness.get_by_label("Load on deck 1");
+    for label in ["Find another cover", "Find a cover", "Remove cover"] {
+        assert!(harness.query_by_label(label).is_none(), "{label}");
     }
 }
 
